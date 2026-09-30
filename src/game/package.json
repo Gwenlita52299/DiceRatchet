@@ -1,0 +1,13 @@
+{
+  "name": "game-rsi-dice",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "GameRSI 网页版骰子 roguelike（GAME-00/01/02 实现）",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test \"tests/**/*.test.js\"",
+    "balance": "node scripts/balance.js --n 200"
+  },
+  "engines": { "node": ">=18" }
+}

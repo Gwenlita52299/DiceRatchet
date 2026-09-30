@@ -1,0 +1,220 @@
+{
+  "$schemaVersion": "content-1",
+  "stageCount": 10,
+  "chapters": [
+    {
+      "chapter": 1,
+      "name": "腐蚀礁岩",
+      "stages": [
+        1,
+        2,
+        3
+      ],
+      "theme": "verdant"
+    },
+    {
+      "chapter": 2,
+      "name": "星域遗迹",
+      "stages": [
+        4,
+        5,
+        6
+      ],
+      "theme": "arcana"
+    },
+    {
+      "chapter": 3,
+      "name": "异常原点",
+      "stages": [
+        7,
+        8,
+        9,
+        10
+      ],
+      "theme": "blade"
+    }
+  ],
+  "stages": [
+    {
+      "stage": 1,
+      "chapter": 1,
+      "rows": 2,
+      "nodeBudget": [
+        3,
+        2
+      ],
+      "kinds": [
+        "battle"
+      ],
+      "boss": false,
+      "tutorial": true
+    },
+    {
+      "stage": 2,
+      "chapter": 1,
+      "rows": 3,
+      "nodeBudget": [
+        3,
+        3,
+        3
+      ],
+      "kinds": [
+        "battle",
+        "treasure"
+      ],
+      "boss": false,
+      "tutorial": true
+    },
+    {
+      "stage": 3,
+      "chapter": 1,
+      "rows": 3,
+      "nodeBudget": [
+        3,
+        4,
+        1
+      ],
+      "kinds": [
+        "battle",
+        "shop",
+        "rest"
+      ],
+      "boss": true,
+      "bossId": "boss_verdant_bloom"
+    },
+    {
+      "stage": 4,
+      "chapter": 2,
+      "rows": 3,
+      "nodeBudget": [
+        3,
+        4,
+        3
+      ],
+      "kinds": [
+        "battle",
+        "shop"
+      ],
+      "boss": false
+    },
+    {
+      "stage": 5,
+      "chapter": 2,
+      "rows": 4,
+      "nodeBudget": [
+        3,
+        3,
+        4,
+        3
+      ],
+      "kinds": [
+        "battle",
+        "event",
+        "treasure"
+      ],
+      "boss": false
+    },
+    {
+      "stage": 6,
+      "chapter": 2,
+      "rows": 3,
+      "nodeBudget": [
+        4,
+        4,
+        1
+      ],
+      "kinds": [
+        "battle",
+        "forge",
+        "shop"
+      ],
+      "boss": true,
+      "bossId": "boss_arcana_spiral"
+    },
+    {
+      "stage": 7,
+      "chapter": 3,
+      "rows": 4,
+      "nodeBudget": [
+        3,
+        4,
+        4,
+        3
+      ],
+      "kinds": [
+        "battle",
+        "shop",
+        "event"
+      ],
+      "boss": false
+    },
+    {
+      "stage": 8,
+      "chapter": 3,
+      "rows": 4,
+      "nodeBudget": [
+        4,
+        4,
+        4,
+        3
+      ],
+      "kinds": [
+        "battle",
+        "shrine",
+        "treasure"
+      ],
+      "boss": false
+    },
+    {
+      "stage": 9,
+      "chapter": 3,
+      "rows": 3,
+      "nodeBudget": [
+        4,
+        3,
+        2
+      ],
+      "kinds": [
+        "battle",
+        "forge",
+        "rest"
+      ],
+      "boss": false
+    },
+    {
+      "stage": 10,
+      "chapter": 3,
+      "rows": 3,
+      "nodeBudget": [
+        3,
+        3,
+        1
+      ],
+      "kinds": [
+        "battle",
+        "shop",
+        "shrine"
+      ],
+      "boss": true,
+      "bossId": "boss_chaos_core"
+    }
+  ],
+  "toggleFallback": {
+    "shop": {
+      "toggle": "shops",
+      "fallback": "treasure"
+    },
+    "forge": {
+      "toggle": "shops",
+      "fallback": "treasure"
+    },
+    "event": {
+      "toggle": "events",
+      "fallback": "treasure"
+    },
+    "shrine": {
+      "toggle": "relics",
+      "fallback": "rest"
+    }
+  }
+}

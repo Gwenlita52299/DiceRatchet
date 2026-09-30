@@ -1,0 +1,111 @@
+{
+  "$schemaVersion": "content-1",
+  "keys": {
+    "heartsMax": "玩家局内心数",
+    "virtueMax": "每场战斗的净化值上限",
+    "drawPerTurn": "每回合抽骰数",
+    "handMax": "手骰上限",
+    "enemyHpMulPermille": "敌血倍率（千分）",
+    "enemyDmgMulPermille": "敌伤倍率（千分）",
+    "enemyExtraDice": "敌人每回合额外意图骰",
+    "eliteStages": "出现精英战斗的关",
+    "counterMulPermille": "克制强度（克/被克，千分）",
+    "monoPenaltyPermille": "单学派集中惩罚（千分）",
+    "shopPriceMulPermille": "商店价格倍率（千分）",
+    "goldMulPermille": "掉落星屑倍率（千分）",
+    "relicSlots": "遗物栏位",
+    "purifyPerStage": "每场战斗「净化」次数",
+    "bossPhaseHpBonusPermille": "Boss 血量加成（千分）",
+    "reviveOnce": "首次失心时改为回复 50% 净化值"
+  },
+  "levels": {
+    "easy": {
+      "label": "简单",
+      "heartsMax": 4,
+      "virtueMax": 22,
+      "drawPerTurn": 4,
+      "handMax": 8,
+      "enemyHpMulPermille": 900,
+      "enemyDmgMulPermille": 1000,
+      "enemyExtraDice": 0,
+      "eliteStages": [
+        3,
+        6
+      ],
+      "counterIntensity": "soft",
+      "counterMulPermille": {
+        "advantage": 1200,
+        "disadvantage": 850
+      },
+      "monoPenaltyPermille": 0,
+      "shopPriceMulPermille": 850,
+      "goldMulPermille": 1250,
+      "relicSlots": 4,
+      "purifyPerStage": 1,
+      "bossPhaseHpBonusPermille": 0,
+      "reviveOnce": true
+    },
+    "medium": {
+      "label": "中等",
+      "heartsMax": 3,
+      "virtueMax": 24,
+      "drawPerTurn": 4,
+      "handMax": 8,
+      "enemyHpMulPermille": 900,
+      "enemyDmgMulPermille": 850,
+      "enemyExtraDice": 0,
+      "eliteStages": [
+        3,
+        6,
+        9
+      ],
+      "counterIntensity": "standard",
+      "counterMulPermille": {
+        "advantage": 1300,
+        "disadvantage": 770
+      },
+      "monoPenaltyPermille": 150,
+      "shopPriceMulPermille": 1000,
+      "goldMulPermille": 1000,
+      "relicSlots": 3,
+      "purifyPerStage": 1,
+      "bossPhaseHpBonusPermille": 0,
+      "reviveOnce": false
+    },
+    "hard": {
+      "label": "困难",
+      "heartsMax": 2,
+      "virtueMax": 24,
+      "drawPerTurn": 3,
+      "handMax": 5,
+      "enemyHpMulPermille": 600,
+      "enemyDmgMulPermille": 575,
+      "enemyExtraDice": 1,
+      "eliteStages": [
+        3,
+        5,
+        7,
+        9
+      ],
+      "counterIntensity": "punishing",
+      "counterMulPermille": {
+        "advantage": 1450,
+        "disadvantage": 700
+      },
+      "monoPenaltyPermille": 250,
+      "shopPriceMulPermille": 1200,
+      "goldMulPermille": 800,
+      "relicSlots": 2,
+      "purifyPerStage": 0,
+      "bossPhaseHpBonusPermille": 200,
+      "reviveOnce": false
+    }
+  },
+  "common": {
+    "monoThresholdPermille": 700,
+    "monoMinDice": 3,
+    "stageCount": 10,
+    "maxTurnsPerBattle": 60,
+    "biasStrengthPermille": 500
+  }
+}

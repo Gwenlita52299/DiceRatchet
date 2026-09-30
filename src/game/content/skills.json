@@ -1,0 +1,1010 @@
+{
+  "$schemaVersion": "content-1",
+  "skills": {
+    "skill_blade_flurry": {
+      "name": "连环突刺",
+      "school": "blade",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "突刺 2",
+          "kind": "purge",
+          "value": 2,
+          "school": "blade",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 1,
+          "label": "突刺 2",
+          "kind": "purge",
+          "value": 2,
+          "school": "blade",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 2,
+          "label": "突刺 3",
+          "kind": "purge",
+          "value": 3,
+          "school": "blade",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 3,
+          "label": "突刺 3",
+          "kind": "purge",
+          "value": 3,
+          "school": "blade",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 4,
+          "label": "突刺 4",
+          "kind": "purge",
+          "value": 4,
+          "school": "blade",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 5,
+          "label": "贯通 5",
+          "kind": "purge",
+          "value": 5,
+          "school": "arcana",
+          "target": "enemy"
+        }
+      ],
+      "category": "skill",
+      "subtype": "blade",
+      "riskTier": "safe"
+    },
+    "skill_blade_execute": {
+      "name": "处决斩",
+      "school": "blade",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "自损 2",
+          "kind": "selfCorruption",
+          "value": 2,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "斩击 3",
+          "kind": "purge",
+          "value": 3,
+          "school": "blade",
+          "target": "enemy",
+          "tags": [
+            "execute"
+          ]
+        },
+        {
+          "faceIndex": 2,
+          "label": "斩击 4",
+          "kind": "purge",
+          "value": 4,
+          "school": "arcana",
+          "target": "enemy",
+          "tags": [
+            "execute"
+          ]
+        },
+        {
+          "faceIndex": 3,
+          "label": "斩击 5",
+          "kind": "purge",
+          "value": 5,
+          "school": "blade",
+          "target": "enemy",
+          "tags": [
+            "execute"
+          ]
+        },
+        {
+          "faceIndex": 4,
+          "label": "斩击 6",
+          "kind": "purge",
+          "value": 6,
+          "school": "blade",
+          "target": "enemy",
+          "tags": [
+            "execute"
+          ]
+        },
+        {
+          "faceIndex": 5,
+          "label": "自损 3",
+          "kind": "selfCorruption",
+          "value": 3,
+          "school": "neutral",
+          "target": "self"
+        }
+      ],
+      "category": "skill",
+      "subtype": "blade",
+      "riskTier": "balanced"
+    },
+    "skill_blade_charge": {
+      "name": "蓄势",
+      "school": "blade",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "蓄势 1",
+          "kind": "status",
+          "value": 1,
+          "school": "blade",
+          "target": "self",
+          "statusKind": "strength"
+        },
+        {
+          "faceIndex": 1,
+          "label": "蓄势 1",
+          "kind": "status",
+          "value": 1,
+          "school": "blade",
+          "target": "self",
+          "statusKind": "strength"
+        },
+        {
+          "faceIndex": 2,
+          "label": "蓄势 2",
+          "kind": "status",
+          "value": 2,
+          "school": "blade",
+          "target": "self",
+          "statusKind": "strength"
+        },
+        {
+          "faceIndex": 3,
+          "label": "刺击 2",
+          "kind": "purge",
+          "value": 2,
+          "school": "blade",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 4,
+          "label": "刺击 3",
+          "kind": "purge",
+          "value": 3,
+          "school": "blade",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 5,
+          "label": "毒刺 3",
+          "kind": "status",
+          "value": 3,
+          "school": "verdant",
+          "target": "enemy",
+          "statusKind": "poison"
+        }
+      ],
+      "category": "skill",
+      "subtype": "blade",
+      "riskTier": "safe"
+    },
+    "skill_blade_berserk": {
+      "name": "狂战",
+      "school": "blade",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "自损 4",
+          "kind": "selfCorruption",
+          "value": 4,
+          "school": "arcana",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "自损 4",
+          "kind": "selfCorruption",
+          "value": 4,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "狂斩 7",
+          "kind": "purge",
+          "value": 7,
+          "school": "blade",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 3,
+          "label": "狂斩 8",
+          "kind": "purge",
+          "value": 8,
+          "school": "blade",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 4,
+          "label": "狂斩 9",
+          "kind": "purge",
+          "value": 9,
+          "school": "blade",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 5,
+          "label": "自损 5",
+          "kind": "selfCorruption",
+          "value": 5,
+          "school": "neutral",
+          "target": "self"
+        }
+      ],
+      "category": "skill",
+      "subtype": "blade",
+      "riskTier": "risky"
+    },
+    "skill_blade_reap": {
+      "name": "收割",
+      "school": "blade",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "斩 2",
+          "kind": "purge",
+          "value": 2,
+          "school": "blade",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 1,
+          "label": "自损 2",
+          "kind": "selfCorruption",
+          "value": 2,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "斩 4",
+          "kind": "purge",
+          "value": 4,
+          "school": "blade",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 3,
+          "label": "斩 5",
+          "kind": "purge",
+          "value": 5,
+          "school": "blade",
+          "target": "enemy",
+          "tags": [
+            "execute"
+          ]
+        },
+        {
+          "faceIndex": 4,
+          "label": "斩 6",
+          "kind": "purge",
+          "value": 6,
+          "school": "blade",
+          "target": "enemy",
+          "tags": [
+            "execute"
+          ]
+        },
+        {
+          "faceIndex": 5,
+          "label": "藤蔓 2",
+          "kind": "status",
+          "value": 2,
+          "school": "verdant",
+          "target": "enemy",
+          "statusKind": "poison"
+        }
+      ],
+      "category": "skill",
+      "subtype": "blade",
+      "riskTier": "balanced"
+    },
+    "skill_arcana_echo": {
+      "name": "回响",
+      "school": "arcana",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "抽骰 1",
+          "kind": "draw",
+          "value": 1,
+          "school": "arcana",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "抽骰 1",
+          "kind": "draw",
+          "value": 1,
+          "school": "arcana",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "抽骰 2",
+          "kind": "draw",
+          "value": 2,
+          "school": "arcana",
+          "target": "self"
+        },
+        {
+          "faceIndex": 3,
+          "label": "魔弹 2",
+          "kind": "purge",
+          "value": 2,
+          "school": "arcana",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 4,
+          "label": "魔弹 3",
+          "kind": "purge",
+          "value": 3,
+          "school": "arcana",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 5,
+          "label": "锋刃 4",
+          "kind": "purge",
+          "value": 4,
+          "school": "blade",
+          "target": "enemy"
+        }
+      ],
+      "category": "skill",
+      "subtype": "arcana",
+      "riskTier": "safe"
+    },
+    "skill_arcana_shift": {
+      "name": "移位",
+      "school": "arcana",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "自损 2",
+          "kind": "selfCorruption",
+          "value": 2,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "重掷",
+          "kind": "reroll",
+          "value": 1,
+          "school": "arcana",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "重掷",
+          "kind": "reroll",
+          "value": 1,
+          "school": "arcana",
+          "target": "self"
+        },
+        {
+          "faceIndex": 3,
+          "label": "改骰 +1",
+          "kind": "modify",
+          "value": 1,
+          "school": "verdant",
+          "target": "self"
+        },
+        {
+          "faceIndex": 4,
+          "label": "魔弹 3",
+          "kind": "purge",
+          "value": 3,
+          "school": "arcana",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 5,
+          "label": "自损 1",
+          "kind": "selfCorruption",
+          "value": 1,
+          "school": "neutral",
+          "target": "self"
+        }
+      ],
+      "category": "skill",
+      "subtype": "arcana",
+      "riskTier": "balanced"
+    },
+    "skill_arcana_hex": {
+      "name": "咒印",
+      "school": "arcana",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "咒印 2",
+          "kind": "status",
+          "value": 2,
+          "school": "arcana",
+          "target": "enemy",
+          "statusKind": "weak"
+        },
+        {
+          "faceIndex": 1,
+          "label": "咒印 2",
+          "kind": "status",
+          "value": 2,
+          "school": "arcana",
+          "target": "enemy",
+          "statusKind": "weak"
+        },
+        {
+          "faceIndex": 2,
+          "label": "魔弹 2",
+          "kind": "purge",
+          "value": 2,
+          "school": "arcana",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 3,
+          "label": "魔弹 3",
+          "kind": "purge",
+          "value": 3,
+          "school": "arcana",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 4,
+          "label": "灼烧 3",
+          "kind": "status",
+          "value": 3,
+          "school": "blade",
+          "target": "enemy",
+          "statusKind": "burn"
+        },
+        {
+          "faceIndex": 5,
+          "label": "自损 3",
+          "kind": "selfCorruption",
+          "value": 3,
+          "school": "neutral",
+          "target": "self"
+        }
+      ],
+      "category": "skill",
+      "subtype": "arcana",
+      "riskTier": "balanced"
+    },
+    "skill_arcana_duplicate": {
+      "name": "复制",
+      "school": "arcana",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "复制",
+          "kind": "duplicate_face",
+          "value": 1,
+          "school": "arcana",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "魔弹 2",
+          "kind": "purge",
+          "value": 2,
+          "school": "arcana",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 2,
+          "label": "抽骰 1",
+          "kind": "draw",
+          "value": 1,
+          "school": "arcana",
+          "target": "self"
+        },
+        {
+          "faceIndex": 3,
+          "label": "魔弹 4",
+          "kind": "purge",
+          "value": 4,
+          "school": "verdant",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 4,
+          "label": "自损 2",
+          "kind": "selfCorruption",
+          "value": 2,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 5,
+          "label": "自损 2",
+          "kind": "selfCorruption",
+          "value": 2,
+          "school": "neutral",
+          "target": "self"
+        }
+      ],
+      "category": "skill",
+      "subtype": "arcana",
+      "riskTier": "balanced"
+    },
+    "skill_arcana_surge": {
+      "name": "法潮",
+      "school": "arcana",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "自损 3",
+          "kind": "selfCorruption",
+          "value": 3,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "自损 3",
+          "kind": "selfCorruption",
+          "value": 3,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "魔弹 6",
+          "kind": "purge",
+          "value": 6,
+          "school": "blade",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 3,
+          "label": "魔弹 7",
+          "kind": "purge",
+          "value": 7,
+          "school": "arcana",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 4,
+          "label": "抽骰 2",
+          "kind": "draw",
+          "value": 2,
+          "school": "arcana",
+          "target": "self"
+        },
+        {
+          "faceIndex": 5,
+          "label": "自损 4",
+          "kind": "selfCorruption",
+          "value": 4,
+          "school": "neutral",
+          "target": "self"
+        }
+      ],
+      "category": "skill",
+      "subtype": "arcana",
+      "riskTier": "risky"
+    },
+    "skill_verdant_bloom": {
+      "name": "绽放",
+      "school": "verdant",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "修复 2",
+          "kind": "mend",
+          "value": 2,
+          "school": "verdant",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "修复 3",
+          "kind": "mend",
+          "value": 3,
+          "school": "verdant",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "修复 3",
+          "kind": "mend",
+          "value": 3,
+          "school": "verdant",
+          "target": "self"
+        },
+        {
+          "faceIndex": 3,
+          "label": "修复 4",
+          "kind": "mend",
+          "value": 4,
+          "school": "verdant",
+          "target": "self"
+        },
+        {
+          "faceIndex": 4,
+          "label": "修复 5",
+          "kind": "mend",
+          "value": 5,
+          "school": "verdant",
+          "target": "self"
+        },
+        {
+          "faceIndex": 5,
+          "label": "魔弹 3",
+          "kind": "purge",
+          "value": 3,
+          "school": "arcana",
+          "target": "enemy"
+        }
+      ],
+      "category": "skill",
+      "subtype": "verdant",
+      "riskTier": "safe"
+    },
+    "skill_verdant_venom": {
+      "name": "荆棘毒",
+      "school": "verdant",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "剧毒 2",
+          "kind": "status",
+          "value": 2,
+          "school": "verdant",
+          "target": "enemy",
+          "statusKind": "poison"
+        },
+        {
+          "faceIndex": 1,
+          "label": "剧毒 2",
+          "kind": "status",
+          "value": 2,
+          "school": "verdant",
+          "target": "enemy",
+          "statusKind": "poison"
+        },
+        {
+          "faceIndex": 2,
+          "label": "剧毒 3",
+          "kind": "status",
+          "value": 3,
+          "school": "verdant",
+          "target": "enemy",
+          "statusKind": "poison"
+        },
+        {
+          "faceIndex": 3,
+          "label": "剧毒 4",
+          "kind": "status",
+          "value": 4,
+          "school": "verdant",
+          "target": "enemy",
+          "statusKind": "poison"
+        },
+        {
+          "faceIndex": 4,
+          "label": "藤击 2",
+          "kind": "purge",
+          "value": 2,
+          "school": "verdant",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 5,
+          "label": "锋刃 4",
+          "kind": "purge",
+          "value": 4,
+          "school": "blade",
+          "target": "enemy"
+        }
+      ],
+      "category": "skill",
+      "subtype": "verdant",
+      "riskTier": "safe"
+    },
+    "skill_verdant_bark": {
+      "name": "树皮甲",
+      "school": "verdant",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "光盾 4",
+          "kind": "ward",
+          "value": 4,
+          "school": "verdant",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "光盾 5",
+          "kind": "ward",
+          "value": 5,
+          "school": "verdant",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "光盾 5",
+          "kind": "ward",
+          "value": 5,
+          "school": "verdant",
+          "target": "self"
+        },
+        {
+          "faceIndex": 3,
+          "label": "咒壁 6",
+          "kind": "ward",
+          "value": 6,
+          "school": "arcana",
+          "target": "self"
+        },
+        {
+          "faceIndex": 4,
+          "label": "光盾 7",
+          "kind": "ward",
+          "value": 7,
+          "school": "verdant",
+          "target": "self"
+        },
+        {
+          "faceIndex": 5,
+          "label": "自损 1",
+          "kind": "selfCorruption",
+          "value": 1,
+          "school": "neutral",
+          "target": "self"
+        }
+      ],
+      "category": "skill",
+      "subtype": "verdant",
+      "riskTier": "balanced"
+    },
+    "skill_verdant_regrow": {
+      "name": "再生",
+      "school": "verdant",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "再生 1",
+          "kind": "status",
+          "value": 1,
+          "school": "verdant",
+          "target": "self",
+          "statusKind": "regen"
+        },
+        {
+          "faceIndex": 1,
+          "label": "再生 1",
+          "kind": "status",
+          "value": 1,
+          "school": "verdant",
+          "target": "self",
+          "statusKind": "regen"
+        },
+        {
+          "faceIndex": 2,
+          "label": "再生 2",
+          "kind": "status",
+          "value": 2,
+          "school": "verdant",
+          "target": "self",
+          "statusKind": "regen"
+        },
+        {
+          "faceIndex": 3,
+          "label": "修复 2",
+          "kind": "mend",
+          "value": 2,
+          "school": "verdant",
+          "target": "self"
+        },
+        {
+          "faceIndex": 4,
+          "label": "修复 3",
+          "kind": "mend",
+          "value": 3,
+          "school": "verdant",
+          "target": "self"
+        },
+        {
+          "faceIndex": 5,
+          "label": "咒印 1",
+          "kind": "status",
+          "value": 1,
+          "school": "arcana",
+          "target": "enemy",
+          "statusKind": "weak"
+        }
+      ],
+      "category": "skill",
+      "subtype": "verdant",
+      "riskTier": "safe"
+    },
+    "skill_verdant_thorn": {
+      "name": "血荆棘",
+      "school": "verdant",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "自损 3",
+          "kind": "selfCorruption",
+          "value": 3,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "自损 3",
+          "kind": "selfCorruption",
+          "value": 3,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "咒毒 6",
+          "kind": "status",
+          "value": 6,
+          "school": "arcana",
+          "target": "enemy",
+          "statusKind": "poison"
+        },
+        {
+          "faceIndex": 3,
+          "label": "剧毒 7",
+          "kind": "status",
+          "value": 7,
+          "school": "verdant",
+          "target": "enemy",
+          "statusKind": "poison"
+        },
+        {
+          "faceIndex": 4,
+          "label": "修复 6",
+          "kind": "mend",
+          "value": 6,
+          "school": "verdant",
+          "target": "self"
+        },
+        {
+          "faceIndex": 5,
+          "label": "自损 4",
+          "kind": "selfCorruption",
+          "value": 4,
+          "school": "neutral",
+          "target": "self"
+        }
+      ],
+      "category": "skill",
+      "subtype": "verdant",
+      "riskTier": "risky"
+    },
+    "skill_common_forge": {
+      "name": "锻造锤",
+      "school": "neutral",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "改骰 +1",
+          "kind": "modify",
+          "value": 1,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "改骰 +1",
+          "kind": "modify",
+          "value": 1,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "改骰 +2",
+          "kind": "modify",
+          "value": 2,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 3,
+          "label": "星屑 10",
+          "kind": "gold",
+          "value": 10,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 4,
+          "label": "星屑 15",
+          "kind": "gold",
+          "value": 15,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 5,
+          "label": "魔化 3",
+          "kind": "purge",
+          "value": 3,
+          "school": "neutral",
+          "target": "enemy"
+        }
+      ],
+      "category": "skill",
+      "subtype": "common",
+      "riskTier": "safe"
+    },
+    "skill_common_gamble": {
+      "name": "赌徒",
+      "school": "neutral",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "无事",
+          "kind": "nothing",
+          "value": 0,
+          "school": "neutral",
+          "target": "none"
+        },
+        {
+          "faceIndex": 1,
+          "label": "自损 2",
+          "kind": "selfCorruption",
+          "value": 2,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "自损 2",
+          "kind": "selfCorruption",
+          "value": 2,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 3,
+          "label": "魔化 6",
+          "kind": "purge",
+          "value": 6,
+          "school": "neutral",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 4,
+          "label": "魔化 8",
+          "kind": "purge",
+          "value": 8,
+          "school": "neutral",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 5,
+          "label": "无事",
+          "kind": "nothing",
+          "value": 0,
+          "school": "neutral",
+          "target": "none"
+        }
+      ],
+      "category": "skill",
+      "subtype": "common",
+      "riskTier": "risky"
+    }
+  }
+}

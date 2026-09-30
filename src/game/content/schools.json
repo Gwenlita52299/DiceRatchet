@@ -1,0 +1,31 @@
+{
+  "$schemaVersion": "content-1",
+  "order": [
+    "blade",
+    "arcana",
+    "verdant",
+    "neutral"
+  ],
+  "schools": {
+    "blade": {
+      "name": "锋刃",
+      "beats": "verdant",
+      "mechanic": "蓄势：连续锋刃攻击累积层数，回合末未攻击则减半"
+    },
+    "arcana": {
+      "name": "秘法",
+      "beats": "blade",
+      "mechanic": "过牌与重掷：靠抽骰/重掷/复制堆叠连携"
+    },
+    "verdant": {
+      "name": "自然",
+      "beats": "arcana",
+      "mechanic": "续航与毒：回净化 + 中毒 DoT + 减伤"
+    },
+    "neutral": {
+      "name": "中立",
+      "beats": null,
+      "mechanic": "不参与克制"
+    }
+  }
+}

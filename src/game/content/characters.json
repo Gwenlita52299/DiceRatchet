@@ -1,0 +1,77 @@
+{
+  "$schemaVersion": "content-1",
+  "characters": {
+    "warrior": {
+      "name": "破咒者",
+      "desc": "以骰为刃，以净化为盾。",
+      "heartsBonus": 0,
+      "virtueBonus": 0,
+      "abilities": [
+        {
+          "id": "warrior_reroll",
+          "name": "重掷",
+          "usesPerBattle": 1,
+          "effect": "reroll_all_hand",
+          "desc": "重掷手中所有未使用的骰子（消费 dice.player 流）"
+        },
+        {
+          "id": "warrior_purify",
+          "name": "净化",
+          "usesPerBattle": null,
+          "effect": "purify_one_corrupt",
+          "desc": "无代价清除 1 颗魔化骰（次数由难度 purifyPerStage 决定）"
+        },
+        {
+          "id": "warrior_focus",
+          "name": "专注",
+          "usesPerBattle": 1,
+          "effect": "set_pip",
+          "desc": "把 1 颗手骰的骰面改为任意值（1–6），每场 1 次"
+        }
+      ],
+      "startingDeck": [
+        "die_strike",
+        "die_strike",
+        "die_guard",
+        "die_guard",
+        "die_mend",
+        "die_utility",
+        "die_strike",
+        "die_utility"
+      ],
+      "startingSlots": [
+        {
+          "slotId": "slot_1",
+          "slotKind": "attack",
+          "constraint": "any",
+          "bonus": 0
+        },
+        {
+          "slotId": "slot_2",
+          "slotKind": "attack",
+          "constraint": "ge:3",
+          "bonus": 1
+        },
+        {
+          "slotId": "slot_3",
+          "slotKind": "defense",
+          "constraint": "any",
+          "bonus": 0
+        },
+        {
+          "slotId": "slot_4",
+          "slotKind": "heal",
+          "constraint": "even",
+          "bonus": 1
+        },
+        {
+          "slotId": "slot_5",
+          "slotKind": "utility",
+          "constraint": "any",
+          "bonus": 0,
+          "reusable": true
+        }
+      ]
+    }
+  }
+}

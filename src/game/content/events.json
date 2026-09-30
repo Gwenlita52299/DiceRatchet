@@ -1,0 +1,865 @@
+{
+  "$schemaVersion": "content-1",
+  "events": {
+    "ev_shrine_shards": {
+      "title": "星屑矿脉",
+      "school": null,
+      "weight": 10,
+      "stageRange": [
+        1,
+        10
+      ],
+      "text": "岩壁的裂缝里闪烁着细碎的星屑光芒，像是有人在黑暗中撒下了一把星星。矿脉深处传来低沉的嗡鸣，空气中弥漫着腐蚀的气味——长时间挖掘会让魔化渗入你的身体。你可以冒险深挖，也可以只拾取表层的碎屑，或者干脆不去碰它。矿工的遗骨静静地躺在一旁，提醒着贪婪的代价。",
+      "options": [
+        {
+          "label": "深入挖掘：得 70 星屑，下一场战斗初始净化 -3",
+          "requirement": null,
+          "risk": "risk",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你挖出了一大把星屑，但指尖已被魔化侵蚀。",
+              "effect": [
+                {
+                  "op": "gain_gold",
+                  "value": 70
+                },
+                {
+                  "op": "lose_virtue",
+                  "value": 3
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "谨慎拾取：得 30 星屑",
+          "requirement": null,
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你小心地收集了表层的星屑。",
+              "effect": [
+                {
+                  "op": "gain_gold",
+                  "value": 30
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "离开",
+          "requirement": null,
+          "risk": "neutral",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你没有停留，转身继续前行。",
+              "effect": []
+            }
+          ]
+        }
+      ]
+    },
+    "ev_blade_altar": {
+      "title": "锋刃祭坛",
+      "school": "blade",
+      "weight": 8,
+      "stageRange": [
+        2,
+        10
+      ],
+      "text": "一座由断剑堆砌而成的祭坛矗立在废墟中央，剑刃上的锈迹早已褪去，只剩下冰冷的锋芒。祭坛上刻着古老的铭文：\"以血换刃，以心换锋。\"你能感觉到某种沉睡的战意在呼唤你。献上生命的一部分，它将回馈你两柄锋刃技能骰；只是触碰它，也能让你的骰面淬上一丝力量。",
+      "options": [
+        {
+          "label": "献祭：失 1 心，得 2 颗锋刃技能骰",
+          "requirement": {
+            "hearts": 2
+          },
+          "risk": "risk",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "鲜血渗入祭坛，两颗锋刃骰浮现在你掌心。",
+              "effect": [
+                {
+                  "op": "lose_heart",
+                  "value": 1
+                },
+                {
+                  "op": "gain_die",
+                  "school": "blade",
+                  "count": 2
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "触碰：一颗骰子的某面被改造为「力量 1」",
+          "requirement": null,
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "一道寒光掠过，你的骰子被淬炼了。",
+              "effect": [
+                {
+                  "op": "modify_face",
+                  "faceId": "ff_strength1"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "离开",
+          "requirement": null,
+          "risk": "neutral",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你没有停留，转身继续前行。",
+              "effect": []
+            }
+          ]
+        }
+      ]
+    },
+    "ev_arcana_library": {
+      "title": "咒文图书馆",
+      "school": "arcana",
+      "weight": 8,
+      "stageRange": [
+        3,
+        10
+      ],
+      "text": "无数书页在半空中缓缓翻动，每一页都写满了会发光的符文。图书馆的管理者早已化为一缕幽影，只留下一句低语：\"知识从不免费。\"书架上有一本平稳的《回响》手札，而更深处的禁书区散发着危险的气息——那里也许藏着强大的法潮秘术，也许只有吞噬读者的诅咒。",
+      "options": [
+        {
+          "label": "研读：得「回响」技能骰",
+          "requirement": null,
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你记下了回响的咒式。",
+              "effect": [
+                {
+                  "op": "gain_die",
+                  "defId": "skill_arcana_echo"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "闯入禁书区：50% 得「法潮」/ 50% 塞入 1 颗重咒骰",
+          "requirement": null,
+          "risk": "risk",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "禁书向你敞开，法潮之力涌入骰中。",
+              "effect": [
+                {
+                  "op": "gain_die",
+                  "defId": "skill_arcana_surge"
+                }
+              ]
+            },
+            {
+              "weight": 1,
+              "text": "书页化作黑焰，一颗重咒骰钻进了你的骰袋。",
+              "effect": [
+                {
+                  "op": "add_curse",
+                  "defId": "die_curse_heavy",
+                  "count": 1
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "离开",
+          "requirement": null,
+          "risk": "neutral",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你没有停留，转身继续前行。",
+              "effect": []
+            }
+          ]
+        }
+      ]
+    },
+    "ev_verdant_grove": {
+      "title": "藤蔓林",
+      "school": "verdant",
+      "weight": 8,
+      "stageRange": [
+        1,
+        10
+      ],
+      "text": "浓密的藤蔓编织成一座天然的穹顶，枝头挂着散发微光的果实。果实甘甜，能让人精神焕发，但果皮上的细刺带着轻微的毒性。林子深处堆积着枯枝，一把火就能烧出一条路，灰烬里也许还能捡到被藤蔓吞没的旅人遗物——只是火焰同样会灼伤你。",
+      "options": [
+        {
+          "label": "采摘：清除净化惩罚并在下场战斗 +3 净化，带 1 层中毒",
+          "requirement": null,
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "果实入口，疲惫一扫而空，只是舌尖有些发麻。",
+              "effect": [
+                {
+                  "op": "heal_virtue",
+                  "value": 3
+                },
+                {
+                  "op": "gain_status",
+                  "statusKind": "poison",
+                  "value": 1
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "焚毁：得 60 星屑，失 1 心",
+          "requirement": {
+            "hearts": 2
+          },
+          "risk": "risk",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "火光冲天，你在灰烬中拾到了星屑，也被灼伤了。",
+              "effect": [
+                {
+                  "op": "gain_gold",
+                  "value": 60
+                },
+                {
+                  "op": "lose_heart",
+                  "value": 1
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "离开",
+          "requirement": null,
+          "risk": "neutral",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你没有停留，转身继续前行。",
+              "effect": []
+            }
+          ]
+        }
+      ]
+    },
+    "ev_dice_forge": {
+      "title": "废弃锻造台",
+      "school": null,
+      "weight": 6,
+      "stageRange": [
+        2,
+        10
+      ],
+      "text": "一座被遗弃的锻造台仍残留着余温，铁砧上摆着几块未完成的骰坯。旁边的工具架上挂着一张褪色的价目单：改造骰面，四十星屑。锻造台的另一边是一个拆解槽，丢进去的骰子会被熔成星屑。你可以付钱改造一颗骰子，也可以拆掉一颗不需要的骰子换取星屑。",
+      "options": [
+        {
+          "label": "锻造：支付 40 星屑，从 5 个候选面中选 1 替换",
+          "requirement": {
+            "gold": 40
+          },
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "炉火重新燃起。",
+              "effect": [
+                {
+                  "op": "lose_gold",
+                  "value": 40
+                },
+                {
+                  "op": "goto_forge"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "拆解：随机移除 1 颗骰子，得 45 星屑",
+          "requirement": null,
+          "risk": "risk",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "一颗骰子在熔炉中化为星屑。",
+              "effect": [
+                {
+                  "op": "remove_die",
+                  "mode": "random"
+                },
+                {
+                  "op": "gain_gold",
+                  "value": 45
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "离开",
+          "requirement": null,
+          "risk": "neutral",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你没有停留，转身继续前行。",
+              "effect": []
+            }
+          ]
+        }
+      ]
+    },
+    "ev_mirror_pool": {
+      "title": "镜像池",
+      "school": null,
+      "weight": 7,
+      "stageRange": [
+        2,
+        10
+      ],
+      "text": "一汪静止的池水倒映着另一个你，那个倒影的骰袋里装着和你一模一样的骰子。凝视它足够久，倒影中的骰子似乎会溢出水面，成为真实之物；但如果你一拳打碎镜面，锋利的碎片会割伤你，而碎片深处也许藏着一颗锋刃骰。池水不会一直等待。",
+      "options": [
+        {
+          "label": "凝视：随机复制骰池中的 1 颗骰子",
+          "requirement": null,
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "倒影中的骰子浮出了水面。",
+              "effect": [
+                {
+                  "op": "duplicate_die"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "打碎：下场战斗初始净化 -2，得 1 颗锋刃技能骰",
+          "requirement": null,
+          "risk": "risk",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "碎片割伤了你，但你握住了一颗锋刃骰。",
+              "effect": [
+                {
+                  "op": "lose_virtue",
+                  "value": 2
+                },
+                {
+                  "op": "gain_die",
+                  "school": "blade",
+                  "count": 1
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "离开",
+          "requirement": null,
+          "risk": "neutral",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你没有停留，转身继续前行。",
+              "effect": []
+            }
+          ]
+        }
+      ]
+    },
+    "ev_lost_oracle": {
+      "title": "迷失的神谕使",
+      "school": null,
+      "weight": 6,
+      "stageRange": [
+        3,
+        10
+      ],
+      "relicsOnly": true,
+      "text": "一位披着星纹长袍的神谕使蜷缩在路边，他的六面神谕骰已经碎了一半。他说，只要你施舍五十星屑，他就会把珍藏的遗物交给你。如果你视而不见，他会在你背后低声念出一句诅咒——那诅咒不致命，却会让你的骰袋里多出一颗滞涩的骰子。",
+      "options": [
+        {
+          "label": "救助：失 50 星屑，得 1 个随机遗物",
+          "requirement": {
+            "gold": 50
+          },
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "神谕使把一件遗物放进你手中。",
+              "effect": [
+                {
+                  "op": "lose_gold",
+                  "value": 50
+                },
+                {
+                  "op": "gain_relic"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "无视：得 1 颗滞涩骰",
+          "requirement": null,
+          "risk": "risk",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你听见身后传来含混的咒语。",
+              "effect": [
+                {
+                  "op": "add_curse",
+                  "defId": "die_curse_static",
+                  "count": 1
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "离开（绕路）：失 10 星屑",
+          "requirement": null,
+          "risk": "neutral",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你绕了远路，丢了几枚星屑。",
+              "effect": [
+                {
+                  "op": "lose_gold",
+                  "value": 10
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "ev_blood_pact": {
+      "title": "血契",
+      "school": "blade",
+      "weight": 5,
+      "stageRange": [
+        4,
+        10
+      ],
+      "text": "黑曜石桌上摊开着一份用血写成的契约，墨迹仍在缓慢流动。契约承诺赐予你「献祭 9」的禁忌骰面——一刀足以劈开大多数敌人——代价是两颗心。如果你拒绝，契约不会善罢甘休，它会从你身上抽走一些净化之力作为打扰的补偿。",
+      "options": [
+        {
+          "label": "签订：失 2 心，一颗骰子获得「献祭 9」面",
+          "requirement": {
+            "hearts": 3
+          },
+          "risk": "risk",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "契约燃尽，禁忌的力量刻进了你的骰面。",
+              "effect": [
+                {
+                  "op": "lose_heart",
+                  "value": 2
+                },
+                {
+                  "op": "modify_face",
+                  "faceId": "ff_risky_purge9"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "拒绝：下场战斗初始净化 -5",
+          "requirement": null,
+          "risk": "risk",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "契约抽走了你的一部分力量。",
+              "effect": [
+                {
+                  "op": "lose_virtue",
+                  "value": 5
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "撕毁契约：50% 得 40 星屑 / 50% 下场战斗初始净化 -3",
+          "requirement": null,
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "契约碎片化作星屑。",
+              "effect": [
+                {
+                  "op": "gain_gold",
+                  "value": 40
+                }
+              ]
+            },
+            {
+              "weight": 1,
+              "text": "契约的余烬灼伤了你。",
+              "effect": [
+                {
+                  "op": "lose_virtue",
+                  "value": 3
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "ev_wandering_merchant": {
+      "title": "流浪商人",
+      "school": null,
+      "weight": 7,
+      "stageRange": [
+        2,
+        10
+      ],
+      "text": "一个背着巨大骰袋的商人从雾中走来，袋子里的骰子叮当作响。他眯着眼打量你：\"看你这副样子，是要去挑战下一个守关者吧？我这里正好有能克制它的好东西，八十星屑。要是囊中羞涩，四十星屑也能买到一颗随机的技能骰——运气好的话。\"",
+      "options": [
+        {
+          "label": "交易：失 80 星屑，得 1 颗克制本章 Boss 学派的技能骰",
+          "requirement": {
+            "gold": 80
+          },
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "商人递给你一颗骰子，眨了眨眼。",
+              "effect": [
+                {
+                  "op": "lose_gold",
+                  "value": 80
+                },
+                {
+                  "op": "gain_die_counter_boss"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "小交易：失 40 星屑，得 1 颗随机技能骰",
+          "requirement": {
+            "gold": 40
+          },
+          "risk": "risk",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你从袋中摸出了一颗骰子。",
+              "effect": [
+                {
+                  "op": "lose_gold",
+                  "value": 40
+                },
+                {
+                  "op": "gain_die_random"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "离开",
+          "requirement": null,
+          "risk": "neutral",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你没有停留，转身继续前行。",
+              "effect": []
+            }
+          ]
+        }
+      ]
+    },
+    "ev_ancient_slot": {
+      "title": "古代槽位",
+      "school": null,
+      "weight": 5,
+      "stageRange": [
+        3,
+        10
+      ],
+      "text": "墙壁上嵌着一个古老的技能槽，边缘的符文仍在微微发亮。它可以被激活并与你的装备共鸣，让你每回合多一个放置骰子的位置；或者你可以把它撬下来卖给收藏家，换一大笔星屑。槽位的纹路与你的骰子惊人地契合，仿佛就是为你准备的。",
+      "options": [
+        {
+          "label": "激活：本局永久获得 1 个攻击槽（any）",
+          "requirement": null,
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "槽位与你共鸣，成为你的一部分。",
+              "effect": [
+                {
+                  "op": "add_slot"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "货币化：得 100 星屑，但一颗滞涩骰混入骰池",
+          "requirement": null,
+          "risk": "risk",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你撬下了槽位，附着其上的咒尘却钻进了骰袋。",
+              "effect": [
+                {
+                  "op": "gain_gold",
+                  "value": 100
+                },
+                {
+                  "op": "add_curse",
+                  "defId": "die_curse_static",
+                  "count": 1
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "离开",
+          "requirement": null,
+          "risk": "neutral",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你没有停留，转身继续前行。",
+              "effect": []
+            }
+          ]
+        }
+      ]
+    },
+    "ev_corrupt_spring": {
+      "title": "腐化泉",
+      "school": "verdant",
+      "weight": 6,
+      "stageRange": [
+        2,
+        10
+      ],
+      "text": "泉水呈现出诡异的翠绿色，泡沫中漂浮着细小的孢子。据说饮下它能让人重获新生，但腐化也会随之潜入骰袋。泉边的石碑上还刻着一段净化仪式的步骤，照做可以驱散骰袋中所有的厄咒——只是仪式需要消耗大量星屑作为祭品。",
+      "options": [
+        {
+          "label": "饮用：回 1 心，塞入 2 颗滞涩骰",
+          "requirement": null,
+          "risk": "risk",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "泉水治愈了你，但腐化也一同涌入。",
+              "effect": [
+                {
+                  "op": "gain_heart",
+                  "value": 1
+                },
+                {
+                  "op": "add_curse",
+                  "defId": "die_curse_static",
+                  "count": 2
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "净化：失 30 星屑，移除全部厄咒骰",
+          "requirement": {
+            "gold": 30
+          },
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "仪式完成，厄咒烟消云散。",
+              "effect": [
+                {
+                  "op": "lose_gold",
+                  "value": 30
+                },
+                {
+                  "op": "remove_curses"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "离开",
+          "requirement": null,
+          "risk": "neutral",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "你没有停留，转身继续前行。",
+              "effect": []
+            }
+          ]
+        }
+      ]
+    },
+    "ev_school_trial": {
+      "title": "学派试炼",
+      "school": "all",
+      "weight": 8,
+      "stageRange": [
+        1,
+        10
+      ],
+      "text": "三座雕像环立于试炼场：执剑的锋刃武者、手捧典籍的秘法贤者、身缠藤蔓的自然德鲁伊。每座雕像都在等待一位挑战者。选择一座雕像接受试炼，你将获得该学派的一颗技能骰与一份祝福——但请记住，敌人会针对你骰池中最多的学派进行防守。",
+      "options": [
+        {
+          "label": "锋刃试炼：得 1 颗锋刃技能骰 + 下场战斗力量 1",
+          "requirement": null,
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "武者的雕像向你致敬。",
+              "effect": [
+                {
+                  "op": "gain_die",
+                  "school": "blade",
+                  "count": 1
+                },
+                {
+                  "op": "gain_status",
+                  "statusKind": "strength",
+                  "value": 1
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "秘法试炼：得 1 颗秘法技能骰 + 下场战斗首回合抽骰 +2",
+          "requirement": null,
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "贤者的典籍翻开了一页。",
+              "effect": [
+                {
+                  "op": "gain_die",
+                  "school": "arcana",
+                  "count": 1
+                },
+                {
+                  "op": "extra_draw",
+                  "value": 2
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "自然试炼：得 1 颗自然技能骰 + 下场战斗 +5 净化",
+          "requirement": null,
+          "risk": "positive",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "藤蔓缠上你的手腕，温暖而有力。",
+              "effect": [
+                {
+                  "op": "gain_die",
+                  "school": "verdant",
+                  "count": 1
+                },
+                {
+                  "op": "heal_virtue",
+                  "value": 5
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "挑战三座雕像：50% 各得 1 颗 / 50% 失 1 心",
+          "requirement": {
+            "hearts": 2
+          },
+          "risk": "risk",
+          "outcomes": [
+            {
+              "weight": 1,
+              "text": "三座雕像同时点头！",
+              "effect": [
+                {
+                  "op": "gain_die",
+                  "school": "blade",
+                  "count": 1
+                },
+                {
+                  "op": "gain_die",
+                  "school": "arcana",
+                  "count": 1
+                },
+                {
+                  "op": "gain_die",
+                  "school": "verdant",
+                  "count": 1
+                }
+              ]
+            },
+            {
+              "weight": 1,
+              "text": "雕像们的怒火击倒了你。",
+              "effect": [
+                {
+                  "op": "lose_heart",
+                  "value": 1
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

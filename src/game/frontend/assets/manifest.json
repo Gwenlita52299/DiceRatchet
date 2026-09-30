@@ -1,0 +1,8 @@
+{
+  "$schemaVersion": "assets-1",
+  "note": "全部资产当前为占位符（CSS/emoji/内联 SVG）。替换时在此登记路径；缺失资产自动降级为占位符。",
+  "monsters": {},
+  "relics": {},
+  "dice": {},
+  "icons": {}
+}

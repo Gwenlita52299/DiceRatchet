@@ -1,0 +1,41 @@
+{
+  "$schemaVersion": "content-1",
+  "shop_dice": {
+    "count": 3,
+    "priceMin": 45,
+    "priceMax": 75,
+    "refreshCost": 20,
+    "refreshMax": 2
+  },
+  "shop_relic": {
+    "count": 2,
+    "priceMin": 80,
+    "priceMax": 150
+  },
+  "shop_remove": {
+    "base": 60,
+    "step": 15
+  },
+  "forge": {
+    "candidates": 5,
+    "priceMin": 35,
+    "priceMax": 55
+  },
+  "treasure": {
+    "skipGold": 15
+  },
+  "loot": {
+    "normal": [
+      14,
+      22
+    ],
+    "elite": [
+      40,
+      55
+    ],
+    "boss": [
+      90,
+      110
+    ]
+  }
+}

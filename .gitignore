@@ -13,3 +13,6 @@ logs/
 
 # Large binaries (papers kept locally)
 papers/*.pdf
+
+# Game runtime logs
+src/game/runs/

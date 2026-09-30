@@ -1,0 +1,469 @@
+{
+  "$schemaVersion": "content-1",
+  "dice": {
+    "die_strike": {
+      "name": "打击骰",
+      "category": "normal",
+      "subtype": "starter",
+      "school": "neutral",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "刺击 1",
+          "kind": "purge",
+          "value": 1,
+          "school": "neutral",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 1,
+          "label": "刺击 2",
+          "kind": "purge",
+          "value": 2,
+          "school": "neutral",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 2,
+          "label": "刺击 3",
+          "kind": "purge",
+          "value": 3,
+          "school": "neutral",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 3,
+          "label": "刺击 4",
+          "kind": "purge",
+          "value": 4,
+          "school": "neutral",
+          "target": "enemy"
+        },
+        {
+          "faceIndex": 4,
+          "label": "蓄力斩 6",
+          "kind": "purge",
+          "value": 6,
+          "school": "neutral",
+          "target": "enemy",
+          "tags": [
+            "charge"
+          ]
+        },
+        {
+          "faceIndex": 5,
+          "label": "蓄力斩 7",
+          "kind": "purge",
+          "value": 7,
+          "school": "neutral",
+          "target": "enemy",
+          "tags": [
+            "charge"
+          ]
+        }
+      ],
+      "riskTier": "safe"
+    },
+    "die_guard": {
+      "name": "护盾骰",
+      "category": "normal",
+      "subtype": "starter",
+      "school": "neutral",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "光盾 2",
+          "kind": "ward",
+          "value": 2,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "光盾 3",
+          "kind": "ward",
+          "value": 3,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "光盾 4",
+          "kind": "ward",
+          "value": 4,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 3,
+          "label": "光盾 5",
+          "kind": "ward",
+          "value": 5,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 4,
+          "label": "光盾 6",
+          "kind": "ward",
+          "value": 6,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 5,
+          "label": "光盾 8",
+          "kind": "ward",
+          "value": 8,
+          "school": "neutral",
+          "target": "self"
+        }
+      ],
+      "riskTier": "safe"
+    },
+    "die_mend": {
+      "name": "修复骰",
+      "category": "normal",
+      "subtype": "starter",
+      "school": "neutral",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "修复 1",
+          "kind": "mend",
+          "value": 1,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "修复 2",
+          "kind": "mend",
+          "value": 2,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "修复 3",
+          "kind": "mend",
+          "value": 3,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 3,
+          "label": "修复 4",
+          "kind": "mend",
+          "value": 4,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 4,
+          "label": "修复 5",
+          "kind": "mend",
+          "value": 5,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 5,
+          "label": "修复 6",
+          "kind": "mend",
+          "value": 6,
+          "school": "neutral",
+          "target": "self"
+        }
+      ],
+      "riskTier": "safe"
+    },
+    "die_utility": {
+      "name": "工具骰",
+      "category": "normal",
+      "subtype": "starter",
+      "school": "neutral",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "抽骰 1",
+          "kind": "draw",
+          "value": 1,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "抽骰 1",
+          "kind": "draw",
+          "value": 1,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "星屑 8",
+          "kind": "gold",
+          "value": 8,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 3,
+          "label": "改骰 +1",
+          "kind": "modify",
+          "value": 1,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 4,
+          "label": "重掷",
+          "kind": "reroll",
+          "value": 1,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 5,
+          "label": "刺击 4",
+          "kind": "purge",
+          "value": 4,
+          "school": "neutral",
+          "target": "enemy"
+        }
+      ],
+      "riskTier": "safe"
+    },
+    "die_curse_heavy": {
+      "name": "重咒骰",
+      "category": "cursed",
+      "subtype": "cursed",
+      "school": "neutral",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "自损 3",
+          "kind": "selfCorruption",
+          "value": 3,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 1,
+          "label": "自损 3",
+          "kind": "selfCorruption",
+          "value": 3,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 2,
+          "label": "自损 2",
+          "kind": "selfCorruption",
+          "value": 2,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 3,
+          "label": "自损 2",
+          "kind": "selfCorruption",
+          "value": 2,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 4,
+          "label": "自损 4",
+          "kind": "selfCorruption",
+          "value": 4,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 5,
+          "label": "自损 1",
+          "kind": "selfCorruption",
+          "value": 1,
+          "school": "neutral",
+          "target": "self"
+        }
+      ],
+      "riskTier": "cursed"
+    },
+    "die_curse_static": {
+      "name": "滞涩骰",
+      "category": "cursed",
+      "subtype": "cursed",
+      "school": "neutral",
+      "faces": [
+        {
+          "faceIndex": 0,
+          "label": "滞涩",
+          "kind": "nothing",
+          "value": 0,
+          "school": "neutral",
+          "target": "none"
+        },
+        {
+          "faceIndex": 1,
+          "label": "滞涩",
+          "kind": "nothing",
+          "value": 0,
+          "school": "neutral",
+          "target": "none"
+        },
+        {
+          "faceIndex": 2,
+          "label": "滞涩",
+          "kind": "nothing",
+          "value": 0,
+          "school": "neutral",
+          "target": "none"
+        },
+        {
+          "faceIndex": 3,
+          "label": "滞涩",
+          "kind": "nothing",
+          "value": 0,
+          "school": "neutral",
+          "target": "none"
+        },
+        {
+          "faceIndex": 4,
+          "label": "自损 1",
+          "kind": "selfCorruption",
+          "value": 1,
+          "school": "neutral",
+          "target": "self"
+        },
+        {
+          "faceIndex": 5,
+          "label": "自损 2",
+          "kind": "selfCorruption",
+          "value": 2,
+          "school": "neutral",
+          "target": "self"
+        }
+      ],
+      "riskTier": "cursed"
+    }
+  },
+  "forgeFaces": {
+    "ff_purge3": {
+      "weight": 3,
+      "face": {
+        "label": "魔化 3",
+        "kind": "purge",
+        "value": 3,
+        "school": "neutral",
+        "target": "enemy"
+      }
+    },
+    "ff_purge5": {
+      "weight": 1,
+      "face": {
+        "label": "魔化 5",
+        "kind": "purge",
+        "value": 5,
+        "school": "neutral",
+        "target": "enemy"
+      }
+    },
+    "ff_ward4": {
+      "weight": 3,
+      "face": {
+        "label": "光盾 4",
+        "kind": "ward",
+        "value": 4,
+        "school": "neutral",
+        "target": "self"
+      }
+    },
+    "ff_mend3": {
+      "weight": 2,
+      "face": {
+        "label": "修复 3",
+        "kind": "mend",
+        "value": 3,
+        "school": "neutral",
+        "target": "self"
+      }
+    },
+    "ff_draw1": {
+      "weight": 2,
+      "face": {
+        "label": "抽骰 1",
+        "kind": "draw",
+        "value": 1,
+        "school": "neutral",
+        "target": "self"
+      }
+    },
+    "ff_gold12": {
+      "weight": 2,
+      "face": {
+        "label": "星屑 12",
+        "kind": "gold",
+        "value": 12,
+        "school": "neutral",
+        "target": "self"
+      }
+    },
+    "ff_poison3": {
+      "weight": 2,
+      "face": {
+        "label": "剧毒 3",
+        "kind": "status",
+        "value": 3,
+        "school": "verdant",
+        "target": "enemy",
+        "statusKind": "poison"
+      }
+    },
+    "ff_weak2": {
+      "weight": 2,
+      "face": {
+        "label": "虚弱 2",
+        "kind": "status",
+        "value": 2,
+        "school": "arcana",
+        "target": "enemy",
+        "statusKind": "weak"
+      }
+    },
+    "ff_strength1": {
+      "weight": 1,
+      "face": {
+        "label": "力量 1",
+        "kind": "status",
+        "value": 1,
+        "school": "blade",
+        "target": "self",
+        "statusKind": "strength"
+      }
+    },
+    "ff_blade_purge6": {
+      "weight": 1,
+      "face": {
+        "label": "锋刃 6",
+        "kind": "purge",
+        "value": 6,
+        "school": "blade",
+        "target": "enemy"
+      }
+    },
+    "ff_risky_purge9": {
+      "weight": 1,
+      "face": {
+        "label": "献祭 9",
+        "kind": "purge",
+        "value": 9,
+        "school": "blade",
+        "target": "enemy",
+        "selfCorruption": 3
+      }
+    }
+  }
+}

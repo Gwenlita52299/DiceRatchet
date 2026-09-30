@@ -1,0 +1,1263 @@
+{
+  "$schemaVersion": "content-1",
+  "monsters": {
+    "mon_verdant_slime": {
+      "name": "腐生史莱姆",
+      "school": "verdant",
+      "tier": "normal",
+      "maxCorruption": 12,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "purge",
+            "value": 3
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "odd",
+          "effect": {
+            "kind": "ward",
+            "value": 3
+          }
+        }
+      ],
+      "diceCount": 1,
+      "diceSides": 6,
+      "ai": "greedy_damage",
+      "taunt": "自然 · 黏滑的腐殖体",
+      "desc": "自然 · 黏滑的腐殖体",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_verdant_bramble": {
+      "name": "荆棘藤",
+      "school": "verdant",
+      "tier": "normal",
+      "maxCorruption": 16,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "purge",
+            "value": 4
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "any",
+          "effect": {
+            "kind": "status",
+            "statusKind": "poison",
+            "value": 2,
+            "target": "player"
+          }
+        }
+      ],
+      "diceCount": 2,
+      "diceSides": 6,
+      "ai": "greedy_damage",
+      "taunt": "自然 · 带毒的藤蔓",
+      "desc": "自然 · 带毒的藤蔓",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_verdant_mossbeast": {
+      "name": "苔兽",
+      "school": "verdant",
+      "tier": "normal",
+      "maxCorruption": 22,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "ge:3",
+          "effect": {
+            "kind": "purge",
+            "value": 5
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "any",
+          "effect": {
+            "kind": "ward",
+            "value": 5
+          }
+        }
+      ],
+      "diceCount": 2,
+      "diceSides": 6,
+      "ai": "greedy_block",
+      "taunt": "自然 · 厚苔护体",
+      "desc": "自然 · 厚苔护体",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_verdant_sporeling": {
+      "name": "孢子群",
+      "school": "verdant",
+      "tier": "normal",
+      "maxCorruption": 14,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "status",
+            "statusKind": "weak",
+            "value": 2,
+            "target": "player"
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "any",
+          "effect": {
+            "kind": "purge",
+            "value": 3
+          }
+        }
+      ],
+      "diceCount": 2,
+      "diceSides": 4,
+      "ai": "scripted",
+      "taunt": "自然 · 散播虚弱孢子",
+      "desc": "自然 · 散播虚弱孢子",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_verdant_thornback": {
+      "name": "棘背兽",
+      "school": "verdant",
+      "tier": "normal",
+      "maxCorruption": 26,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "even",
+          "effect": {
+            "kind": "purge",
+            "value": 6
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "any",
+          "effect": {
+            "kind": "ward",
+            "value": 4
+          }
+        }
+      ],
+      "diceCount": 3,
+      "diceSides": 6,
+      "ai": "greedy_damage",
+      "taunt": "自然 · 背生利棘",
+      "desc": "自然 · 背生利棘",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_arcana_wisp": {
+      "name": "游荡咒火",
+      "school": "arcana",
+      "tier": "normal",
+      "maxCorruption": 10,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "purge",
+            "value": 3
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "ge:4",
+          "effect": {
+            "kind": "status",
+            "statusKind": "burn",
+            "value": 3,
+            "target": "player"
+          }
+        }
+      ],
+      "diceCount": 1,
+      "diceSides": 6,
+      "ai": "greedy_damage",
+      "taunt": "秘法 · 飘忽的咒火",
+      "desc": "秘法 · 飘忽的咒火",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_arcana_hexer": {
+      "name": "咒术师",
+      "school": "arcana",
+      "tier": "normal",
+      "maxCorruption": 18,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "status",
+            "statusKind": "weak",
+            "value": 3,
+            "target": "player"
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "any",
+          "effect": {
+            "kind": "purge",
+            "value": 4
+          }
+        }
+      ],
+      "diceCount": 2,
+      "diceSides": 6,
+      "ai": "scripted",
+      "taunt": "秘法 · 擅长削弱",
+      "desc": "秘法 · 擅长削弱",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_arcana_golem": {
+      "name": "符石傀儡",
+      "school": "arcana",
+      "tier": "normal",
+      "maxCorruption": 30,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "ge:4",
+          "effect": {
+            "kind": "purge",
+            "value": 7
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "any",
+          "effect": {
+            "kind": "ward",
+            "value": 6
+          }
+        }
+      ],
+      "diceCount": 2,
+      "diceSides": 8,
+      "ai": "greedy_block",
+      "taunt": "秘法 · 符文石躯",
+      "desc": "秘法 · 符文石躯",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_arcana_mirror": {
+      "name": "镜像体",
+      "school": "arcana",
+      "tier": "normal",
+      "maxCorruption": 20,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "in:2,4,6",
+          "effect": {
+            "kind": "purge",
+            "value": 5
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "any",
+          "effect": {
+            "kind": "add_curse",
+            "value": 1,
+            "dieId": "die_curse_static"
+          }
+        }
+      ],
+      "diceCount": 2,
+      "diceSides": 6,
+      "ai": "scripted",
+      "taunt": "秘法 · 向你的骰池塞入厄咒",
+      "desc": "秘法 · 向你的骰池塞入厄咒",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_arcana_eye": {
+      "name": "窥视之眼",
+      "school": "arcana",
+      "tier": "normal",
+      "maxCorruption": 15,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "status",
+            "statusKind": "weak",
+            "value": 2,
+            "target": "player"
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "odd",
+          "effect": {
+            "kind": "purge",
+            "value": 5
+          }
+        }
+      ],
+      "diceCount": 2,
+      "diceSides": 6,
+      "ai": "greedy_damage",
+      "taunt": "秘法 · 洞察弱点",
+      "desc": "秘法 · 洞察弱点",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_blade_grunt": {
+      "name": "锋刃幼体",
+      "school": "blade",
+      "tier": "normal",
+      "maxCorruption": 16,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "purge",
+            "value": 4
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "ge:4",
+          "effect": {
+            "kind": "purge",
+            "value": 6
+          }
+        }
+      ],
+      "diceCount": 2,
+      "diceSides": 6,
+      "ai": "greedy_damage",
+      "taunt": "锋刃 · 莽撞的新兵",
+      "desc": "锋刃 · 莽撞的新兵",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_blade_duelist": {
+      "name": "决斗者",
+      "school": "blade",
+      "tier": "normal",
+      "maxCorruption": 24,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "odd",
+          "effect": {
+            "kind": "purge",
+            "value": 6
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "any",
+          "effect": {
+            "kind": "ward",
+            "value": 4
+          }
+        }
+      ],
+      "diceCount": 2,
+      "diceSides": 6,
+      "ai": "greedy_damage",
+      "taunt": "锋刃 · 攻守兼备",
+      "desc": "锋刃 · 攻守兼备",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_blade_brute": {
+      "name": "蛮兵",
+      "school": "blade",
+      "tier": "normal",
+      "maxCorruption": 34,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "ge:3",
+          "effect": {
+            "kind": "purge",
+            "value": 8
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "any",
+          "effect": {
+            "kind": "purge",
+            "value": 3
+          }
+        }
+      ],
+      "diceCount": 3,
+      "diceSides": 6,
+      "ai": "greedy_damage",
+      "taunt": "锋刃 · 重击",
+      "desc": "锋刃 · 重击",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_blade_assassin": {
+      "name": "刺客",
+      "school": "blade",
+      "tier": "normal",
+      "maxCorruption": 18,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "even",
+          "effect": {
+            "kind": "purge",
+            "value": 7
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "any",
+          "effect": {
+            "kind": "status",
+            "statusKind": "strength",
+            "value": 1,
+            "target": "self"
+          }
+        }
+      ],
+      "diceCount": 2,
+      "diceSides": 6,
+      "ai": "scripted",
+      "taunt": "锋刃 · 越战越强",
+      "desc": "锋刃 · 越战越强",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "mon_neutral_shell": {
+      "name": "空壳",
+      "school": "neutral",
+      "tier": "normal",
+      "maxCorruption": 28,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "purge",
+            "value": 3
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "any",
+          "effect": {
+            "kind": "ward",
+            "value": 8
+          }
+        }
+      ],
+      "diceCount": 2,
+      "diceSides": 6,
+      "ai": "greedy_block",
+      "taunt": "中立 · 空洞的甲壳",
+      "desc": "中立 · 空洞的甲壳",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "elite_verdant_warden": {
+      "name": "林苑守望者",
+      "school": "verdant",
+      "tier": "elite",
+      "maxCorruption": 60,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "purge",
+            "value": 6
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "ge:3",
+          "effect": {
+            "kind": "purge",
+            "value": 4
+          }
+        },
+        {
+          "slotId": "e_slot_2",
+          "constraint": "any",
+          "effect": {
+            "kind": "ward",
+            "value": 5
+          }
+        }
+      ],
+      "diceCount": 3,
+      "diceSides": 6,
+      "ai": "greedy_damage",
+      "taunt": "自然 · 每回合回血 2，免疫中毒",
+      "desc": "自然 · 每回合回血 2，免疫中毒",
+      "passives": [
+        {
+          "kind": "regen",
+          "value": 2
+        },
+        {
+          "kind": "poison_immune"
+        }
+      ],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "elite_verdant_blight": {
+      "name": "腐化母株",
+      "school": "verdant",
+      "tier": "elite",
+      "maxCorruption": 55,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "purge",
+            "value": 5
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "any",
+          "effect": {
+            "kind": "add_curse",
+            "value": 1,
+            "dieId": "die_curse_static"
+          }
+        },
+        {
+          "slotId": "e_slot_2",
+          "constraint": "ge:4",
+          "effect": {
+            "kind": "status",
+            "statusKind": "poison",
+            "value": 3,
+            "target": "player"
+          }
+        }
+      ],
+      "diceCount": 3,
+      "diceSides": 6,
+      "ai": "scripted",
+      "taunt": "自然 · 向你的骰池塞入滞涩骰",
+      "desc": "自然 · 向你的骰池塞入滞涩骰",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "elite_arcana_weaver": {
+      "name": "织咒者",
+      "school": "arcana",
+      "tier": "elite",
+      "maxCorruption": 52,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "status",
+            "statusKind": "weak",
+            "value": 2,
+            "target": "player"
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "any",
+          "effect": {
+            "kind": "purge",
+            "value": 6
+          }
+        },
+        {
+          "slotId": "e_slot_2",
+          "constraint": "ge:4",
+          "effect": {
+            "kind": "purge",
+            "value": 5
+          }
+        }
+      ],
+      "diceCount": 3,
+      "diceSides": 6,
+      "ai": "scripted",
+      "taunt": "秘法 · 每回合施加虚弱",
+      "desc": "秘法 · 每回合施加虚弱",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "elite_arcana_lattice": {
+      "name": "咒阵",
+      "school": "arcana",
+      "tier": "elite",
+      "maxCorruption": 66,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "purge",
+            "value": 6
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "ge:5",
+          "effect": {
+            "kind": "purge",
+            "value": 9
+          }
+        },
+        {
+          "slotId": "e_slot_2",
+          "constraint": "any",
+          "effect": {
+            "kind": "ward",
+            "value": 6
+          }
+        }
+      ],
+      "diceCount": 3,
+      "diceSides": 8,
+      "ai": "greedy_damage",
+      "taunt": "秘法 · 受击时反弹 2 点自魔化",
+      "desc": "秘法 · 受击时反弹 2 点自魔化",
+      "passives": [
+        {
+          "kind": "thorns",
+          "value": 2
+        }
+      ],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "elite_blade_champion": {
+      "name": "锋刃冠军",
+      "school": "blade",
+      "tier": "elite",
+      "maxCorruption": 58,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "purge",
+            "value": 6
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "ge:4",
+          "effect": {
+            "kind": "purge",
+            "value": 7
+          }
+        },
+        {
+          "slotId": "e_slot_2",
+          "constraint": "any",
+          "effect": {
+            "kind": "ward",
+            "value": 4
+          }
+        }
+      ],
+      "diceCount": 3,
+      "diceSides": 6,
+      "ai": "greedy_damage",
+      "taunt": "锋刃 · 每回合力量 +1",
+      "desc": "锋刃 · 每回合力量 +1",
+      "passives": [
+        {
+          "kind": "ramp_strength",
+          "value": 1
+        }
+      ],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "elite_neutral_warden": {
+      "name": "铁壁",
+      "school": "neutral",
+      "tier": "elite",
+      "maxCorruption": 72,
+      "slots": [
+        {
+          "slotId": "e_slot_0",
+          "constraint": "any",
+          "effect": {
+            "kind": "ward",
+            "value": 12
+          }
+        },
+        {
+          "slotId": "e_slot_1",
+          "constraint": "ge:4",
+          "effect": {
+            "kind": "purge",
+            "value": 8
+          }
+        }
+      ],
+      "diceCount": 2,
+      "diceSides": 10,
+      "ai": "greedy_block",
+      "taunt": "中立 · 高光盾",
+      "desc": "中立 · 高光盾",
+      "passives": [],
+      "phases": null,
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "boss_verdant_bloom": {
+      "name": "腐化绽放",
+      "school": "verdant",
+      "tier": "boss",
+      "maxCorruption": 75,
+      "slots": [],
+      "diceCount": 3,
+      "diceSides": 6,
+      "ai": "boss_pattern",
+      "taunt": "自然 · 两阶段：毒雾 → 狂暴",
+      "desc": "自然 · 两阶段：毒雾 → 狂暴",
+      "passives": [],
+      "phases": [
+        {
+          "phase": 1,
+          "endsAtPermille": 500,
+          "school": "verdant",
+          "slots": [
+            {
+              "slotId": "e_slot_0",
+              "constraint": "any",
+              "effect": {
+                "kind": "purge",
+                "value": 5
+              }
+            },
+            {
+              "slotId": "e_slot_1",
+              "constraint": "any",
+              "effect": {
+                "kind": "status",
+                "statusKind": "poison",
+                "value": 3,
+                "target": "player"
+              }
+            }
+          ]
+        },
+        {
+          "phase": 2,
+          "endsAtPermille": 0,
+          "school": "verdant",
+          "slots": [
+            {
+              "slotId": "e_slot_0",
+              "constraint": "ge:3",
+              "effect": {
+                "kind": "purge",
+                "value": 7
+              }
+            },
+            {
+              "slotId": "e_slot_1",
+              "constraint": "any",
+              "effect": {
+                "kind": "ward",
+                "value": 8
+              }
+            },
+            {
+              "slotId": "e_slot_2",
+              "constraint": "any",
+              "effect": {
+                "kind": "heal",
+                "value": 4
+              }
+            }
+          ]
+        }
+      ],
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "boss_arcana_spiral": {
+      "name": "咒环",
+      "school": "arcana",
+      "tier": "boss",
+      "maxCorruption": 110,
+      "slots": [],
+      "diceCount": 3,
+      "diceSides": 8,
+      "ai": "boss_pattern",
+      "taunt": "秘法 · 三阶段：削弱 → 诅咒 → 连击",
+      "desc": "秘法 · 三阶段：削弱 → 诅咒 → 连击",
+      "passives": [],
+      "phases": [
+        {
+          "phase": 1,
+          "endsAtPermille": 600,
+          "school": "arcana",
+          "slots": [
+            {
+              "slotId": "e_slot_0",
+              "constraint": "any",
+              "effect": {
+                "kind": "status",
+                "statusKind": "weak",
+                "value": 3,
+                "target": "player"
+              }
+            },
+            {
+              "slotId": "e_slot_1",
+              "constraint": "any",
+              "effect": {
+                "kind": "purge",
+                "value": 5
+              }
+            }
+          ]
+        },
+        {
+          "phase": 2,
+          "endsAtPermille": 250,
+          "school": "arcana",
+          "slots": [
+            {
+              "slotId": "e_slot_0",
+              "constraint": "in:2,4,6",
+              "effect": {
+                "kind": "purge",
+                "value": 8
+              }
+            },
+            {
+              "slotId": "e_slot_1",
+              "constraint": "any",
+              "effect": {
+                "kind": "add_curse",
+                "value": 1,
+                "dieId": "die_curse_heavy"
+              }
+            },
+            {
+              "slotId": "e_slot_2",
+              "constraint": "any",
+              "effect": {
+                "kind": "purge",
+                "value": 4
+              }
+            }
+          ]
+        },
+        {
+          "phase": 3,
+          "endsAtPermille": 0,
+          "school": "arcana",
+          "slots": [
+            {
+              "slotId": "e_slot_0",
+              "constraint": "any",
+              "effect": {
+                "kind": "purge",
+                "value": 6,
+                "hits": 2
+              }
+            },
+            {
+              "slotId": "e_slot_1",
+              "constraint": "any",
+              "effect": {
+                "kind": "ward",
+                "value": 10
+              }
+            }
+          ]
+        }
+      ],
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    },
+    "boss_chaos_core": {
+      "name": "异常原点",
+      "school": "arcana",
+      "tier": "boss",
+      "maxCorruption": 160,
+      "slots": [],
+      "diceCount": 3,
+      "diceSides": 8,
+      "ai": "boss_pattern",
+      "taunt": "三阶段三学派：秘法 → 锋刃 → 自然",
+      "desc": "三阶段三学派：秘法 → 锋刃 → 自然",
+      "passives": [],
+      "phases": [
+        {
+          "phase": 1,
+          "endsAtPermille": 666,
+          "school": "arcana",
+          "slots": [
+            {
+              "slotId": "e_slot_0",
+              "constraint": "any",
+              "effect": {
+                "kind": "status",
+                "statusKind": "weak",
+                "value": 3,
+                "target": "player"
+              }
+            },
+            {
+              "slotId": "e_slot_1",
+              "constraint": "any",
+              "effect": {
+                "kind": "purge",
+                "value": 6
+              }
+            },
+            {
+              "slotId": "e_slot_2",
+              "constraint": "any",
+              "effect": {
+                "kind": "drain_hand",
+                "value": 1
+              }
+            }
+          ]
+        },
+        {
+          "phase": 2,
+          "endsAtPermille": 333,
+          "school": "blade",
+          "slots": [
+            {
+              "slotId": "e_slot_0",
+              "constraint": "ge:3",
+              "effect": {
+                "kind": "purge",
+                "value": 11
+              }
+            },
+            {
+              "slotId": "e_slot_1",
+              "constraint": "any",
+              "effect": {
+                "kind": "purge",
+                "value": 7
+              }
+            },
+            {
+              "slotId": "e_slot_2",
+              "constraint": "any",
+              "effect": {
+                "kind": "disable_slot",
+                "value": 2
+              }
+            }
+          ]
+        },
+        {
+          "phase": 3,
+          "endsAtPermille": 0,
+          "school": "verdant",
+          "slots": [
+            {
+              "slotId": "e_slot_0",
+              "constraint": "any",
+              "effect": {
+                "kind": "heal",
+                "value": 6
+              }
+            },
+            {
+              "slotId": "e_slot_1",
+              "constraint": "any",
+              "effect": {
+                "kind": "status",
+                "statusKind": "poison",
+                "value": 5,
+                "target": "player"
+              }
+            },
+            {
+              "slotId": "e_slot_2",
+              "constraint": "any",
+              "effect": {
+                "kind": "ward",
+                "value": 12
+              }
+            }
+          ]
+        }
+      ],
+      "intentRules": {
+        "revealCount": 99,
+        "hiddenUntil": 0
+      }
+    }
+  },
+  "groups": {
+    "g_01": {
+      "members": [
+        "mon_verdant_slime"
+      ],
+      "stages": [
+        1,
+        1
+      ]
+    },
+    "g_02": {
+      "members": [
+        "mon_verdant_slime",
+        "mon_arcana_wisp"
+      ],
+      "stages": [
+        1,
+        2
+      ]
+    },
+    "g_03": {
+      "members": [
+        "mon_blade_grunt"
+      ],
+      "stages": [
+        2,
+        3
+      ]
+    },
+    "g_04": {
+      "members": [
+        "mon_verdant_bramble",
+        "mon_blade_grunt"
+      ],
+      "stages": [
+        2,
+        4
+      ]
+    },
+    "g_05": {
+      "members": [
+        "mon_arcana_hexer",
+        "mon_arcana_eye"
+      ],
+      "stages": [
+        4,
+        5
+      ]
+    },
+    "g_06": {
+      "members": [
+        "mon_verdant_mossbeast"
+      ],
+      "stages": [
+        4,
+        6
+      ]
+    },
+    "g_07": {
+      "members": [
+        "mon_blade_duelist",
+        "mon_arcana_wisp"
+      ],
+      "stages": [
+        5,
+        7
+      ]
+    },
+    "g_08": {
+      "members": [
+        "mon_arcana_golem",
+        "mon_verdant_sporeling"
+      ],
+      "stages": [
+        6,
+        8
+      ]
+    },
+    "g_09": {
+      "members": [
+        "mon_blade_brute",
+        "mon_blade_assassin"
+      ],
+      "stages": [
+        7,
+        9
+      ]
+    },
+    "g_10": {
+      "members": [
+        "mon_arcana_mirror",
+        "mon_verdant_thornback"
+      ],
+      "stages": [
+        8,
+        10
+      ]
+    },
+    "g_11": {
+      "members": [
+        "mon_blade_brute",
+        "mon_arcana_golem"
+      ],
+      "stages": [
+        9,
+        10
+      ]
+    },
+    "g_12": {
+      "members": [
+        "mon_neutral_shell"
+      ],
+      "stages": [
+        3,
+        6
+      ]
+    },
+    "g_e1": {
+      "members": [
+        "elite_verdant_warden"
+      ],
+      "elite": true
+    },
+    "g_e2": {
+      "members": [
+        "elite_arcana_weaver"
+      ],
+      "elite": true
+    },
+    "g_e3": {
+      "members": [
+        "elite_blade_champion"
+      ],
+      "elite": true
+    },
+    "g_e4": {
+      "members": [
+        "elite_verdant_blight",
+        "mon_verdant_sporeling"
+      ],
+      "elite": true
+    },
+    "g_e5": {
+      "members": [
+        "elite_arcana_lattice"
+      ],
+      "elite": true
+    },
+    "g_e6": {
+      "members": [
+        "elite_neutral_warden",
+        "mon_arcana_wisp"
+      ],
+      "elite": true
+    }
+  }
+}

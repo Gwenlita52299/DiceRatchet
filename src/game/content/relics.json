@@ -1,0 +1,182 @@
+{
+  "$schemaVersion": "content-1",
+  "relics": {
+    "relic_blade_mark": {
+      "name": "锋刃印记",
+      "rarity": "common",
+      "trigger": "on_play_face",
+      "effect": {
+        "op": "face_bonus",
+        "school": "blade",
+        "kind": "purge",
+        "value": 1
+      },
+      "desc": "打出锋刃骰面时，该面魔化值 +1",
+      "tags": [
+        "school"
+      ]
+    },
+    "relic_arcana_loop": {
+      "name": "秘法回环",
+      "rarity": "common",
+      "trigger": "on_turn_start",
+      "effect": {
+        "op": "arcana_draw",
+        "need": 3,
+        "value": 1
+      },
+      "desc": "若上回合打出 ≥3 颗秘法骰面，本回合抽骰 +1",
+      "tags": [
+        "school"
+      ]
+    },
+    "relic_verdant_root": {
+      "name": "自然根须",
+      "rarity": "common",
+      "trigger": "passive",
+      "effect": {
+        "op": "verdant_mend",
+        "value": 1
+      },
+      "desc": "每次打出自然骰面回 1 净化值",
+      "tags": [
+        "school"
+      ]
+    },
+    "relic_school_prism": {
+      "name": "学派棱镜",
+      "rarity": "rare",
+      "trigger": "on_play_face",
+      "effect": {
+        "op": "counter_bonus",
+        "value": 150
+      },
+      "desc": "你的克制倍率额外 +150‰（1300→1450）",
+      "tags": [
+        "school"
+      ]
+    },
+    "relic_stubborn_mix": {
+      "name": "杂派护符",
+      "rarity": "rare",
+      "trigger": "passive",
+      "effect": {
+        "op": "no_mono_penalty",
+        "drawPenalty": 1
+      },
+      "desc": "单学派惩罚失效；但每回合抽骰 -1",
+      "tags": [
+        "school",
+        "cost"
+      ]
+    },
+    "relic_blade_echo": {
+      "name": "锋刃回响",
+      "rarity": "rare",
+      "trigger": "on_kill",
+      "effect": {
+        "op": "blade_echo",
+        "value": 2
+      },
+      "desc": "击杀敌人后，首颗锋刃手骰点数 +2",
+      "tags": [
+        "school"
+      ]
+    },
+    "relic_greedy_eye": {
+      "name": "贪婪之眼",
+      "rarity": "rare",
+      "trigger": "passive",
+      "effect": {
+        "op": "greedy",
+        "goldPermille": 1500,
+        "virtueLoss": 2
+      },
+      "desc": "星屑获取 ×1.5，但每场战斗初始净化值 -2",
+      "tags": [
+        "cost"
+      ]
+    },
+    "relic_glass_heart": {
+      "name": "玻璃之心",
+      "rarity": "rare",
+      "trigger": "passive",
+      "effect": {
+        "op": "glass_heart",
+        "virtueMax": 4
+      },
+      "desc": "净化上限 +4，但每次失心额外再失 1 心",
+      "tags": [
+        "cost"
+      ]
+    },
+    "relic_iron_bark": {
+      "name": "铁树皮",
+      "rarity": "common",
+      "trigger": "on_battle_start",
+      "effect": {
+        "op": "battle_ward",
+        "value": 8
+      },
+      "desc": "战斗开始获得 8 光盾",
+      "tags": []
+    },
+    "relic_swift_hand": {
+      "name": "疾风之手",
+      "rarity": "common",
+      "trigger": "on_turn_start",
+      "effect": {
+        "op": "swift_hand",
+        "value": 1
+      },
+      "desc": "每回合首颗打出的骰面视为你的主学派，且值 +1",
+      "tags": []
+    },
+    "relic_purifier": {
+      "name": "净化之瓶",
+      "rarity": "common",
+      "trigger": "on_battle_start",
+      "effect": {
+        "op": "purify_bonus",
+        "value": 1
+      },
+      "desc": "每场战斗净化次数 +1",
+      "tags": []
+    },
+    "relic_last_stand": {
+      "name": "背水一战",
+      "rarity": "rare",
+      "trigger": "passive",
+      "effect": {
+        "op": "last_stand",
+        "threshold": 3,
+        "value": 3
+      },
+      "desc": "净化值 ≤ 3 时所有魔化值 +3",
+      "tags": []
+    },
+    "relic_boss_trophy": {
+      "name": "王的遗骸",
+      "rarity": "boss",
+      "trigger": "on_battle_start",
+      "effect": {
+        "op": "boss_trophy",
+        "mulPermille": 1200
+      },
+      "desc": "对精英/Boss 伤害 +20%",
+      "tags": []
+    },
+    "relic_deck_thin": {
+      "name": "极简教义",
+      "rarity": "boss",
+      "trigger": "on_shop",
+      "effect": {
+        "op": "deck_thin",
+        "threshold": 5,
+        "value": 1
+      },
+      "desc": "每次商店首次删骰免费；骰池 ≤5 颗时全骰面 +1",
+      "tags": []
+    }
+  }
+}
