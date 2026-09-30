@@ -1,6 +1,6 @@
 # MOD-08 evals 技术 PRD
 
-> 版本：v0.1（草案）· 状态：待评审 · 所属里程碑：M1（基线）→ M2（执行器/指标）→ M3（完整：坍缩 + 消融 + test 终检）
+> 版本：v0.2（2026-09-30 17:21 按 Spec v1.3 修订，见 §17）· 状态：待评审 · 所属里程碑：M1（基线）→ M2（执行器/指标）→ M3（完整：坍缩 + 消融 + test 终检）
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（**唯一事实来源**，冲突以 Spec 为准）· 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md)（§5 防坍缩、§6 三项验收、§8 沙箱泄漏）
 > 作者：MOD-08 owner · 落地：`gamer_rsi/evals/{harness,metrics,diversity,ablation,baselines}.py`
 
@@ -19,7 +19,8 @@ MOD-08 是 L3 测量层，**只读轨迹与报告，不参与决策**（Spec §1
 
 - `configs/seeds.yaml` 的**协议部分**（区间、篮子、exposure 策略、hash 固化与 CI 校验规则；文件加载归 MOD-09）；三类 seed 隔离的**代码级护栏**（INV-5）。
 - 评估执行器（`harness_version + seed 列表 + 预算` → 并行跑局并汇总）；基线 `random`/`heuristic`/`fixed_prompt` 的实现、与 MOD-04 的复用关系、不可变归档。
-- 指标：`win_rate` + Wilson 95% CI、`mean_hp_left`、`mean_kills`、`mean_turns`、`illegal_rate`、归一化动作熵与每回合熵曲线。
+- 指标（Spec v1.3 INV-7）：`win_rate` + Wilson 95% CI、`mean_stages_cleared`、`mean_hearts_left`、`mean_battles_won`、`mean_decisions`、`illegal_rate`、`fallback_rate`、`truncation_rate`、归一化动作熵与每个决策点的熵曲线。
+- shaped reward 定义（`evals/reward.py`，只供学习与调试，Spec v1.3 §3 由 MOD-01 移交过来）。
 - 增益真实性（`win_rate_gap` + `verdict`）、多样性/坍缩（`entropy_slope`、`js_divergence`、`collapse_flag`）、消融两变体。
 - 报告落地：`report.json`、`metrics/generations.csv`、绘图 tidy 数据（绘图本身是 MOD-09）。
 
@@ -46,16 +47,22 @@ MOD-08 是 L3 测量层，**只读轨迹与报告，不参与决策**（Spec §1
 - **FR-08-01** 加载 `seeds.yaml` 并校验三类区间两两不相交；任一重叠抛 `E_EVAL_SEED_OVERLAP`。
 - **FR-08-02** `train`（默认 1000–1999）按 `per_generation=30` 顺序切块：第 g 代用 `1000+30(g-1) … 1029+30(g-1)`；越界抛 `E_EVAL_SEED_EXHAUSTED`。
 - **FR-08-03** `heldout`（2000–2099）切成固定篮子 `H1=2000–2039`（代际裁判）、`H2=2040–2079`（消融/终检复核）、`H3=2080–2099`（应急）；篮子成员不得重新抽样。
-- **FR-08-04** `test`（9000–9099）默认锁定；仅 `test_unlock` 解锁，每里程碑 ≤1 次，落 `test_attestation.json`；结果**不得**进入代际决策路径。
+- **FR-08-04** `test`（9000–9099）默认锁定；仅 `test_unlock` 解锁，每里程碑 ≤1 次，落 `test_attestation.json`；结果**不得**进入代际决策路径。test 同时跑两种局：默认局（主结论）和完整局 medium × 10 关（次级「迁移」指标，Spec §8.6，只报告不判定）。
 - **FR-08-05 / 06** `guard_prompt_context()` 在 prompt/memory/reflection 三 destination 上断言文本不含 heldout/test seed 数值 token；`split != "train"` 的局任何 memory 写入与 reflection 落库被拦截；两者命中均抛 `E_EVAL_INV5_LEAK`。
-- **FR-08-07 / 08 / 09 / 10** `run_eval()` 支持 `n_workers≥1`，结果按 `seed` 升序归一化聚合且与串行逐字节一致；评估 `temperature=0.0`（训练沿用计划 §3 的 ≥0.7）；每 seed 默认 1 局（后端非确定时 `n_rep=3` 多数票）；超时/崩溃记 `dropped` 不计入 n，`dropped/n > 0.10` 抛 `E_EVAL_INSUFFICIENT_N` 并标 `low_confidence=true`。
+- **FR-08-07 / 08 / 09 / 10** `run_eval()` 支持 `n_workers≥1`，结果按 `seed` 升序归一化聚合且与串行逐字节一致；评估 `temperature=0.0`（训练沿用计划 §3 的 ≥0.7）；每 seed 默认 1 局（后端非确定时 `n_rep=3` 多数票）；超时或崩溃的局记为 `dropped`，**计入 n 并按 lose 计**（Spec v1.3 §8.5，防止幸存者偏差），另外单列 `n_dropped`；`dropped/n > 0.10` 时抛 `E_EVAL_INSUFFICIENT_N` 并标 `low_confidence=true`。`degraded` 局（模型不可用、由启发式代打）则从 n 中剔除，并单列 `degraded_n`。
 - **FR-08-11 / 12** 三基线可用同一 `EvalSpec` 跑通并归档；归档不可覆盖：同名时写 `<kind>-<split>-<ts>.json` 并向 `registry.csv` 追加一行。
-- **FR-08-13 / 14** `heuristic` 复用 MOD-04 `policy.fallback_action()`（禁止复制第二份启发式逻辑）；`fixed_prompt` 固定 `harness_version=0`、`memory_enabled=false`、`reflection_enabled=false`。
-- **FR-08-15 / 16** 计算 `win_rate`/`wilson_ci()`/`mean_hp_left`/`mean_kills`/`mean_turns`/`illegal_rate`，全部由整数累加器聚合后单次相除；`action_entropy_curve` 长度 `T_max`（默认 48），样本 < `min_support` 的回合写 `null`。
+- **FR-08-13 / 14** `heuristic` 复用 MOD-04 `agent.heuristic.heuristic_policy()`（Spec §4.7，禁止复制第二份启发式逻辑；它移植自 GAME `greedy_counter`，默认局上的参考通关率为 45.0%）；`fixed_prompt` 固定 `harness_version=0`、`memory_enabled=false`、`reflection_enabled=false`。
+- **FR-08-15 / 16** 计算 `win_rate`/`wilson_ci()`/`mean_stages_cleared`/`mean_hearts_left`/`mean_battles_won`/`mean_decisions`/`illegal_rate`/`fallback_rate`/`truncation_rate`，全部由整数累加器聚合后单次相除。`action_entropy_curve` 以**决策点序号**为横轴，长度 `T_max`（默认 120），样本数 < `min_support` 的位置写 `null`。截断局的 outcome 一律记为 lose。
 - **FR-08-17** 生成 `report.json` 并通过 `additionalProperties=false` schema 校验；扩展指标写入 `metrics/gen-XXX.ext.json`。
 - **FR-08-18** 计算 `win_rate_gap = train.win_rate - heldout.win_rate`，按 §8.2 有序规则产出 `verdict`。
 - **FR-08-19** 按 §8.3 的 OR 条件 + 两点确认产出 `collapse_flag`；为真时禁止 `real_gain`（`collapse_veto`）。
-- **FR-08-20 / 21** 计算跨代 `js_divergence`（`action.kind` 与 `place_die.slot_id` 两口径）；`run_ablation()` 在 H2 上跑 3 臂（full/no_reflection/no_self_edit）并做配对检验，产出 `attribution ∈ {reflection, self_edit, both, none}`。
+- **FR-08-20 / 21** 计算跨代 `js_divergence`，有两个口径：`action.kind`，以及 `play_face` 的 `slotKind×school`；`run_ablation()` 在 H2 上跑 3 臂（full/no_reflection/no_self_edit）并做配对检验，产出 `attribution ∈ {reflection, self_edit, both, none}`。
+- **FR-08-25 MOD-07 门面**（Spec §4.7）：
+  - `evaluate_arm(harness_dir, *, split, basket, memory_version, arm, run_id) -> ArmResult`
+  - `compare_paired(a, b) -> PairedTest`：胜率用 McNemar 精确检验，连续量用配对 bootstrap B=10000；返回 `method/p/delta/significant/direction`
+  - `evaluate_generation(gen, parent, winner, *, run_id) -> dict`：只返回 report 的指标段，MOD-07 负责合并，MOD-09 原子写入
+
+  MOD-07 不得自行实现统计检验。
 - **FR-08-22** 生成 `metrics/generations.csv`（每代追加一行）与 `metrics/plots_data/gen-XXX_entropy.json`。
 - **FR-08-23 / 24** 主指标聚合路径**结构上不可**读取 `reward`/`cum_reward`（INV-7）：`EpisodeResult` 不含这两个字段；报告落盘后写 `report.sha256`，同参数重跑必须一致，否则抛 `E_EVAL_NONDETERMINISTIC`。
 
@@ -65,7 +72,7 @@ MOD-08 是 L3 测量层，**只读轨迹与报告，不参与决策**（Spec §1
 - **NFR-08-02（统计严谨）** 任何"提升"结论必须给点估计 + 区间 + 检验；配对比较用 McNemar，次级指标用 BH-FDR(q=0.10)，消融用 Holm–Bonferroni。
 - **NFR-08-03（可复现）** `config_hash`/`harness_version`/`seeds_hash`/`bootstrap_seed` 全部写入报告；§12 命令可直接复制执行（G6）。
 - **NFR-08-04（可观测）** 每次评估 ≥1 行 `eval_index.jsonl`；埋点走 MOD-09 结构化日志，**禁止自建日志格式**（Spec §8.2）。
-- **NFR-08-05（成本）** 单次 heldout 评估（n=40、4 worker）目标 ≤20 min wall-clock；并发不得压垮同一模型实例（§14 R-5）。
+- **NFR-08-05（成本）** 耗时由 Spec v1.3 §8.6 成本模型推出：单局 ≈ `D·t_d` ≈ 5 min（默认局，8B），所以 n=40 的 heldout 评估 ≈ 3.3 h。局级并发共享同一推理队列（P-10），并发数不能缩短推理瓶颈，只能掩盖 env/IO 的开销。报告必须写实测 `dur_s`，不设不可达的 wall-clock 目标。
 
 ## 6. 接口契约（真实 Python 签名 + JSON Schema）
 
@@ -79,19 +86,22 @@ def assert_split_isolation(split: Split, seeds: Sequence[int]) -> None: ...
 def guard_prompt_context(*, split: Split, seed: int, text: str, destination: Literal["prompt","memory","reflection"]) -> None: ...
 def resolve_basket(basket: BasketId, *, generation: int, protocol: SeedProtocol) -> tuple[int, ...]: ...
 def run_eval(spec: EvalSpec, *, runner: EpisodeRunner, writer: TraceWriter, protocol: SeedProtocol) -> EvalResult: ...
-def evaluate_generation(generation: int, *, harness_version: int, split: Split, basket: BasketId, run_id: str, n_workers: int = 4, agent_kind: str = "llm") -> EvalResult: ...
+def evaluate_arm(harness_dir: Path, *, split: Split, basket: BasketId, memory_version: int, arm: str, run_id: str) -> ArmResult: ...   # Spec §4.7
+def compare_paired(a: ArmResult, b: ArmResult) -> PairedTest: ...                                                            # Spec §4.7
+def evaluate_generation(generation: int, parent: ArmResult, winner: ArmResult | None, *, run_id: str) -> dict: ...            # Spec §4.7，返回 report 指标段
 # gamer_rsi/evals/metrics.py
-KIND_SPACE = ("place_die","end_turn","use_ability","shop_buy","shop_leave","levelup_choose")
-MAIN_METRIC_SOURCES = ("info.outcome","info.kills","info.floors","self_hp","turn")   # INV-7 白名单
+KIND_SPACE = ("play_face","discard_die","purify","use_ability","end_turn","map_choose","shop_buy","shop_refresh",
+              "shop_remove","shop_leave","event_choose","treasure_pick","forge_pick","shrine_choose","rest_choose","relic_swap")  # 16，= Spec §4.3 agent 可用 kind
+MAIN_METRIC_SOURCES = ("info.outcome","info.truncation_reason","info.stages_cleared","info.hearts_left","info.battles_won")   # INV-7 白名单
 def wilson_ci(wins: int, n: int, z: float = 1.959964) -> tuple[float, float]: ...
-def normalized_entropy(counts: Mapping[str,int], *, kind_space: int = 6, base: float = 2.0) -> float: ...
-def action_entropy_curve(results: Sequence[EpisodeResult], *, t_max: int = 48, min_support: int = 3) -> list[float|None]: ...
+def normalized_entropy(counts: Mapping[str,int], *, kind_space: int = 16, base: float = 2.0) -> float: ...
+def action_entropy_curve(results: Sequence[EpisodeResult], *, t_max: int = 120, min_support: int = 3) -> list[float|None]: ...   # 横轴 = decision_index
 def bootstrap_mean_ci(values: Sequence[float], *, B: int = 10000, rng: np.random.Generator) -> tuple[float,float]: ...
 def paired_bootstrap_gap(a: Sequence[float], b: Sequence[float], *, B: int = 10000, rng: np.random.Generator) -> tuple[float, tuple[float,float]]: ...
 def mcnemar_exact_p(a: Sequence[bool], b: Sequence[bool], alternative: Literal["two-sided","greater","less"]) -> float: ...
-def aggregate(results: Sequence[EpisodeResult], *, t_max: int = 48) -> SplitMetrics: ...
-def render_report(*, generation: int, harness_version: int, parent_version: int, heldout: SplitMetrics, train: SplitMetrics, gain: GainVerdict, diversity: CollapseVerdict, ablation: Mapping[str,float], decision: str, decided_by: Literal["auto","human"], reason: str) -> dict: ...
-# 便捷访问器（签名同形，(results: Sequence[EpisodeResult]) -> float）：win_rate / mean_hp_left / mean_kills / mean_turns / illegal_rate
+def aggregate(results: Sequence[EpisodeResult], *, t_max: int = 120) -> SplitMetrics: ...
+def render_report_sections(*, generation: int, harness_version: int, parent_version: int, heldout: SplitMetrics, train: SplitMetrics, gain: GainVerdict, diversity: CollapseVerdict, ablation: Mapping[str,float], decision: str, decided_by: Literal["auto","human"], reason: str) -> dict: ...
+# 便捷访问器（签名同形，(results: Sequence[EpisodeResult]) -> float）：win_rate / mean_stages_cleared / mean_hearts_left / mean_battles_won / mean_decisions / illegal_rate / fallback_rate / truncation_rate
 # gamer_rsi/evals/diversity.py
 def js_divergence(p: Mapping[str,float], q: Mapping[str,float], *, base: float = 2.0) -> float: ...
 def entropy_slope(curve: Sequence[float|None]) -> float: ...   # 非 null 点上的 OLS 斜率
@@ -103,23 +113,18 @@ def run_ablation(generation: int, *, arms: Sequence[AblationArm], run_id: str, s
 def attribution(full: Sequence[bool], arm: Sequence[bool], *, alpha: float = 0.05) -> str: ...
 # gamer_rsi/evals/baselines.py
 class BaselineAgent(Protocol):   # name: str; reset(seed) -> None; act(obs, legal) -> Action
-# RandomAgent: rng = np.random.default_rng(seed ^ 0x5EED) 在 legal_actions 上均匀采样；HeuristicAgent: 委托 MOD-04 policy.fallback_action(obs, legal)；FixedPromptAgent: harness_version=0，memory/reflection 关闭，temperature=0
+# RandomAgent: rng = np.random.default_rng(seed ^ 0x5EED) 在 legal_actions 上均匀采样；HeuristicAgent: 委托 MOD-04 agent.heuristic.heuristic_policy(obs, legal)；FixedPromptAgent: harness_version=0，memory/reflection 关闭，temperature=0
 def build_agent(kind: str, *, seed: int, harness_version: int = 0) -> BaselineAgent: ...
 def archive_baseline(kind: str, split: Split, metrics: SplitMetrics, *, run_id: str, model_hash: str, git_commit: str) -> Path: ...
 ```
 
-`report.json` schema（对齐 Spec §4.5，**只允许下列字段**；扩展字段走 `metrics/gen-XXX.ext.json`）：
+`report.json` schema：唯一文件为 `schemas/generation_report.schema.json`（Spec v1.3 §4.5 / B-16，由 MOD-09 登记），本模块不再单独维护副本。与 v0.1 相比有以下变化：
 
-```json
-{"title":"GenerationReport","type":"object","additionalProperties":false,"required":["generation","harness_version","parent_version","heldout","train","gain_realism","diversity","ablation","decision","decided_by","reason"],
- "properties":{"generation":{"type":"integer","minimum":1},"harness_version":{"type":"integer","minimum":0},"parent_version":{"type":["integer","null"]},"heldout":{"$ref":"#/$defs/split"},
-  "train":{"type":"object","additionalProperties":false,"required":["n","win_rate"],"properties":{"n":{"type":"integer"},"win_rate":{"type":"number","minimum":0,"maximum":1}}},
-  "gain_realism":{"type":"object","additionalProperties":false,"required":["win_rate_gap","gap_threshold","verdict"],"properties":{"win_rate_gap":{"type":"number"},"gap_threshold":{"type":"number"},"verdict":{"enum":["real_gain","null","overfit_suspect","regress"]}}},
-  "diversity":{"type":"object","additionalProperties":false,"required":["entropy_slope","collapse_flag"],"properties":{"entropy_slope":{"type":"number"},"collapse_flag":{"type":"boolean"}}},
-  "ablation":{"type":"object","additionalProperties":false,"required":["no_reflection","no_self_edit"],"properties":{"no_reflection":{"type":["number","null"]},"no_self_edit":{"type":["number","null"]}}},
-  "decision":{"enum":["accept","reject","rollback","pending"]},"decided_by":{"enum":["auto","human"]},"reason":{"type":"string","maxLength":280}},
- "$defs":{"split":{"type":"object","additionalProperties":false,"required":["n","win_rate","win_rate_ci95","mean_hp_left","mean_kills","mean_turns","illegal_rate","action_entropy_curve"],"properties":{"n":{"type":"integer"},"win_rate":{"type":"number"},"win_rate_ci95":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2},"mean_hp_left":{"type":"number"},"mean_kills":{"type":"number"},"mean_turns":{"type":"number"},"illegal_rate":{"type":"number"},"action_entropy_curve":{"type":"array","items":{"type":["number","null"]}}}}}}
-```
+- `generation ≥ 0`，其中 `gen-000` 是 v0 基线，`decision="baseline"`。
+- `heldout` 段的字段改为 INV-7 新指标，并加入 `basket`、`fallback_rate`、`truncation_rate`、`degraded_n`。
+- `verdict` 的枚举增加 `insufficient`（`low_confidence` 时使用）。
+- 新增 `candidates[]` 与 `episode_config_hash`，由 MOD-07 填写。
+- `ablation` 可以为 `null`（非消融代）。
 
 ## 7. 数据模型与存储
 
@@ -127,15 +132,18 @@ def archive_baseline(kind: str, split: Split, metrics: SplitMetrics, *, run_id: 
 @dataclass(frozen=True)
 class EpisodeResult:      # INV-7：结构上不含 reward / cum_reward，主指标无法误用 shaped reward
     seed: int; split: Split; generation: int; harness_version: int
-    outcome: Literal["win","lose","truncated"]; hp_left: int; kills: int; floors: int
-    turns: int; steps: int; illegal_steps: int; kind_counts: tuple[int, ...]   # kind 长度 6，对齐 KIND_SPACE
+    outcome: Literal["win","lose"]; truncation_reason: str | None      # 截断计 lose（Spec §8.6）
+    stages_cleared: int; hearts_left: int; battles_won: int
+    decisions: int; steps: int; illegal_attempts: int; fallback_decisions: int
+    kind_counts: tuple[int, ...]   # 长度 16，对齐 KIND_SPACE
     slot_counts: Mapping[str, int]; seq_hash: str    # sha256(动作序列)，供 distinct_sequence_ratio
-    dropped: bool = False
+    dropped: bool = False; degraded: bool = False
 @dataclass(frozen=True)
 class SplitMetrics:
     split: Split; basket: BasketId; n: int; n_dropped: int; low_confidence: bool
-    win_rate: float; win_rate_ci95: tuple[float,float]; mean_hp_left: float; mean_kills: float
-    mean_turns: float; illegal_rate: float; entropy_mean_norm: float
+    win_rate: float; win_rate_ci95: tuple[float,float]; mean_stages_cleared: float; mean_hearts_left: float
+    mean_battles_won: float; mean_decisions: float; illegal_rate: float; fallback_rate: float
+    truncation_rate: float; degraded_n: int; entropy_mean_norm: float
     action_entropy_curve: tuple[float | None, ...]
 @dataclass(frozen=True)
 class GainVerdict:
@@ -155,7 +163,7 @@ class CollapseVerdict:    # collapse_reasons 落 ext 文件，不进 report.json
 | `metrics/plots_data/gen-003_entropy.json` | tidy：`{"generation":3,"buckets":[{"turn":1,"h_norm":0.71,"n":40}]}` | 否 |
 | `baselines/<kind>-<split>.json` + `baselines/registry.csv` | 基线归档（M1 交付物） | 否 |
 | `ablation/gen-003.json` | 消融三臂结果 + 归因 | 否 |
-| `eval/eval_index.jsonl` | `{run_id,generation,split,basket,n,agent_kind,n_workers,ts,dur_s}` | 追加 |
+| （v0.2 删除 `eval/eval_index.jsonl`，改为 `events.jsonl` 中的 `eval.report` 事件） | — | — |
 
 数值序列化统一 `round(x, 4)`；Spec §4.5 示例中的 2 位小数仅为展示。**决策（本 PRD 提出，待回填 Spec）**：报告精度统一 4 位。
 
@@ -167,13 +175,13 @@ evaluate_generation(g, harness_version, split, basket):
   seeds = resolve_basket(basket, generation=g, protocol=load_seeds())   # load_seeds 由 MOD-09 提供
   assert_split_isolation(split, seeds)                                  # FR-08-01/05
   spec = EvalSpec(run_id, g, harness_version, split, basket, seeds, ...)
-  with ProcessPoolExecutor(n_workers) as ex:      # 每 seed 一个独立 task，按 seed 排序收集
+  with EpisodePool(n_workers, shared_client) as ex:   # 局级并发 + 共享推理队列（P-10），按 seed 排序收集
       for seed in seeds: ex.submit(play_one, seed, spec)
   heldout = aggregate(sorted(results, key=lambda r: r.seed))            # 整数累加后单次相除
   train   = aggregate(train_window(g))                                  # 滚动窗口，默认 60 局
   gain = judge_gain(train, heldout, parent_metrics, rng)                # §8.2
   div  = collapse_check(curves_by_gen, jsd_series, win_rates, cfg)      # §8.3
-  report = render_report(...); validate(report, GenerationReport); write + sha256
+  sections = render_report_sections(...)   # 交给 MOD-07 合并 decision 段，MOD-09 write_json_atomic + sha256
 ```
 **8.2 `verdict` 有序规则（短路求值）**
 ```
@@ -233,11 +241,13 @@ seeds_hash: "sha256:<>"         # 由 CLI 生成、CI 校验；改动必须同�
 eval:
   n_heldout: 40; n_test: 100; n_ablation: 40        # 依次为 H1 / test_full / H2 篮子
   bootstrap_B: 10000; alpha: 0.05; fdr_q: 0.10; gap_threshold: 0.15
-  max_steps: 60; t_max: 48; n_workers: 4; seed_timeout_s: 300; min_support: 3; drop_rate_max: 0.10
-  budget_seconds: null; entropy: {base: 2.0, kind_space: 6}
+  t_max: 120; n_workers: 2;   # 步数/决策上限读 Spec §8.6 的 episode.*，本模块不另设
+  seed_timeout_s: 300; min_support: 3; drop_rate_max: 0.10
+  budget_seconds: null; entropy: {base: 2.0, kind_space: 16}
   collapse: {c1_slope_threshold: -0.010, c2_ratio_threshold: 0.60, c3_jsd_freeze: 0.010,
              c3_winrate_jump: 0.05, c4_seq_ratio: 0.50, confirm_generations: 2}
-  determinism: {eval_temperature: 0.0, train_temperature: 0.7, n_rep: 1, n_rep_nondeterministic: 3, decode_seed: 0}
+  determinism: {eval_temperature: 0.0,   # Spec §8.1 B-14，MOD-03 强制
+                 train_temperature: 0.7, n_rep: 1, n_rep_nondeterministic: 3, decode_seed: 0}
   baseline: {kinds: [random, heuristic, fixed_prompt], archive_dir: baselines, fixed_prompt_harness_version: 0}
   ablation: {arms: [full, no_reflection, no_self_edit], split_basket: H2}
 ```
@@ -259,17 +269,17 @@ eval:
 单测 `tests/unit/evals/`（覆盖率 ≥80%）：
 
 - **T-01 Wilson CI 手算**：给定 wins=3, n=5（p̂=0.6）→ 当 `wilson_ci(3,5)` → 则返回 `(0.2307, 0.8824)`（z²=3.841459；中心 0.556523，半宽 0.325828），容差 1e-4；边界 wins=0,n=40 → 则 ≈`(0.0000, 0.0876)`；n=0 → 则抛 `E_EVAL_INSUFFICIENT_N`。
-- **T-02 归一化熵手算**：给定 `kind_counts={place_die:6, end_turn:2}` → 则原始熵 `0.811278` bits、`normalized_entropy=0.811278/log2(6)=0.313852`（容差 1e-6）。
+- **T-02 归一化熵手算**：给定 `kind_counts={play_face:6, end_turn:2}`、`kind_space=16` → 则原始熵 `0.811278` bits、`normalized_entropy=0.811278/log2(16)=0.202820`（容差 1e-6）。v0.1 的手算值 `0.313852` 有误，按 log2(6) 的正确值是 0.313845。
 - **T-03 JSD 手算**：给定 P=(1.0,0.0)、Q=(0.8,0.2) → 则 `js_divergence=0.108031`（0.5·(0.152003+0.064060)）；P=Q → 则 0.0；含零概率项不得产生 NaN。
 - **T-04 熵曲线与斜率**：给定 3 条构造轨迹、`min_support=3` → 则曲线长度 48 且无支撑回合为 `null`；给定单调下降曲线 → 则 `entropy_slope < 0`。
-- **T-05 主指标与非法率公式**：给定 outcome=`["win","lose","win"]`、hp_left=`[5,0,3]`、kills=`[2,1,3]` → 则 `win_rate=0.6667`、`mean_hp_left=2.6667`、`mean_kills=2.0`；给定步级非法 3、总步 300 → 则 `illegal_rate=0.01`（局级 2/10 只进 ext）。
+- **T-05 主指标与非法率公式**：给定 outcome=`["win","lose","win"]`、stages_cleared=`[6,3,6]`、hearts_left=`[1,0,2]` → 则 `win_rate=0.6667`、`mean_stages_cleared=5.0`、`mean_hearts_left=1.0`；另给定 1 局 `truncation_reason="policy_failure"` → 按 lose 计入 n；给定步级非法 3、总步 300 → 则 `illegal_rate=0.01`（局级 2/10 只进 ext）。
 - **T-06 INV-7 结构检查**：给定对 `metrics.py` 做 AST 扫描 → 则主指标计算路径不出现 `reward`/`cum_reward` 标识符。
 - **T-07 INV-5 数值护栏**：给定 `guard_prompt_context(text="seed 2043 …", split="heldout")` → 则抛 `E_EVAL_INV5_LEAK`；给定 `text="hp 23, dice 4"` → 则通过（无误报）。
 - **T-08 INV-5 记忆拦截**：给定 split="heldout" 触发 `memory.write` → 则抛 `E_EVAL_INV5_LEAK`，且 `episodes/*.jsonl` 无 `reflect` 事件。
 - **T-09 确定性**：给定同一 `EvalResult` 与 `rng_seed` → 当两次跑 bootstrap → 则 CI 逐位相同、`report.sha256` 一致。
 - **T-10 verdict + McNemar 手算**：给定 4 组 `(gap, p_improve, p_regress, collapse_flag)` 参数化用例 → 则依次返回 `regress/overfit_suspect/real_gain/null`，且 `collapse_flag=true` 时永不返回 `real_gain`；给定 b=6,c=0 → 则双尾 p=0.03125、单尾 0.015625，b=5,c=0 → 则双尾 0.0625（不显著）。
 - **T-11 坍缩两点确认**：给定 C1 仅第 g 代触发 → 则 `collapse_flag=false`；第 g、g+1 连续触发 → 则 `true`。
-- **T-12 基线复用**：给定 `HeuristicAgent` 与 MOD-04 `fallback_action` 在同一 obs 上 → 则选同一动作（防逻辑分叉）。
+- **T-12 基线复用**：给定 `HeuristicAgent` 与 MOD-04 `heuristic_policy` 在同一 obs 上 → 则选同一动作（防逻辑分叉）。
 
 集成 `tests/integration/`：
 
@@ -302,14 +312,14 @@ python -m gamer_rsi eval test --run <run_id> --unlock-once --attestation runs/<r
 
 ## 13. 指标与埋点
 
-- **主指标（INV-7 白名单来源）**：`win_rate`、`mean_hp_left`、`mean_kills`、`mean_turns`、`floors`。
+- **主指标（INV-7 白名单来源）**：`win_rate`（第一主指标），`mean_stages_cleared` / `mean_hearts_left` / `mean_battles_won`（并列次指标）。
 - **次级指标与判定量**：`illegal_rate`、`entropy_mean_norm`、`entropy_slope`、`jsd_kind`、`jsd_slot`、`distinct_sequence_ratio`、`llm_latency_ms_p50/p95`、`mean_cum_reward_debug`（**仅调试，禁止进入 verdict**）；判定量为 `win_rate_gap`、`verdict`、`collapse_flag`、`attribution`。
-- **埋点事件**（JSONL，统一走 MOD-09 logging）：`eval_start{spec}`、`seed_start{seed,split,basket}`、`seed_end{seed,outcome,steps,dur_s,dropped,error_code}`、`eval_end{n,n_dropped,dur_s,report_sha256}`、`guard_violation{error_code,split,seed,destination,matched_token}`、`collapse_flagged{generation,reasons}`、`test_unlock{generation,attestation_path,decided_by}`。
-- **绘图数据（MOD-09 消费）**：`metrics/generations.csv` 列固定为 `generation,harness_version,parent_version,split,basket,n,win_rate,ci_lo,ci_hi,mean_hp_left,mean_kills,mean_turns,illegal_rate,entropy_mean_norm,entropy_slope,jsd_kind,collapse_flag,win_rate_gap,verdict,decision,bootstrap_seed,config_hash,git_commit,ts`。
+- **埋点事件**（统一经 MOD-09 `emit` 写入 `events.jsonl`）：`eval.start{spec}`、`eval.seed_start{seed,split,basket}`、`eval.seed_done{seed,outcome,steps,decisions,dur_s,dropped,degraded,error_code}`、`eval.report{n,n_dropped,degraded_n,dur_s,report_sha256}`、`eval.guard_violation{error_code,split,seed,destination,matched_token}`、`eval.collapse{generation,reasons}`、`eval.test_unlock{generation,attestation_path,decided_by}`。
+- **绘图数据（MOD-09 消费）**：`metrics/generations.csv` 列固定为 `generation,harness_version,parent_version,split,basket,n,win_rate,ci_lo,ci_hi,mean_stages_cleared,mean_hearts_left,mean_battles_won,mean_decisions,illegal_rate,fallback_rate,truncation_rate,entropy_mean_norm,entropy_slope,jsd_kind,collapse_flag,win_rate_gap,verdict,decision,bootstrap_seed,config_hash,git_commit,ts`。
 
 ## 14. 依赖与风险
 
-依赖：MOD-01（原生 `info.outcome/kills/floors`、`turn`）、MOD-02（`SandboxEnv` 门面、轨迹审计）、MOD-09（config、JSONL、CLI、`run_id`/hash、绘图、`guards.py`）、MOD-04（`fallback_action` 供 heuristic 复用）、MOD-05（反思条目开关供消融）、MOD-06（train seed 消耗顺序）。
+依赖：MOD-01（原生 `info.outcome/stages_cleared/hearts_left/battles_won`）、MOD-02（`SandboxEnv` 门面、轨迹审计）、MOD-09（config、JSONL、CLI、`run_id`/hash、绘图、`guards.py`）、MOD-04（`heuristic_policy` 供 heuristic 复用）、MOD-05（反思条目开关供消融）、MOD-06（train seed 消耗顺序）。
 
 | # | 风险 | 影响 | 对策 |
 |---|---|---|---|
@@ -319,7 +329,7 @@ python -m gamer_rsi eval test --run <run_id> --unlock-once --attestation runs/<r
 | R-4 | 次级指标多重比较致假阳性 | 误判增益 | BH-FDR(q=0.10)；主指标预注册单次检验，不做校正 |
 | R-6 | `fixed_prompt` 基线随 harness 漂移 | 基线不可比 | 基线钉死 `harness_version=0` + `model_hash` 入档；归档不可覆盖 |
 | R-7 | 坍缩阈值凭经验设定，误报/漏报 | 错误否决或漏检 | M3 用基线熵曲线标定阈值；`confirm_generations=2` 降误报；`collapse_reasons` 全量留证 |
-| R-8 | train 与 heldout 难度不一致（seed 分布偏差） | `gap` 系统性偏移 | 两侧样本量足够大；同时记录 `floors` 分布并在 ext 文件告警 |
+| R-8 | train 与 heldout 难度不一致（seed 分布偏差） | `gap` 系统性偏移 | 两侧样本量足够大；同时记录 `stages_cleared` 分布并在 ext 文件告警 |
 
 ## 15. 里程碑与工作量估算（人日）
 
@@ -338,3 +348,10 @@ python -m gamer_rsi eval test --run <run_id> --unlock-once --attestation runs/<r
 3. **`mean_turns` 定义**：取终局 `obs.turn` 还是 `steps`？依赖 MOD-01 对 `turn` 最终语义的确认（当前取 `turn`，备选 `steps` 写入 ext）。
 4. **模型更新的可比性**：阶段一换 27B Q4 后，历史 `report.json` 是否因 `model_hash` 不同而标记不可比，并强制重跑全部基线？
 5. **人在环覆盖与消融预算**：HITL 覆盖 `verdict` 时写 `decided_by="human"` 并保留自动结论，是否需在 schema 增加 `overridden_verdict`（涉及 Spec §4.5 变更 → 待回填）？`no_self_edit` 冻结臂当前不消耗 train 池、仅在 H2 评估，是否应改为同样消耗以对齐预算？
+
+## 17. 变更记录
+
+| 版本 | 时间 | 变更 |
+|---|---|---|
+| v0.1 | 2026-09-30 | 首版 |
+| v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：指标改为 INV-7 新口径（outcome/stages_cleared/hearts_left/battles_won），新增 fallback/truncation/degraded（P0-1）；步数上限改读 Spec §8.6，删除 `max_steps=60`（P0-2）；NFR-08-05 改由成本模型推出（P0-3）；`KIND_SPACE` 改为 16 个 GAME kind，熵曲线横轴改为决策点；修正 T-02 手算值；dropped 计为 lose（防幸存者偏差）；新增 FR-08-25 MOD-07 门面（P1-3/4）；report schema 改为引用唯一文件（P1-5/6）；heuristic 改为委托 `heuristic_policy`（P1-16）；事件改名为 `eval.*` |

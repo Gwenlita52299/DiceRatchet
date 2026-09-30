@@ -1,6 +1,6 @@
 # MOD-09 infra 技术 PRD
 
-> 版本：v0.1（草案）· 状态：待评审 · 所属里程碑：M0–M3（L3 工程层，横切全模块）
+> 版本：v0.2（2026-09-30 17:21 按 Spec v1.3 修订，见 §17）· 状态：待评审 · 所属里程碑：M0–M3（L3 工程层，横切全模块）
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源；与本文件冲突时以 Spec 为准）
 > 作者：主代理（MOD-09 owner）· 日期：2026-09-30
 > 标注「决策（本 PRD 提出，待回填 Spec）」的条目是 Spec 未覆盖处的临时决策，需回填 Spec 后转正。
@@ -59,20 +59,38 @@ MOD-09 是 Spec §6 依赖矩阵中**唯一不被任何人阻塞、却阻塞所�
 
 - **FR-09-1 配置优先级**：合并顺序 `CLI 显式参数 > GAMERSI_* 环境变量 > configs/default.yaml > 代码内 dataclass 默认值`。环境变量命名规则 `GAMERSI_<SECTION>__<KEY>`（双下划线分层），未知键 → 记 `E_IO_CONFIG_UNKNOWN` 并**忽略**（不中断），未知键清单写入 run 启动日志。
 - **FR-09-2 schema 校验**：`AppConfig` 为 frozen dataclass + 显式 `validate()`（避免引入 pydantic 作为阶段一硬依赖）；类型不符或越界 → `E_IO_CONFIG_INVALID` 并以退出码 2 终止，错误信息必须指出键路径与期望类型。
-- **FR-09-3 config_hash**：`config_hash = sha256(json.dumps(_canonical(cfg), sort_keys=True, separators=(",",":"), ensure_ascii=False))[:16]`；`_canonical` **排除**易变字段（`run_id`、`created_at`、`log_level`、`paths.runs_root`）与所有绝对路径，**包含** `harness_version`。
+- **FR-09-3 config_hash**：`config_hash = sha256(json.dumps(_canonical(cfg), sort_keys=True, separators=(",",":"), ensure_ascii=False))[:16]`；`_canonical` **排除**易变字段（`run_id`、`created_at`、`log_level`、`paths.runs_root`）与所有绝对路径，**不包含** `harness_version`（Spec v1.3 B-19：否则第一代被接受后 `--resume` 必然冲突）。harness 的变化由 `artifact_hash(harness_dir)` 表达：对 `(相对路径, 文件 sha256)` 按路径排序后整体 sha256，逐代写入 `version.json` 与 report。
 - **FR-09-4 run_id**：`run_id = f"{git_short_sha}-{config_hash[:8]}-{utc_ts}"`，`utc_ts = YYYYMMDDTHHMMSSZ`；`git_short_sha` 取自 `git rev-parse --short HEAD`，仓库不可用（无 git / dirty 之外的情况）→ 用 `nogit` 占位并记 `E_IO_GIT_UNAVAILABLE`。**决策（本 PRD 提出，待回填 Spec）**：`--run-id` 显式指定时以显式值为准，用于复现与测试。
-- **FR-09-5 目录初始化**：`init_run_dir(run_id, cfg) -> RunPaths` 幂等创建 Spec §5 的目录树（`config.json`、`episodes/`、`reflections/`、`generations/`、`metrics/`、`plots/`、`audit/`）。目录已存在且 `config.json` 的 `config_hash` 不一致 → `E_IO_RUN_CONFLICT` 并退出码 2（禁止两套配置写同一 run）。
+- **FR-09-5 目录初始化**：`init_run_dir(run_id, cfg) -> RunPaths` 幂等创建 Spec §5 的目录树（`config.json`、`events.jsonl`、`episodes/<split>/`、`reflections/`、`generations/`、`metrics/`、`plots/`、`audit/`）。目录已存在且 `config.json` 的 `config_hash` 不一致 → `E_IO_RUN_CONFLICT` 并退出码 2（禁止两套配置写同一 run）。
 - **FR-09-6 JsonlWriter 写入语义**：每行 `json.dumps(..., ensure_ascii=False)` + `\n`；每次 `write()` 后 `flush()`；`infra.fsync_every`（默认 0 = 不 fsync，>0 表示每 N 行 `os.fsync`）。**崩溃安全**：读取端必须容忍末行截断（`json.JSONDecodeError` 时丢弃最后一行并记 `E_IO_TRAILING_TRUNCATED`）；写入端保证「一行要么完整要么不存在」——先构造整行字符串再单次 `write`。
-- **FR-09-7 事件类型**：`EVENT_TYPES = {episode_start, step, illegal, reflect, evolve, decision, run_start, run_end, guard_finding}`。非法事件名 → `E_IO_EVENT_UNKNOWN`，写一条 `illegal` 兜底事件并在 dry-run 外抛异常（开发期早暴露）。
-- **FR-09-8 轨迹行 schema**：字段名、类型严格对齐 Spec §4.5（`episode_id, generation, harness_version, seed, split, step, obs_digest, action, reward, cum_reward, illegal, illegal_reason, llm_raw, llm_latency_ms, prompt_tokens, completion_tokens, ts`）；额外允许字段必须前缀 `x_`；缺必填 → `E_IO_TRAJECTORY_SCHEMA`。`ts` 统一 UTC ISO-8601 带 `Z`。
-- **FR-09-9 redaction**：`Redactor` 持有敏感值集合（由 MOD-02 审计器注册：heldout/test seed 数字、canary 串、`full_state` 键名）。落盘前对字符串做**值级**替换（`<REDACTED:seed>` 等）并计数；命中数 > 0 → 额外写 `guard_finding` 事件（`code=E_IO_REDACTION_HIT`）并触发 MOD-02 告警回调。redaction **只擦除不阻断**（阻断属 MOD-04/MOD-02 职责）。
-- **FR-09-10 CLI 一致性**：子命令树与 Spec §4.6 逐字一致：`env selftest`、`play`、`baseline`、`loop run`、`evolve approve|rollback`、`eval report`、`audit leak`、`eval diversity`。本模块只负责解析与转发到各模块的 `register(subparser)`；**新增命令必须同步更新 Spec §4.6**。
-- **FR-09-11 退出码**：`0` 成功；`1` 领域失败（如验收不达标）；`2` 配置/环境错误；`3` 模型不可用；`4` 沙箱/守卫违例；`130` 用户 Ctrl-C。约定写入 `gamer_rsi/infra/exit_codes.py` 并被所有命令复用。
-- **FR-09-12 dry-run 与 resume**：`--dry-run` 对所有命令生效——不调用模型、不写 `runs/`、只打印将执行的动作与配置摘要（stdout 为可解析 JSON）；`--resume <run_id>` 由 MOD-06 实现语义，本模块负责定位目录、校验 `config_hash` 一致、并在 `state.json` 缺失时报 `E_IO_STATE_MISSING`。
+- **FR-09-7 事件注册表**（Spec v1.3 §8.2）：
+  - 事件名为 `<module>.<event>`，全部登记在 `infra/events.py::EVENT_REGISTRY`（§6.5），统一落到 `runs/<run_id>/events.jsonl`。
+  - 通过 `emit(event, **fields)` 写入，自动附加 `ts/run_id/module`。
+  - 未登记的事件：开发模式抛 `E_IO_EVENT_UNKNOWN`；生产模式改写为 `infra.unknown_event` 并保留原名。
+  - 轨迹行不是事件，走 `JsonlWriter` 写入 `episodes/`。
+- **FR-09-8 轨迹行 schema**：
+  - 字段严格对齐 Spec v1.3 §4.5，schema 文件为 `schemas/trajectory_line.schema.json`（§6.2）。
+  - 已登记的字段之外，只允许 `x_` 前缀字段（`additionalProperties:false` + `patternProperties`）。
+  - 缺必填字段 → `E_IO_TRAJECTORY_SCHEMA`。
+  - 局末的 `episode_end` 行用独立的 schema 分支校验。
+  - `ts` 统一为 UTC ISO-8601，带 `Z`。
+- **FR-09-9 redaction（作用域收窄，Spec v1.3 B-19）**：
+  - `Redactor` 持有敏感值集合，由 MOD-02 审计器注册：heldout/test seed、canary 串、`GameState` 专有键名。
+  - **只作用于 agent 可见的三个出口**：`prompts/` 快照、`memory/` 与 `reflections/`。落盘前做值级替换（如 `<REDACTED:seed>`）并计数。
+  - 命中数 > 0 → 写 `infra.redaction_hit` 事件，并触发 MOD-02 告警回调（这类命中本身说明发生了 INV-5 泄漏）。
+  - **轨迹（`episodes/`）、`events.jsonl`、`generations/` 不做 redaction**：它们属于审计侧，MOD-08 的配对检验需要原始 seed。
+  - 只擦除不阻断，阻断属于 MOD-04/MOD-02 的职责。
+- **FR-09-10 CLI 一致性**：
+  - 子命令树与 Spec v1.3 §4.6 逐字一致，包括 `inference *`、`loop status|smoke`、`eval ablation|test`、`memory *`、`guards check`。
+  - run 一律用 `--run-id ID` 指定，续跑用 `--resume` 开关。本模块只负责解析与转发到各模块的 `register(subparser)`；**新增命令必须同步更新 Spec §4.6**。
+- **FR-09-11 退出码**：`0` 成功（含 HITL 挂起）；`1` 领域失败（如验收不达标）；`2` 配置/环境错误；`3` 模型不可用；`4` 沙箱/守卫违例；`5` IO 落盘失败；`130` 用户 Ctrl-C（与 Spec v1.3 §8.3 一致）。约定写入 `gamer_rsi/infra/exit_codes.py` 并被所有命令复用。
+- **FR-09-12 dry-run 与 resume**：`--dry-run` 对所有命令生效——不调用模型、不写 `runs/`、只打印将执行的动作与配置摘要（stdout 为可解析 JSON）；`--run-id ID --resume` 由 MOD-06 实现语义，本模块负责定位目录、校验 `config_hash` 一致（`config_hash` 不含 harness，所以演化过的 run 也能续跑）、并在 `state.json` 缺失时报 `E_IO_STATE_MISSING`。
 - **FR-09-13 绘图**：`plot_generations(csv_path, out_dir)` 输出 `win_rate.png`、`hp_left.png`、`kills.png`、`entropy.png`、`train_heldout_gap.png`，每图含 `n`、`ci95` 误差棒与数据点标注；无 matplotlib 时降级为 `E_IO_PLOT_UNAVAILABLE` 警告而不失败。
-- **FR-09-14 git 封装**：`worktree_clean_check()` 在有未提交改动时抛 `E_IO_GIT_DIRTY`（演化前门禁）；`commit_harness(version, message)` 提交 `harness/` 并返回 commit sha，提交信息格式 `harness(v{N}): {message}`；`tag_version(N)` 打 `harness/v{N}` 轻量 tag（已存在则跳过）；`rollback_to(N)` 以 `git checkout <tag> -- harness/` 恢复工件目录并返回新 commit sha。
+- **FR-09-14 git 封装**：`worktree_clean_check()` 在有未提交改动时抛 `E_IO_GIT_DIRTY`（演化前门禁）；`commit_harness(version, message)` 提交 `harness/` 并返回 commit sha，提交信息格式 `harness(v{N}): {message}`；`tag_version(N)` 打 `harness-v{N}` 轻量 tag（已存在则跳过；不建同名分支，避免 `refname is ambiguous`）；`rollback_to(N)` 以 `git checkout harness-v{N} -- harness/` 恢复工件目录并返回新 commit sha。
 - **FR-09-15 确定性守卫（AST，非正则）**：`scan_determinism()` 报出 `E_IO_GUARD_RANDOM`（`import random` / `numpy.random.*` 未显式 seed / `time.time()` 参与采样 / `uuid4()` 用于标识 id）、`scan_layer_imports()` 报出 `E_IO_GUARD_LAYER`（`gamer_rsi/agent|memory|loop|evolve|evals/*` 中出现 `import gamer_rsi.env`，违反 INV-1）。白名单注释 `# guard: allow <CODE> reason=...` 可豁免，但会记 `guard_finding` 事件留痕。
 - **FR-09-16 错误码注册表**：`gamer_rsi/infra/errors.py` 集中定义全部 `E_*` 枚举 + 含义表 + 默认退出码映射；禁止其他模块自定义字符串错误码。
+- **FR-09-18 schema 与原子写**：`schemas/*.schema.json` 由本模块登记并提供 `validate(name, obj)`；`write_json_atomic(path, obj)`（tmp + `os.replace`）是 `report.json`、`state.json`、`version.json` 唯一的写入口。
+- **FR-09-19 git 忽略检查**：`init_run_dir` 检查 `runs_root` 已被 `.gitignore` 覆盖（`git check-ignore`），否则记 `E_IO_RUNS_NOT_IGNORED` 并退出码 2，防止 `worktree_clean_check()` 永远判定为 dirty。
 - **FR-09-17 进程确定性环境**：`bootstrap_process()` 设置 `PYTHONHASHSEED=0`（若未设置则 re-exec 一次）、`TZ=UTC`、`LC_ALL=C.UTF-8`，并把 `infra.threads=1` 传给后端；所有设置记入 `run_start` 事件。
 
 ## 5. 非功能需求（NFR-09-x：确定性/性能/可复现/可观测）
@@ -138,33 +156,41 @@ class JsonlWriter:
 def validate_trajectory_line(line: Mapping[str, Any]) -> None: ...  # 失败抛 E_IO_TRAJECTORY_SCHEMA
 ```
 
-轨迹行 JSON Schema（严格对齐 Spec §4.5）：
+轨迹行 JSON Schema（`schemas/trajectory_line.schema.json`，严格对齐 Spec v1.3 §4.5）：
 
 ```jsonc
 {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"TrajectoryLine",
- "type":"object","additionalProperties":true,
- "required":["episode_id","generation","harness_version","seed","split","step",
-             "obs_digest","action","reward","cum_reward","illegal","ts"],
+ "type":"object","additionalProperties":false,
+ "required":["episode_key","generation","harness_version","arm","seed","split","step",
+             "decision_index","plan_index","attempt","source","obs_digest","action",
+             "reward","cum_reward","illegal","mode","ts"],
  "properties":{
-   "episode_id":{"type":"string","pattern":"^e-[0-9]{6}$"},
+   "episode_key":{"type":"string","pattern":"^e-[0-9]{6}-g[0-9]{3}-(train|parent|cand-[a-z0-9]+|baseline-[a-z_]+|ablation-[a-z_]+)$"},
    "generation":{"type":"integer","minimum":0},
    "harness_version":{"type":"integer","minimum":0},
-   "seed":{"type":"integer"},
+   "arm":{"type":"string"},
+   "seed":{"type":"integer","minimum":0},
    "split":{"enum":["train","heldout","test","demo"]},
    "step":{"type":"integer","minimum":0},
+   "decision_index":{"type":"integer","minimum":0},
+   "plan_index":{"type":"integer","minimum":0},
+   "attempt":{"type":"integer","minimum":1,"maximum":3},
+   "source":{"enum":["llm","fallback","heuristic","random","scripted"]},
    "obs_digest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
    "action":{"type":["object","null"]},
-   "reward":{"type":"number"},
-   "cum_reward":{"type":"number"},
-   "illegal":{"type":"boolean"},
-   "illegal_reason":{"type":["string","null"]},
+   "reward":{"type":"number"}, "cum_reward":{"type":"number"},
+   "illegal":{"type":"boolean"}, "illegal_reason":{"type":["string","null"]},
    "llm_raw":{"type":["string","null"]},
    "llm_latency_ms":{"type":["integer","null"],"minimum":0},
    "prompt_tokens":{"type":["integer","null"],"minimum":0},
    "completion_tokens":{"type":["integer","null"],"minimum":0},
+   "prompt_hash":{"type":["string","null"]}, "memory_ids":{"type":["array","null"],"items":{"type":"string"}},
+   "tool_hash":{"type":["string","null"]}, "mode":{"enum":["train","eval"]},
    "ts":{"type":"string","format":"date-time"}},
- "patternProperties":{"^x_":{"description":"扩展字段必须以此前缀开头"}}}
+ "patternProperties":{"^x_":{}}}
 ```
+
+局末行 `{"type":"episode_end", ...}` 的字段见 Spec §4.5，由同一文件中的 `$defs/EpisodeEnd` 校验。
 
 ### 6.3 git / 绘图 / 守卫
 
@@ -195,22 +221,53 @@ def scan_all(root: Path) -> list[GuardFinding]: ...          # 供 CI 与 CLI �
 | `env selftest` | `--seed INT` | 0/4 |
 | `play` | `--agent {llm,heuristic,fixed}` `--seeds SPEC` `--episodes N` `--dry-run` | 0/1/2/3 |
 | `baseline` | `--kind {random,heuristic,fixed_prompt}` `--seeds SPEC` | 0/1/2 |
-| `loop run` | `--generations N` `--k N` `--hitl/--no-hitl` `--resume RUN_ID` `--run-id ID` | 0/1/2/3/4 |
-| `evolve approve\|rollback` | `--generation N` `--reason STR` | 0/2/4 |
-| `eval report` | `--split {train,heldout,test}` `--baseline {none,all,...}` | 0/1/2 |
-| `audit leak` | `--run RUN_ID` | 0/4 |
-| `eval diversity` | `--run RUN_ID` | 0/1/4 |
+| `loop run` | `--generations N` `--k N` `--hitl/--no-hitl` `--run-id ID` `--resume` | 0/1/2/3/4/5 |
+| `loop status\|smoke` | `--run-id ID` | 0/1/2 |
+| `evolve approve\|rollback` | `--run-id ID` `--generation N` `--reason STR` | 0/2/4 |
+| `eval report` | `--run-id ID` `--split {train,heldout,test}` `--baseline {none,all,...}` | 0/1/2 |
+| `eval ablation\|test` | `--run-id ID` `--basket {H1,H2,H3}` | 0/1/2/3 |
+| `inference probe\|bench\|robustness` | `--model ID` | 0/1/3 |
+| `memory stats\|snapshot\|rollback\|verify\|retrieve` | `--run-id ID` | 0/1/2 |
+| `audit leak` | `--run-id ID` | 0/4 |
+| `eval diversity` | `--run-id ID` | 0/1/4 |
 | `guards check` | `--root PATH` `--fix-hints` | 0/4 |
 
-`--seeds SPEC` 语法：`train:1000-1004`、`heldout:2000-2099`、`9000,9001`、`file:seeds.txt`。**决策（本 PRD 提出，待回填 Spec）**：新增 `guards check` 子命令，需回填 Spec §4.6。
+`--seeds SPEC` 语法：`train:1000-1004`、`heldout:2000-2099`、`9000,9001`、`file:seeds.txt`。`guards check` 已回填 Spec v1.3 §4.6（P-20）。
+
+### 6.5 事件与错误码注册表（Spec v1.3 §8.2/§8.3 的落地）
+
+```python
+# gamer_rsi/infra/events.py
+EVENT_REGISTRY: Final[Mapping[str, EventSpec]]   # 键为 "<module>.<event>"
+def emit(event: str, **fields: Any) -> None: ...
+
+# gamer_rsi/infra/errors.py
+class E(StrEnum): ...                             # 全部错误码
+EXIT_CODE: Final[Mapping[E, int]]
+```
+
+登记来源为各 PRD「指标与埋点」节。v0.2 的初始清单：
+
+- `infra.{run_start,run_end,guard_finding,redaction_hit,unknown_event}`
+- `env.*`（MOD-02 转发内核 events）
+- `sandbox.{gate_pass,gate_reject,tool_timeout,honeypot_hit,audit_finding}`
+- `llm.{call,degrade,oom}`
+- `policy.{decision,fallback,reject}`
+- `memory.{add,dedup,evict,snapshot,rollback,retrieve}`
+- `loop.{episode_start,episode_end,cycle_start,budget_exhausted,interrupted,resume}`
+- `evolve.{propose,gate,judge,decision,hitl_pending,rollback}`
+- `eval.{start,seed_done,report,collapse}`
+
+错误码以 Spec §8.3 的统一命名为准；每个 PRD 新增错误码时，必须在同一个 PR 里更新 `errors.py`。
 
 ## 7. 数据模型与存储
 
 ```
 runs/<run_id>/
-  config.json                      # AppConfig 快照 + config_hash + git sha + 环境变量白名单
+  config.json                      # AppConfig 快照 + config_hash + content_hash + git sha + 环境变量白名单
   state.json                       # MOD-06 语义；本模块提供原子写原语
-  episodes/<seed>.jsonl            # 轨迹（每步一行，schema 见 §6.2）
+  events.jsonl                     # 全部结构化事件（§6.5）
+  episodes/<split>/<episode_key>.jsonl   # 轨迹（每步一行，schema 见 §6.2）
   reflections/<episode_id>.json    # MOD-06 产出
   generations/gen-{N}/             # report.json / diff.patch / harness snapshot
   metrics/scoreboard.json          # MOD-06 计分台账（episode_key 幂等）
@@ -238,10 +295,9 @@ def bootstrap(argv):
     run_id = make_run_id(cfg, explicit=arg("--run-id"))  # FR-09-4
     paths = init_run_dir(run_id, cfg)                    # FR-09-5
     redactor = Redactor(); mod02_audit.register_sensitive(redactor)   # FR-09-9
-    writer = JsonlWriter(paths.episodes / "run.jsonl", redactor=redactor)
-    writer.write({"type": "run_start", "run_id": run_id, "config_hash": config_hash(cfg),
-                  "git_sha": git_sha(), "ts": utcnow_iso()})
-    return paths, cfg, writer
+    events.bind(paths.root / "events.jsonl", run_id)             # FR-09-7
+    events.emit("infra.run_start", config_hash=config_hash(cfg), git_sha=git_sha())
+    return paths, cfg, redactor                                  # redactor 只交给 prompt/memory/reflection 写入方
 ```
 
 ```python
@@ -292,7 +348,8 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
 | `E_IO_EVENT_UNKNOWN` | 事件名不在 `EVENT_TYPES` | 同上 |
 | `E_IO_TRAILING_TRUNCATED` | 读到最后一行 JSON 不完整 | 丢弃该行并告警（不中断） |
 | `E_IO_REDACTION_HIT` | 落盘前擦除命中 | 写 `guard_finding` + 触发 MOD-02 告警 |
-| `E_IO_DISK_FULL` | 写入 `OSError` | 立即停止 run，保留已落盘数据，退出码 2 |
+| `E_IO_DISK_FULL` | 写入 `OSError` | 立即停止 run，保留已落盘数据，退出码 5 |
+| `E_IO_RUNS_NOT_IGNORED` | `runs/` 未被 `.gitignore` 覆盖 | 退出码 2 |
 | `E_IO_GIT_DIRTY` / `E_IO_GIT_UNAVAILABLE` | git 门禁失败 / 无 git | 前者阻断演化；后者降级为 `nogit` |
 | `E_IO_GUARD_RANDOM` / `E_IO_GUARD_LAYER` | 守卫检出违例 | 退出码 4；演化场景直接拒绝候选 |
 | `E_IO_PLOT_UNAVAILABLE` | 缺 matplotlib | 降级为警告 |
@@ -306,10 +363,11 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
 | T-09-1 | `default.yaml` 中 `loop.k=30`，环境变量 `GAMERSI_LOOP__K=5` | `load_config()` | `cfg.loop.k == 5` |
 | T-09-2 | 同上且 CLI 传 `--k 7` | `load_config(cli_overrides={"loop.k":7})` | `cfg.loop.k == 7`（CLI 胜出） |
 | T-09-3 | 同一 AppConfig，两次不同 `run_id`/时间 | `config_hash()` | 两次结果相同 |
-| T-09-4 | 仅 `harness_version` 不同 | `config_hash()` | 结果不同（harness 属可复现要素） |
+| T-09-4 | 仅 `harness_version` 或 harness 文件不同 | `config_hash()` / `artifact_hash()` | `config_hash` 相同；`artifact_hash` 不同（B-19） |
 | T-09-5 | `derive_seed("a", 1, 2)` 在不同 `PYTHONHASHSEED` 子进程 | 调用 | 返回值完全相同 |
 | T-09-6 | 已写入 100 行后 `kill -9` | 重新读取文件 | 前 99 行全部可解析；末行截断被 `E_IO_TRAILING_TRUNCATED` 识别 |
-| T-09-7 | redactor 注册了 heldout seed `2042` | 写含 `"seed": 2042, "note": "seed 2042 ok"` 的行 | 落盘内容中 2042 全部替换为 `<REDACTED:seed>`，并产生 1 条 `guard_finding` |
+| T-09-7 | redactor 注册了 heldout seed `2042` | ① 写 prompt 快照 `"…seed 2042…"`；② 写 heldout 轨迹行 `"seed": 2042` | ① 替换为 `<REDACTED:seed>` 并产生 1 条 `infra.redaction_hit`；② 原样落盘、schema 校验通过、不产生事件 |
+| T-09-16 | 已接受 1 代（harness v1）的 run | `loop run --run-id X --resume` | 通过 `config_hash` 校验并继续 |
 | T-09-8 | 轨迹行缺 `obs_digest` | `validate_trajectory_line()` | 抛 `E_IO_TRAJECTORY_SCHEMA` |
 | T-09-9 | fixture 中 `gamer_rsi/agent/policy.py` 写了 `import gamer_rsi.env.engine` | `scan_layer_imports()` | 返回 1 条 `E_IO_GUARD_LAYER`，定位到具体行号 |
 | T-09-10 | fixture 中 `random.random()` 未豁免 | `scan_determinism()` | 返回 `E_IO_GUARD_RANDOM`；加 `# guard: allow` 注释后 `exempted=True` 且仍可见 |
@@ -344,7 +402,7 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
 | 风险 | 对策 |
 |---|---|
 | infra 被塞进领域逻辑（最易发生的腐化） | NFR-09-5：`infra` 不得 import 其他子包，由 `guards` 强制 |
-| redaction 误伤（把正常数字当地 seed 擦掉） | 只注册**精确值 + 上下文约束**（如 `split in {heldout,test}` 行才擦 seed），并有 T-09-7 反向用例 |
+| redaction 误伤（把正常数字当成 seed 擦掉） | 只作用于 prompt/memory/reflection 出口，并且只匹配带词边界的精确值；T-09-7 ② 为反向用例 |
 | fsync 拖慢单步 | 默认 `fsync_every=0`，仅在长跑 run 建议设 200 |
 | 时间戳/时区导致不可复现 | 强制 UTC + `ts` 不参与任何 hash |
 | CLI 与 Spec 漂移 | FR-09-10：新增命令必须同步更新 Spec §4.6，PR 检查项 |
@@ -368,3 +426,10 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
 4. `--dry-run` 是否需要模拟「一次完整的代际演化」计划（含候选数、预计局数、预计耗时）？会显著提升可操作性但也增加耦合。
 5. `E_IO_*` 与其他模块 `E_*` 的归属：模型不可用引发的 IO 失败应报 `E_LLM_*` 还是 `E_IO_*`？建议以**根因方**为准并写入 Spec §8。
 6. 是否需要把 `guards` 做成 pre-commit hook（当前只做 CLI + CI）？
+
+## 17. 变更记录
+
+| 版本 | 时间 | 变更 |
+|---|---|---|
+| v0.1 | 2026-09-30 | 首版 |
+| v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：`config_hash` 不再包含 harness_version，新增 `artifact_hash`（P0-7）；redaction 只作用于 prompt/memory/reflection（P0-7）；事件改为 `<module>.<event>` 注册表并统一落到 `events.jsonl`（P1-11）；轨迹 schema 对齐 §4.5 新字段与 `episode_key` 路径（P1-10）；退出码新增 5（P1-13）；CLI 对齐 §4.6，统一使用 `--run-id`（P1-14）；git tag 改为 `harness-v{N}`（P1-15）；新增 FR-09-18 schema 与原子写、FR-09-19 `runs/` 忽略检查 |

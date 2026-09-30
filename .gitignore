@@ -16,3 +16,4 @@ papers/*.pdf
 
 # Game runtime logs
 src/game/runs/
+runs/
