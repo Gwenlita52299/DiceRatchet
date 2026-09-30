@@ -16,7 +16,7 @@
 > 游戏跑通后，按同一套规则实现**纯 Python 模拟器**（MOD-01）供 RSI 训练；未来可接视觉模型直接对游戏本体训练。
 > GAME 系列是**游戏规则**的唯一事实来源，MOD-01 是该规则的 Python 等价移植（对拍契约见 [GAME-01](prd/GAME-01-kernel-contract.md) §7）。
 
-**冲突处理**：PRD 与 Spec 冲突时以 Spec 为准；Spec 未覆盖处由 PRD 决策并以「决策（本 PRD 提出，待回填 Spec）」标注，汇总登记在 [模块拆分Spec-GameRSI.md](模块拆分Spec-GameRSI.md) **§11 待回填决策登记表**（当前 8 项已回填、27 项待裁决）。
+**冲突处理**：PRD 与 Spec 冲突时以 Spec 为准；Spec 未覆盖处由 PRD 决策并以「决策（本 PRD 提出，待回填 Spec）」标注，汇总登记在 [模块拆分Spec-GameRSI.md](模块拆分Spec-GameRSI.md) **§11 待回填决策登记表**（v1.3：22 项已回填、11 项待裁决）。
 
 > 🔎 **评审入口**：开工前只需看 Spec §11。其中涉及 INV-1/INV-2/INV-5 的 6 条（P-01/02/06/07/08/14）建议在 M0–M1 评审时先行裁决。
 

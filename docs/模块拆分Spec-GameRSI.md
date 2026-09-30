@@ -1,7 +1,8 @@
 # GameRSI 模块拆分 Spec
 
-> 版本：v1.1 · 状态：定稿（2026-09-30）· 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
+> 版本：v1.3（2026-09-30 17:21，按 MOD PRD 评审修订，见 §12）· 状态：待评审· 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
 > 上游：[项目计划-GameRSI.md](../项目计划-GameRSI.md) · [RSI调研纪要.md](../RSI调研纪要.md)
+> 游戏本体：`docs/prd/GAME-00/01/02`（规则、观测、动作的游戏侧事实来源，B-09）
 > 下游：`docs/prd/MOD-*.md`（每个模块的技术 PRD 必须与本文件一致；冲突时以本文件为准）
 
 ---
@@ -48,7 +49,7 @@
 | INV-4 | harness 自编辑产出的代码在受限执行环境运行：无网络、无文件写、无 subprocess、无 env 内部访问 | MOD-02 + MOD-07 |
 | INV-5 | train / heldout / test 三类 seed 严格隔离；heldout 与 test 的 seed 值不得进入任何 prompt 或记忆 | MOD-08 + MOD-09 |
 | INV-6 | 所有随机性来自显式 seed（`env`、采样、演化），禁用全局 `random`/时间相关随机 | MOD-01 + MOD-09 |
-| INV-7 | 评估主指标只用**环境原生结果**（胜/负、剩余 HP、击杀、楼层），shaped reward 仅用于学习与调试 | MOD-08 |
+| INV-7 | 评估主指标只用**环境原生结果**：`outcome`（win/lose，截断一律计 lose）为第一主指标，`stages_cleared` / `hearts_left` / `battles_won` 为并列次指标（全部取自 GAME `stats` 与 `player`）；shaped reward 仅用于学习与调试 | MOD-08 |
 
 ---
 
@@ -56,7 +57,7 @@
 
 | ID | 模块 | 层 | 一句话职责 | 里程碑 | 关键依赖 |
 |---|---|---|---|---|---|
-| MOD-01 | env-rules | L0 | 纯 Python《Dicey Dungeons》简化规则引擎 + seed 确定性 | M0 | — |
+| MOD-01 | env-rules | L0 | GAME 内核（`src/game/kernel`）的纯 Python 等价移植 + golden 对拍 | M0 | GAME-01（契约）、`src/game/content`（配表） |
 | MOD-02 | env-sandbox | L0 | 观测裁剪、进程/代码隔离、轨迹审计、蜜罐测试 | M0 | MOD-01 |
 | MOD-03 | inference | L1 | 本地模型服务抽象（MLX/llama.cpp）+ 结构化输出与重试 | M1 | MOD-09 |
 | MOD-04 | policy | L1 | prompt 组装、动作解析与校验、harness 工具函数契约 | M1 | MOD-02/03/05 |
@@ -74,12 +75,12 @@
 > 每条 PRD 必须逐字复用本节的"非职责"清单作为 Out of scope，防止职责漂移。
 
 ### MOD-01 env-rules
-- **负责**：游戏规则状态机（骰子、装备槽、奇偶/大小限制、敌人意图、伤害结算）、关卡/商店/升级的最小实现、`reset/step`、奖励计算、非法动作判定、`full_state_hash()`。
-- **不负责**：观测裁剪（MOD-02）、prompt（MOD-04）、模型调用（MOD-03）、评分与统计（MOD-08）。
+- **负责**：按 GAME-01 逐位移植内核（`createGame/reduce/legalActions/observe/digest`、SplitMix64 + 命名流、配表加载与校验），与 `src/game/tests/golden/*.jsonl` 逐行对拍；`state_hash()`；非法动作判定。
+- **不负责**：发明或修改规则（规则改动先改 GAME PRD 与 JS 内核，再同步移植）、观测裁剪（MOD-02）、prompt（MOD-04）、模型调用（MOD-03）、shaped reward 与评分统计（MOD-08）。
 
 ### MOD-02 env-sandbox
-- **负责**：`FullState → Observation` 白名单投影；`SandboxEnv` 门面（唯一的 agent 侧入口）；harness 代码受限执行与静态扫描；轨迹泄漏审计器；蜜罐泄漏注入与告警。
-- **不负责**：规则本身（MOD-01）、奖励函数（MOD-01）、模型侧重试（MOD-03）。
+- **负责**：GAME 观测 → `obs-agent` 白名单投影与紧凑渲染；决策失败的唯一判负方（§4.3）；`SandboxEnv` 门面（唯一的 agent 侧入口）；harness 代码受限执行与静态扫描；轨迹泄漏审计器；蜜罐泄漏注入与告警。
+- **不负责**：规则本身（MOD-01 / GAME）、shaped reward（MOD-08）、模型侧重试（MOD-03）。
 
 ### MOD-03 inference
 - **负责**：本地后端抽象（MLX / llama.cpp）、模型加载与生命周期、`generate_json()`（JSON Schema 约束 + 失败重试 + 超时降级）、token/延迟埋点、temperature/top-p 等采样参数管控；以及**可选**辅助接口 `count_tokens()` 与 `embed()`（供 MOD-05 记忆检索；阶段一默认关闭，MOD-03 可返回 `E_LLM_UNSUPPORTED` 由调用方降级为 BM25）。
@@ -102,7 +103,7 @@
 - **不负责**：模型推理实现（MOD-03）、指标定义与统计口径（MOD-08）、seed 抽取规则（MOD-09 注册表 + MOD-08 协议）。
 
 ### MOD-08 evals
-- **负责**：三类 seed 协议与 held-out 评估执行、基线（random / heuristic / fixed-prompt）实现与归档、指标计算（主指标 + 次级指标 + 置信区间）、多样性/坍塌监控、训练-留出增益真实性判定、消融实验（去反思 / 去自编辑）。
+- **负责**：三类 seed 协议与 held-out 评估执行、基线（random / heuristic / fixed-prompt）实现与归档、指标计算（主指标 + 次级指标 + 置信区间）、shaped reward 定义（`evals/reward.py`，仅学习/调试用）、多样性/坍塌监控、训练-留出增益真实性判定、消融实验（去反思 / 去自编辑）。
 - **不负责**：修改 harness（MOD-07）、写游戏规则（MOD-01）、编排训练局（MOD-06）。
 
 ### MOD-09 infra
@@ -113,77 +114,106 @@
 
 ## 4. 全局接口契约
 
+> v1.3 起，游戏侧事实以 GAME-00/01/02 为准（B-09）：动作 kind、观测字段名、规则与配表全部**引用**游戏侧契约，本节只定义 agent 侧的投影、封装与跨模块调用。字段名沿用 GAME 的 camelCase（Python 侧以 dict 键访问，不做改名映射，避免对拍时出现一整类映射错误）。
+
 ### 4.1 环境接口（MOD-01/02 对外）
 
 ```python
 # gamer_rsi/sandbox/api.py
 class SandboxEnv:
     def reset(self, seed: int, *, episode_config: EpisodeConfig) -> Observation: ...
-    def step(self, action: Action) -> StepResult: ...
+    def step(self, action: Action) -> StepResult: ...          # 单个 GAME 动作
+    def reject(self, *, stage: Literal["syntax", "semantic"], reason: str,
+               raw: str | None, final: bool) -> StepResult: ...  # 不改状态，记一次非法（B-15）
     def observe(self) -> Observation: ...
-    def legal_actions(self) -> list[Action]: ...   # 公开信息足以推出的合法动作，可含噪声提示
+    def legal_actions(self) -> list[Action]: ...   # GAME legalActions() 去掉 abandon_run；同一状态下顺序确定
     def close(self) -> None: ...
+
+@dataclass(frozen=True)
+class EpisodeConfig:            # 展开为 GAME createGame 输入（GAME-00 §8.2）
+    difficulty: Literal["easy", "medium", "hard"] = "hard"
+    stage_count: Literal[3, 6, 10] = 6        # GAME D-34；默认局定义见 §8.6
+    toggles: Mapping[str, bool] = ALL_ON       # mapBranching/relics/events/shops/schoolCounter
+    character: str = "warrior"
 
 @dataclass(frozen=True)
 class StepResult:
     observation: Observation
-    reward: float              # shaped，仅供学习/调试
-    terminated: bool           # 胜负已分
-    truncated: bool            # 超时/步数上限
+    reward: float              # shaped，仅供学习/调试（INV-7）；计算归 MOD-08 `reward.py`
+    terminated: bool           # outcome 已定（win / lose）
+    truncated: bool            # 步数/决策数上限或 policy_failure（主指标一律计为 lose）
     info: dict                 # {"illegal": bool, "illegal_reason": str|None,
-                               #  "outcome": "win"|"lose"|None, "floors": int,
-                               #  "kills": int, "state_hash": str}
+                               #  "outcome": "win"|"lose"|None, "truncation_reason": str|None,
+                               #  "stages_cleared": int, "hearts_left": int, "battles_won": int,
+                               #  "state_hash": str, "obs_digest": str}
 ```
 
-### 4.2 Observation（白名单，MOD-02 唯一权威定义）
+### 4.2 Observation（agent 侧投影 `obs-agent-1.0.0`，MOD-02 唯一权威定义）
 
-| 字段 | 类型 | 说明 |
+agent 侧观测 = GAME `observe(state, "full")`（GAME-00 §9.4 `obs-1.0.0`）的**键子集** + 3 个 agent 专属键。不改名，不新增游戏语义。
+
+| 来源 | 字段 | 说明 |
 |---|---|---|
-| `schema_version` | str | 投影协议版本，变更需 +1 并记 CHANGELOG |
-| `episode_id` / `turn` | str / int | 标识与回合 |
-| `phase` | enum | `player_turn` / `enemy_turn` / `shop` / `levelup` / `game_over` |
-| `self_hp` / `self_max_hp` / `self_block` | int | 自身状态 |
-| `dice` | list[int] | **已掷出**的骰面；未掷出时为空 |
-| `slots` | list[SlotView] | `{slot_id, kind, constraint, filled_by, used}` |
-| `enemies` | list[EnemyView] | `{enemy_id, hp, max_hp, status, intent}` |
-| `floor` | int | 当前楼层 |
-| `allowed_actions` | list[str] | 合法动作 **kind** 摘要，不含隐藏信息 |
+| 保留 | `phase` `stage` `chapter` `turn` `difficulty` | `phase ∈ map/player_turn/shop/event/treasure/shrine/forge/rest/relic_swap/settle` |
+| 保留 | `player{hearts,heartsMax,virtue,virtueMax,ward,starShards,statuses,deckSchool,purifyLeft,abilities}` | 自身状态 |
+| 保留 | `hand[]` `slots[]` `enemies[]`（含 `intent`） | 战斗内；`intent` 在玩家回合开始时提交且不重掷，所以是真实信息 |
+| 保留 | `map`（仅已揭示的行与 `reachable`/`preview`） | 地图 |
+| 保留 | `shop` `event` `treasure` `forge` `shrine` `rest` `pendingRelic` | 仅在对应 `phase` 非 null |
+| 保留 | `toggles` `relics` | 公开配置与遗物 |
+| 改写 | `legalActionKinds` | 去掉 `abandon_run` |
+| 新增 | `schemaVersion="obs-agent-1.0.0"` `episodeId` `decisionIndex` | 标识 |
+| 新增 | `stageCount` | 本局关数（公开） |
+| 新增 | `lastResult: {illegal, reason} \| null` | 上一次被拒绝的原因（B-15 重试反馈） |
+| 删除 | `sessionId` `runId` `seed` `config` `stages` `stats` `outcomeReason` `truncationReason` | 与决策无关或属于审计信息 |
 
-**严禁出现在 Observation 中**：seed、后续房间/遭遇、商店与升级台内容、敌人未公开状态、模拟器内部随机数状态、未来骰面、`full_state`。这些只能存在于审计侧（`state_hash` 是单向摘要，允许）。
+**严禁出现在 Observation 中**（同 GAME-00 §9.4）：seed、RNG 流状态、未来骰面、未揭示的地图节点与内容、商店未展示商品、敌人未公开状态、`GameState` 全量。`state_hash` 与 `obs_digest` 是单向摘要，只进 `info`，不进 prompt。
 
-### 4.3 动作契约（MOD-04 产出，MOD-01 消费）
+**token 预算**：MOD-04 渲染后的观测 p95 ≤ 1,500 token（8B 模型 `context_length=8192`）。GAME 原始观测约 12k 字符，所以 MOD-02 提供确定性的**紧凑渲染** `render_compact(obs) -> str`（地图只展开下一行可达节点，已访问的行折叠）。紧凑渲染是投影的一部分，版本随 `schemaVersion` 走。
 
-模型必须输出：
+### 4.3 决策与动作契约（MOD-04 产出，MOD-01 消费）
+
+**决策点**（B-12）：`phase=player_turn` 时每回合一次决策，产出本回合的**动作计划**；其余 `phase` 每一步一次决策，计划长度固定为 1。模型输出统一为：
 
 ```json
-{"reasoning": "≤2 句", "action": {"kind": "place_die", "die_index": 0, "slot_id": "sword_1"}}
+{"reasoning": "≤2 句", "plan": [{"kind": "play_face", "dieId": "d-0007", "slotId": "slot_1", "targetId": "e-00"},
+                                 {"kind": "end_turn"}]}
 ```
 
-`kind` 枚举与必填字段：
+- `plan[i]` 就是 GAME 动作对象，kind 与字段**逐字引用 GAME-01 §4 分派表**。agent 可用的 kind：`play_face/discard_die/purify/use_ability/end_turn/map_choose/shop_buy/shop_refresh/shop_remove/shop_leave/event_choose/treasure_pick/forge_pick/shrine_choose/rest_choose/relic_swap`（`abandon_run` 对 agent 不开放）。
+- 计划长度：`player_turn` 为 1..12，其余为 1。
+- **执行语义**（MOD-04 `play_decision`）：
+  - 按顺序逐个执行。每个动作执行前，都要用**当前**的 `legal_actions()` 校验。
+  - 离开 `player_turn`（战斗结束或进入敌方回合）后，剩余动作全部丢弃，不计非法。
+  - 计划执行完仍处于 `player_turn` → 开始下一个决策（不自动 `end_turn`）。
+- **GBNF 友好**：schema 只用 `object/array/string/integer/enum/required/maxItems`，`kind` 用 enum，其余字段设为可选，由语义层校验。不用 `oneOf/allOf/if`（解决 P-09 与 MOD-03/04 schema 分叉的问题），schema 文件唯一，位于 `schemas/decision.schema.json`。
 
-| kind | 必填 | 说明 |
-|---|---|---|
-| `place_die` | `die_index`, `slot_id` | 单颗骰入单个槽（§2 约束：单次改动 ≤2 模块） |
-| `end_turn` | — | 主动结束回合 |
-| `use_ability` | `ability_id` | 使用特殊能力 |
-| `shop_buy` | `item_id` | 商店购买 |
-| `shop_leave` | — | 离开商店 |
-| `levelup_choose` | `option_id` | 升级选择 |
+**三层校验与重试（唯一口径，B-15）**：
 
-**三级校验**：① 语法（JSON 可解析 + schema）→ ② 语义（落在 `legal_actions()` 内）→ ③ 执行。
-**失败策略**：前两级失败不执行动作，返回带 `illegal_reason` 的 Observation + `reward -= 0.05`，计入 `illegal_rate`；同一步最多重试 `R=2` 次；连续 3 次非法判该局失败（防死循环）。
+| 层 | 归属 | 失败处理 | 计非法？ |
+|---|---|---|---|
+| L0 格式修复 | MOD-03 `generate_json` 内部（首答 + ≤2 次修复） | 耗尽 → `E_LLM_SCHEMA_INVALID`，视为本次**尝试**失败 | 否（只进 `llm_calls.jsonl`） |
+| L1 语法 / L2 语义 | MOD-04（schema + 当前 `legal_actions()`） | `env.reject(final=False)`：不改状态，`illegal_count += 1`，shaped `-0.05`；带 `lastResult` 重试 | 是（每次尝试计 1） |
+| L3 执行 | MOD-01 `reduce` 拒绝 | 同 L2 | 是 |
+
+- 每个决策最多 **3 次尝试**（首次 + `R=2` 次重试）。重试时换采样 seed：`derive_seed(run, episode, decision, attempt)`。
+- 3 次都失败 → `env.reject(final=True)`，然后由**启发式 fallback** 执行 1 个动作（`source="fallback"`），决策完成。
+- **判负只由 MOD-02 `SandboxEnv` 负责**：连续 3 个决策都以 `final=True` 结束 → `truncated=True, truncation_reason="policy_failure"`，主指标计为 lose。MOD-04/06 只读 `info`，不另行判负。
+- GAME 内核自身的 `consecutiveIllegal`（Web 会话挂起用）对 agent 路径不生效。
 
 ### 4.4 Harness 工件契约（MOD-07 写，MOD-04 读）
 
 ```
 harness/
-  version.json          # {"version": int, "parent": int|null, "git_commit": str,
-                        #  "created_at": iso, "reason": str, "accepted_by": "auto"|"human"}
-  prompts/decision.md   # 决策 prompt 模板（含 {{observation}} {{memory}} 占位）
+  version.json          # {"version": int, "parent": int|null, "git_commit": str, "artifact_hash": str,
+                        #  "created_at": iso, "reason": str, "accepted_by": "auto"|"human", "base_model": str|null}
+  prompts/decision.md   # 决策 prompt 模板（含 {{observation}} {{memory}} {{legal_actions}} 占位）
   prompts/reflection.md # 反思模板
   tools/*.py            # 决策工具函数，纯函数 + @harness_tool 注册
-  config.json           # 采样参数、检索 top_k 等可演化配置
+  config.json           # 采样参数（训练期）、检索 top_k 等可演化配置；不得覆盖 §8.1 的评估温度
 ```
+
+- `artifact_hash = sha256(按路径排序的 (相对路径, 文件 sha256) 列表)`，由 MOD-09 计算（B-19）。
+- git tag 统一为 `harness-v{N}`（不建同名分支，B-22）。
 
 工具函数唯一签名（**禁止变更**）：
 
@@ -193,41 +223,102 @@ def rank_actions(obs: dict, candidates: list[dict], memory: list[dict]) -> list[
     """返回重排后的 candidates；纯函数，无 IO、无网络、无随机、无 import env。"""
 ```
 
-### 4.5 轨迹与报告契约（MOD-09 落地，MOD-08 消费）
+工具在 MOD-02 提供的**常驻子进程 worker** 中执行（rlimit 设在子进程上，超时即杀并重启，B-20），主进程（持有模型）不设 rlimit。
 
-```jsonc
-// runs/<run_id>/episodes/<seed>.jsonl —— 每步一行
-{"episode_id":"e-000123","generation":3,"harness_version":7,"seed":1042,"split":"train",
- "step":14,"obs_digest":"sha256:...","action":{...},"reward":0.03,"cum_reward":0.41,
- "illegal":false,"illegal_reason":null,"llm_raw":"...","llm_latency_ms":812,
- "prompt_tokens":932,"completion_tokens":61,"ts":"2026-09-30T12:00:00Z"}
+### 4.5 轨迹与报告契约（schema 文件归 MOD-09 登记，字段由本节定义）
+
+**文件布局**（B-16）：
+
+```
+runs/<run_id>/episodes/<split>/<episode_key>.jsonl
+episode_key = e-{seed:06d}-g{generation:03d}-{arm}
+arm ∈ train | parent | cand-{id} | baseline-{random|heuristic|fixed_prompt} | ablation-{name}
 ```
 
+同一 seed 在不同代、不同候选下各有独立文件，互不覆盖；`episode_key` 同时作为 MOD-06 计分台账的幂等键（取代 P-13 的旧格式）。
+
+**轨迹行**（每个 env 步一行；`reject` 也写一行，`illegal=true`，`action` 为模型原始动作）：
+
 ```jsonc
-// runs/<run_id>/generations/gen-003/report.json —— 代际报告
-{"generation":3,"harness_version":7,"parent_version":6,
- "heldout":{"n":40,"win_rate":0.32,"win_rate_ci95":[0.20,0.47],"mean_hp_left":9.4,
-            "mean_kills":2.8,"mean_turns":31.2,"illegal_rate":0.011,
-            "action_entropy_curve":[...]},
- "train":{"n":60,"win_rate":0.51},
- "gain_realism":{"win_rate_gap":0.19,"gap_threshold":0.15,"verdict":"overfit_suspect"},
+{"episode_key":"e-002013-g003-cand-b","generation":3,"harness_version":7,"arm":"cand-b",
+ "seed":2013,"split":"heldout","step":14,"decision_index":6,"plan_index":1,"attempt":1,
+ "source":"llm","obs_digest":"sha256:...","action":{"kind":"play_face","dieId":"d-0007","slotId":"slot_1"},
+ "reward":0.03,"cum_reward":0.41,"illegal":false,"illegal_reason":null,
+ "llm_raw":"...","llm_latency_ms":812,"prompt_tokens":1432,"completion_tokens":96,
+ "prompt_hash":"sha256:...","memory_ids":["m-0012"],"tool_hash":"sha256:...","mode":"eval",
+ "ts":"2026-09-30T12:00:00Z"}
+```
+
+- LLM 相关字段（`llm_raw/llm_latency_ms/*_tokens/prompt_hash/memory_ids`）只在决策内第一个执行的动作行上填写，其余行为 `null`。
+- `source ∈ llm | fallback | heuristic | random | scripted`。
+- 局末追加一行 `{"type":"episode_end", "outcome", "truncation_reason", "stages_cleared", "hearts_left", "battles_won", "decisions", "degraded", "exclude_reason"}`。
+- **seed 不做 redaction**：轨迹属于审计侧，redaction 只作用于 prompt/memory/reflection（B-19）。
+
+**代际报告** `runs/<run_id>/generations/gen-{NNN}/report.json`：
+
+- schema 唯一文件为 `schemas/generation_report.schema.json`（`additionalProperties:false`），扩展量外置到 `metrics/gen-{NNN}.ext.json`（P-19）。
+- **代数约定**：`gen-000` 是 harness v0 的基线评估（`decision="baseline"`），演化代从 1 开始；`harness_version ≥ 0`。
+- **写入分工**：
+  - MOD-08 `evaluate_generation()` 产出 `heldout/train/gain_realism/diversity/ablation` 段。
+  - MOD-07 填写 `candidates/decision/decided_by/reason` 段。
+  - MOD-09 `write_json_atomic()` 负责落盘并计算 sha256。
+
+```jsonc
+{"generation":3,"harness_version":7,"parent_version":6,"episode_config_hash":"sha256:...",
+ "heldout":{"basket":"H1","n":40,"win_rate":0.475,"win_rate_ci95":[0.33,0.62],
+            "mean_stages_cleared":4.1,"mean_hearts_left":0.9,"mean_battles_won":11.3,
+            "mean_decisions":96.2,"illegal_rate":0.011,"fallback_rate":0.004,"truncation_rate":0.0,
+            "degraded_n":0,"action_entropy_curve":[...]},
+ "train":{"window":60,"win_rate":0.51},
+ "gain_realism":{"win_rate_gap":0.035,"gap_threshold":0.15,"verdict":"null"},  // real_gain|null|overfit_suspect|regress|insufficient
  "diversity":{"entropy_slope":-0.004,"collapse_flag":false},
- "ablation":{"no_reflection":0.18,"no_self_edit":0.22},
- "decision":"reject","decided_by":"auto","reason":"heldout 未提升且 gap 超阈"}
+ "ablation":null,
+ "candidates":[{"id":"b","kind":"tool_patch","gate":"pass","paired":{"method":"mcnemar","p":0.21,"delta":0.05}}],
+ "decision":"reject","decided_by":"auto","reason":"C2 未显著"}
 ```
 
-### 4.6 命令面（MOD-09 统一暴露）
+### 4.6 命令面（MOD-09 统一暴露；新增命令必须回填本节）
 
 ```bash
-python -m gamer_rsi env selftest --seed 1              # M0 验收：规则/确定性自检
-python -m gamer_rsi play --agent fixed --seeds train:1000-1004
-python -m gamer_rsi baseline --kind random|heuristic|fixed_prompt
-python -m gamer_rsi loop run --generations 3 --k 30 --hitl        # HITL=人在环确认
-python -m gamer_rsi evolve approve|rollback --generation 3
-python -m gamer_rsi eval report --split heldout --baseline all
-python -m gamer_rsi audit leak --run <run_id>          # INV-2/INV-3 审计
-python -m gamer_rsi eval diversity --run <run_id>
+python -m gamer_rsi env selftest --seed 1              # M0：规则/确定性自检 + GAME golden 对拍
+python -m gamer_rsi play --agent llm|heuristic|random|fixed_prompt --seeds train:1000-1004
+python -m gamer_rsi baseline --kind random|heuristic|fixed_prompt --basket H1
+python -m gamer_rsi loop run --generations 3 --k 30 [--hitl] [--run-id ID] [--resume]
+python -m gamer_rsi loop status|smoke --run-id ID
+python -m gamer_rsi evolve approve|rollback --run-id ID --generation 3 [--reason STR]
+python -m gamer_rsi eval report --run-id ID --split heldout --baseline all
+python -m gamer_rsi eval ablation|test --run-id ID [--basket H2]
+python -m gamer_rsi eval diversity --run-id ID
+python -m gamer_rsi audit leak --run-id ID            # INV-2/INV-3/INV-5 审计
+python -m gamer_rsi inference probe|bench|robustness   # MOD-03
+python -m gamer_rsi memory stats|snapshot|rollback|verify|retrieve   # MOD-05（B-08）
+python -m gamer_rsi guards check [--root PATH]         # MOD-09（P-20）
 ```
+
+统一约定：run 一律用 `--run-id ID` 指定，续跑用 `--resume` 开关；所有命令都支持 `--dry-run`。
+
+### 4.7 模块间调用签名表（唯一登记处，B-17）
+
+各 PRD 只能**引用**本表签名；改签名需要先改本表。
+
+| 调用方 → 被调方 | 签名 | 说明 |
+|---|---|---|
+| MOD-02 → MOD-01 | `GameEngine(tables).create(cfg) / reduce(state, action) / legal_actions(state) / observe(state, view)` | GAME-01 §1 的 Python 等价；`tables` 读取 `src/game/content/*.json` |
+| MOD-06 → MOD-04 | `PolicyAgent.reset(ctx: EpisodeContext) -> None` | 每局开始 |
+| MOD-06 → MOD-04 | `PolicyAgent.play_decision(env: SandboxEnv, obs: Observation, *, ctx: EpisodeContext) -> DecisionResult` | 执行一个决策点（含计划、重试、fallback），返回 `steps: list[StepRecord]`、`source`、`attempts`、`llm: LLMCallMeta\|None`、`memory_ids`、`prompt_hash`、`last: StepResult` |
+| MOD-04 → MOD-03 | `InferenceClient.generate_json(prompt, *, schema, mode, sampling, seed) -> JsonResult` | `mode ∈ train/eval` |
+| MOD-04 → MOD-05 | `MemoryStore.retrieve(obs, *, top_k, token_budget, tick: int) -> list[MemoryHit]` | `tick` 为逻辑时钟（训练局序号），不用墙钟 |
+| MOD-06 → MOD-05 | `MemoryStore.add_reflection(entry: ReflectionEntry, *, provenance: Provenance) -> str` · `record_usage(episode_key, memory_ids, outcome) -> None` · `snapshot(version: int) -> Path` · `frozen(version) -> MemoryView` | 评估局只用 `frozen` 只读视图 |
+| MOD-06 → MOD-03 | `loop.reflect.reflect(summary: EpisodeSummary, *, client, template) -> ReflectionEntry` | 反思归 MOD-06；`ReflectionEntry` schema 归 MOD-05 |
+| MOD-07 → MOD-08 | `evals.evaluate_arm(harness_dir, *, split, basket, memory_version, arm, run_id) -> ArmResult` | 单臂评估 |
+| MOD-07 → MOD-08 | `evals.compare_paired(a: ArmResult, b: ArmResult) -> PairedTest` | 方法与显著性口径归 MOD-08 |
+| MOD-07 → MOD-08 | `evals.evaluate_generation(gen, parent: ArmResult, winner: ArmResult\|None, *, run_id) -> dict` | 产出 report 指标段 |
+| MOD-06/07 → MOD-08 | `evals.seeds.take(split, *, generation=None, basket=None) -> list[int]` | seed 唯一出口（INV-5） |
+| MOD-07 → MOD-02 | `sandbox.guard.gate(harness_dir) -> GateReport` · `sandbox.guard.load_harness_tools(harness_dir) -> ToolWorker` | 子进程 worker |
+| MOD-04/05/06 → MOD-02 | `sandbox.audit.scan_text(text, *, surface) -> list[Finding]` | prompt/memory/reflection 泄漏扫描 |
+| MOD-04/08 → MOD-04 | `agent.heuristic.heuristic_policy(obs, legal: list[Action]) -> Action` | fallback 与 heuristic 基线共用，逻辑移植自 GAME `scripts/bots.js::greedy_counter` |
+| MOD-07 → MOD-09 | `git_ops.commit_harness(repo, version, msg) -> sha` · `tag_version(repo, version)` · `rollback_to(repo, version) -> sha` | tag 为 `harness-v{N}` |
+| 全部 → MOD-09 | `infra.events.emit(event: str, **fields)` · `infra.errors.E.<CODE>` · `infra.io.write_json_atomic(path, obj)` | 注册表见 §8.2/§8.3 |
 
 ---
 
@@ -235,19 +326,20 @@ python -m gamer_rsi eval diversity --run <run_id>
 
 ```
 gamer_rsi/
-  env/        engine.py models.py rng.py actions.py      # MOD-01
+  env/        engine.py rng.py digest.py loader.py combat.py map.py shop.py forge.py event.py relic.py  # MOD-01（与 src/game/kernel 一一对应）
   sandbox/    api.py projection.py guard.py audit.py honeypot.py  # MOD-02
   inference/  backend.py mlx_backend.py llama_backend.py schema.py # MOD-03
-  agent/      policy.py parser.py prompts/ tools/         # MOD-04
+  agent/      policy.py parser.py heuristic.py prompts/ tools/  # MOD-04
   memory/     store.py retriever.py schemas.py            # MOD-05
   loop/       runner.py reflect.py generation.py          # MOD-06
   evolve/     proposer.py judge.py versioning.py gate.py  # MOD-07
   evals/      baselines.py harness.py metrics.py diversity.py ablation.py # MOD-08
-  infra/      config.py logging.py cli.py plotting.py git_ops.py guards.py # MOD-09
+  infra/      config.py logging.py events.py errors.py io.py cli.py plotting.py git_ops.py guards.py # MOD-09
+schemas/     decision.schema.json trajectory_line.schema.json generation_report.schema.json  # 跨模块 schema（MOD-09 登记）
 harness/     （当前生效工件，见 §4.4）
 harness/versions/v{N}/   （历史工件快照，由 MOD-07 维护）
 configs/     default.yaml seeds.yaml models.yaml
-runs/        <run_id>/{config.json,state.json,episodes/,reflections/,prompts/,memory/,
+runs/        <run_id>/{config.json,state.json,events.jsonl,episodes/<split>/,reflections/,prompts/,memory/,
                        generations/,metrics/,plots/,audit/}
              metrics/ 内含 generations.csv（MOD-08 列定义）、scoreboard.json（MOD-06 计分台账）、
                       llm_calls.jsonl（MOD-03 推理埋点）、plots_data/（MOD-08 绘图数据）
@@ -256,7 +348,9 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 ```
 
 **配置优先级**：CLI 参数 > 环境变量 `GAMERSI_*` > `configs/default.yaml` 默认值。
-**run_id** = `{git_short_sha}-{config_hash[:8]}-{utc_ts}`；`config_hash` 覆盖 configs + harness_version，保证可复现。
+**run_id** = `{git_short_sha}-{config_hash[:8]}-{utc_ts}`。`config_hash` 只覆盖**静态配置**（configs + EpisodeConfig），用于判定 run 身份与 `--resume` 一致性；harness 的变化由逐代记录的 `artifact_hash` 表达（B-19）。否则第一代被接受后 `--resume` 必然冲突。
+**内容配表**：MOD-01 直接读取 `src/game/content/*.json`，与 JS 内核共用同一份，不另建 `configs/enemies.yaml`。
+**忽略规则**：`runs/` 必须写进 `.gitignore`，否则 MOD-07 的 `worktree_clean_check()` 永远判定为 dirty。
 
 ---
 
@@ -264,7 +358,7 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 
 | 模块 | 依赖 | 可并行于 | 阻塞谁 |
 |---|---|---|---|
-| MOD-01 | — | MOD-09 起步 | MOD-02/06/08 |
+| MOD-01 | GAME 内核与配表（已完成，`src/game`） | MOD-09 起步 | MOD-02/06/08 |
 | MOD-02 | MOD-01 | MOD-03 | MOD-04/06/08 |
 | MOD-03 | MOD-09 | MOD-01/02 | MOD-04/06 |
 | MOD-04 | MOD-02/03/05 | MOD-08 | MOD-06/07 |
@@ -283,7 +377,7 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 
 | 里程碑 | 覆盖模块 | 交付物 | 验收（源自计划 §7） |
 |---|---|---|---|
-| M0 | MOD-01、MOD-02、MOD-09（骨架） | 可复现模拟器 + 观测投影 + 审计器 + 单测 | 同一 seed 两次运行 `state_hash` 序列完全一致；人工策略示范局可通关 |
+| M0 | MOD-01、MOD-02、MOD-09（骨架） | Python 移植 + 观测投影 + 审计器 + 单测 | `src/game/tests/golden` 4 组逐行对拍全过；同一 seed 两次运行 `state_hash` 序列完全一致；Python 版 heuristic 在默认局（§8.6）上的通关率与 JS `greedy_counter` 相差 ≤ 3pp（n=200） |
 | M1 | MOD-03、MOD-04、MOD-08（基线部分） | 8B agent + random/heuristic/fixed-prompt 三基线 | 三个基线的 held-out 分数入档；JSON 格式鲁棒性报告 |
 | M2 | MOD-05、MOD-06、MOD-07（初版） | 反思 + 记忆 + K 局自动演化 + HITL 门 | 闭环跑通 ≥1 轮演化，产出 diff 与决策记录 |
 | M3 | MOD-08（完整）、MOD-07（回滚/消融） | 评估报告 + 曲线图 + 消融结论 | 计划 §6 三项验收全部通过 |
@@ -293,12 +387,78 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 
 ## 8. 横切关注点
 
-1. **确定性**：所有随机来自显式 seed；`PYTHONHASHSEED=0`；禁止 `random.*`、`time`-based 随机、`torch`/`numpy` 全局 seed 缺省；MOD-09 `guards.py` 提供 CI 级 AST 扫描。
-2. **可观测性**：一次调用 = 一行 JSONL + 结构化事件（`episode_start/step/illegal/reflect/evolve/decision`）；任何模块不得自建日志格式。
-3. **错误分类码**：`E_ENV_*`、`E_ACTION_*`、`E_LLM_*`、`E_EVOLVE_*`、`E_EVAL_*`、`E_IO_*`，随日志与 `info` 一并返回（MOD-09 集中登记）。
-4. **版本与审计**：`harness_version` 单调递增且不可重写历史；每次接受/拒绝都要有 `report.json` 支撑；轨迹保留 ≥ 全部代际。
-5. **降级**：模型不可用 → 退化为 heuristic agent 并显眼标注（该局不计入评估样本）；演化裁判失败 → 保守拒绝候选。
-6. **成本**：单局上限步数、单次生成 tok 上限、每代候选数 ≤3，全部可配置并有默认。
+### 8.1 确定性
+所有随机都来自显式 seed，并设 `PYTHONHASHSEED=0`。禁止使用 `random.*`、基于时间的随机，以及未显式设 seed 的 `torch`/`numpy` 全局随机；MOD-09 `guards.py` 在 CI 中用 AST 扫描检查。
+
+**评估局统一 `temperature=0.0`**，并且 seed 显式，不可被 harness `config.json` 覆盖。训练局温度由 harness 配置决定（上限 1.0）。MOD-03 在 `mode="eval"` 下强制执行（B-14）。
+
+记忆、TTL 与时新度一律使用**逻辑时钟**（训练局序号 / 代数），不使用墙钟。
+
+### 8.2 可观测性与事件注册
+- 一次调用对应一行 JSONL。事件统一落到 `runs/<run_id>/events.jsonl`，事件名为 `<module>.<event>`（如 `loop.episode_end`、`evolve.decision`、`sandbox.gate_reject`）。
+- 事件注册表位于 MOD-09 `infra/events.py::EVENT_REGISTRY`，由各 PRD「指标与埋点」节列出的事件汇总而成。未注册的事件在开发模式下抛异常，生产模式下写成 `infra.unknown_event`。
+- 任何模块不得自建日志格式或自选落点（B-18）。
+
+### 8.3 错误码与退出码
+- 错误码前缀为 `E_ENV_*`、`E_ACTION_*`、`E_LLM_*`、`E_EVOLVE_*`、`E_EVAL_*`、`E_IO_*`，全集在 MOD-09 `infra/errors.py` 登记；各 PRD 只能引用已登记的码。
+- 命名冲突已统一：
+  - LLM 错误以 MOD-03 为准：`E_LLM_UNAVAILABLE / E_LLM_BACKEND_ERROR / E_LLM_SCHEMA_INVALID / E_LLM_TIMEOUT / E_LLM_OOM`。
+  - 泄漏统一为 `E_EVAL_INV5_LEAK`。
+  - 记忆写入失败统一为 `E_IO_MEMORY_WRITE_FAILED`。
+- 退出码：
+
+  | 码 | 含义 |
+  |---|---|
+  | 0 | 成功，含 HITL 挂起 |
+  | 1 | 领域失败，如验收不达标 |
+  | 2 | 配置/环境错误 |
+  | 3 | 模型不可用 |
+  | 4 | 沙箱/守卫违例 |
+  | 5 | IO 落盘失败 |
+  | 130 | Ctrl-C |
+
+### 8.4 版本与审计
+- `harness_version` 单调递增，历史不可重写；每次接受/拒绝都要有 `report.json` 支撑。
+- 轨迹保留 ≥ 全部代际。
+- redaction 只作用于 prompt/memory/reflection 三个出口，审计侧轨迹保留原值（B-19）。
+
+### 8.5 降级
+- 模型不可用 → 退化为 heuristic agent 并显眼标注，该局 `degraded=true`，不计入评估样本；但 MOD-08 必须单独报告 `degraded_n`。
+- 演化裁判失败 → 保守拒绝候选。
+- 超时、崩溃造成的 dropped 局**计为 lose 并单列**，不得从 n 中剔除，避免幸存者偏差。
+
+### 8.6 「一局」的定义与成本模型（B-12/B-13）
+
+**默认局**：`EpisodeConfig(difficulty="hard", stage_count=6, toggles=全开, character="warrior")`，即第 1–2 章，以第 6 关 Boss 收尾。选择依据是 GAME 侧的实测（启发式 bot，n=200）：
+
+| 局型 | greedy_counter 通关率 | env 步 p50/p90 | 决策点 p50/p90 |
+|---|---|---|---|
+| hard × 6 关（**默认**） | 45.0% | 227 / 270 | 94 / 108 |
+| medium × 10 关（完整局） | 39.5% | 435 / 538 | 159 / 187 |
+| 任意难度 × 3 关 | 99–100%（天花板，不用） | 86–106 | — |
+
+默认局的启发式通关率在中段，上升和下降都有空间可测，决策点数量也只有完整局的 60%。完整局（medium × 10）只作为 test 的次级「迁移」指标报告。
+
+**上限**（唯一配置键，各模块只读）：
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `episode.max_env_steps` | 1000 | env 步硬上限（6 关实测最大约 350，10 关最大约 650） |
+| `episode.max_decisions` | 300 | 决策点上限 |
+| GAME `maxTurnsPerBattle` | 60 | **单场战斗**回合上限（内核自带，不是整局上限） |
+
+超出上限 → `truncated=true`，计为 lose。
+
+**成本模型**：设 `t_d` 为单个决策的推理耗时（MOD-03 实测 p50，8B 在默认局上的预估约 3 s，包括约 1.5k token 的预填和约 150 token 的输出），`D` 为每局决策数（约 94）。
+
+- 单局耗时 `t_ep ≈ D·t_d + t_reflect` ≈ **5 分钟**。
+- 每代局数 `E_gen = K + H + C·(S + H)`：训练 K=30，parent heldout H=40（与候选使用同一个冻结的记忆快照，所以每代都要重跑），候选数 C=**2**（上限 3），冒烟 S=5。默认值下 E_gen = 30 + 40 + 2×45 = **160 局，约 13 小时/代**。
+- M3 全程为 3 代，加上 fixed_prompt 基线 40 局、消融 2 臂 × 40 局、test 100 局，合计约 **55 小时**，即约 2.3 天的连续推理。
+
+**硬约束**：
+- `E_gen` 由 MOD-06 按上式统一计算，超出 `loop.max_episodes_per_generation`（默认 160）即拒绝启动。MOD-07 不再单独设成本上限。
+- 并发一律采用 P-10 的「局级并发 + 共享串行推理队列」，不得每个 worker 各载一份模型。
+- 任何声称「n 局在 x 分钟内完成」的 NFR 都必须由本式推出。
 
 ---
 
@@ -307,7 +467,7 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 | 门 | 要求 |
 |---|---|
 | G1 单测 | 核心路径单测覆盖；纯函数模块（MOD-01/02/08）覆盖率 ≥80% |
-| G2 Golden | MOD-01/02 有固定 seed 的 golden 轨迹快照，改动必须显式更新并说明 |
+| G2 Golden | MOD-01 逐行对拍 `src/game/tests/golden/*.jsonl`（JS 为基准，Python 不得自行生成替代快照）；MOD-02 有投影 golden；改动必须显式更新并说明 |
 | G3 确定性 | 同 seed 重跑产生逐字节相同的 `obs_digest`/`state_hash` 序列 |
 | G4 泄漏审计 | `audit leak` 在自测 run 上 0 告警；蜜罐注入必须被抓到 |
 | G5 Schema 校验 | 所有跨模块 JSON 有 schema 定义 + round-trip 测试 |
@@ -348,42 +508,66 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 | B-07 | MOD-08 | **seed 协议区间**（唯一权威）：train `1000–1999`（第 g 代取 `1000+30(g-1) … +29`）、heldout `2000–2099` 分三篮子 H1=`2000–2039`（代际裁判 n=40）/ H2=`2040–2079`（消融与复核）/ H3=`2080–2099`（应急）、test `9000–9099`（锁定，每里程碑单次解锁）。**v1.1 已据此修正 MOD-04/06/07/09 与本文档的命令示例**（原先误用 `train:1-5`、`heldout:1001-1040`） | §4.6、INV-5 |
 | B-08 | MOD-05 | 新增 `memory stats\|snapshot\|rollback\|verify\|retrieve` 子命令族 | §4.6 |
 
-### 11.2 待裁决
+### 11.1b v1.3 已回填（2026-09-30 17:21，按 MOD PRD 评审修订，见 [reviews/2026-09-30-MOD-PRD评审.md](reviews/2026-09-30-MOD-PRD评审.md)）
+
+| # | 来源 | 决策 | 回填位置 |
+|---|---|---|---|
+| B-09 | P-28 | 游戏本体以 GAME-00/01/02 + `src/game` 为规则唯一真相；MOD-01 定位为纯 Python 等价移植，直接读取 `src/game/content` 配表 | §2、§3、§5、§6、§7 |
+| B-10 | P-29 | agent 侧观测 `obs-agent-1.0.0` = GAME `obs-1.0.0` 的键子集 + `episodeId/decisionIndex/stageCount/lastResult`，保留 camelCase；动作即 GAME 动作对象，`abandon_run` 对 agent 不开放 | §4.1–4.3 |
+| B-11 | P-30 | 难度经 `applyDifficulty` 展开；失心语义同 GAME（`virtue` 归零扣 1 心，心数归零才 lose） | §4.1、MOD-01 |
+| B-12 | 评审 P0-1/2 | 决策点粒度：战斗内每回合产出一个计划，其余每步一次；默认局为 hard × 6 关（GAME D-34）；上限统一为 `episode.max_env_steps` / `episode.max_decisions` | §4.3、§8.6 |
+| B-13 | 评审 P0-3 | 成本模型 `E_gen = K + H + C·(S+H)`，默认 C=2、每代约 160 局、约 13 小时；局级并发 + 共享推理队列 | §8.6 |
+| B-14 | 评审 P0-4 | 评估温度统一为 0.0 + 显式 seed，harness 不可覆盖 | §8.1 |
+| B-15 | 评审 P0-5 | 三层校验唯一口径：L0 修复不计非法；每个决策最多 3 次尝试，失败走 fallback；只有 SandboxEnv 判负（连续 3 个 `final` 失败 → `policy_failure`） | §4.3 |
+| B-16 | 评审 P1-5/6/10 | 轨迹路径 `episodes/<split>/<episode_key>.jsonl`；`gen-000` 为基线；report 用唯一 schema 文件，写入分工为 MOD-08/07/09 | §4.5 |
+| B-17 | 评审 P1-1/2/3/16 | 模块间调用签名表 | §4.7 |
+| B-18 | 评审 P1-11/12/13/14 | 事件统一为 `<module>.<event>` 并落到 `events.jsonl`；错误码/退出码/CLI 集中登记 | §4.6、§8.2、§8.3 |
+| B-19 | 评审 P0-7 | `config_hash` 只含静态配置，harness 变化用 `artifact_hash` 表达；redaction 不作用于轨迹 | §4.4、§5、§8.4 |
+| B-20 | 评审 P0-6 | harness 工具在常驻子进程 worker 中执行，rlimit 设在子进程上 | §4.4 |
+| B-21 | 评审 P2 | dropped 局计为 lose 并单列；记忆与 TTL 使用逻辑时钟 | §8.1、§8.5 |
+| B-22 | 评审 P1-15 | git 只打 tag `harness-v{N}`，不建同名分支 | §4.4 |
+
+**v1.3 结案的待裁决条目**：
+
+| # | 结论 |
+|---|---|
+| P-02 | 采纳，并扩展 `final` 参数（§4.1/§4.3，B-15） |
+| P-04 | 采纳，字段已写入 §4.5 轨迹行 |
+| P-08 | 被 B-10 取代：`shop` 在 `phase=shop` 时随观测给出陈列 |
+| P-09 | 采纳，并要求 schema 扁平化以便 GBNF 可用（§4.3） |
+| P-10 | 采纳，并提升为 §8.6 硬约束 |
+| P-12 | 采纳（§4.5 `episode_end`、§8.5） |
+| P-13 | 被 B-16 的 `episode_key` 取代 |
+| P-14 | 采纳，统一出口为 `evals.seeds.take`（§4.7） |
+| P-15 | 采纳 |
+| P-16 | 被 P-10/§8.6 取代：不再用进程池各载一份模型 |
+| P-19 | 采纳（§4.5/§4.6） |
+| P-20 | 采纳（§4.6） |
+| P-21 | 被 GAME-01 §7 P-8 取代：规范化 JSON 以 JS `stableStringify` 为准（`ensure_ascii=True`） |
+| P-22 | 被 GAME-01 §3 取代：派生算法为 xmur3 + SplitMix64（禁 hashlib），流名以 GAME `STREAM_NAMES` 为准 |
+| P-23 | 被 GAME 取代：DSL 同 GAME-00 §4.3；不建 `configs/enemies.yaml`，配表读 `src/game/content` |
+| P-25 | 采纳；C5 改为 `illegal_rate ≤ 0.05`、`fallback_rate ≤ 0.10`、`truncation_rate ≤ 0.05`（不再用回合数）；M3 另需 ≥1 次 accept |
+| P-28 | 采纳，即 B-09 |
+| P-29 | 采纳，即 B-10/B-12 |
+| P-30 | 采纳，即 B-11 |
+
+### 11.2 待裁决（v1.3 剩余 11 项）
 
 | # | 提出方 | 决策（当前实现依据） | 影响面 |
 |---|---|---|---|
 | P-01 | MOD-04 | `Action` 类仍定义在 `gamer_rsi/env/actions.py`，但由 `sandbox/api.py` re-export，L1+ 只许从门面导入——用于消解 INV-1 与 §4.3 的表面冲突 | INV-1、§4.3 |
-| P-02 | MOD-04 | 新增 `SandboxEnv.reject(*, stage, reason, raw) -> StepResult`：一级校验失败时产生带 `illegal_reason` 的 Observation + `-0.05`，不改环境状态 | MOD-02 接口、MOD-01 记账 |
 | P-03 | MOD-04 | 配置优先级插入可演化的 `harness/config.json`：CLI > `GAMERSI_*` > `harness/config.json` > `default.yaml` | §5 配置契约 |
-| P-04 | MOD-04 | 轨迹行新增 `prompt_hash` / `memory_ids` / `tool_hash` / `source` / `mode` / `attempts` 字段（`x_` 前缀规则放宽为显式登记） | §4.5 schema |
 | P-05 | MOD-04 | `agent/prompts/task.md` 为 INV-3 的第 ④ 类白名单上下文，且**不属**演化对象 | INV-3 |
 | P-06 | MOD-02 | `FullState` 只经 `build_full_state() -> Mapping[str, Any]` 暴露一次，L1+ 在 `BLOCKED_MODULES` 语义下不可调用 | INV-1、MOD-01 接口 |
 | P-07 | MOD-02 | 审计器只做黑名单扫描 + canary 探针，不做「prompt 中每个数值都归因到 `VisibleSet`」的正向校验 | INV-2/INV-3 |
-| P-08 | MOD-02/04 | `phase="shop"` 时 `allowed_actions` 仅含 kind；商品 `item_id` 需以 `OBSERVATION_SCHEMA` 1.1.0 新增可选字段 `shop_items` 逐步揭示 | §4.2、INV-2 |
-| P-09 | MOD-03 | GBNF 编译支持子集：`object/string/integer/number/boolean/array` + `enum/required/additionalProperties/maxLength/minimum/maximum`；遇 `allOf/if/$ref/oneOf` 返回 `None` 并降级 JSON mode | §4.3 结构化输出 |
-| P-10 | MOD-03 | 30B-A3B 在 24GB 机器默认 `context_length=8192, max_inflight=1`；并发靠**局级并发**（多局共享串行推理队列）而非模型级批处理 | §8.6 成本 |
 | P-11 | MOD-03 | 修复 prompt 模板由 `inference/schema.py` 独占拥有，MOD-04 不得覆盖 | §4.3、MOD-04/03 边界 |
-| P-12 | MOD-03 | 局级降级需写 `degraded: bool` + `exclude_reason: str\|null`，MOD-08 据此剔除样本 | §4.5、§8.5 |
-| P-13 | MOD-06 | `episode_key = e-{seed:06d}-v{harness_version}`：同 seed 跨代计两条、同代内只计一条 | 计分幂等 |
-| P-14 | MOD-06 | 训练/评估 seed **必须**经 MOD-08 split 协议取用；MOD-06 自行切分则抛 `E_EVAL_SPLIT_VIOLATION` | INV-5 |
-| P-15 | MOD-06 | 评估局不写 `scoreboard.json` 主台账，只写 `episodes/` 与 `EvalBatchResult` | 计分一致性 |
-| P-16 | MOD-06 | 24GB 下 `eval_workers ≤ 2`，内存不足退化为 `workers=1` 顺序模式（行为等价） | §8.6 |
 | P-17 | MOD-07 | `harness/versions/v{N}/` 布局：`version.json` / `gate.json` / `candidates/` / `patches/` | §4.4 |
 | P-18 | MOD-05 | 记忆配置嵌套键用 `__`（如 `GAMERSI_MEMORY_RETRIEVE__TOP_K`）；新增 `memory` 子命令族；中文分词用字符 unigram/bigram（零依赖）；去重阈值 `sim≥0.85` 且 `situation_key` 相同 | §5、§4.6 |
-| P-19 | MOD-08 | 报告数值统一 `round(x, 4)`；新增 `--basket` 选项与 `eval ablation` / `eval test` 子命令；`report.json` 严格只含 §4.5 字段（`additionalProperties:false`），扩展量（JSD/collapse_reasons/power_note）外置到 `metrics/gen-XXX.ext.json` 以避免 schema 漂移 | §4.5、§4.6 |
-| P-20 | MOD-09 | `--run-id` 显式指定时以显式值为准（复现/测试用）；新增 `guards check` 子命令 | §4.6 |
-| P-21 | MOD-01 | `state_hash` 规范化序列化规则：sort_keys + `ensure_ascii` + 禁 float（奖励用 1e-3 定点整数）+ NFC 归一 + UTF-8 码点序 | §4.1、INV-6 |
-| P-22 | MOD-01 | 随机底座自实现 SplitMix64 + **命名流**（禁 `random`），流名白名单 `STREAM_NAMES`；敌方 `next_rolls` 在玩家回合开始前提交、敌方回合不重掷（使 `intent` 真实，防预读） | INV-6、§4.2 |
-| P-23 | MOD-01 | 槽位约束 DSL 文法 `any\|odd\|even\|(ge\|gt\|le\|lt\|eq):int\|in:...`（阶段一仅单骰单条件）；难度只经 `enemy_hp_mul`/敌骰数调节，不改 AI 路径；新增 `configs/enemies.yaml` | §4.2、§5 |
 | P-24 | MOD-03 | **M1 只交付 `MLXBackend` + `MockBackend`**，`LlamaCppBackend` 与阶段二 30B 同期上（省约 2.5 人日） | §4 技术栈、M1 范围 |
-| P-25 | MOD-07 | 接受判定表 C0–C5（短路求值 + `condition_trace`）：C1 主指标不降（tol=0.0）、C2 配对显著且方向为升、C3 `win_rate_gap ≤ 0.15`、C4 无坍缩且 `entropy_slope ≥ −0.01`、C5 非法率/回合数上限；多候选同时通过时**只接受 1 个**；`paired_significance` 口径与最小样本量归 MOD-08 | §4.5、MOD-08 统计口径 |
 | P-26 | MOD-07 | HITL 挂起写 `gen-{N}/gate.json(status=pending)` 并以退出码 0 结束（可续跑）；超时 24h 保守回滚（`hitl_timeout`） | §4.5、§5 |
 | P-27 | MOD-07 | `version.json` 预留 `base_model` 字段以承接 MOD-10（会改 §4.4 契约） | §4.4、MOD-10 |
-| P-28 | GAME-00 | **游戏本体改为前后端分离的网页实现（MOD-11 `game-web` 待立项）**：`frontend/`（静态 HTML，只渲染与收集输入）+ `backend/`（HTTP 薄壳，零依赖）+ `kernel/`（纯函数规则引擎，零 IO/DOM/时间/随机，唯一规则真相，禁浮点、禁 `Math.random`）。MOD-01 的定位从"唯一环境实现"改为**该本体的纯 Python 等价移植**，对拍契约见 GAME-01 §7。INV-6 语义不变（随机仍只来自显式 seed，改由自实现 SplitMix64 + 命名流承载）；INV-1 在 Web 场景由 API 观测白名单（GAME-00 §9.4）承担。**同时新增五系统前置开关** `mapBranching`/`relics`/`events`/`shops`/`schoolCounter`（全关 = 纯战斗线性闯关，必须可通关，作为回归基线）。见 [prd/GAME-00-webgame-PRD.md](prd/GAME-00-webgame-PRD.md) §2/§8/§17 | §1 INV-1/INV-6、§2 模块清单、§3 MOD-01、§5 配置契约、§6 依赖矩阵 |
-| P-29 | GAME-00 | **动作集统一与新增**：游戏侧动作 `play_face`/`discard_die`/`use_ability`/`purify`/`end_turn`/`map_choose`/`shop_buy`/`shop_refresh`/`shop_remove`/`shop_leave`/`event_choose`/`treasure_pick`/`forge_pick`/`shrine_choose`/`abandon_run`，与 Spec §4.3 的 6 动作枚举合并（`place_die`→`play_face`，`levelup_choose` 暂缓）；`discard_die` 与 `purify` 为新增。**观测白名单 `obs-1.0.0` 与 MOD-02 的 `OBSERVATION_SCHEMA` 建议合并为同一契约**（字段名以 GAME-00 §9.4 为游戏侧基准，MOD-02 增补 agent 侧字段后再投影） | §4.2、§4.3 |
-| P-30 | GAME-00 | **难度只经 `applyDifficulty(config)` 展开为全量整数配置**（`*Permille` 千分整数），业务逻辑禁止出现难度分支；**扩展 MOD-01 D-04**（原定"难度只调 `enemy_hp_mul`/敌骰数"）为整套配置化。另：玩家 `virtue`（战斗内血条）归零且仍有心时，**单场战斗判负但 `outcome` 不置 `lose`**，失心上移到 MOD-06 的 episode 层（修订 MOD-01 §8 的 `outcome="lose"` 粒度） | MOD-01 D-04/§8、§5 配置契约 |
 
-**裁决原则**：涉及 **INV-1/INV-2/INV-5** 的条目（P-01、P-02、P-06、P-07、P-08、P-14）优先级最高，必须在 M0/M1 评审时先行裁决，其余可在对应里程碑裁决。**B-07（seed 协议）已裁决并全量对齐**，后续任何 seed 区间引用必须回查 MOD-08 PRD §4。
+**裁决原则**：涉及 **INV-1/INV-2/INV-5** 的剩余条目（P-01、P-06、P-07）优先级最高，必须在 M0/M1 评审时先行裁决，其余可在对应里程碑裁决。**B-07（seed 协议）已裁决并全量对齐**，后续任何 seed 区间引用必须回查 MOD-08 PRD §4。
 
 ---
 
@@ -393,4 +577,5 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 |---|---|---|
 | v1.0 | 2026-09-30 | 首版：9 模块 + MOD-10 预留、7 条不变量、全局契约、质量门 |
 | v1.1 | 2026-09-30 | 配套 9 份模块 PRD 产出；回填 8 项跨模块契约（B-01..B-08，含 seed 协议全量对齐与 `generations.csv` 归属裁定）；新增 §11 待回填决策登记表（27 项待裁决） |
-| v1.2（待评审） | 2026-09-30 | 新增 GAME 系列 PRD（游戏本体：GAME-00/01/02，见 [docs/README.md](README.md)）；登记 P-28..P-30：游戏本体改为前后端分离网页实现（MOD-11 待立项，MOD-01 转为纯 Python 等价移植）、动作集统一与新增、难度配置化与失心粒度上移 |
+| v1.2 | 2026-09-30 | 新增 GAME 系列 PRD（游戏本体：GAME-00/01/02，见 [docs/README.md](README.md)）；登记 P-28..P-30：游戏本体改为前后端分离网页实现（MOD-11 待立项，MOD-01 转为纯 Python 等价移植）、动作集统一与新增、难度配置化与失心粒度上移 |
+| v1.3（待评审） | 2026-09-30 17:21 | 按 [MOD PRD 评审](reviews/2026-09-30-MOD-PRD评审.md) 修订：裁决 P-28/29/30 并结案 19 项待裁决条目；§4 全面对齐 GAME（obs-agent-1.0.0、决策计划、三层校验唯一口径、轨迹路径与 report 写入分工）；新增 §4.7 模块间调用签名表；§8 拆分为 8.1–8.6，新增「一局」定义与成本模型；INV-7 主指标改为 outcome/stages_cleared/hearts_left/battles_won；新登记 B-09..B-22 |
