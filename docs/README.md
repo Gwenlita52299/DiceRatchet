@@ -18,7 +18,7 @@
 
 **冲突处理**：PRD 与 Spec 冲突时以 Spec 为准；Spec 未覆盖处由 PRD 决策并以「决策（本 PRD 提出，待回填 Spec）」标注，汇总登记在 [模块拆分Spec-GameRSI.md](模块拆分Spec-GameRSI.md) **§11 待回填决策登记表**（v1.3：22 项已回填、11 项待裁决）。
 
-> 🔎 **评审入口**：开工前只需看 Spec §11。其中涉及 INV-1/INV-2/INV-5 的 6 条（P-01/02/06/07/08/14）建议在 M0–M1 评审时先行裁决。
+> 🔎 **评审入口**：开工前只需看 Spec §11。v1.3（2026-09-30 17:21）已按 [MOD PRD 评审](reviews/2026-09-30-MOD-PRD评审.md) 修订并结案 19 项；剩余涉及 INV-1/INV-2/INV-5 的 3 条（P-01/06/07）建议在 M0–M1 评审时先行裁决。跨模块签名以 Spec §4.7 为唯一登记处，「一局」的定义与成本模型见 Spec §8.6。
 
 ## 模块地图
 
@@ -36,23 +36,23 @@ L0 环境        MOD-01 env-rules    MOD-02 env-sandbox
 
 | ID | 模块 | 层 | 里程碑 | PRD |
 |---|---|---|---|---|
-| GAME-00 | game-web（网页版骰子 roguelike 本体） | 游戏 | G0 | [PRD](prd/GAME-00-webgame-PRD.md) |
-| GAME-01 | 规则内核契约（确定性 / API / 对拍） | 游戏 | G0 | [契约](prd/GAME-01-kernel-contract.md) |
+| GAME-00 | game-web（网页版骰子 roguelike 本体，已实现于 `src/game`） | 游戏 | G0 | [PRD](prd/GAME-00-webgame-PRD.md) v1.2 |
+| GAME-01 | 规则内核契约（确定性 / API / 对拍） | 游戏 | G0 | [契约](prd/GAME-01-kernel-contract.md) v1.2 |
 | GAME-02 | 配表规格与内容数据 | 游戏 | G0 | [配表](prd/GAME-02-content-tables.md) |
 
 ### RSI 训练链路（MOD 系列）
 
-| ID | 模块 | 层 | 里程碑 | PRD |
+| ID | 模块 | 层 | 里程碑 | PRD（v1.3 修订后版本） |
 |---|---|---|---|---|
-| MOD-01 | env-rules（游戏规则引擎 / Python 模拟器） | L0 | M0 | [PRD](prd/MOD-01-env-rules-PRD.md) |
-| MOD-02 | env-sandbox（投影/隔离/审计/蜜罐） | L0 | M0 | [PRD](prd/MOD-02-env-sandbox-PRD.md) |
-| MOD-03 | inference（本地模型推理） | L1 | M1 | [PRD](prd/MOD-03-inference-PRD.md) |
-| MOD-04 | policy（prompt/解析/工具契约） | L1 | M1 | [PRD](prd/MOD-04-policy-PRD.md) |
-| MOD-05 | memory（策略记忆与反思库） | L1 | M2 | [PRD](prd/MOD-05-memory-PRD.md) |
-| MOD-06 | loop（闭环编排） | L2 | M2 | [PRD](prd/MOD-06-loop-PRD.md) |
-| MOD-07 | evolve（harness 自进化） | L2 | M2–M3 | [PRD](prd/MOD-07-evolve-PRD.md) |
-| MOD-08 | evals（评估与测量） | L3 | M1–M3 | [PRD](prd/MOD-08-evals-PRD.md) |
-| MOD-09 | infra（配置/日志/CLI/守卫） | L3 | M0–M3 | [PRD](prd/MOD-09-infra-PRD.md) |
+| MOD-01 | env-rules（GAME 内核的 Python 逐位移植） | L0 | M0 | [PRD](prd/MOD-01-env-rules-PRD.md) v1.0 |
+| MOD-02 | env-sandbox（投影/隔离/审计/蜜罐） | L0 | M0 | [PRD](prd/MOD-02-env-sandbox-PRD.md) v1.1 |
+| MOD-03 | inference（本地模型推理） | L1 | M1 | [PRD](prd/MOD-03-inference-PRD.md) v1.1 |
+| MOD-04 | policy（prompt/解析/工具契约） | L1 | M1 | [PRD](prd/MOD-04-policy-PRD.md) v0.2 |
+| MOD-05 | memory（策略记忆与反思库） | L1 | M2 | [PRD](prd/MOD-05-memory-PRD.md) v1.1 |
+| MOD-06 | loop（闭环编排） | L2 | M2 | [PRD](prd/MOD-06-loop-PRD.md) v1.1 |
+| MOD-07 | evolve（harness 自进化） | L2 | M2–M3 | [PRD](prd/MOD-07-evolve-PRD.md) v0.2 |
+| MOD-08 | evals（评估与测量） | L3 | M1–M3 | [PRD](prd/MOD-08-evals-PRD.md) v0.2 |
+| MOD-09 | infra（配置/日志/CLI/守卫） | L3 | M0–M3 | [PRD](prd/MOD-09-infra-PRD.md) v0.2 |
 
 ## 关键路径（开工顺序）
 
@@ -66,6 +66,6 @@ MOD-01 规则 ─→ MOD-02 沙箱 ─→ MOD-03/04 推理+策略 ─→ MOD-06 
 
 INV-1 agent 不得触达 Env 内部 · INV-2 观测必须白名单投影 · INV-3 prompt 只含四类白名单上下文 ·
 INV-4 harness 代码受限执行 · INV-5 train/heldout/test 三方隔离 · INV-6 随机性只来自显式 seed ·
-INV-7 主指标只用环境原生结果（shaped reward 不得用于结论）。
+INV-7 主指标只用环境原生结果（outcome 为第一主指标，stages_cleared/hearts_left/battles_won 为次指标；shaped reward 不得用于结论）。
 
 详见 [模块拆分Spec-GameRSI.md](模块拆分Spec-GameRSI.md) §1。
