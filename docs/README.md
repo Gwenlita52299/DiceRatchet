@@ -11,6 +11,7 @@
 | 2 | [模块拆分Spec-GameRSI.md](模块拆分Spec-GameRSI.md) | **切成几块、怎么接起来**——唯一事实来源 |
 | 2.5 | `prd/GAME-*.md` | **游戏本体怎么做**（先做出可玩的网页游戏，再据此写模拟器） |
 | 3 | `prd/MOD-*.md` | 每块怎么实现（本文档集） |
+| 4 | [项目排期-GameRSI.md](项目排期-GameRSI.md) | 什么时候做完（甘特图、关键路径、风险）；模块依赖图见 [assets/module-deps.svg](assets/module-deps.svg) |
 
 > **游戏本体与模拟器的关系**：先用 [GAME-00](prd/GAME-00-webgame-PRD.md) 做出**人类可玩的网页版游戏**；
 > 游戏跑通后，按同一套规则实现**纯 Python 模拟器**（MOD-01）供 RSI 训练；未来可接视觉模型直接对游戏本体训练。

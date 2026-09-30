@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="720" viewBox="0 0 1400 720" font-family="PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif">
+<defs>
+<marker id="a-crit" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#e53935"/></marker>
+<marker id="a-norm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#78909c"/></marker>
+<marker id="a-dash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#bdbdbd"/></marker>
+<filter id="sh" x="-5%" y="-5%" width="110%" height="120%"><feDropShadow dx="0" dy="1.5" stdDeviation="1.5" flood-opacity="0.18"/></filter>
+</defs>
+<rect width="1400" height="720" fill="#ffffff"/>
+<g transform="translate(0,90)">
+<text x="40" y="-52" font-size="22" font-weight="700" fill="#263238">GameRSI 模块依赖与关键路径</text>
+<text x="40" y="-28" font-size="13" fill="#607d8b">箭头：上游 → 下游（下游依赖上游）。数据源：Spec v1.4 §6 依赖矩阵、各 PRD §15 工作量（人日）</text>
+<path d="M190,205 C240,205 182,150 232,150" fill="none" stroke="#e53935" stroke-width="3" marker-end="url(#a-crit)"/>
+<path d="M385,150 C435,150 377,150 427,150" fill="none" stroke="#e53935" stroke-width="3" marker-end="url(#a-crit)"/>
+<path d="M580,150 C650,150 552,290 622,290" fill="none" stroke="#e53935" stroke-width="3" marker-end="url(#a-crit)"/>
+<path d="M385,330 C504,330 504,290 622,290" fill="none" stroke="#e53935" stroke-width="3" marker-end="url(#a-crit)"/>
+<path d="M580,440 C655,440 547,290 622,290" fill="none" stroke="#78909c" stroke-width="1.6" marker-end="url(#a-norm)"/>
+<path d="M775,290 C825,290 767,290 817,290" fill="none" stroke="#e53935" stroke-width="3" marker-end="url(#a-crit)"/>
+<path d="M580,150 C738,150 895,96 895,254" fill="none" stroke="#78909c" stroke-width="1.6" marker-end="url(#a-norm)"/>
+<path d="M580,440 C738,440 895,484 895,326" fill="none" stroke="#78909c" stroke-width="1.6" marker-end="url(#a-norm)"/>
+<path d="M310,117 C310,-39 466,50 622,50" fill="none" stroke="#78909c" stroke-width="1.6" marker-end="url(#a-norm)"/>
+<path d="M580,150 C630,150 572,50 622,50" fill="none" stroke="#78909c" stroke-width="1.6" marker-end="url(#a-norm)"/>
+<path d="M970,290 C1030,290 952,170 1012,170" fill="none" stroke="#e53935" stroke-width="3" marker-end="url(#a-crit)"/>
+<path d="M775,50 C894,50 894,170 1012,170" fill="none" stroke="#78909c" stroke-width="1.6" marker-end="url(#a-norm)"/>
+<path d="M1165,170 C1215,170 1157,170 1207,170" fill="none" stroke="#e53935" stroke-width="3" marker-end="url(#a-crit)"/>
+<path d="M775,50 C991,50 991,170 1207,170" fill="none" stroke="#78909c" stroke-width="1.6" marker-end="url(#a-norm)"/>
+<path d="M1165,170 C1245,170 1127,330 1207,330" fill="none" stroke="#bdbdbd" stroke-width="1.6" stroke-dasharray="6 5" marker-end="url(#a-dash)"/>
+<rect x="40" y="172.0" width="150" height="66" rx="10" fill="#e8f5e9" stroke="#43a047" stroke-width="2" filter="url(#sh)"/>
+<text x="50" y="194.0" font-size="14" font-weight="700" fill="#263238">GAME 网页游戏</text>
+<text x="50" y="212.0" font-size="11.5" fill="#455a64">内核 + 配表 + golden</text>
+<text x="50" y="229.0" font-size="11" fill="#43a047" font-weight="600">已完成 ✓ · G0</text>
+<rect x="235" y="117.0" width="150" height="66" rx="10" fill="#e3f2fd" stroke="#1e88e5" stroke-width="2" filter="url(#sh)"/>
+<text x="245" y="139.0" font-size="14" font-weight="700" fill="#263238">MOD-01 env-rules</text>
+<text x="245" y="157.0" font-size="11.5" fill="#455a64">JS 内核的 Python 移植</text>
+<text x="245" y="174.0" font-size="11" fill="#1e88e5" font-weight="600">7 人日 · M0</text>
+<rect x="235" y="297.0" width="150" height="66" rx="10" fill="#f3e5f5" stroke="#8e24aa" stroke-width="2" filter="url(#sh)"/>
+<text x="245" y="319.0" font-size="14" font-weight="700" fill="#263238">MOD-03 inference</text>
+<text x="245" y="337.0" font-size="11.5" fill="#455a64">本地推理 MLX</text>
+<text x="245" y="354.0" font-size="11" fill="#8e24aa" font-weight="600">14 人日 · M1</text>
+<rect x="430" y="117.0" width="150" height="66" rx="10" fill="#e3f2fd" stroke="#1e88e5" stroke-width="2" filter="url(#sh)"/>
+<text x="440" y="139.0" font-size="14" font-weight="700" fill="#263238">MOD-02 env-sandbox</text>
+<text x="440" y="157.0" font-size="11.5" fill="#455a64">投影/隔离/审计</text>
+<text x="440" y="174.0" font-size="11" fill="#1e88e5" font-weight="600">18 人日 · M0</text>
+<rect x="430" y="407.0" width="150" height="66" rx="10" fill="#f3e5f5" stroke="#8e24aa" stroke-width="2" filter="url(#sh)"/>
+<text x="440" y="429.0" font-size="14" font-weight="700" fill="#263238">MOD-05 memory</text>
+<text x="440" y="447.0" font-size="11.5" fill="#455a64">反思记忆库</text>
+<text x="440" y="464.0" font-size="11" fill="#8e24aa" font-weight="600">12 人日 · M2</text>
+<rect x="625" y="17.0" width="150" height="66" rx="10" fill="#eceff1" stroke="#546e7a" stroke-width="2" filter="url(#sh)"/>
+<text x="635" y="39.0" font-size="14" font-weight="700" fill="#263238">MOD-08 evals</text>
+<text x="635" y="57.0" font-size="11.5" fill="#455a64">基线/指标/消融</text>
+<text x="635" y="74.0" font-size="11" fill="#546e7a" font-weight="600">18 人日 · M1–M3</text>
+<rect x="625" y="257.0" width="150" height="66" rx="10" fill="#f3e5f5" stroke="#8e24aa" stroke-width="2" filter="url(#sh)"/>
+<text x="635" y="279.0" font-size="14" font-weight="700" fill="#263238">MOD-04 policy</text>
+<text x="635" y="297.0" font-size="11.5" fill="#455a64">决策计划/校验/fallback</text>
+<text x="635" y="314.0" font-size="11" fill="#8e24aa" font-weight="600">13.5 人日 · M1</text>
+<rect x="820" y="257.0" width="150" height="66" rx="10" fill="#fff3e0" stroke="#fb8c00" stroke-width="2" filter="url(#sh)"/>
+<text x="830" y="279.0" font-size="14" font-weight="700" fill="#263238">MOD-06 loop</text>
+<text x="830" y="297.0" font-size="11.5" fill="#455a64">闭环编排/续跑</text>
+<text x="830" y="314.0" font-size="11" fill="#fb8c00" font-weight="600">14 人日 · M2</text>
+<rect x="1015" y="137.0" width="150" height="66" rx="10" fill="#fff3e0" stroke="#fb8c00" stroke-width="2" filter="url(#sh)"/>
+<text x="1025" y="159.0" font-size="14" font-weight="700" fill="#263238">MOD-07 evolve</text>
+<text x="1025" y="177.0" font-size="11.5" fill="#455a64">harness 自进化</text>
+<text x="1025" y="194.0" font-size="11" fill="#fb8c00" font-weight="600">10 人日 · M2–M3</text>
+<rect x="1210" y="137.0" width="150" height="66" rx="10" fill="#fffde7" stroke="#f9a825" stroke-width="2" filter="url(#sh)"/>
+<text x="1220" y="159.0" font-size="14" font-weight="700" fill="#263238">M3 验收</text>
+<text x="1220" y="177.0" font-size="11.5" fill="#455a64">held-out/消融/test</text>
+<rect x="1210" y="297.0" width="150" height="66" rx="10" fill="#fafafa" stroke="#9e9e9e" stroke-width="2" stroke-dasharray="6 4" filter="url(#sh)"/>
+<text x="1220" y="319.0" font-size="14" font-weight="700" fill="#263238">MOD-10 distill</text>
+<text x="1220" y="337.0" font-size="11.5" fill="#455a64">STaR + LoRA（预留）</text>
+<text x="1220" y="354.0" font-size="11" fill="#9e9e9e" font-weight="600">— · M4 可选</text>
+<rect x="235" y="520" width="930" height="52" rx="10" fill="#eceff1" stroke="#546e7a" stroke-width="2" stroke-dasharray="8 4"/>
+<text x="249" y="542" font-size="14" font-weight="700" fill="#263238">MOD-09 infra（横切，第一天启动 · 7 人日 · M0–M3）</text>
+<text x="249" y="561" font-size="11.5" fill="#455a64">配置/run_id · events.jsonl 事件注册 · 错误码/退出码 · CLI · import 门禁与确定性守卫 · git tag harness-v{N} —— 所有 MOD 均依赖</text>
+<path d="M310.0,520 L310.0,498" stroke="#90a4ae" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#a-norm)"/>
+<path d="M505.0,520 L505.0,498" stroke="#90a4ae" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#a-norm)"/>
+<path d="M700.0,520 L700.0,498" stroke="#90a4ae" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#a-norm)"/>
+<path d="M895.0,520 L895.0,498" stroke="#90a4ae" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#a-norm)"/>
+<path d="M1090.0,520 L1090.0,498" stroke="#90a4ae" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#a-norm)"/>
+<rect x="40" y="588" width="18" height="14" rx="3" fill="#e8f5e9" stroke="#43a047" stroke-width="1.6"/>
+<text x="64" y="600" font-size="12" fill="#37474f">游戏本体（已完成）</text>
+<rect x="203" y="588" width="18" height="14" rx="3" fill="#e3f2fd" stroke="#1e88e5" stroke-width="1.6"/>
+<text x="227" y="600" font-size="12" fill="#37474f">L0 环境</text>
+<rect x="314" y="588" width="18" height="14" rx="3" fill="#f3e5f5" stroke="#8e24aa" stroke-width="1.6"/>
+<text x="338" y="600" font-size="12" fill="#37474f">L1 智能体</text>
+<rect x="438" y="588" width="18" height="14" rx="3" fill="#fff3e0" stroke="#fb8c00" stroke-width="1.6"/>
+<text x="462" y="600" font-size="12" fill="#37474f">L2 进化</text>
+<rect x="549" y="588" width="18" height="14" rx="3" fill="#eceff1" stroke="#546e7a" stroke-width="1.6"/>
+<text x="573" y="600" font-size="12" fill="#37474f">L3 测量与工程</text>
+<rect x="699" y="588" width="18" height="14" rx="3" fill="#fafafa" stroke="#9e9e9e" stroke-width="1.6"/>
+<text x="723" y="600" font-size="12" fill="#37474f">预留/可选</text>
+<path d="M810,595 L846,595" stroke="#e53935" stroke-width="3" marker-end="url(#a-crit)"/>
+<text x="854" y="600" font-size="12" fill="#37474f">关键路径 GAME→01→02→(03)→04→06→07→M3</text>
+</g></svg>

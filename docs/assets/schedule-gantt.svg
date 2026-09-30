@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1552" height="830" viewBox="0 0 1552 830" font-family="PingFang SC, Hiragino Sans GB, Noto Sans CJK SC, Microsoft YaHei, sans-serif">
+<rect width="1552" height="830" fill="#fff"/>
+<text x="20" y="30" font-size="20" font-weight="700" fill="#263238">GameRSI 项目排期（单人 · 起始 2026-10-08 · 生成自 docs/tools/gen_diagrams.py）</text>
+<line x1="420.0" y1="52" x2="420.0" y2="700" stroke="#eceff1"/>
+<text x="423.0" y="64" font-size="11" fill="#78909c">2026-10</text>
+<line x1="544.8" y1="52" x2="544.8" y2="700" stroke="#eceff1"/>
+<text x="547.8" y="64" font-size="11" fill="#78909c">2026-11</text>
+<line x1="700.8" y1="52" x2="700.8" y2="700" stroke="#eceff1"/>
+<text x="703.8" y="64" font-size="11" fill="#78909c">2026-12</text>
+<line x1="862.0" y1="52" x2="862.0" y2="700" stroke="#eceff1"/>
+<text x="865.0" y="64" font-size="11" fill="#78909c">2027-01</text>
+<line x1="1023.2" y1="52" x2="1023.2" y2="700" stroke="#eceff1"/>
+<text x="1026.2" y="64" font-size="11" fill="#78909c">2027-02</text>
+<line x1="1168.8" y1="52" x2="1168.8" y2="700" stroke="#eceff1"/>
+<text x="1171.8" y="64" font-size="11" fill="#78909c">2027-03</text>
+<line x1="1330.0" y1="52" x2="1330.0" y2="700" stroke="#eceff1"/>
+<text x="1333.0" y="64" font-size="11" fill="#78909c">2027-04</text>
+<line x1="1486.0" y1="52" x2="1486.0" y2="700" stroke="#eceff1"/>
+<text x="1489.0" y="64" font-size="11" fill="#78909c">2027-05</text>
+<rect x="862.0" y="68" width="5.2" height="630" fill="#ffebee"/>
+<rect x="1044.0" y="68" width="5.2" height="630" fill="#ffebee"/>
+<rect x="1049.2" y="68" width="5.2" height="630" fill="#ffebee"/>
+<rect x="1054.4" y="68" width="5.2" height="630" fill="#ffebee"/>
+<rect x="1059.6" y="68" width="5.2" height="630" fill="#ffebee"/>
+<rect x="1064.8" y="68" width="5.2" height="630" fill="#ffebee"/>
+<rect x="1070.0" y="68" width="5.2" height="630" fill="#ffebee"/>
+<rect x="1075.2" y="68" width="5.2" height="630" fill="#ffebee"/>
+<rect x="1080.4" y="68" width="5.2" height="630" fill="#ffebee"/>
+<line x1="10" y1="69" x2="1542" y2="69" stroke="#cfd8dc"/>
+<text x="14" y="86" font-size="11.5" fill="#37474f">M0 · MOD-09 · 骨架：config/run_id/JsonlWrit…</text>
+<rect x="420.0" y="75" width="10.4" height="14" rx="3" fill="#42a5f5"/>
+<text x="434.4" y="86" font-size="10" fill="#607d8b">10-08→10-09</text>
+<text x="14" y="110" font-size="11.5" fill="#37474f">M0 · MOD-09 · 守卫：AST 门禁 + 确定性引导</text>
+<rect x="440.8" y="99" width="10.4" height="14" rx="3" fill="#42a5f5"/>
+<text x="455.2" y="110" font-size="10" fill="#607d8b">10-12→10-13</text>
+<text x="14" y="134" font-size="11.5" fill="#37474f">M0 · MOD-01 · JS 内核 Python 移植 + golden 对…</text>
+<rect x="446.0" y="123" width="52.0" height="14" rx="3" fill="#42a5f5"/>
+<text x="502.0" y="134" font-size="10" fill="#607d8b">10-13→10-22</text>
+<text x="14" y="158" font-size="11.5" fill="#37474f">M0 · MOD-02 · 投影 + SandboxEnv 门面</text>
+<rect x="492.8" y="147" width="41.6" height="14" rx="3" fill="#42a5f5"/>
+<text x="538.4" y="158" font-size="10" fill="#607d8b">10-22→10-29</text>
+<text x="14" y="182" font-size="11.5" fill="#37474f">M0 · MOD-02 · guard/ToolWorker + 审计 + 蜜罐</text>
+<rect x="534.4" y="171" width="78.0" height="14" rx="3" fill="#42a5f5"/>
+<text x="616.4" y="182" font-size="10" fill="#607d8b">10-30→11-13</text>
+<text x="14" y="206" font-size="11.5" fill="#37474f">M0 · MOD-02 · 集成 + CI 门禁接线</text>
+<rect x="607.2" y="195" width="26.0" height="14" rx="3" fill="#42a5f5"/>
+<text x="637.2" y="206" font-size="10" fill="#607d8b">11-13→11-17</text>
+<text x="14" y="230" font-size="11.5" fill="#37474f">M0 · M0 验收：5 组 golden + 200 局差分 + heuris…</text>
+<rect x="628.0" y="219" width="20.8" height="14" rx="3" fill="#ffb300"/>
+<text x="652.8" y="230" font-size="10" fill="#607d8b">11-17→11-20</text>
+<line x1="10" y1="237" x2="1542" y2="237" stroke="#cfd8dc"/>
+<text x="14" y="254" font-size="11.5" fill="#37474f">M1 · MOD-03 · 推理后端 MLX + Mock + GBNF/修复</text>
+<rect x="643.6" y="243" width="109.2" height="14" rx="3" fill="#42a5f5"/>
+<text x="756.8" y="254" font-size="10" fill="#607d8b">11-20→12-10</text>
+<text x="14" y="278" font-size="11.5" fill="#37474f">M1 · MOD-04 · 决策计划/三层校验/fallback/heurist…</text>
+<rect x="747.6" y="267" width="104.0" height="14" rx="3" fill="#42a5f5"/>
+<text x="855.6" y="278" font-size="10" fill="#607d8b">12-10→12-29</text>
+<text x="14" y="302" font-size="11.5" fill="#37474f">M1 · MOD-08 · 三基线 + Wilson CI + eval rep…</text>
+<rect x="851.6" y="291" width="41.6" height="14" rx="3" fill="#42a5f5"/>
+<text x="897.2" y="302" font-size="10" fill="#607d8b">12-30→01-06</text>
+<text x="14" y="326" font-size="11.5" fill="#37474f">M1 · MOD-09 · CLI 子命令树 + 轨迹 schema 校验</text>
+<rect x="893.2" y="315" width="10.4" height="14" rx="3" fill="#42a5f5"/>
+<text x="907.6" y="326" font-size="10" fill="#607d8b">01-07→01-08</text>
+<text x="14" y="350" font-size="11.5" fill="#37474f">M1 · 三基线 heldout 实跑（fixed_prompt 40 局 ≈ …</text>
+<rect x="898.4" y="339" width="5.2" height="14" rx="3" fill="#ab47bc"/>
+<text x="907.6" y="350" font-size="10" fill="#607d8b">01-08→01-08</text>
+<text x="14" y="374" font-size="11.5" fill="#37474f">M1 · M1 验收：基线入档 + JSON 鲁棒性报告</text>
+<rect x="914.0" y="363" width="20.8" height="14" rx="3" fill="#ffb300"/>
+<text x="938.8" y="374" font-size="10" fill="#607d8b">01-11→01-14</text>
+<line x1="10" y1="381" x2="1542" y2="381" stroke="#cfd8dc"/>
+<text x="14" y="398" font-size="11.5" fill="#37474f">M2 · MOD-05 · 记忆库（逻辑时钟/检索/INV-5 拦截）</text>
+<rect x="929.6" y="387" width="98.8" height="14" rx="3" fill="#42a5f5"/>
+<text x="1032.4" y="398" font-size="10" fill="#607d8b">01-14→02-01</text>
+<text x="14" y="422" font-size="11.5" fill="#37474f">M2 · MOD-06 · 闭环编排 + 续跑 + 成本闸门</text>
+<rect x="1023.2" y="411" width="150.8" height="14" rx="3" fill="#42a5f5"/>
+<text x="1178.0" y="422" font-size="10" fill="#607d8b">02-01→03-01</text>
+<text x="14" y="446" font-size="11.5" fill="#37474f">M2 · MOD-07 · proposer/versioning/gate/j…</text>
+<rect x="1168.8" y="435" width="52.0" height="14" rx="3" fill="#42a5f5"/>
+<text x="1224.8" y="446" font-size="10" fill="#607d8b">03-01→03-10</text>
+<text x="14" y="470" font-size="11.5" fill="#37474f">M2 · MOD-08 · 评估执行器 + report schema + ge…</text>
+<rect x="1215.6" y="459" width="46.8" height="14" rx="3" fill="#42a5f5"/>
+<text x="1266.4" y="470" font-size="10" fill="#607d8b">03-10→03-18</text>
+<text x="14" y="494" font-size="11.5" fill="#37474f">M2 · MOD-09 · git_ops + redaction + 原子写</text>
+<rect x="1257.2" y="483" width="10.4" height="14" rx="3" fill="#42a5f5"/>
+<text x="1271.6" y="494" font-size="10" fill="#607d8b">03-18→03-19</text>
+<text x="14" y="518" font-size="11.5" fill="#37474f">M2 · 闭环冒烟：1 代实跑（165 局 ≈ 14h）</text>
+<rect x="1262.4" y="507" width="20.8" height="14" rx="3" fill="#ab47bc"/>
+<text x="1287.2" y="518" font-size="10" fill="#607d8b">03-19→03-22</text>
+<text x="14" y="542" font-size="11.5" fill="#37474f">M2 · M2 验收：≥1 轮演化 + diff + 决策记录</text>
+<rect x="1278.0" y="531" width="26.0" height="14" rx="3" fill="#ffb300"/>
+<text x="1308.0" y="542" font-size="10" fill="#607d8b">03-22→03-26</text>
+<line x1="10" y1="549" x2="1542" y2="549" stroke="#cfd8dc"/>
+<text x="14" y="566" font-size="11.5" fill="#37474f">M3 · MOD-07 · evaluate_candidate 编排 + 安全…</text>
+<rect x="1298.8" y="555" width="31.2" height="14" rx="3" fill="#42a5f5"/>
+<text x="1334.0" y="566" font-size="10" fill="#607d8b">03-26→03-31</text>
+<text x="14" y="590" font-size="11.5" fill="#37474f">M3 · MOD-08 · 多样性/坍缩 + 消融 + test 终检</text>
+<rect x="1324.8" y="579" width="52.0" height="14" rx="3" fill="#42a5f5"/>
+<text x="1380.8" y="590" font-size="10" fill="#607d8b">03-31→04-09</text>
+<text x="14" y="614" font-size="11.5" fill="#37474f">M3 · MOD-09 · 绘图 + 报告汇总脚本</text>
+<rect x="1371.6" y="603" width="20.8" height="14" rx="3" fill="#42a5f5"/>
+<text x="1396.4" y="614" font-size="10" fill="#607d8b">04-09→04-12</text>
+<text x="14" y="638" font-size="11.5" fill="#37474f">M3 · 正式实验：3 代 + 基线 + 消融 + test（≈60h）</text>
+<rect x="1387.2" y="627" width="20.8" height="14" rx="3" fill="#ab47bc"/>
+<text x="1412.0" y="638" font-size="10" fill="#607d8b">04-12→04-15</text>
+<text x="14" y="662" font-size="11.5" fill="#37474f">M3 · 结果分析 + 实验报告/作品集</text>
+<rect x="1402.8" y="651" width="36.4" height="14" rx="3" fill="#42a5f5"/>
+<text x="1443.2" y="662" font-size="10" fill="#607d8b">04-15→04-21</text>
+<text x="14" y="686" font-size="11.5" fill="#37474f">M3 · M3 验收：计划 §6 三项</text>
+<rect x="1434.0" y="675" width="10.4" height="14" rx="3" fill="#ffb300"/>
+<text x="1448.4" y="686" font-size="10" fill="#607d8b">04-21→04-22</text>
+<path d="M648.8,708 l7,8 l-7,8 l-7,-8 z" fill="#e53935"/>
+<text x="658.8" y="720" font-size="11" fill="#c62828" font-weight="700">M0 11-20</text>
+<path d="M934.8,708 l7,8 l-7,8 l-7,-8 z" fill="#e53935"/>
+<text x="944.8" y="720" font-size="11" fill="#c62828" font-weight="700">M1 01-14</text>
+<path d="M1304.0,708 l7,8 l-7,8 l-7,-8 z" fill="#e53935"/>
+<text x="1314.0" y="720" font-size="11" fill="#c62828" font-weight="700">M2 03-26</text>
+<path d="M1444.4,708 l7,8 l-7,8 l-7,-8 z" fill="#e53935"/>
+<text x="1454.4" y="720" font-size="11" fill="#c62828" font-weight="700">M3 04-22</text>
+<rect x="20" y="739" width="18" height="12" rx="2" fill="#42a5f5"/><text x="44" y="750" font-size="12" fill="#37474f">编码/联调</text>
+<rect x="220" y="739" width="18" height="12" rx="2" fill="#ab47bc"/><text x="244" y="750" font-size="12" fill="#37474f">模型实跑（结果阻塞后续）</text>
+<rect x="420" y="739" width="18" height="12" rx="2" fill="#ffb300"/><text x="444" y="750" font-size="12" fill="#37474f">缓冲 + 里程碑验收</text>
+<rect x="620" y="739" width="18" height="12" fill="#ffebee"/><text x="644" y="750" font-size="12" fill="#37474f">节假日（元旦、春节）</text>
+</svg>
