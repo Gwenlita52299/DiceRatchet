@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Local environment / deps
+.local/
+.venv/
+__pycache__/
+*.pyc
+
+# Logs
+logs/
+*.log
+
+# Large binaries (papers kept locally)
+papers/*.pdf
