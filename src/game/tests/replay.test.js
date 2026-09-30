@@ -29,6 +29,7 @@ for (const f of files) {
       state = r.state;
       assert.equal(K.digest(K.observe(state, 'full', tables)), s.obsDigest, `obsDigest 分歧 @ step ${s.step} ${JSON.stringify(s.action)}`);
       assert.equal(K.digest(state.rng), s.rngDigest, `rngDigest 分歧 @ step ${s.step}`);
+      if (s.stateDigest) assert.equal(K.digest(state), s.stateDigest, `stateDigest 分歧 @ step ${s.step}`);
     }
     // replay 便利函数与逐步 reduce 一致
     const rp = K.replay(meta.config, steps.slice(1).map((s) => s.action), tables);

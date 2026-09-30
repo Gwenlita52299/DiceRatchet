@@ -33,6 +33,8 @@
 | D-31 | 新增动作 | `rest_choose`（休息点）、`relic_swap`（遗物替换）、`purify`（净化）加入动作全集 | GAME-01 §4 未列出 |
 | D-32 | 编队 | 新增 `g_12`（空壳，第 3–6 关），让配表中的 `mon_neutral_shell` 可出现 | GAME-02 §5.4 编队表未引用该怪物 |
 | D-33 | 运行方式 | 启动命令为 `node server.js`（Node ≥18，零依赖），不支持 `python3 -m http.server` | GAME-00 G-1 写的是静态服务器，但 ADR-2 要求服务端持有会话、隐藏信息不下发，两者冲突，按 ADR-2 与 §11 实现 |
+| D-34 | 局长 | 开局输入可选 `stageCount ∈ {3,6,10}`（只能在章末 Boss 关截断），缺省为 10 | Spec v1.3 §8.6：RSI 训练/评估需要短局；hard × 6 关启发式通关率 45%，约 94 个决策点 |
+| D-35 | 统计修复 | 最终 Boss 在出骰时被击杀的路径也累加 `stats.stagesCleared` | 原实现漏记，胜局会显示 `stageCount-1`；该字段是 INV-7 次指标 |
 
 ## 数值偏差（平衡标定，GAME-02 §8 流程）
 

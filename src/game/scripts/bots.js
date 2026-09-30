@@ -200,9 +200,9 @@ export function chooseAction(state, tables, strategy, rnd) {
   }
 }
 
-export function runGame({ difficulty = 'medium', seed = 1, strategy = 'greedy_damage', toggles = {}, maxSteps = 20000, tables, record = false, stopAtStage = null }) {
+export function runGame({ difficulty = 'medium', seed = 1, strategy = 'greedy_damage', toggles = {}, maxSteps = 20000, tables, record = false, stopAtStage = null, stageCount = null }) {
   const rnd = botRng(seed + 7);
-  let state = K.createGame({ difficulty, seed, toggles, runId: `r-bot${seed}` }, tables);
+  let state = K.createGame({ difficulty, seed, toggles, stageCount, runId: `r-bot${seed}` }, tables);
   const actions = [];
   let steps = 0;
   while (state.phase !== 'settle' && steps < maxSteps) {

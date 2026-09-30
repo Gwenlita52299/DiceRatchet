@@ -18,13 +18,15 @@ const SETS = [
   { name: 'g1_all_off_medium', difficulty: 'medium', seed: 1042, toggles: OFF, strategy: 'greedy_counter', maxSteps: 700 },
   { name: 'g2_all_on_medium', difficulty: 'medium', seed: 7, toggles: {}, strategy: 'greedy_counter', maxSteps: 700 },
   { name: 'g3_easy_full_run', difficulty: 'easy', seed: 10003, toggles: {}, strategy: 'greedy_counter', maxSteps: 4000 },
-  { name: 'g4_hard_corrupt_path', difficulty: 'hard', seed: 10001, toggles: {}, strategy: 'school_blade', maxSteps: 700, injectIllegalEndTurn: true }
+  { name: 'g4_hard_corrupt_path', difficulty: 'hard', seed: 10001, toggles: {}, strategy: 'school_blade', maxSteps: 700, injectIllegalEndTurn: true },
+  // Spec v1.3 §8.6 默认局（hard × 6 关，D-34），MOD-01 移植对拍的主基准；seed 3100 不属于任何 split（避免 INV-5 审计误报）
+  { name: 'g5_hard_six_stage', difficulty: 'hard', seed: 3100, toggles: {}, strategy: 'greedy_counter', maxSteps: 1000, stageCount: 6 }
 ];
 
 fs.mkdirSync(OUT, { recursive: true });
 for (const set of SETS) {
-  const r = runGame({ difficulty: set.difficulty, seed: set.seed, toggles: set.toggles, strategy: set.strategy, tables, record: true, maxSteps: set.maxSteps });
-  const config = { difficulty: set.difficulty, seed: set.seed, toggles: { ...{ mapBranching: true, relics: true, events: true, shops: true, schoolCounter: true }, ...set.toggles }, runId: `r-golden${set.seed}` };
+  const r = runGame({ difficulty: set.difficulty, seed: set.seed, toggles: set.toggles, strategy: set.strategy, tables, record: true, maxSteps: set.maxSteps, stageCount: set.stageCount == null ? null : set.stageCount });
+  const config = { difficulty: set.difficulty, seed: set.seed, toggles: { ...{ mapBranching: true, relics: true, events: true, shops: true, schoolCounter: true }, ...set.toggles }, runId: `r-golden${set.seed}`, ...(set.stageCount == null ? {} : { stageCount: set.stageCount }) };
   // 魔化骰路径：在处理魔化骰（弃/净化）之前插入一次非法 end_turn（应被拒绝且状态不变）
   let actions = r.actions;
   if (set.injectIllegalEndTurn) {
@@ -39,13 +41,13 @@ for (const set of SETS) {
   }
   let state = K.createGame(config, tables);
   const lines = [JSON.stringify({ type: 'meta', name: set.name, config, strategy: set.strategy, steps: actions.length, kernelVersion: K.KERNEL_VERSION })];
-  lines.push(JSON.stringify({ step: 0, action: null, obsDigest: K.digest(K.observe(state, 'full', tables)), rngDigest: K.digest(state.rng) }));
+  lines.push(JSON.stringify({ step: 0, action: null, obsDigest: K.digest(K.observe(state, 'full', tables)), rngDigest: K.digest(state.rng), stateDigest: K.digest(state) }));
   let illegal = 0;
   actions.forEach((a, i) => {
     const res = K.reduce(state, a, tables);
     if (res.illegal) illegal += 1;
     state = res.state;
-    lines.push(JSON.stringify({ step: i + 1, action: a, illegal: !!res.illegal, obsDigest: K.digest(K.observe(state, 'full', tables)), rngDigest: K.digest(state.rng) }));
+    lines.push(JSON.stringify({ step: i + 1, action: a, illegal: !!res.illegal, obsDigest: K.digest(K.observe(state, 'full', tables)), rngDigest: K.digest(state.rng), stateDigest: K.digest(state) }));
   });
   lines.push(JSON.stringify({ type: 'run_end', outcome: state.outcome, stage: state.stage, phase: state.phase }));
   fs.writeFileSync(path.join(OUT, `${set.name}.jsonl`), lines.join('\n') + '\n');

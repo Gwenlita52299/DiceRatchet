@@ -391,7 +391,7 @@ virtue <= 0                                   →  players_lost_heart
 
 ```
 1. JS 侧：node scripts/golden-gen.js --seed 1042 --config <cfg> --script <actions.json>
-   → tests/golden/<name>.jsonl  （每行 obsDigest + rngDigest + events 摘要）
+   → tests/golden/<name>.jsonl  （每行 obsDigest + rngDigest + stateDigest(v1.2，全状态摘要) + action）
 2. PY 侧：pytest tests/golden/  （MOD-01 实现 replay 并逐行比对）
 3. 任一行不等 → 打印首个分歧点的 step、字段路径、两侧值；CI 失败
 ```
@@ -402,6 +402,7 @@ virtue <= 0                                   →  players_lost_heart
 - 1 组含 Boss 阶段切换
 - 1 组含"魔化骰残留 → 非法 end_turn → discard → 再 end_turn"的完整路径
 - 1 组含"失心 + reviveOnce"
+- （v1.2）1 组 Spec §8.6 默认局 hard × `stageCount=6`（`g5_hard_six_stage`，seed 3100 不属于任何 split）
 
 ---
 
@@ -513,4 +514,4 @@ index.js
 |---|---|---|
 | v1.0 | 2026-09-30 | 首版：内核 5 条纪律、API 签名、GameState、SplitMix64+命名流与消费登记表、reduce 分派与 end_turn 12 步顺序、观察投影与 3 个 view 档、事件与轨迹契约、14 条 Python 移植风险清单、配表校验、9 组一致性测试向量 |
 | v1.1 | 2026-09-30 16:39 | 按 `src/game` 实现回写：§1 签名增加 `tables` 参数与 `playHints`（D-26）；§1.2 `maxTurnsPerBattle` 200→60（D-24）；§4 新增 `rest_choose`/`relic_swap` 与 `play_face.targetId`（D-19/D-31）；§4.2 敌人光盾/状态结算移至各自回合开始、虚弱减半、意图骰每槽至多触发一次（D-12/D-13/D-17/D-30）；§5.3 揭示规则精确化（D-27）；§8 风险与学派校验规则修订（D-09/D-10）；§11 Q-2/Q-3/Q-4 定案 |
-| v1.2 | 2026-09-30 17:21 | §1.2 `stageCount` 可覆盖为章末 Boss 关（D-34，新增导出 `allowedStageCounts(tables)`）；最终 Boss 胜利两条路径都累加 `stats.stagesCleared`（D-35） |
+| v1.2 | 2026-09-30 17:21 | §1.2 `stageCount` 可覆盖为章末 Boss 关（D-34，新增导出 `allowedStageCounts(tables)`）；最终 Boss 胜利两条路径都累加 `stats.stagesCleared`（D-35）；§7 golden 行新增 `stateDigest`，新增 `g5_hard_six_stage`（原 4 组其余字段不变） |
