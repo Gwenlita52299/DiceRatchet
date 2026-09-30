@@ -1,6 +1,6 @@
 # GAME-00 网页版骰子 roguelike 游戏 PRD
 
-> 版本：v1.0 · 状态：待评审（可交付生成）· 定位：**这份 PRD 是「游戏实现」的唯一事实来源（SSoT）**
+> 版本：v1.1（2026-09-30 16:39 按实现回写，见 §20）· 状态：待评审（可交付生成）· 定位：**这份 PRD 是「游戏实现」的唯一事实来源（SSoT）**
 > 作者：GAME-00 owner · 日期：2026-09-30
 > 上游：[项目计划-GameRSI.md](../../项目计划-GameRSI.md) · [模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)
 > 下游/平行：[MOD-01-env-rules-PRD.md](MOD-01-env-rules-PRD.md)（**本游戏跑通后**，按本 PRD 规则另行实现一份纯 Python 模拟器供 RSI 训练）
@@ -19,7 +19,7 @@
 | 10 关结构 | 3 章：Ch1 关 1–3 / Ch2 关 4–6 / Ch3 关 7–10；**Boss 关 = 第 3、6、10 关**；**精英战斗**出现于难度表 `eliteStages` 指定的关（第 3、5、6、7、9 关的普通战斗节点升格为精英）|
 | 难度 | easy / medium / hard —— 只调**配置常量**（心数、敌 HP 倍率、伤害倍率、敌骰数、商店价格、掉落），**不改 AI 代码路径、不改 RNG 消费顺序** |
 | 系统开关 | `mapBranching` / `relics` / `events` / `shops` / `schoolCounter` 五个独立开关，开局前可关；不全开也能通关 |
-| 免构建 | 原生 ES Module，`python3 -m http.server` 即可运行；不引入打包器、不引入前端框架（可选 preact 但默认不用） |
+| 免构建 | 原生 ES Module，`node server.js` 即可运行（零 npm 依赖；v1.1 起不再支持纯静态服务器，见 D-33）；不引入打包器、不引入前端框架（可选 preact 但默认不用） |
 | 为 RSI 预留 | 内核可 1:1 移植 Python；`Action`/`Observation`/配表 ID 全部是**语言无关的纯数据契约** |
 
 **实现顺序建议**：内核（可单测）→ 后端 API → 前端战斗页 → 地图/商店/事件 → 开关与难度 → 打磨。**任何情况下不得先做 UI 再补内核。**
@@ -47,7 +47,7 @@ GameRSI 项目的终点是「小模型在自建游戏里自我进化」。项目
 
 | # | 目标 | 验收方式 |
 |---|---|---|
-| G-1 | 浏览器打开即玩，无需构建步骤 | 全新机器 `python3 -m http.server 8080` → 打开 `http://localhost:8080` 能完整通关 |
+| G-1 | 浏览器打开即玩，无需构建步骤 | 全新机器 `node server.js` → 打开 `http://127.0.0.1:8080` 能完整通关（v1.1 修订，D-33） |
 | G-2 | 三难度可玩且**难度差异可感** | 同一 seed 下 easy/medium/hard 的敌 HP、玩家心数、伤害倍率按 §7 配置表生效；三难度各通关一次 |
 | G-3 | ≥10 关，含精英与 Boss | 完整跑通第 1–10 关并击败最终 Boss |
 | G-4 | ≥3 个技能骰流派，且流派有**可感知的玩法差异** | 三个流派各通关一次，且胜局中使用该流派技能骰次数 ≥ 8 |
@@ -190,9 +190,10 @@ GameRSI 项目的终点是「小模型在自建游戏里自我进化」。项目
 
 | kind | 参数 | 说明 |
 |---|---|---|
-| `play_face` | `dieId`, `slotId`, `faceIndex?` | 把一颗手骰放到一个技能槽位（或直接执行骰面效果） |
+| `play_face` | `dieId`, `slotId`, `faceIndex?`, `targetId?` | 把一颗手骰放到一个技能槽位；`targetId` 为攻击/对敌状态面的敌人 ID，或 `reroll/modify/duplicate_face` 的目标手骰 ID，缺省由内核规范化（D-19） |
 | `discard_die` | `dieId` | 弃掉一颗手骰（丢弃魔化骰的**代价路径**，见 §5.3） |
-| `use_ability` | `abilityId` | 使用角色主动技能（每场限次） |
+| `purify` | `dieId` | 消耗 1 次净化，无代价清除 1 颗魔化骰（D-31） |
+| `use_ability` | `abilityId`, `dieId?`, `value?` | 使用角色主动技能（每场战斗限次，D-23） |
 | `end_turn` | — | 结束回合（受 P5 约束） |
 
 **胜负判定**：
@@ -211,7 +212,7 @@ GameRSI 项目的终点是「小模型在自建游戏里自我进化」。项目
 | `attack` | `purge`（敌人向） | `constraint` | 造成魔化 |
 | `defense` | `ward`（自向） | `constraint` | 获得光盾 |
 | `heal` | `mend`（自向） | `constraint` | 恢复净化值 |
-| `utility` | 任意 | `constraint` | 触发骰面自身效果 |
+| `utility` | 任意 | `constraint` | 触发骰面自身效果；**可在同一回合重复使用**（`reusable: true`）。`status/draw/reroll/modify/gold/nothing/duplicate_face` 面只能进此槽（D-11） |
 | `cursed` | 仅 `selfCorruption` 面 | — | 敌人施加的"毒槽"，占位并可被净化 |
 
 **约束 DSL（`constraint`）**，与 MOD-01 §4 保持同一文法以便直接移植：
@@ -323,11 +324,13 @@ Die
 
 **风险分类（riskTier，按面统计自动判定，不手填）**：
 
+> **v1.1 修订（D-09）**：不利面 = 含 `selfCorruption` 分量的面或 `nothing` 面。原规则（balanced 2–3 面 / risky 4–6 面）与 GAME-02 配表矛盾，改为能使全部配表自洽的阈值。
+
 | riskTier | 判定规则 | 色 | 定位 |
 |---|---|---|---|
-| `safe` 安全骰 | 6 面**全部**为有益（无 `selfCorruption`） | 蓝 | 稳定构筑基底 |
-| `balanced` 均衡骰 | 6 面中 **2–3 面**含 `selfCorruption` | 绿 | 默认推荐 |
-| `risky` 冒险骰 | 6 面中 **4–6 面**含 `selfCorruption` | 红 | 高数值高代价 |
+| `safe` 安全骰 | 6 面**全部**为有益（无不利面） | 蓝 | 稳定构筑基底 |
+| `balanced` 均衡骰 | 6 面中 **1–2 面**为不利面 | 绿 | 默认推荐 |
+| `risky` 冒险骰 | 6 面中 **≥3 面**为不利面 | 红 | 高数值高代价 |
 | `cursed` 厄咒骰 | 由敌人/事件强行塞入骰池，恒有 `selfCorruption` 且不可锻造 | 紫 | 负面物 |
 
 **魔化骰（corruptFace）与风险债机制**（本作独有的策略压力）：
@@ -374,7 +377,7 @@ status → target.status[kind] += value          # 中毒/灼烧在 upkeep 结�
 
 | 学派 | 独占机制 | 玩法节奏 | 反制手段（克制谁） |
 |---|---|---|---|
-| **锋刃 blade** | **蓄势（charge）**：连续同系攻击累积层数，层数越高单次爆发越高；回合末未攻击则层数减半 | 爆发型，前期猥琐后期斩杀 | 克 `verdant` |
+| **锋刃 blade** | **蓄势（charge）**：每次打出锋刃攻击面，基础值 + 当前层数，然后层数 +1（上限 5）；回合末本回合未打出锋刃攻击则层数减半。`execute` 标签面在目标 HP ≤ 50% 时基础值 ×2（D-20） | 爆发型，前期猥琐后期斩杀 | 克 `verdant` |
 | **秘法 arcana** | **过牌与重掷**：低单次伤害，靠抽骰/重掷/复制骰面堆叠连携 | 组合型，靠手牌质量取胜 | 克 `blade` |
 | **自然 verdant** | **续航与毒**：小额回净化 + 中毒 DoT + 减伤；长线消耗 | 控制型，越打越稳 | 克 `arcana` |
 
@@ -432,7 +435,7 @@ status → target.status[kind] += value          # 中毒/灼烧在 upkeep 结�
   - `standard`（中等默认）→ ×1.30 / ×0.77；
   - `punishing`（困难默认）→ ×1.45 / ×0.70。
   该值属于**难度配置**，可被配表覆盖（§7）。
-- **单一学派惩罚**：`deckSchool` 集中度 ≥ 70% 时，敌人额外获得 `monoPenalty`（默认 +15% 伤害）——逼迫混合构筑，制造"选骰博弈"。
+- **单一学派惩罚**：骰池学派技能骰 ≥ 3 颗（`monoMinDice`，D-22）且 `deckSchool` 集中度 ≥ 70% 时，敌人额外获得 `monoPenalty`（默认 +15% 伤害）——逼迫混合构筑，制造"选骰博弈"。
 - **学派盲区提示**：若玩家骰池**完全没有**能克制当前敌人的学派骰，战斗开始前弹出非阻塞提示 `「你的骰池没有能克制<学派>的骰子」`。
 
 ### 6.3 怪物清单（结构，完整配表见 GAME-02 §2）
@@ -462,12 +465,12 @@ status → target.status[kind] += value          # 中毒/灼烧在 upkeep 结�
 | 配置键 | easy | medium | hard | 说明 |
 |---|---|---|---|---|
 | `heartsMax` | 4 | 3 | 2 | 玩家局内心数 |
-| `virtueMax` | 12 | 10 | 9 | 每场战斗的净化值上限 |
+| `virtueMax` | **22**（原 12） | **24**（原 10） | **24**（原 9） | 每场战斗的净化值上限（v1.1 平衡标定） |
 | `drawPerTurn` | 4 | 4 | 3 | 每回合抽骰数 |
 | `handMax` | 8 | 8 | 5 | 手骰上限 |
-| `enemyHpMul` | 0.80 | 1.00 | 1.35 | 敌血倍率（取整） |
-| `enemyDmgMul` | 0.80 | 1.00 | 1.25 | 敌伤倍率 |
-| `enemyExtraDice` | 0 | 0 | +1 | 敌人每回合额外意图骰 |
+| `enemyHpMul` | **0.90**（原 0.80） | **0.90**（原 1.00） | **0.60**（原 1.35） | 敌血倍率（取整；v1.1 平衡标定） |
+| `enemyDmgMul` | **1.00**（原 0.80） | **0.85**（原 1.00） | **0.575**（原 1.25） | 敌伤倍率（v1.1 平衡标定） |
+| `enemyExtraDice` | 0 | 0 | +1 | 敌人每回合额外意图骰（只提高满足槽约束的概率，每槽每回合至多触发一次，D-13） |
 | `eliteStages` | `[3,6]` | `[3,6,9]` | `[3,5,7,9]` | 哪些关的普通战斗节点升格为精英战斗（Boss 关固定为 3/6/10，不在此列） |
 | `counterIntensity` | soft (1.20/0.85) | standard (1.30/0.77) | punishing (1.45/0.70) | 克制强度 |
 | `monoPenalty` | 0.00 | 0.15 | 0.25 | 单学派集中惩罚 |
@@ -477,6 +480,9 @@ status → target.status[kind] += value          # 中毒/灼烧在 upkeep 结�
 | `potionPerStage` | 1 | 1 | 0 | 「净化」使用次数（清魔化骰，§5.3） |
 | `bossPhaseHpBonus` | 0 | 0 | +20% | Boss 阶段血量加成 |
 | `reviveOnce` | true | false | false | easy 独有：首次失心不结束战斗，改为 virtue 回满 50% |
+
+> **v1.1 平衡标定说明（2026-09-30 16:39）**：按 GAME-02 §8 流程，仅调整了 `virtueMax` / `enemyHpMul` / `enemyDmgMul` 三项，其余键保持原值。启发式 bot（`greedy_counter`）200 局/难度通关率：easy 61.0% / medium 35.5% / hard 12.5%，均落在 §7.2 目标区间。
+> hard 的倍率低于 medium 是有意为之：hard 的结构性惩罚（抽 3、手骰上限 5、0 次净化、+1 意图骰、克制 ×1.45/×0.70、单系惩罚 +25%、Boss +20% HP、2 心）叠加后远超倍率本身，"hard 结构 + medium 倍率"实测通关率为 0%。详见 `src/game/docs/BALANCE.md`。
 
 > **决策 D-02（待回填 Spec）**：难度**只允许**通过上表键调整；新增难度差异必须走配置键，禁止任何 `if (difficulty === 'hard')` 式的分支出现在内核的业务逻辑中（允许出现在 `applyDifficulty(config)` 这一个函数里）。
 
@@ -902,6 +908,38 @@ status → target.status[kind] += value          # 中毒/灼烧在 upkeep 结�
 | D-07 | 骰面风险分类（safe/balanced/risky/cursed）与学派为正交维度 | 无（新增） | 写入 GAME-02 配表 schema |
 | D-08 | 玩家动作集 `play_face/discard_die/use_ability/end_turn` | Spec §4.3 动作契约（`place_die/end_turn/use_ability/shop_buy/shop_leave/levelup_choose`） | 建议：**统一为同一枚举**，游戏侧把 `shop_buy` 等节点动作并入；`discard_die` 为新增，需回填 Spec §4.3 |
 
+### 17.1 实现阶段补充决策（v1.1，2026-09-30 16:39 回写）
+
+以下决策在实现中补充，完整理由见 `src/game/docs/DECISIONS.md`。
+
+| # | 决策 | 影响文档 |
+|---|---|---|
+| D-09 | 风险等级：不利面（自损面/`nothing` 面）0 → safe，1–2 → balanced，≥3 → risky | GAME-00 §5.3、GAME-01 §8 |
+| D-10 | 技能骰学派规则：≥2 面属本系，且 ≥1 面属其他非中立学派 | GAME-02 §3、GAME-01 §8 |
+| D-11 | 工具槽可重复使用；功能面（状态/抽骰/重掷/改骰/得币/无事/复制）只能进工具槽 | GAME-00 §4.3、GAME-02 §1.1 |
+| D-12 | 虚弱在持有者回合开始时减半；力量不衰减 | GAME-01 §4.2 / §11 Q-3 |
+| D-13 | 敌人意图骰贪心分配，每槽每回合至多触发一次 | GAME-00 §7.1、GAME-01 §4.2 |
+| D-14 | 敌人塞入的厄咒骰仅本场战斗有效；事件塞入的永久 | GAME-02 §5 |
+| D-15 | 每场战斗胜利：星屑 + 骰子 3 选 1；精英/Boss 另掉 1 遗物 | GAME-00 §4.1、GAME-02 §4 |
+| D-16 | 战斗外"失/回净化"记为下一场战斗的初始净化修正；休息点改为"回 1 心 / 净化上限 +1" | GAME-02 §4 / §6 |
+| D-17 | 敌人光盾在其自身回合开始时清零 | GAME-01 §4.2 |
+| D-18 | Boss 关末行固定 1 个 Boss 节点；精英放置规则见 GAME-02 §4 | GAME-02 §4 |
+| D-19 | `play_face` 增加可选 `targetId` | GAME-00 §4.2、GAME-01 §4 |
+| D-20 | 蓄势与处决的具体数值规则 | GAME-00 §5.5 |
+| D-21 | `duplicate_face`：再执行目标手骰当前面的正向效果 | GAME-02 §2.2 |
+| D-22 | 单系惩罚需学派骰 ≥3 颗 | GAME-00 §6.2 |
+| D-23 | 能力次数按"每场战斗"计 | GAME-02 §1.1 |
+| D-24 | `maxTurnsPerBattle = 60` | GAME-01 §1.2 |
+| D-25 | `runId` 由后端随机生成；`/api/replay` 接受 `config.runId`；`sessionId` 放响应外层 | GAME-00 §9 |
+| D-26 | 内核 API 显式接收 `tables` 作为最后一个参数 | GAME-01 §1 |
+| D-27 | 地图揭示 `row ≤ max(currentRow,0)+1` | GAME-01 §5.3 |
+| D-28 | 遗物栏满 → `relic_swap` 阶段 | GAME-02 §7 |
+| D-29 | 第 1–2 关奖励只出安全骰，不显示学派盲区提示 | GAME-00 §4.4 |
+| D-30 | 玩家中毒/灼烧非致死；敌人中毒可致死 | GAME-01 §4.2 |
+| D-31 | 动作全集新增 `purify` / `rest_choose` / `relic_swap` | GAME-01 §4 |
+| D-32 | 新增编队 `g_12`（空壳，第 3–6 关） | GAME-02 §5.4 |
+| D-33 | 启动方式为 `node server.js`（ADR-2 要求服务端持有会话，与纯静态服务器冲突） | GAME-00 §0 / G-1 |
+
 > 建议新增 Spec 模块 **MOD-11 `game-web`**（L0 之外的独立层：游戏本体），其 PRD 即本文档。若采纳，Spec §2 模块清单、§6 依赖矩阵、§10 PRD 索引需同步更新。
 
 ---
@@ -935,3 +973,12 @@ status → target.status[kind] += value          # 中毒/灼烧在 upkeep 结�
 > 8. 先跑通**最小可玩切片**（1 场有克制关系的战斗）再扩展；`node --test` 覆盖 ≥80%；产出 3 组 golden 快照（含 1 组全开关关闭）。
 > 9. 任何本文档未覆盖的规则细节，**先在文档里补一条决策再实现**，不要默默发明规则。
 > 10. 资产用占位符（CSS/emoji/内联 SVG），不得因缺资产而报错。
+
+---
+
+## 20. 变更记录
+
+| 版本 | 时间 | 变更 |
+|---|---|---|
+| v1.0 | 2026-09-30 | 首版 |
+| v1.1 | 2026-09-30 16:39 | 按 `src/game` 实现回写：§0/G-1 启动方式改为 `node server.js`；§4.2 动作全集补充 `targetId` 与 `purify`；§4.3 工具槽可重复使用；§5.3 风险等级阈值修订；§5.5 蓄势/处决规则具体化；§6.2 单系惩罚最小骰数；§7.1 `virtueMax`/`enemyHpMul`/`enemyDmgMul` 平衡标定并附通关率；§17.1 登记实现决策 D-09～D-33 |

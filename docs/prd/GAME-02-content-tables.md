@@ -1,6 +1,6 @@
 # GAME-02 配表规格与内容数据
 
-> 版本：v1.0 · 状态：待评审 · 上游：[GAME-00-webgame-PRD.md](GAME-00-webgame-PRD.md) · [GAME-01-kernel-contract.md](GAME-01-kernel-contract.md)
+> 版本：v1.1（2026-09-30 16:39 按实现回写，见 §9）· 状态：待评审 · 上游：[GAME-00-webgame-PRD.md](GAME-00-webgame-PRD.md) · [GAME-01-kernel-contract.md](GAME-01-kernel-contract.md)
 > 定位：把 GAME-00 的规则**落到可实现的纯数据**。本文件的表即为 `content/*.json` 的**权威内容与数值基线**；
 > 实现者可直接照抄，也可按 §8 的平衡流程调整数值（调整必须回写本文件）。
 >
@@ -35,11 +35,12 @@
     { "slotId": "slot_2", "slotKind": "attack",   "constraint": "ge:3",  "bonus": 1 },
     { "slotId": "slot_3", "slotKind": "defense",  "constraint": "any",   "bonus": 0 },
     { "slotId": "slot_4", "slotKind": "heal",     "constraint": "even",  "bonus": 1 },
-    { "slotId": "slot_5", "slotKind": "utility",  "constraint": "any",   "bonus": 0 }
+    { "slotId": "slot_5", "slotKind": "utility",  "constraint": "any",   "bonus": 0, "reusable": true }   // v1.1：工具槽可重复使用（D-11）
   ]
 }
 ```
 
+> v1.1（D-23）：`usesPerStage` 按「每场战斗」重置（实现中字段名为 `usesPerBattle`）。
 > `warrior_focus` 的 `set_pip` 需要额外输入（`value`），是本作**唯一**带附加参数的能力；`use_ability` 的 schema 需允许可选 `value: 1..6`。
 
 ### 1.2 初始普通骰（`normal` 类）
@@ -378,10 +379,10 @@
   "stages": [
     { "stage":1,  "chapter":1, "rows":2, "nodeBudget":[3,2], "kinds":["battle"],                    "boss":false, "tutorial":true },
     { "stage":2,  "chapter":1, "rows":3, "nodeBudget":[3,3,3], "kinds":["battle","treasure"],      "boss":false, "tutorial":true },
-    { "stage":3,  "chapter":1, "rows":3, "nodeBudget":[3,4,2], "kinds":["battle","shop","rest"],   "boss":true,  "bossId":"boss_verdant_bloom" },
+    { "stage":3,  "chapter":1, "rows":3, "nodeBudget":[3,4,1], "kinds":["battle","shop","rest"],   "boss":true,  "bossId":"boss_verdant_bloom" },
     { "stage":4,  "chapter":2, "rows":3, "nodeBudget":[3,4,3], "kinds":["battle","shop"],           "boss":false },
     { "stage":5,  "chapter":2, "rows":4, "nodeBudget":[3,3,4,3], "kinds":["battle","event","treasure"], "boss":false },
-    { "stage":6,  "chapter":2, "rows":3, "nodeBudget":[4,4,2], "kinds":["battle","forge","shop"],   "boss":true,  "bossId":"boss_arcana_spiral" },
+    { "stage":6,  "chapter":2, "rows":3, "nodeBudget":[4,4,1], "kinds":["battle","forge","shop"],   "boss":true,  "bossId":"boss_arcana_spiral" },
     { "stage":7,  "chapter":3, "rows":4, "nodeBudget":[3,4,4,3], "kinds":["battle","shop","event"], "boss":false },
     { "stage":8,  "chapter":3, "rows":4, "nodeBudget":[4,4,4,3], "kinds":["battle","shrine","treasure"], "boss":false },
     { "stage":9,  "chapter":3, "rows":3, "nodeBudget":[4,3,2], "kinds":["battle","forge","rest"],   "boss":false },
@@ -404,11 +405,16 @@
 | `forge` | `shops` | `treasure` |
 | `event` | `events` | `treasure` |
 | `shrine` | `relics` | `rest` |
-| `rest` | — | — （回复 30% `virtueMax` 或 1 心，二选一）|
+| `rest` | — | — （v1.1：回 1 心 / 净化上限永久 +1，二选一；原「回复 30% virtueMax」在「每场回满」规则下无意义，D-16）|
 
 > `mapBranching=false` 时：整关压成**单一线性路径**，节点类型取该关 `kinds` 中按 `map` 流抽 1 种，`rows` 节点依次连接。
 
-**精英关**（由难度 `eliteStages` 决定哪些 stage 的**最后一个战斗节点**升格为精英）：
+> **v1.1 地图规则补充（D-18 / D-15）**：
+> - Boss 关（3/6/10）最后一行固定为 1 个 Boss 节点（第 3、6 关 `nodeBudget` 末行 2→1）。
+> - 精英放置：非 Boss 的精英关，最后一行全部为精英；Boss 精英关（3/6），倒数第二行的首个战斗节点升格为精英。
+> - 每场战斗胜利都进入「骰子 3 选 1」（loot 流，两颗构筑学派 + 一颗克制本章敌学派；第 1–2 关只出安全骰），精英/Boss 另掉 1 个遗物。
+
+**精英关**（由难度 `eliteStages` 决定哪些 stage 出现精英，放置规则见上方 v1.1 补充）：
 
 ```jsonc
 { "eliteStages": { "easy":[3,6], "medium":[3,6,9], "hard":[3,5,7,9] } }
@@ -437,6 +443,10 @@
 | `mon_blade_brute` | 蛮兵 | blade | 34 | `ge:3`→purge 8；`any`→purge 3 | 3×d6 | greedy_damage |
 | `mon_blade_assassin` | 刺客 | blade | 18 | `even`→purge 7；`any`→status strength 1 | 2×d6 | scripted |
 | `mon_neutral_shell` | 空壳 | neutral | 28 | `any`→purge 3；`any`→ward 8 | 2×d6 | greedy_block |
+
+> **v1.1 敌人行为补充**：
+> - 意图骰降序贪心分配给敌槽，每槽每回合至多触发一次；`enemyExtraDice` 只提高满足约束的概率（D-13）。
+> - 敌人塞入玩家骰池的厄咒骰（镜像体/腐化母株/咒环）**仅本场战斗有效**，战斗结束移除；事件塞入的厄咒骰永久（D-14）。
 
 ### 5.2 精英（`elite`，6 只）
 
@@ -476,6 +486,8 @@
 
 > **GAME-00 §6.3 的落点**：三阶段三学派 ⇒ 任何单一学派构筑必有一阶段吃亏。这是验收 A6 的核心检验点。
 
+> v1.1：上表「特色」已落为具体槽位与被动（如 `regen` / `poison_immune` / `thorns` / `ramp_strength`），权威数值见 `src/game/content/monsters.json`。
+
 ### 5.4 敌人编队（`enemyGroupId`）
 
 编队由 `map` 流按 stage 抽取。**受难度影响的只是 HP/伤害倍率与额外骰，编队构成不变**（保证 RNG 消费一致）。
@@ -493,6 +505,7 @@
 | `g_09` | `mon_blade_brute` + `mon_blade_assassin` | 7–9 |
 | `g_10` | `mon_arcana_mirror` + `mon_verdant_thornback` | 8–10 |
 | `g_11` | `mon_blade_brute` + `mon_arcana_golem` | 9–10 |
+| `g_12` | `mon_neutral_shell` | 3–6（v1.1 新增，D-32） |
 | `g_e1` | `elite_verdant_warden` | elite |
 | `g_e2` | `elite_arcana_weaver` | elite |
 | `g_e3` | `elite_blade_champion` | elite |
@@ -517,20 +530,22 @@ op 枚举：gain_gold | lose_gold | gain_die | remove_die | gain_relic | lose_re
 
 | id | 标题 | 选项（label / 要求 / 结果） | 学派 |
 |---|---|---|---|
-| `ev_shrine_shards` | 星屑矿脉 | ①挖掘：得 70 星屑，失 3 净化 ②谨慎：得 30 星屑 ③离开：无 | — |
+| `ev_shrine_shards` | 星屑矿脉 | ①挖掘：得 70 星屑，下场战斗初始净化 -3 ②谨慎：得 30 星屑 ③离开：无 | — |
 | `ev_blade_altar` | 锋刃祭坛 | ①献祭：失 1 心，得 2 颗 `blade` 技能骰 ②触碰：得 `ff_strength1` 面改造 ③离开 | blade |
 | `ev_arcana_library` | 咒文图书馆 | ①研读：得 `skill_arcana_echo` ②赌博：50% 得 `skill_arcana_surge` / 50% 塞 1 颗 `die_curse_heavy` ③离开 | arcana |
-| `ev_verdant_grove` | 藤蔓林 | ①采摘：回满净化值，得 1 层 poison ②焚毁：得 60 星屑，失 1 心 ③离开 | verdant |
-| `ev_dice_forge` | 废弃锻造台 | ①锻造：从 5 选 1 改造骰面（需 40 星屑） ②拆解：移除 1 颗骰，得 45 星屑 ③离开 | — |
-| `ev_mirror_pool` | 镜像池 | ①凝视：复制骰池中 1 颗随机骰 ②打碎：失 2 净化，得 1 颗 `blade` 技能骰 ③离开 | — |
-| `ev_lost_oracle` | 迷失的神谕使 | ①救助：失 50 星屑，得 1 个随机遗物（`relics` 开时） ②无视：得 1 颗 `die_curse_static` ③离开 | — |
-| `ev_blood_pact` | 血契 | ①签订：得 `ff_risky_purge9` 面，失 2 心（不足则不可选） ②拒绝：失 5 净化 ③离开 | blade |
+| `ev_verdant_grove` | 藤蔓林 | ①采摘：清除净化惩罚并在下场战斗 +3 净化，带 1 层 poison ②焚毁：得 60 星屑，失 1 心（需 ≥2 心） ③离开 | verdant |
+| `ev_dice_forge` | 废弃锻造台 | ①锻造：支付 40 星屑，从 5 选 1 改造骰面 ②拆解：随机移除 1 颗骰，得 45 星屑 ③离开 | — |
+| `ev_mirror_pool` | 镜像池 | ①凝视：复制骰池中 1 颗随机骰 ②打碎：下场战斗初始净化 -2，得 1 颗 `blade` 技能骰 ③离开 | — |
+| `ev_lost_oracle` | 迷失的神谕使 | ①救助：失 50 星屑，得 1 个随机遗物（`relics` 关闭时整条事件被过滤） ②无视：得 1 颗 `die_curse_static` ③绕路：失 10 星屑 | — |
+| `ev_blood_pact` | 血契 | ①签订：一颗骰获得 `ff_risky_purge9` 面，失 2 心（需 ≥3 心） ②拒绝：下场战斗初始净化 -5 ③撕毁：50% 得 40 星屑 / 50% 下场战斗初始净化 -3 | blade |
 | `ev_wandering_merchant` | 流浪商人 | ①交易：失 80 星屑，得 1 颗**克制本章 BOSS 学派**的技能骰 ②小交易：失 40，得 1 颗随机技能骰 ③离开 | — |
-| `ev_ancient_slot` | 古代槽位 | ①激活：槽位上限 +1（永久本局） ②货币化：得 100 星屑 ③离开 | — |
-| `ev_corrupt_spring` | 腐化泉 | ①饮用：回满净化值并回 1 心，塞 2 颗 `die_curse_static` ②净化：移除全部厄咒骰 ③离开 | verdant |
-| `ev_school_trial` | 学派试炼 | ①锋刃试炼：得 1 颗 `blade` 技能骰 + 1 层 strength ②秘法试炼：得 1 颗 `arcana` 技能骰 + 抽骰 2 ③自然试炼：得 1 颗 `verdant` 技能骰 + 回 5 净化 | 三系 |
+| `ev_ancient_slot` | 古代槽位 | ①激活：本局永久获得 1 个攻击槽（any） ②货币化：得 100 星屑，但塞入 1 颗 `die_curse_static` ③离开 | — |
+| `ev_corrupt_spring` | 腐化泉 | ①饮用：回 1 心，塞 2 颗 `die_curse_static` ②净化：失 30 星屑，移除全部厄咒骰 ③离开 | verdant |
+| `ev_school_trial` | 学派试炼 | ①锋刃试炼：得 1 颗 `blade` 技能骰 + 下场战斗 1 层 strength ②秘法试炼：得 1 颗 `arcana` 技能骰 + 下场战斗首回合抽骰 +2 ③自然试炼：得 1 颗 `verdant` 技能骰 + 下场战斗 +5 净化 ④挑战三座：50% 各得 1 颗 / 50% 失 1 心（需 ≥2 心） | 三系 |
 
 **叙事文本与结果文案**由实现者撰写（≥120 字/事件），本表只定义机制。
+
+> **v1.1 修订说明**：净化值每场战斗回满，故战斗外的「失/回净化」一律改为「下一场战斗初始净化修正」（D-16）；为满足 GAME-01 §8「每个事件 ≥1 个风险选项」，`ev_lost_oracle`/`ev_blood_pact`/`ev_ancient_slot`/`ev_corrupt_spring`/`ev_school_trial` 调整或新增了选项。权威数据见 `src/game/content/events.json`。
 
 ---
 
@@ -546,7 +561,7 @@ op 枚举：gain_gold | lose_gold | gain_die | remove_die | gain_relic | lose_re
 | `relic_verdant_root` | 自然根须 | common | passive | 每次打出 `verdant` 骰面回 1 净化值 | ★ |
 | `relic_school_prism` | 学派棱镜 | rare | on_play_face | 克制倍率对己方额外 `+150‰`（即 1300→1450） | ★ |
 | `relic_stubborn_mix` | 杂派护符 | rare | passive | `monoPenalty` 失效；但你每回合抽骰 -1 | ★ ⚠️ |
-| `relic_blade_echo` | 锋刃回响 | rare | on_kill | 击杀敌人后，随机 1 颗 `blade` 手骰骰面 +2 | ★ |
+| `relic_blade_echo` | 锋刃回响 | rare | on_kill | 击杀敌人后，**首颗**（按手骰顺序）`blade` 手骰骰面 +2（v1.1：改为确定性选择，遗物不得消费 RNG） | ★ |
 | `relic_greedy_eye` | 贪婪之眼 | rare | passive | 星屑获取 ×1.5，但每场战斗初始净化值 -2 | ⚠️ |
 | `relic_glass_heart` | 玻璃之心 | rare | passive | `virtueMax +4`，但每次失心立即再失 1 心 | ⚠️ |
 | `relic_iron_bark` | 铁树皮 | common | on_battle_start | 战斗开始获得 8 光盾 | — |
@@ -554,7 +569,7 @@ op 枚举：gain_gold | lose_gold | gain_die | remove_die | gain_relic | lose_re
 | `relic_purifier` | 净化之瓶 | common | on_battle_start | `purifyLeft +1` | — |
 | `relic_last_stand` | 背水一战 | rare | passive | `virtue ≤ 3` 时所有 `purge` 值 +3 | — |
 | `relic_boss_trophy` | 王的遗骸 | boss | on_battle_start | 对 `boss`/`elite` 伤害 +20% | — |
-| `relic_deck_thin` | 极简教义 | boss | on_shop | 每次删骰免费一次；骰池 ≤5 颗时全骰面 +1 | — |
+| `relic_deck_thin` | 极简教义 | boss | on_shop | 每次进商店首次删骰免费；骰池 ≤5 颗时魔化/光盾/修复面 +1 | — |
 
 **遗物栏位**由难度决定（`relicSlots`: 4/3/2）。超出栏位的遗物**拾取时提示替换**（必须选择丢哪一个）。
 
@@ -581,12 +596,36 @@ op 枚举：gain_gold | lose_gold | gain_die | remove_die | gain_relic | lose_re
 | `greedy_counter` | 优先打出**克制当前敌人学派**的骰面 |
 | `school_blade` / `school_arcana` / `school_verdant` | 优先使用本系骰面 + 本系机制（蓄势/过牌/续航） |
 
+### 8.1 v1.1 标定结果（2026-09-30 16:39）
+
+按第 4 步只调整了难度三项（其余难度键与全部怪物数值不变）：
+
+| 键 | easy（原 → 现） | medium | hard |
+|---|---|---|---|
+| `virtueMax` | 12 → 22 | 10 → 24 | 9 → 24 |
+| `enemyHpMulPermille` | 800 → 900 | 1000 → 900 | 1350 → 600 |
+| `enemyDmgMulPermille` | 800 → 1000 | 1000 → 850 | 1250 → 575 |
+
+`node scripts/balance.js --n 200 --strategy all --duel`（种子 10000–10199）结果：
+
+| 难度 | greedy_counter | greedy_damage | school_blade | school_arcana | school_verdant |
+|---|---|---|---|---|---|
+| easy | 61.0% ✅ | 61.0% ✅ | 66.0% | 59.0% ✅ | 61.5% ✅ |
+| medium | 35.5% ✅ | 37.5% ✅ | 34.5% ✅ | 28.0% ✅ | 30.5% ✅ |
+| hard | 12.5% ✅ | 8.0% | 8.0% | 3.5% | 11.5% ✅ |
+
+完整报告见 `src/game/docs/BALANCE.md`。
+
+- A6：`elite_verdant_warden` 面对锋刃构筑（克制）胜率 100%，面对秘法构筑（被克）胜率 0%，差距 +100pp。
+- 待调：单挑时 `elite_arcana_weaver` 对三种构筑都偏弱、`elite_blade_champion` 都偏强（整局中玩家骰池更大，暂未调整）。
+
 > 这些 bot 同时是 GAME-00 §15 第 11 项与验收 A6/A10 的计算基础，**并且可直接复用为 MOD-08 的 heuristic 基线**——这是本 PRD 对 RSI 路线的另一处前置投资。
 
 ---
 
 ## 9. 变更记录
 
-| 版本 | 日期 | 变更 |
+| 版本 | 时间 | 变更 |
 |---|---|---|
 | v1.0 | 2026-09-30 | 首版：角色与初始骰池、17 颗普通/技能/厄咒骰的完整 6 面配表、8 处学派自检修正与最终 `school` 序列、10 关 3 章结构、精英/普通/Boss 共 23 只怪物、编队表、12 个事件、14 个遗物、平衡流程与 5 种 bot 策略 |
+| v1.1 | 2026-09-30 16:39 | 按 `src/game` 实现回写：§1.1 `slot_5` 可重复使用、能力按场计；§4 第 3/6 关 `nodeBudget` 末行 2→1、休息点选项、精英放置与战斗奖励规则；§5 敌人意图分配与厄咒骰持续性、新增编队 `g_12`；§6 事件表与实现对齐；§7 `relic_blade_echo`/`relic_deck_thin` 精确化；§8.1 难度三项平衡标定与通关率 |

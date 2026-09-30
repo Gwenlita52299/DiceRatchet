@@ -1,6 +1,6 @@
 # GAME-01 规则内核契约（Kernel Contract）
 
-> 版本：v1.0 · 状态：待评审 · 上游：[GAME-00-webgame-PRD.md](GAME-00-webgame-PRD.md)
+> 版本：v1.1（2026-09-30 16:39 按实现回写，见 §12）· 状态：待评审 · 上游：[GAME-00-webgame-PRD.md](GAME-00-webgame-PRD.md)
 > 定位：定义**规则内核的唯一接口与确定性语义**。这份文档的存在目的只有一个——
 > **让"网页版游戏"与"未来纯 Python 模拟器（MOD-01）"能逐字段对拍**，从而使 RSI 训练数据可信；
 > 以及让"视觉模型直接对游戏做 RSI"这一路线在接口上可行（§5.4）。
@@ -24,11 +24,13 @@
 
 ```js
 // kernel/index.js —— 全部对外 API（其余模块均为内部实现）
+// v1.1（D-26）：内核不持有模块级状态，所有 API 显式接收 tables 作为最后一个参数
 export function createGame(config, tables) -> GameState
-export function reduce(state, action) -> { state: GameState, events: GameEvent[] }
-export function observe(state, view = "full") -> Observation
-export function legalActions(state) -> Action[]
-export function isLegal(state, action) -> { legal: boolean, reason: string|null, code: string|null }
+export function reduce(state, action, tables) -> { state: GameState, events: GameEvent[], illegal: boolean }
+export function observe(state, view = "full", tables) -> Observation
+export function legalActions(state, tables) -> Action[]
+export function isLegal(state, action, tables) -> { legal: boolean, reason: string|null, code: string|null }
+export function playHints(state, tables) -> { [dieId]: { [slotId]: {legal, reason, previews} } }  // UI 伤害预览/非法原因（v1.1）
 export function configHash(config) -> string          // "sha256:<16hex>"
 export function digest(value) -> string               // "sha256:<64hex>"，规范化 JSON
 export function applyDifficulty(baseConfig, difficulty, tables) -> GameConfig
@@ -66,7 +68,7 @@ export function replay(config, actions, tables) -> { digests: string[], outcome:
   "shopPriceMulPermille": 1000, "goldMulPermille": 1000,
   "relicSlots": 3, "purifyPerStage": 1, "eliteStages": [3, 6, 9],
   "bossPhaseHpBonusPermille": 0, "reviveOnce": false,
-  "stageCount": 10, "maxTurnsPerBattle": 200
+  "stageCount": 10, "maxTurnsPerBattle": 60   // v1.1：由 200 改为 60（D-24）
 }
 ```
 
@@ -219,7 +221,11 @@ export class RngStream {
 | `treasure_pick` | `treasure` | 3 选 1 加骰；或 `skip` 换币 |
 | `forge_pick` | `forge` | 替换指定骰的指定面 |
 | `shrine_choose` | `shrine` | 二/三选一 |
+| `rest_choose` | `rest` | 休息点二选一：回 1 心 / 净化上限 +1（v1.1，D-16/D-31） |
+| `relic_swap` | `relic_swap` | 遗物栏满时丢弃一个旧遗物换新遗物，或 `skip` 放弃新遗物（v1.1，D-28/D-31） |
 | `abandon_run` | 任意 | 主动结束（`outcome="lose"`，标记 `reason="abandon"`） |
+
+> **v1.1 补充（D-19）**：`play_face` 增加可选 `targetId`——攻击面/对敌状态面填敌人 ID，`reroll/modify/duplicate_face` 填另一颗手骰 ID；缺省时内核规范化为首个存活敌人 / 首个其他手骰。
 
 **阶段推进的实现方式**：`end_turn` 是唯一会**跨阶段大步推进**的动作（因为它要跑完敌方整回合）。替代设计（每个子阶段一个 action）会让外部动作流变长且易被误用；本契约选择"`end_turn` 内聚"，但要求 `reduce` 在内部**按 §4.2 顺序**逐步执行并发出全部 `events`，且任一时刻 `state.rng` 的消费量与顺序都完全确定。
 
@@ -251,19 +257,21 @@ play_face(dieId, slotId, faceIndex?)
 E1. 校验：不存在 isCorrupt 的手骰 / 槽内残留                → 否则 E_ACTION_CORRUPT_DIE_REMAINS
 E2. 手骰全部入弃骰堆（清空 hand），清空 isCorrupt 标记
 E3. 进入敌方回合（phase = "enemy_turn"）
-E4. 对 enemies[] 按 enemyId 升序（字符串字典序）依次执行 intent：
+E4. 对 enemies[] 按 enemyId 升序（字符串字典序）依次执行：
+      E4-0. 该敌人回合开始：ward 清零（v1.1，D-17）→ 中毒/灼烧结算（可致死，D-30）→ 虚弱减半（D-12）→ 被动（回血/叠力量）
       E4a. 逐 slotId 升序处理已提交 intent
-      E4b. 应用 enemyDmgMul、学派克制（源 = enemy.school，目标 = player.deckSchool）
+      E4b. 应用 enemyDmgMul、学派克制（源 = enemy.school，目标 = player.deckSchool）、单系惩罚，逐步 floor，最小 1
       E4c. 应用玩家 ward 吸收 → player.virtue 扣减
       E4d. 若 player.virtue <= 0 → 失心流程（§4.3），中断敌人行动
 E5. 若战斗未结束：检查所有敌人 hp <= 0 → 胜利结算（node 结算，phase → 节点结算）
-E6. 敌方 ward 清零、敌人 status 在敌人回合开始/结束的结算点（当前定义：敌人中毒在其回合开始时结算）
+E6. （v1.1：敌方 ward 清零与状态结算已移至 E4-0，此步为空）
 E7. 若战斗继续：turn += 1；phase = "player_turn"
-E8. upkeep：玩家 ward 清零；poison/burn 结算（非致死至少留 1）；regen 结算
+E8. upkeep：玩家 ward 清零；poison/burn 结算（非致死至少留 1）；regen 结算；weak 减半（v1.1，D-12）
 E9. 检查 player.virtue <= 0（upkeep 致死）→ 失心流程
 E10. draw：抽 drawPerTurn 颗（洗牌消费 dice.player）；hand 超 handMax 的部分直接入弃骰堆
 E11. roll：为 hand 中每颗骰消费 dice.player 取 pip → faceIndex
 E12. 敌人重新提交 intent（消费 dice.enemy），marked committed
+     （v1.1，D-13）意图骰降序贪心分配给敌槽（ai 决定槽优先级），每槽每回合至多触发一次；enemyExtraDice 只提高满足约束的概率
 E13. 发出全部 events（顺序与 E1..E12 一致）
 ```
 
@@ -304,7 +312,7 @@ virtue <= 0                                   →  players_lost_heart
 
 `seed`（实际值）、`rng`、`config.seed`、`map.rows[*][*].enemyGroupId` 的**未揭示成员**、`node.state` 内部字段、`drawPile` 的**顺序**（只允许下发数量）、`discardPile` 顺序、未来行的节点内容（只允许下发"存在性 + 是否可达 + 预览种类"）、`stateVersion`/`state` 本体、`aiState`。
 
-> `map.rows` 的揭示策略：**当前行与下一行完整下发**（含节点 kind 与 enemy 学派预览）；再往后的行只下发 `{count, reachable:false}` 占位。这把"预读"限制在 1 行之内，既保证可玩性也保证审计可控。
+> `map.rows` 的揭示策略（v1.1 精确化为 `row ≤ max(currentRow, 0) + 1`，D-27）：**当前行与下一行完整下发**（含节点 kind 与 enemy 学派预览）；再往后的行只下发 `{count, reachable:false}` 占位。这把"预读"限制在 1 行之内，既保证可玩性也保证审计可控。
 
 ### 5.4 `view` 档位（为视觉模型路线预留）
 
@@ -404,8 +412,8 @@ virtue <= 0                                   →  players_lost_heart
 | 每个 `id` 匹配 `^[a-z][a-z0-9_]*$` | `E_CONTENT_ID_FORMAT` |
 | `dice/skills` 每颗**恰好 6 个面**，`faceIndex` 覆盖 0..5 无重复 | `E_CONTENT_FACES` |
 | 每个 `face.kind` 在枚举内；`kind=status` 必有 `statusKind` | `E_CONTENT_FACE_KIND` |
-| `riskTier` 与面统计**一致**（不手填，由 loader 计算并回写校验） | `E_CONTENT_RISK_MISMATCH` |
-| 每个 `skill` 满足 GAME-00 §5.5 三条设计规则（≥2 面属本系机制、≥1 面反制天敌） | `E_CONTENT_SCHOOL_RULE` |
+| `riskTier` 与面统计**一致**（不手填，由 loader 计算并回写校验；阈值见 GAME-00 §5.3 v1.1 / D-09） | `E_CONTENT_RISK_MISMATCH` |
+| 每个非中立 `skill`：≥2 面属本系学派，且 ≥1 面属其他非中立学派（v1.1，D-10） | `E_CONTENT_SCHOOL_RULE` |
 | 每个 `monster` 的 `school` 在枚举内；`slots` 非空；`tier` 合法 | `E_CONTENT_MONSTER` |
 | `stages` 覆盖 1..`stageCount`，第 10 关含 `boss` 节点 | `E_CONTENT_STAGES` |
 | 每个 `event` ≥3 选项、≥1 正期望、≥1 风险选项 | `E_CONTENT_EVENT` |
@@ -489,9 +497,9 @@ index.js
 | # | 问题 | 现状 | 影响 |
 |---|---|---|---|
 | Q-1 | 复合骰面（一面上两个效果）是否纳入 v1？§9.3 M6 已给出顺序约定 | **纳入**，但配表 v1 只允许 `purge+selfCorruption` 一种复合 | 配表 schema、UI 显示 |
-| Q-2 | `use_ability` 是否消耗回合？ | 暂定**不消耗**（每场限次已足够约束） | 平衡；MOD-01 §16 待定项 3 |
-| Q-3 | 状态 `weak`/`strength` 的衰减规则 | 暂定**不衰减**，按层数生效至战斗结束 | 长战斗平衡 |
-| Q-4 | `handMax` 超限时是"丢弃最新抽到的"还是"玩家选择" | 暂定**丢弃最新**（确定性优先，无额外输入） | UI 提示 |
+| Q-2 | `use_ability` 是否消耗回合？ | **已定（v1.1）：不消耗**（每场限次已足够约束） | 平衡；MOD-01 §16 待定项 3 |
+| Q-3 | 状态 `weak`/`strength` 的衰减规则 | **已定（v1.1，D-12）：weak 在持有者回合开始时减半；strength 不衰减** | 长战斗平衡 |
+| Q-4 | `handMax` 超限时是"丢弃最新抽到的"还是"玩家选择" | **已定（v1.1）：丢弃最新**（超出的骰子不掷、直接入弃骰堆） | UI 提示 |
 | Q-5 | 多骰同时入槽（MOD-01 待定项 1） | v1 **不做** | 动作空间 |
 | Q-6 | `"visual"` 档的具体渲染输入 schema | v1 只返回最小实现 | 未来视觉模型路线 |
 | Q-7 | 敌人 `ai` 的 `boss_pattern` 如何声明 | 配表用 `phases[]` 声明，内核按 HP 阈值切换 | 配表 schema |
@@ -501,6 +509,7 @@ index.js
 
 ## 12. 变更记录
 
-| 版本 | 日期 | 变更 |
+| 版本 | 时间 | 变更 |
 |---|---|---|
 | v1.0 | 2026-09-30 | 首版：内核 5 条纪律、API 签名、GameState、SplitMix64+命名流与消费登记表、reduce 分派与 end_turn 12 步顺序、观察投影与 3 个 view 档、事件与轨迹契约、14 条 Python 移植风险清单、配表校验、9 组一致性测试向量 |
+| v1.1 | 2026-09-30 16:39 | 按 `src/game` 实现回写：§1 签名增加 `tables` 参数与 `playHints`（D-26）；§1.2 `maxTurnsPerBattle` 200→60（D-24）；§4 新增 `rest_choose`/`relic_swap` 与 `play_face.targetId`（D-19/D-31）；§4.2 敌人光盾/状态结算移至各自回合开始、虚弱减半、意图骰每槽至多触发一次（D-12/D-13/D-17/D-30）；§5.3 揭示规则精确化（D-27）；§8 风险与学派校验规则修订（D-09/D-10）；§11 Q-2/Q-3/Q-4 定案 |
