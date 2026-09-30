@@ -1,6 +1,6 @@
 # GAME-00 网页版骰子 roguelike 游戏 PRD
 
-> 版本：v1.1（2026-09-30 16:39 按实现回写，见 §20）· 状态：待评审（可交付生成）· 定位：**这份 PRD 是「游戏实现」的唯一事实来源（SSoT）**
+> 版本：v1.2（2026-09-30 17:21 为 RSI 训练补充局长选项，见 §20）· 状态：待评审（可交付生成）· 定位：**这份 PRD 是「游戏实现」的唯一事实来源（SSoT）**
 > 作者：GAME-00 owner · 日期：2026-09-30
 > 上游：[项目计划-GameRSI.md](../../项目计划-GameRSI.md) · [模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)
 > 下游/平行：[MOD-01-env-rules-PRD.md](MOD-01-env-rules-PRD.md)（**本游戏跑通后**，按本 PRD 规则另行实现一份纯 Python 模拟器供 RSI 训练）
@@ -522,7 +522,8 @@ status → target.status[kind] += value          # 中毒/灼烧在 upkeep 结�
     "mapBranching": true, "relics": true, "events": true,
     "shops": true, "schoolCounter": true
   },
-  "debug": { "showHiddenInfo": false, "logActions": true }
+  "debug": { "showHiddenInfo": false, "logActions": true },
+  "stageCount": 10               // v1.2（D-34）：局长，只能取章末 Boss 关 3 | 6 | 10；缺省 10。开局页不展示，仅 API / RSI 训练使用
 }
 ```
 > `debug.showHiddenInfo` **仅在开发模式可用**，字段必须存在于 `config` 哈希中，但它**不得**影响 `observe()` 的服务端输出（隐藏信息永不通过 API 下发，调试靠后端终端日志）。
@@ -939,6 +940,8 @@ status → target.status[kind] += value          # 中毒/灼烧在 upkeep 结�
 | D-31 | 动作全集新增 `purify` / `rest_choose` / `relic_swap` | GAME-01 §4 |
 | D-32 | 新增编队 `g_12`（空壳，第 3–6 关） | GAME-02 §5.4 |
 | D-33 | 启动方式为 `node server.js`（ADR-2 要求服务端持有会话，与纯静态服务器冲突） | GAME-00 §0 / G-1 |
+| D-34 | （v1.2）开局配置新增可选 `stageCount ∈ {3,6,10}`（只能在章末 Boss 关截断），击败第 `stageCount` 关 Boss 即 `outcome="win"`；缺省 10，原 golden 不变。用途：RSI 训练/评估用短局（Spec §8.6），hard×6 关启发式通关率 45%，每局约 227 步 / 94 个决策点 | GAME-00 §8.2 / GAME-01 §1.2 |
+| D-35 | （v1.2）修复：Boss 在玩家出骰时被击杀而直接结束 Run 的路径漏记 `stats.stagesCleared`，现与节点结算路径一致（胜局恒有 `stagesCleared == stageCount`）；`stagesCleared` 是 Spec INV-7 的主指标之一 | GAME-01 §5 |
 
 > 建议新增 Spec 模块 **MOD-11 `game-web`**（L0 之外的独立层：游戏本体），其 PRD 即本文档。若采纳，Spec §2 模块清单、§6 依赖矩阵、§10 PRD 索引需同步更新。
 
@@ -982,3 +985,4 @@ status → target.status[kind] += value          # 中毒/灼烧在 upkeep 结�
 |---|---|---|
 | v1.0 | 2026-09-30 | 首版 |
 | v1.1 | 2026-09-30 16:39 | 按 `src/game` 实现回写：§0/G-1 启动方式改为 `node server.js`；§4.2 动作全集补充 `targetId` 与 `purify`；§4.3 工具槽可重复使用；§5.3 风险等级阈值修订；§5.5 蓄势/处决规则具体化；§6.2 单系惩罚最小骰数；§7.1 `virtueMax`/`enemyHpMul`/`enemyDmgMul` 平衡标定并附通关率；§17.1 登记实现决策 D-09～D-33 |
+| v1.2 | 2026-09-30 17:21 | 为 RSI 训练（Spec v1.3 §8.6）补充：§8.2 新增可选 `stageCount`（D-34）；修复胜局 `stagesCleared` 漏记（D-35）。内核测试 48/48，golden 未变 |

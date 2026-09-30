@@ -40,5 +40,11 @@ export function validateGameRequest(body, tables) {
     toggles[k] = v === undefined ? true : v;
   }
   const debug = { showHiddenInfo: !!(b.debug && b.debug.showHiddenInfo), logActions: !(b.debug && b.debug.logActions === false) };
-  return { difficulty, character, seed, toggles, debug };
+  let stageCount = null;
+  if (b.stageCount != null) {
+    const allowed = tables.stages.stages.filter((x) => x.boss).map((x) => x.stage);
+    if (!allowed.includes(b.stageCount)) throw new ApiError('E_API_BAD_REQUEST', `stageCount 只能取 ${allowed.join('/')}`);
+    stageCount = b.stageCount;
+  }
+  return { difficulty, character, seed, toggles, debug, stageCount };
 }

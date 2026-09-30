@@ -89,7 +89,7 @@ export function createApi({ tables, sessions }) {
     if (route[0] === 'game' && route[2] === 'action' && method === 'POST') return doAction(route[1], body);
     if (route[0] === 'game' && route[2] === 'reset' && method === 'POST') {
       const s = mustSession(route[1]);
-      const cfg = (body && body.config) || { difficulty: s.config.difficulty, character: s.config.character, toggles: s.config.toggles };
+      const cfg = (body && body.config) || { difficulty: s.config.difficulty, character: s.config.character, toggles: s.config.toggles, stageCount: s.config.stageCount };
       sessions.delete(route[1]);
       return startGame(cfg);
     }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as K from '../../kernel/index.js';
 import { tables } from '../helpers.js';
-import { runGame } from '../../scripts/bots.js';
+import { runGame, chooseAction } from '../../scripts/bots.js';
 
 const ALL_OFF = { mapBranching: false, relics: false, events: false, shops: false, schoolCounter: false };
 const ALL_ON = { mapBranching: true, relics: true, events: true, shops: true, schoolCounter: true };
@@ -98,4 +98,20 @@ test('observe("visual") 返回最小渲染输入，不含数值推导信息', ()
   assert.equal(v.view, 'visual');
   const txt = JSON.stringify(v);
   for (const k of ['deckSchool', 'hpMax', 'counterMul', '"deck"']) assert.ok(!txt.includes(k), k);
+});
+
+test('D-34 局长 stageCount：只允许章末 Boss 关（3/6/10），第 3 关 Boss 击败即 win', () => {
+  assert.deepEqual(K.allowedStageCounts(tables), [3, 6, 10]);
+  assert.throws(() => K.createGame({ difficulty: 'medium', seed: 1, stageCount: 4 }, tables), /stageCount/);
+  const def = K.createGame({ difficulty: 'medium', seed: 1 }, tables);
+  assert.equal(def.config.stageCount, 10, '缺省仍为 10 关，旧 golden 不变');
+  const s = K.createGame({ difficulty: 'easy', seed: 3, stageCount: 3 }, tables);
+  assert.equal(s.map.stages.length, 3);
+  let st = s, n = 0;
+  // 用 bot 逐步推进 3 关局
+  let x = 0; const rnd = () => ((x = (x * 1103515245 + 12345) >>> 0) / 4294967296);
+  while (st.phase !== 'settle' && n < 5000) { st = K.reduce(st, chooseAction(st, tables, 'greedy_counter', rnd), tables).state; n += 1; }
+  assert.equal(st.phase, 'settle');
+  assert.ok(st.stage <= 3);
+  if (st.outcome === 'win') assert.equal(st.stats.stagesCleared, 3);
 });

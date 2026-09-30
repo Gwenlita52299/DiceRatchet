@@ -52,8 +52,14 @@ export function applyDifficulty(base, difficulty, tables) {
     shopPriceMulPermille: lv.shopPriceMulPermille, goldMulPermille: lv.goldMulPermille,
     relicSlots: lv.relicSlots, purifyPerStage: lv.purifyPerStage, eliteStages: lv.eliteStages.slice(),
     bossPhaseHpBonusPermille: lv.bossPhaseHpBonusPermille, reviveOnce: lv.reviveOnce,
-    stageCount: common.stageCount, maxTurnsPerBattle: common.maxTurnsPerBattle
+    stageCount: base.stageCount == null ? common.stageCount : base.stageCount,
+    maxTurnsPerBattle: common.maxTurnsPerBattle
   };
+}
+
+/** 允许的局长（D-34）：只能在章末 Boss 关截断，保证每局以 Boss 战收尾 */
+export function allowedStageCounts(tables) {
+  return tables.stages.stages.filter((s) => s.boss).map((s) => s.stage).sort((a, b) => a - b);
 }
 
 export function validateConfig(config, tables) {
@@ -62,6 +68,7 @@ export function validateConfig(config, tables) {
   if (!Number.isInteger(config.seed) || config.seed < 0 || config.seed >= 4294967296) errors.push('seed');
   if (!tables.characters[config.character]) errors.push('character');
   for (const k of TOGGLE_KEYS) if (typeof config.toggles[k] !== 'boolean') errors.push(`toggles.${k}`);
+  if (!allowedStageCounts(tables).includes(config.stageCount)) errors.push('stageCount');
   return { ok: errors.length === 0, errors };
 }
 
@@ -209,6 +216,7 @@ function finishBattle(ctx) {
   state.player.starShards += gold;
   events.push({ type: 'battle_end', result: 'win', drops: { starShards: gold } });
   if (kind === 'boss' && state.stage >= state.config.stageCount) {
+    state.stats.stagesCleared += 1; // D-35：最终 Boss 胜利也计入通过关数
     state.outcome = 'win';
     state.phase = 'settle';
     state.node = null;
@@ -760,6 +768,7 @@ export function configSchema(tables) {
       { id: 'shops', default: true, label: '商店与锻造', off: '商店/锻造节点改为宝箱', on: '商店买骰/遗物/删骰；锻造改造骰面' },
       { id: 'schoolCounter', default: true, label: '学派克制', off: '克制倍率恒为 ×1.00', on: '锋刃 → 自然 → 秘法 → 锋刃 克制方阵生效' }
     ],
+    stageCounts: allowedStageCounts(tables),
     characters: Object.entries(tables.characters).map(([id, ch]) => ({ id, name: ch.name, desc: ch.desc })),
     enums: {
       schools: SCHOOLS.concat(['neutral']), faceKinds: ['purge', 'ward', 'mend', 'status', 'selfCorruption', 'draw', 'reroll', 'modify', 'gold', 'nothing', 'duplicate_face'],
@@ -767,7 +776,7 @@ export function configSchema(tables) {
       statusKinds: ['poison', 'burn', 'weak', 'strength', 'regen'], actionKinds: ACTION_KINDS.slice(), phases: ['map', 'player_turn', 'enemy_turn', 'shop', 'event', 'treasure', 'shrine', 'forge', 'rest', 'relic_swap', 'settle']
     },
     schools: tables.schools.schools,
-    defaults: { difficulty: 'medium', character: 'warrior', toggles: { mapBranching: true, relics: true, events: true, shops: true, schoolCounter: true } }
+    defaults: { difficulty: 'medium', character: 'warrior', stageCount: tables.stages.stageCount, toggles: { mapBranching: true, relics: true, events: true, shops: true, schoolCounter: true } }
   };
 }
 
