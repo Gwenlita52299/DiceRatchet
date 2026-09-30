@@ -85,6 +85,8 @@ class EvalSpec:   # run_id, generation, harness_version, split, basket, seeds, a
 def assert_split_isolation(split: Split, seeds: Sequence[int]) -> None: ...
 def guard_prompt_context(*, split: Split, seed: int, text: str, destination: Literal["prompt","memory","reflection"]) -> None: ...
 def resolve_basket(basket: BasketId, *, generation: int, protocol: SeedProtocol) -> tuple[int, ...]: ...
+# gamer_rsi/evals/seeds.py —— Spec §4.7 规定的 seed 唯一出口（INV-5）；MOD-06/07 不得自行切分
+def take(split: Split, *, generation: int | None = None, basket: BasketId | None = None) -> list[int]: ...   # train 需 generation，heldout 需 basket
 def run_eval(spec: EvalSpec, *, runner: EpisodeRunner, writer: TraceWriter, protocol: SeedProtocol) -> EvalResult: ...
 def evaluate_arm(harness_dir: Path, *, split: Split, basket: BasketId, memory_version: int, arm: str, run_id: str) -> ArmResult: ...   # Spec §4.7
 def compare_paired(a: ArmResult, b: ArmResult) -> PairedTest: ...                                                            # Spec §4.7
@@ -292,21 +294,21 @@ eval:
 ## 12. 验收标准（DoD，对齐 Spec §9 质量门 G1–G6 与计划 §6 三项验收）
 
 - **G1**：`pytest tests/unit/evals --cov=gamer_rsi.evals --cov-fail-under=80` 通过（MOD-08 属纯函数模块）。**G2**：指标 golden 快照存在（T-13）；改动需显式更新并在 PR 说明。**G3**：同 `(run_id, generation, split, seeds)` 重跑 `report.sha256` 一致（T-09/T-15）。
-- **G4**：`audit leak --run <run_id>` 在 eval run 上 0 告警，蜜罐注入必被抓到（T-16）。**G5**：`report.json` / `metrics/*.json` / `seeds.yaml` 均有 schema + round-trip 测试（T-14）。**G6**：下列命令可直接复制执行成功：
+- **G4**：`audit leak --run-id <run_id>` 在 eval run 上 0 告警，蜜罐注入必被抓到（T-16）。**G5**：`report.json` / `metrics/*.json` / `seeds.yaml` 均有 schema + round-trip 测试（T-14）。**G6**：下列命令可直接复制执行成功：
 
 ```bash
 python -m gamer_rsi baseline --kind random|heuristic|fixed_prompt --split heldout --basket H1
-python -m gamer_rsi eval report --split heldout --baseline all --run <run_id>
-python -m gamer_rsi eval diversity --run <run_id> --generation 3
-python -m gamer_rsi eval ablation --run <run_id> --generation 3 --arms no_reflection,no_self_edit
-python -m gamer_rsi eval test --run <run_id> --unlock-once --attestation runs/<run_id>/generations/gen-003/test_attestation.json
+python -m gamer_rsi eval report --split heldout --baseline all --run-id <run_id>
+python -m gamer_rsi eval diversity --run-id <run_id> --generation 3
+python -m gamer_rsi eval ablation --run-id <run_id> --generation 3 --arms no_reflection,no_self_edit
+python -m gamer_rsi eval test --run-id <run_id> --unlock-once --attestation runs/<run_id>/generations/gen-003/test_attestation.json
 ```
 
 **决策（本 PRD 提出，待回填 Spec）**：新增 `--basket` 选项、`eval ablation`、`eval test` 参数/子命令（Spec §4.6 未列）。
 
 | 计划 §6 验收 | 判定指标 | 判定命令 | 通过条件 |
 |---|---|---|---|
-| 1. 闭环自动运行 ≥3 轮演化且 held-out 单调不降 | `generations.csv.heldout_win_rate` + `ci_lo/ci_hi` | `eval report --split heldout --run <run_id>` | g=1..3 均满足 `ci_lo(g) >= win_rate(g-1) - 0.02` 或 `P(gap>0) >= 0.90`；`monotonic_ok=true` |
+| 1. 闭环自动运行 ≥3 轮演化且 held-out 单调不降 | `generations.csv.heldout_win_rate` + `ci_lo/ci_hi` | `eval report --split heldout --run-id <run_id>` | g=1..3 均满足 `ci_lo(g) >= win_rate(g-1) - 0.02` 或 `P(gap>0) >= 0.90`；`monotonic_ok=true` |
 | 2. ≥1 个指标相对基线有可归因提升（含消融） | `ablation.delta_full` + `attribution` + 基线对照 | `eval ablation …` + `eval report --baseline all` | H2 上至少一臂显著劣于 full（Holm–Bonferroni α=0.025），或相对最好基线的 Wilson CI 不重叠；`attribution != "none"` |
 | 3. 增益真实性通过（gap < 阈值、无坍缩） | `gain_realism.verdict`、`diversity.collapse_flag`、test 复核 | `eval report` + `eval test --unlock-once` | `verdict ∈ {real_gain, null}` 且 `collapse_flag=false`；test 上 `win_rate` 的 Wilson CI 下界 > 最好基线点估计，且与 heldout 点估计差 ≤0.20 |
 

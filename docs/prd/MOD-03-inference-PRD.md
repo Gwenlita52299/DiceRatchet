@@ -1,6 +1,6 @@
 # MOD-03 inference 技术 PRD
 
-> 版本：v1.0 · 状态：草案（待复核）· 所属里程碑：M1
+> 版本：v1.1（2026-09-30 17:21 按 Spec v1.3 修订，见 §17）· 状态：草案（待复核）· 所属里程碑：M1
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（**唯一事实来源**；冲突以 Spec 为准）
 > 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md) §4 技术栈（Mac M5 24GB / MLX 或 llama.cpp / Qwen3-8B → 27B Q4）、§8 风险（LLM 输出非 JSON）
 > 作者：GameRSI 技术文档（MOD-03 负责模块）· 依赖：MOD-09 infra（配置、日志、run_id、CLI）
@@ -17,7 +17,7 @@ MOD-03 是 L1 层唯一的"模型出口"：把 `Mac M5 24GB + 全程离线` 的�
 - `gamer_rsi/inference/backend.py`：`Backend` Protocol、`Message`/`Usage`/`GenerationResult`/`BackendHealth`/`ModelSpec`、`MockBackend`、`BackendManager`。
 - `gamer_rsi/inference/mlx_backend.py`：`MLXBackend`（`mlx-lm` 进程内；LoRA 挂载点预留给 MOD-10）。
 - `gamer_rsi/inference/llama_backend.py`：`LlamaCppBackend`（`llama-cpp-python` 进程内）与 `LlamaServerBackend`（`llama-server` 子进程 + HTTP + GBNF）。
-- `gamer_rsi/inference/schema.py`：JSON Schema 子集 → GBNF 编译器、`validate()`、修复 prompt 渲染、`ACTION_SCHEMA`。
+- `gamer_rsi/inference/schema.py`：JSON Schema 子集 → GBNF 编译器、`validate()`、修复 prompt 渲染；加载 `schemas/decision.schema.json`（Spec v1.3 §4.3 的唯一决策 schema，本模块与 MOD-04 共用，不再各自维护）。
 - `configs/models.yaml` 模型注册表；采样参数管控、超时/取消、重试退避、token/延迟埋点、`E_LLM_*` 错误码与降级信号。
 
 ### 2.2 范围外（非目标）
@@ -32,10 +32,10 @@ MOD-03 是 L1 层唯一的"模型出口"：把 `Mac M5 24GB + 全程离线` 的�
 
 | 使用方 | 场景 | 调用形态 |
 |---|---|---|
-| MOD-04 policy | 每回合决策：`obs` 组装的 prompt → 一个符合 `ACTION_SCHEMA` 的 JSON | `generate_json(messages, ACTION_SCHEMA)`，期望 p95 < 3 s |
+| MOD-04 policy | 每个决策点：`obs` 组装的 prompt → 一个符合 `DECISION_SCHEMA` 的 JSON（含 1..12 个动作的计划） | `generate_json(messages, DECISION_SCHEMA)`，期望 p95 < 4 s（Spec §8.6 成本模型取 p50≈3 s） |
 | MOD-04 policy / MOD-07 evolve | 反思、记忆、候选改进生成（自由文本） | `generate(messages)` |
 | MOD-06 loop | 一个 run 内模型常驻，跨局/跨代复用 | `BackendManager.get(model_id)` |
-| MOD-08 evals | held-out 并发评估（4 局并行）、三基线归档、格式鲁棒性报告 | `asyncio.gather` 共享 manager，信号量限流 |
+| MOD-08 evals | held-out 局级并发评估（默认 2 局，共享推理队列，P-10）、三基线归档、格式鲁棒性报告 | `asyncio.gather` 共享 manager，信号量限流 |
 | MOD-09 infra | 采集埋点、写 `metrics/llm_calls.jsonl`、算 `config_hash` | 消费 `InferenceCallRecord` |
 
 关键约束：L1 及以上**禁止 import `gamer_rsi.env.*`**（INV-1），由 MOD-09 `guards.py` AST 扫描纳入 CI 门禁（FR-03-11）。
@@ -49,8 +49,8 @@ MOD-03 是 L1 层唯一的"模型出口"：把 `Mac M5 24GB + 全程离线` 的�
 | FR-03-03 | `generate()` 支持 `max_tokens`/`stop`/`seed`/`temperature`/`top_p`/`top_k`/`repetition_penalty`/`timeout_ms`；`Usage` 必须含 `prompt_tokens`/`completion_tokens`/`latency_ms`/`ttft_ms`。 |
 | FR-03-04 | `generate_json()` 三级策略按序执行：① 约束解码（后端 GBNF 或 JSON mode）→ ② `jsonschema.validate` → ③ 带校验错误的修复重试。任一级成功即返回，`attempts` 记录真实尝试次数（1..`max_attempts`）。 |
 | FR-03-05 | 重试上限 `max_attempts` 默认 3（首答 + 2 修复）；退避 = `retry_backoff_ms × 2^(attempt-1)`（默认 200/400 ms）；全程受 `total_timeout_ms`（默认 8000）约束，超时抛 `E_LLM_TIMEOUT` 且**不留半截结果**。 |
-| FR-03-06 | 每次尝试产出一条 `InferenceCallRecord`（§13），由 MOD-09 写 `runs/<run_id>/metrics/llm_calls.jsonl`，并内嵌进 `episodes/<seed>.jsonl` 步记录（对齐 Spec §4.5）。 |
-| FR-03-07 | 采样白名单：`temperature ∈ [0,1.5]`、`top_p ∈ (0,1]`、`top_k ∈ [0,200]`、`repetition_penalty ∈ [1.0,1.5]`；越界抛 `E_LLM_BACKEND_ERROR`（不静默裁剪）。`mode="eval"` 额外要求 `temperature ≤ eval_temperature_max` 且 `seed is not None`。 |
+| FR-03-06 | 每次尝试产出一条 `InferenceCallRecord`（§13），由 MOD-09 写 `runs/<run_id>/metrics/llm_calls.jsonl`，并内嵌进 `episodes/<split>/<episode_key>.jsonl` 步记录（对齐 Spec §4.5）。 |
+| FR-03-07 | 采样白名单：`temperature ∈ [0,1.5]`、`top_p ∈ (0,1]`、`top_k ∈ [0,200]`、`repetition_penalty ∈ [1.0,1.5]`；越界抛 `E_LLM_BACKEND_ERROR`（不静默裁剪）。`mode="eval"` 额外要求 `temperature == 0.0` 且 `seed is not None`（Spec v1.3 §8.1 B-14：评估温度统一为 0，harness 不可覆盖；v1.0 的「≤0.3」上限与 MOD-04 的 0.7 冲突，已废弃）。 |
 | FR-03-08 | 并发限流与预算前置：`BackendManager` 持 `asyncio.Semaphore(max_inflight)`（默认 MLX=1、server=4）；acquire **之前**做内存预算检查，预计超预算抛 `E_LLM_OOM` 且**不提交**推理请求。 |
 | FR-03-09 | 失败一律以 `E_LLM_*` 异常暴露，`GenerationResult.outcome_kind ∈ {"action","degraded","error"}`；本模块不自行 fallback，由上层决定。 |
 | FR-03-10 | 上下文守卫：`prompt_tokens + max_tokens > context_length` 时，`context_overflow_policy="reject"`（默认）抛 `E_LLM_CONTEXT_OVERFLOW`；`"truncate"` 则从最早的非 system 消息截断并记 `truncated=true`。 |
@@ -131,7 +131,7 @@ class Backend(Protocol):
     async def health(self) -> BackendHealth:
         """无副作用探针（不触发推理）。"""
 
-class BackendManager(BuildManagerFacade):  # 单例门面
+class BackendManager:  # 单例门面（v1.0 误写的父类 BuildManagerFacade 已删除）
     def __init__(self, registry_path: str = "configs/models.yaml", *,
                  mode: Literal["train", "eval"] = "train", ram_budget_gb: float = 20.0,
                  infra: "InfraFacade | None" = None) -> None
@@ -146,29 +146,32 @@ class BackendManager(BuildManagerFacade):  # 单例门面
     async def health(self) -> dict[str, BackendHealth]
 ```
 
-`ACTION_SCHEMA`（`gamer_rsi/inference/schema.py`，形状对齐 Spec §4.3；`allOf` 即 `kind → 必填字段` 的 if/then 规则）：
+`DECISION_SCHEMA`（唯一文件 `schemas/decision.schema.json`，Spec v1.3 §4.3；**扁平、无条件关键字，所以 GBNF 可以直接编译**。kind 与字段名逐字取自 GAME-01 §4 分派表，kind 对应的必填字段由 MOD-04 的语义层校验）：
 
 ```python
-ACTION_SCHEMA: dict[str, Any] = {
+DECISION_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "type": "object", "additionalProperties": False, "required": ["reasoning", "action"],
+    "type": "object", "additionalProperties": False, "required": ["reasoning", "plan"],
     "properties": {
-        "reasoning": {"type": "string", "maxLength": 400},
-        "action": {"type": "object", "additionalProperties": False, "required": ["kind"],
+        "reasoning": {"type": "string", "maxLength": 200},
+        "plan": {"type": "array", "minItems": 1, "maxItems": 12, "items": {
+            "type": "object", "additionalProperties": False, "required": ["kind"],
             "properties": {
-                "kind": {"enum": ["place_die", "end_turn", "use_ability", "shop_buy", "shop_leave", "levelup_choose"]},
-                "die_index": {"type": "integer", "minimum": 0, "maximum": 6},
-                "slot_id": {"type": "string", "maxLength": 64}, "ability_id": {"type": "string", "maxLength": 64},
-                "item_id": {"type": "string", "maxLength": 64}, "option_id": {"type": "string", "maxLength": 64}},
-            # kind→必填：place_die:die_index+slot_id / use_ability:ability_id / shop_buy:item_id / levelup_choose:option_id
-            "allOf": [
-                {"if": {"properties": {"kind": {"const": "place_die"}}, "required": ["kind"]}, "then": {"required": ["die_index", "slot_id"]}},
-                {"if": {"properties": {"kind": {"const": "use_ability"}}, "required": ["kind"]}, "then": {"required": ["ability_id"]}},
-                {"if": {"properties": {"kind": {"const": "shop_buy"}}, "required": ["kind"]}, "then": {"required": ["item_id"]}},
-                {"if": {"properties": {"kind": {"const": "levelup_choose"}}, "required": ["kind"]}, "then": {"required": ["option_id"]}}]}}}
+                "kind": {"enum": ["play_face", "discard_die", "purify", "use_ability", "end_turn", "map_choose",
+                                  "shop_buy", "shop_refresh", "shop_remove", "shop_leave", "event_choose",
+                                  "treasure_pick", "forge_pick", "shrine_choose", "rest_choose", "relic_swap"]},
+                "dieId": {"type": "string", "maxLength": 16}, "slotId": {"type": "string", "maxLength": 16},
+                "faceIndex": {"type": "integer", "minimum": 0, "maximum": 11},
+                "targetId": {"type": "string", "maxLength": 16}, "abilityId": {"type": "string", "maxLength": 32},
+                "value": {"type": "integer", "minimum": 0, "maximum": 99},
+                "nodeId": {"type": "string", "maxLength": 16}, "itemId": {"type": "string", "maxLength": 32},
+                "optionId": {"type": "string", "maxLength": 32}, "defId": {"type": "string", "maxLength": 48},
+                "candidateId": {"type": "string", "maxLength": 32}, "relicId": {"type": "string", "maxLength": 48}}}}}}
 ```
 
-**GBNF 支持子集（`compile_grammar()`）**：`type ∈ {object,string,integer,number,boolean,array}`、`enum`、`required`、`additionalProperties:false`、`maxLength`、`minimum`/`maximum`。遇 `allOf`/`if`/`$ref`/`oneOf` 返回 `None`（= 无 grammar 可用，**不是错误**），自动降级 JSON mode + 运行时 `jsonschema` 校验。**决策（本 PRD 提出，待回填 Spec）**：Spec 未定义 Schema 子集边界与 `allOf` 处理方式，此处定为"编译失败即降级 JSON mode"，禁止静默忽略关键字。
+`plan` 的长度（`player_turn` 为 1..12，其余 phase 为 1）由 MOD-04 按当前 phase 在语义层校验，不写进 schema，以保持 schema 与 phase 无关、可缓存编译。
+
+**GBNF 支持子集（`compile_grammar()`）**：`type ∈ {object,string,integer,number,boolean,array}`、`enum`、`required`、`additionalProperties:false`、`maxLength`、`minimum`/`maximum`。另支持 `minItems/maxItems`。遇 `allOf`/`if`/`$ref`/`oneOf` 返回 `None`（= 无 grammar 可用，**不是错误**），自动降级 JSON mode + 运行时 `jsonschema` 校验；禁止静默忽略关键字（Spec P-09 结案）。`DECISION_SCHEMA` 必须能编译出 grammar，由单测保证。
 
 **两个后端实现的差异（显式声明，不隐藏）**
 
@@ -181,7 +184,7 @@ ACTION_SCHEMA: dict[str, Any] = {
 | 典型失败 | Metal OOM → 包装 `E_LLM_OOM` | server 未就绪/端口占用 → `E_LLM_LOAD_FAILED`；5xx → `E_LLM_BACKEND_ERROR` |
 | 选型 | 阶段一默认（Apple Silicon 更快、迭代快） | 阶段二默认（30B MoE GGUF 生态成熟 + GBNF 稳定），需真并发时用 server 模式 |
 
-两者对上层完全等价：同一份 `ACTION_SCHEMA`、同一套 `GenerationResult`、同一组 `E_LLM_*`；差异只由注册表 `supports_grammar` / `max_inflight` 驱动降级路径。
+两者对上层完全等价：同一份 `DECISION_SCHEMA`、同一套 `GenerationResult`、同一组 `E_LLM_*`；差异只由注册表 `supports_grammar` / `max_inflight` 驱动降级路径。
 
 ## 7. 数据模型与存储
 
@@ -212,7 +215,7 @@ models:
 
 **内存预算公式**：`required_gb = resident_gb_est + kv_gb_per_1k_tokens × (context_length/1000) × max_inflight + 1.0`（1.0 = 临时缓冲）。`required_gb > ram_budget_gb` → 在 acquire 前拒绝并抛 `E_LLM_OOM`。代入 30B：`32768/4` → `18.8 + 0.05×32×4 + 1.0 = 26.2 > 20.0`（拒绝）；`16384/2` → `21.4`（拒绝）；`8192/1` → `20.2`（临界，需实测调 `kv_cache_bits=4` 或修正 `resident_gb_est`）。**决策（本 PRD 提出，待回填 Spec）**：30B-A3B 在 24GB 机器上默认 `context_length=8192, max_inflight=1`；"评估要并发跑多局"通过**局级并发（4 个 episode 共享一个串行推理队列）**实现，而非模型级批处理——与 Spec §8.6 成本可控一致，并避免 OOM 抖动。
 
-**存储落点（均由 MOD-09 写，本模块只产出对象）**：`runs/<run_id>/metrics/llm_calls.jsonl`（每次尝试一行，§13）；`runs/<run_id>/episodes/<seed>.jsonl` 步内嵌 `llm_latency_ms`/`prompt_tokens`/`completion_tokens`/`llm_raw`（Spec §4.5）；配置来源 `configs/models.yaml` + `harness/config.json#inference`，二者均被 `config_hash` 覆盖。无独立数据库。
+**存储落点（均由 MOD-09 写，本模块只产出对象）**：`runs/<run_id>/metrics/llm_calls.jsonl`（每次尝试一行，§13）；`runs/<run_id>/episodes/<split>/<episode_key>.jsonl` 步内嵌 `llm_latency_ms`/`prompt_tokens`/`completion_tokens`/`llm_raw`（Spec §4.5）；配置来源 `configs/models.yaml` + `harness/config.json#inference`，二者均被 `config_hash` 覆盖。无独立数据库。
 
 ## 8. 关键流程
 
@@ -250,7 +253,7 @@ async def _attempt_loop(spec, messages, schema, grammar, sampling, deadline) -> 
 
 **修复 prompt（`schema.py::repair_messages`，只纠错、零领域知识）**：在 MOD-04 传入的 `messages` 之后追加一轮对话。system："你是 JSON 修复器。只输出一个符合给定 JSON Schema 的 JSON 对象，不要解释，不要 markdown 代码块。"；user："你的上一次输出无法通过校验。--- 原始输出 --- {bad_output} --- 校验错误 --- {jsonschema message} @ {json_path} --- 目标 Schema --- {schema_json} 请输出修正后的 JSON。"。**决策（本 PRD 提出，待回填 Spec）**：Spec §4.3 规定了三级校验与 `R=2`，未规定修复 prompt 的存在与全文；此处定义该模板并由 `schema.py` 独占拥有，MOD-04 不得覆盖本模板。
 
-**时序**：MOD-04 → `generate_json(messages, ACTION_SCHEMA)` → 校验采样参数（越界 `E_LLM_BACKEND_ERROR`）→ 内存预算检查（超则 `E_LLM_OOM`，零提交）→ `acquire(semaphore)` → attempt 1..3：`generate(grammar, json_mode)` → `json.loads` → `jsonschema.validate`；失败则 `sleep(200/400)` + `repair_messages` 再试 → 成功返回 `GenerationResult(parsed, usage, attempts, retry_reasons)` → MOD-04 做语义校验（`legal_actions()`）后 `step`。
+**时序**：MOD-04 → `generate_json(messages, DECISION_SCHEMA)` → 校验采样参数（越界 `E_LLM_BACKEND_ERROR`）→ 内存预算检查（超则 `E_LLM_OOM`，零提交）→ `acquire(semaphore)` → attempt 1..3：`generate(grammar, json_mode)` → `json.loads` → `jsonschema.validate`；失败则 `sleep(200/400)` + `repair_messages` 再试 → 成功返回 `GenerationResult(parsed, usage, attempts, retry_reasons)` → MOD-04 做语义校验（`legal_actions()`）后 `step`。
 
 ## 9. 配置项
 
@@ -264,7 +267,7 @@ async def _attempt_loop(spec, messages, schema, grammar, sampling, deadline) -> 
 | `max_attempts` / `retry_backoff_ms` / `total_timeout_ms` | int | `3` / `200` / `8000` | 尝试次数（含首答）/ 退避基数（指数倍增）/ 全程墙钟预算 |
 | `generate_timeout_ms` / `max_tokens` / `reasoning_max_tokens` | int | `30000` / `256` / `160` | 单次 `generate` 超时 / 决策 tok 上限（Spec §8.6）/ 分两次生成时 `reasoning` 预算 |
 | `context_overflow_policy` | enum | `reject` | `reject` → `E_LLM_CONTEXT_OVERFLOW`；`truncate` → 截断最早的 user 消息 |
-| `eval_temperature_max` / `train_temperature_min` | float | `0.3` / `0.7` | 评估温度上限（INV-6）/ 训练温度下限（计划 §3.3） |
+| `eval_temperature` / `train_temperature_min` | float | `0.0`（固定）/ `0.7` | 评估温度（B-14，不可配置为其他值）/ 训练温度下限（计划 §3.3） |
 | `seed` | int\|null | `null` | 采样 seed；评估模式必须非空（由 MOD-09 seed 注册表传入） |
 | `cache_prompt` | bool | `true` | 复用前缀 KV（system + few-shot 不变时显著降延迟） |
 | `kv_cache_bits` / `max_inflight` | int | 注册表值 | 覆盖注册表；`kv_cache_bits=4` 可救 30B 预算（Q-4）；评估模式强制 `max_inflight=1` |
@@ -286,7 +289,7 @@ class InferenceError(RuntimeError):
 | `E_LLM_LOAD_FAILED` | 权重加载异常、server 起不来、端口占用 | True（退避后换 `fallback_backend` 重试 1 次） | 仍失败 → fallback heuristic，标注"模型不可用"（Spec §8.5） |
 | `E_LLM_OOM` | Metal/系统 OOM；或预算检查前置拒绝 | True（降 `max_inflight`/`kv_cache_bits` 后重试 1 次） | 仍失败 → fallback heuristic，run 级 `degraded_runs += 1` |
 | `E_LLM_TIMEOUT` | 超 `total_timeout_ms` 或 `generate_timeout_ms` | True（最多 1 次） | 仍失败 → fallback heuristic；**该局不计入评估样本**（Spec §8.5） |
-| `E_LLM_SCHEMA_INVALID` | 三次尝试后仍不满足 schema | False | 返回 `outcome_kind="error"`；MOD-04 决定是否改走 heuristic 动作 |
+| `E_LLM_SCHEMA_INVALID` | 三次尝试后仍不满足 schema | False | 返回 `outcome_kind="error"`；MOD-04 把它计为该决策的**一次失败尝试**（Spec §4.3 L0 层：修复过程本身不计非法） |
 | `E_LLM_CONTEXT_OVERFLOW` | `prompt_tokens + max_tokens > context_length` 且策略 `reject` | False | MOD-04 缩短上下文后重试（上下文裁剪策略归 MOD-04） |
 | `E_LLM_BACKEND_ERROR` | 采样参数越界、server 5xx、grammar 编译失败且后端无 JSON mode | 参数类 False / 后端类 True（1 次） | 参数类直接上报；后端类重试后仍失败 → fallback heuristic |
 
@@ -297,9 +300,9 @@ class InferenceError(RuntimeError):
 | 层（`tests/unit/inference/`、`tests/integration/`） | 用例（给定-当-则） |
 |---|---|
 | 单测 `test_backend_protocol.py` | 给定任一后端实现，当跑同一套一致性套件（`load → health → generate → unload`），则 5 个方法 + `name`/`model_id` 齐备且 `isinstance(x, Backend)` 为真（`@runtime_checkable`，NFR-03-07）。 |
-| 单测 `test_schema_compile.py` | 给定 `ACTION_SCHEMA`，当 `compile_grammar()`，则输出能被 `llama_cpp.LlamaGrammar` 解析的合法 GBNF；给定含 `allOf` 的 schema，则返回 `None` 而不抛错。 |
+| 单测 `test_schema_compile.py` | 给定 `DECISION_SCHEMA`，当 `compile_grammar()`，则输出能被 `llama_cpp.LlamaGrammar` 解析的合法 GBNF（不得返回 None）；给定含 `allOf` 的 schema，则返回 `None` 而不抛错。 |
 | 单测 `test_validate_roundtrip.py` | 给定 12 正例 / 9 反例，当 `jsonschema.validate`，则正例全过、反例全失败且 `json_path` 指向 `$.action.kind` 等预期路径（G5）。 |
-| 单测 `test_sampling_guard.py` | 给定 `mode="eval", temperature=0.9`，当 `generate_json`，则抛 `E_LLM_BACKEND_ERROR`，且**零埋点**、`MockBackend.generate` 调用数为 0。 |
+| 单测 `test_sampling_guard.py` | 给定 `mode="eval", temperature=0.3`（或 0.9），当 `generate_json`，则抛 `E_LLM_BACKEND_ERROR`，且**零埋点**、`MockBackend.generate` 调用数为 0。 |
 | 单测 `test_memory_budget.py` | 给定 `qwen3-30b-a3b-q4, context_length=32768, max_inflight=4`，当 `estimate_required_gb`，则 > 20.0，且 `generate_json` 抛 `E_LLM_OOM` 而零提交。 |
 | 单测 `test_retry_backoff.py` | 给定 `MockBackend` 前两次坏 JSON、第三次合法，当 `generate_json`，则 `attempts==3`、`len(retry_reasons)==2`、假时钟观测退避 `[200, 400] ms`。 |
 | 单测 `test_timeout.py` | 给定 `total_timeout_ms=1000`、每次 `sleep(800ms)`，当 `generate_json`，则抛 `E_LLM_TIMEOUT` 且 `raw_texts` 不含半截输出。 |
@@ -307,7 +310,7 @@ class InferenceError(RuntimeError):
 | 集成 `test_inference_robustness.py` | 给定 200 条真实固定 prompt（MOD-04 决策模板快照），当对 `qwen3-8b-q4` 跑 `generate_json`，则首答通过率 ≥ 90%、三级全失败率 ≤ 1%，产出 `runs/<run_id>/metrics/format_robustness.json`（M1 交付物）。 |
 | 集成 `test_determinism.py` | 给定 `mode="eval", temperature=0, seed=1042`，当同 prompt 连跑 3 次，则 `text` 逐字节相同且 `prompt_digest` 相同；换 seed 后允许不同（G3/INV-6）。 |
 | 集成 `test_concurrency.py` | 给定 `max_inflight=1` 与 4 个并发 `generate_json`，当 `asyncio.gather`，则观测最大 `inflight==1`、全部成功、总墙钟 ≈ 4 × 单次延迟（验证局级并发的排队语义）。 |
-| 集成 `test_backend_swap.py` | 给定同 prompt 分别打到 `MLXBackend` 与 `LlamaCppBackend`，当比较 `parsed`，则两者都通过 `ACTION_SCHEMA`（**不**断言文本相同，见 NFR-03-01 L2）。 |
+| 集成 `test_backend_swap.py` | 给定同 prompt 分别打到 `MLXBackend` 与 `LlamaCppBackend`，当比较 `parsed`，则两者都通过 `DECISION_SCHEMA`（**不**断言文本相同，见 NFR-03-01 L2）。 |
 | 集成 `test_unload_releases.py` | 给定已加载模型，当 `unload()`，则 `health().state=="unloaded"` 且 `resident_gb < 1.0`（macOS 用 `psutil` 断言）。 |
 
 **`MockBackend`（测试基石，零依赖）**：`MockBackend(script: list[str | Exception], *, delay_ms: int = 0, name: BackendName = "mock", model_id: str = "mock-1")` —— 按脚本逐次返回预设输出，支持注入延迟 / 异常 / OOM，供全部单测使用。
@@ -317,10 +320,10 @@ class InferenceError(RuntimeError):
 | 门 | MOD-03 具体要求 | 证据 |
 |---|---|---|
 | G1 单测 | §11 单测全绿；`gamer_rsi/inference` 行覆盖率 ≥ 80%（`schema.py` ≥ 90%）；后端一致性套件 100% 通过 | `pytest tests/unit/inference -q --cov=gamer_rsi.inference` |
-| G2 Golden | `ACTION_SCHEMA`、其 GBNF 产物、修复 prompt 快照入 `tests/golden/inference/`（`action_schema.json` / `.gbnf` / `repair_prompt.txt`），变更必须显式更新并在 PR 说明 | golden diff 为空 |
+| G2 Golden | `DECISION_SCHEMA`、其 GBNF 产物、修复 prompt 快照入 `tests/golden/inference/`（`decision_schema.json` / `.gbnf` / `repair_prompt.txt`），变更必须显式更新并在 PR 说明 | golden diff 为空 |
 | G3 确定性 | `test_determinism.py` 通过；评估模式 3 次重跑 `llm_raw` 逐字节一致 | CI 日志 |
-| G4 泄漏审计 | 输出只含模型文本与埋点，不含 `seed`/`full_state`/未公开信息；`audit leak` 在本模块自测 run 上 0 告警 | `python -m gamer_rsi audit leak --run <run_id>` |
-| G5 Schema 校验 | `ACTION_SCHEMA`、`InferenceCallRecord`、`models.yaml` 三者均有 schema 定义 + round-trip 测试 | `test_validate_roundtrip.py`、`test_registry_schema.py` |
+| G4 泄漏审计 | 输出只含模型文本与埋点，不含 `seed`/`full_state`/未公开信息；`audit leak` 在本模块自测 run 上 0 告警 | `python -m gamer_rsi audit leak --run-id <run_id>` |
+| G5 Schema 校验 | `DECISION_SCHEMA`、`InferenceCallRecord`、`models.yaml` 三者均有 schema 定义 + round-trip 测试 | `test_validate_roundtrip.py`、`test_registry_schema.py` |
 | G6 可复现命令 | 可复制执行成功：`python -m gamer_rsi inference probe --model qwen3-8b-q4`；`... inference bench --model qwen3-8b-q4 --n 50`；`... inference robustness --model qwen3-8b-q4 --n 200` | 退出码 0 + 报告落盘 |
 | M1 对齐 | 8B agent 与 MOD-04 联调跑通；**JSON 格式鲁棒性报告**入档（Spec §7 M1）；random / heuristic / fixed-prompt 三基线不被本模块阻塞 | `runs/<run_id>/metrics/format_robustness.json` |
 
@@ -393,3 +396,10 @@ class InferenceError(RuntimeError):
 | Q-4 | `kv_cache_bits=4` 对 JSON 格式鲁棒性的实测影响未知 | 内存换质量的应急开关 | 默认 8；开启后必须重跑 `format_robustness` 做前后对比 |
 | Q-5 | 是否允许本模块"多候选并行采样 + 自选最优"（`n>1`）？ | 与 MOD-04 `rank_actions()` 职责重叠 | **不允许**。MOD-03 只做单次采样；候选排序归 MOD-04 的 harness 工具函数（Spec §4.4） |
 | Q-6 | 每次加载都校验 `weights_sha256` 是否太慢？ | 启动时间 | 默认开启（离线安全）；提供 `GAMERSI_INFERENCE_SKIP_HASH=1` 逃生开关，CI 保持开启 |
+
+## 17. 变更记录
+
+| 版本 | 时间 | 变更 |
+|---|---|---|
+| v1.0 | 2026-09-30 | 首版 |
+| v1.1 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：评估温度固定为 0.0（P0-4）；`ACTION_SCHEMA` 改为扁平的 `DECISION_SCHEMA`（动作计划，GBNF 可编译，与 MOD-04 共用同一文件，P1-19）；L0 修复失败计为一次尝试（P0-5）；评估并发默认 2 局、共享推理队列；删除误写的父类 `BuildManagerFacade` |

@@ -85,7 +85,7 @@ MOD-09 是 Spec §6 依赖矩阵中**唯一不被任何人阻塞、却阻塞所�
   - run 一律用 `--run-id ID` 指定，续跑用 `--resume` 开关。本模块只负责解析与转发到各模块的 `register(subparser)`；**新增命令必须同步更新 Spec §4.6**。
 - **FR-09-11 退出码**：`0` 成功（含 HITL 挂起）；`1` 领域失败（如验收不达标）；`2` 配置/环境错误；`3` 模型不可用；`4` 沙箱/守卫违例；`5` IO 落盘失败；`130` 用户 Ctrl-C（与 Spec v1.3 §8.3 一致）。约定写入 `gamer_rsi/infra/exit_codes.py` 并被所有命令复用。
 - **FR-09-12 dry-run 与 resume**：`--dry-run` 对所有命令生效——不调用模型、不写 `runs/`、只打印将执行的动作与配置摘要（stdout 为可解析 JSON）；`--run-id ID --resume` 由 MOD-06 实现语义，本模块负责定位目录、校验 `config_hash` 一致（`config_hash` 不含 harness，所以演化过的 run 也能续跑）、并在 `state.json` 缺失时报 `E_IO_STATE_MISSING`。
-- **FR-09-13 绘图**：`plot_generations(csv_path, out_dir)` 输出 `win_rate.png`、`hp_left.png`、`kills.png`、`entropy.png`、`train_heldout_gap.png`，每图含 `n`、`ci95` 误差棒与数据点标注；无 matplotlib 时降级为 `E_IO_PLOT_UNAVAILABLE` 警告而不失败。
+- **FR-09-13 绘图**：`plot_generations(csv_path, out_dir)` 输出 `win_rate.png`、`stages_cleared.png`、`hearts_left.png`、`entropy.png`、`train_heldout_gap.png`（INV-7 口径，Spec v1.3），每图含 `n`、`ci95` 误差棒与数据点标注；无 matplotlib 时降级为 `E_IO_PLOT_UNAVAILABLE` 警告而不失败。
 - **FR-09-14 git 封装**：`worktree_clean_check()` 在有未提交改动时抛 `E_IO_GIT_DIRTY`（演化前门禁）；`commit_harness(version, message)` 提交 `harness/` 并返回 commit sha，提交信息格式 `harness(v{N}): {message}`；`tag_version(N)` 打 `harness-v{N}` 轻量 tag（已存在则跳过；不建同名分支，避免 `refname is ambiguous`）；`rollback_to(N)` 以 `git checkout harness-v{N} -- harness/` 恢复工件目录并返回新 commit sha。
 - **FR-09-15 确定性守卫（AST，非正则）**：`scan_determinism()` 报出 `E_IO_GUARD_RANDOM`（`import random` / `numpy.random.*` 未显式 seed / `time.time()` 参与采样 / `uuid4()` 用于标识 id）、`scan_layer_imports()` 报出 `E_IO_GUARD_LAYER`（`gamer_rsi/agent|memory|loop|evolve|evals/*` 中出现 `import gamer_rsi.env`，违反 INV-1）。白名单注释 `# guard: allow <CODE> reason=...` 可豁免，但会记 `guard_finding` 事件留痕。
 - **FR-09-16 错误码注册表**：`gamer_rsi/infra/errors.py` 集中定义全部 `E_*` 枚举 + 含义表 + 默认退出码映射；禁止其他模块自定义字符串错误码。
@@ -97,7 +97,7 @@ MOD-09 是 Spec §6 依赖矩阵中**唯一不被任何人阻塞、却阻塞所�
 
 - **NFR-09-1 崩溃安全**：`SIGKILL` 后已落盘行 100% 可解析；末行截断可检测（`E_IO_TRAILING_TRUNCATED`）。
 - **NFR-09-2 性能**：单次 `write()` p99 < 1 ms（本地 SSD，不含 fsync）；`load_config()` < 50 ms；不得成为单步决策的瓶颈（单步预算见 MOD-04）。
-- **NFR-09-3 确定性**：`config_hash`、`run_id` 中除时间戳外全部稳定；`derive_seed` 对同一输入返回同一 64-bit 整数，且与进程、平台、`PYTHONHASHSEED` 无关（内部用 `hashlib.blake2b` 而非 `hash()`）。
+- **NFR-09-3 确定性**：`config_hash`、`run_id` 中除时间戳外全部稳定；`derive_seed` 对同一输入返回同一 64-bit 整数，且与进程、平台、`PYTHONHASHSEED` 无关（内部用 `hashlib.blake2b` 而非 `hash()`）。**作用域**：只用于 agent 侧随机（采样 seed、bootstrap、候选 id）；环境侧的流派生由 MOD-01 按 GAME-01 §3 的 xmur3 + SplitMix64 实现，两者互不替代。
 - **NFR-09-4 可观测**：任何失败必须带错误码 + 人类可读信息 + 复现命令三要素。
 - **NFR-09-5 依赖方向单向**：`infra` 不 import 任何其他 `gamer_rsi` 子包（除 `errors` 自身）；`guards` 对此做静态检查。
 
@@ -276,7 +276,7 @@ runs/<run_id>/
   metrics/plots_data/*.json        # MOD-08 产出，本模块绘图输入
   prompts/                         # MOD-04 决策 prompt 快照（供审计复现）
   memory/memory_v{N}.jsonl         # MOD-05 记忆快照
-  plots/*.png                      # win_rate.png / hp_left.png / kills.png / entropy.png / train_heldout_gap.png
+  plots/*.png                      # win_rate.png / stages_cleared.png / hearts_left.png / entropy.png / train_heldout_gap.png
   audit/leak_report.json           # MOD-02 产出
 ```
 

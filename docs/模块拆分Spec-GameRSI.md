@@ -127,6 +127,7 @@ class SandboxEnv:
                raw: str | None, final: bool) -> StepResult: ...  # 不改状态，记一次非法（B-15）
     def observe(self) -> Observation: ...
     def legal_actions(self) -> list[Action]: ...   # GAME legalActions() 去掉 abandon_run；同一状态下顺序确定
+    def hints(self) -> dict: ...                   # GAME playHints()（伤害预览/非法原因，公开信息），供启发式使用
     def close(self) -> None: ...
 
 @dataclass(frozen=True)
@@ -305,10 +306,10 @@ python -m gamer_rsi guards check [--root PATH]         # MOD-09（P-20）
 |---|---|---|
 | MOD-02 → MOD-01 | `GameEngine(tables).create(cfg) / reduce(state, action) / legal_actions(state) / observe(state, view)` | GAME-01 §1 的 Python 等价；`tables` 读取 `src/game/content/*.json` |
 | MOD-06 → MOD-04 | `PolicyAgent.reset(ctx: EpisodeContext) -> None` | 每局开始 |
-| MOD-06 → MOD-04 | `PolicyAgent.play_decision(env: SandboxEnv, obs: Observation, *, ctx: EpisodeContext) -> DecisionResult` | 执行一个决策点（含计划、重试、fallback），返回 `steps: list[StepRecord]`、`source`、`attempts`、`llm: LLMCallMeta\|None`、`memory_ids`、`prompt_hash`、`last: StepResult` |
+| MOD-06 → MOD-04 | `PolicyAgent.play_decision(env: SandboxEnv, obs: Observation, *, ctx: EpisodeContext) -> DecisionResult` | 执行一个决策点（含计划、重试、fallback），返回 `steps: list[StepRecord]`、`source`、`attempts`、`llm: LLMCallMeta\|None`、`memory_ids`、`adopted_memory_ids`、`prompt_hash`、`last: StepResult` |
 | MOD-04 → MOD-03 | `InferenceClient.generate_json(prompt, *, schema, mode, sampling, seed) -> JsonResult` | `mode ∈ train/eval` |
 | MOD-04 → MOD-05 | `MemoryStore.retrieve(obs, *, top_k, token_budget, tick: int) -> list[MemoryHit]` | `tick` 为逻辑时钟（训练局序号），不用墙钟 |
-| MOD-06 → MOD-05 | `MemoryStore.add_reflection(entry: ReflectionEntry, *, provenance: Provenance) -> str` · `record_usage(episode_key, memory_ids, outcome) -> None` · `snapshot(version: int) -> Path` · `frozen(version) -> MemoryView` | 评估局只用 `frozen` 只读视图 |
+| MOD-06 → MOD-05 | `MemoryStore.add_reflection(entry: ReflectionEntry, *, provenance: Provenance) -> str` · `record_usage(episode_key, memory_ids, outcome, *, adopted_ids, tick) -> None` · `snapshot(version: int) -> Path` · `frozen(version) -> MemoryView` | 评估局只用 `frozen` 只读视图 |
 | MOD-06 → MOD-03 | `loop.reflect.reflect(summary: EpisodeSummary, *, client, template) -> ReflectionEntry` | 反思归 MOD-06；`ReflectionEntry` schema 归 MOD-05 |
 | MOD-07 → MOD-08 | `evals.evaluate_arm(harness_dir, *, split, basket, memory_version, arm, run_id) -> ArmResult` | 单臂评估 |
 | MOD-07 → MOD-08 | `evals.compare_paired(a: ArmResult, b: ArmResult) -> PairedTest` | 方法与显著性口径归 MOD-08 |
@@ -316,7 +317,7 @@ python -m gamer_rsi guards check [--root PATH]         # MOD-09（P-20）
 | MOD-06/07 → MOD-08 | `evals.seeds.take(split, *, generation=None, basket=None) -> list[int]` | seed 唯一出口（INV-5） |
 | MOD-07 → MOD-02 | `sandbox.guard.gate(harness_dir) -> GateReport` · `sandbox.guard.load_harness_tools(harness_dir) -> ToolWorker` | 子进程 worker |
 | MOD-04/05/06 → MOD-02 | `sandbox.audit.scan_text(text, *, surface) -> list[Finding]` | prompt/memory/reflection 泄漏扫描 |
-| MOD-04/08 → MOD-04 | `agent.heuristic.heuristic_policy(obs, legal: list[Action]) -> Action` | fallback 与 heuristic 基线共用，逻辑移植自 GAME `scripts/bots.js::greedy_counter` |
+| MOD-04/08 → MOD-04 | `agent.heuristic.heuristic_policy(obs, legal: list[Action], hints: dict) -> Action`（`hints` 来自 `SandboxEnv.hints()`） | fallback 与 heuristic 基线共用，逻辑移植自 GAME `scripts/bots.js::greedy_counter` |
 | MOD-07 → MOD-09 | `git_ops.commit_harness(repo, version, msg) -> sha` · `tag_version(repo, version)` · `rollback_to(repo, version) -> sha` | tag 为 `harness-v{N}` |
 | 全部 → MOD-09 | `infra.events.emit(event: str, **fields)` · `infra.errors.E.<CODE>` · `infra.io.write_json_atomic(path, obj)` | 注册表见 §8.2/§8.3 |
 
@@ -452,11 +453,11 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 **成本模型**：设 `t_d` 为单个决策的推理耗时（MOD-03 实测 p50，8B 在默认局上的预估约 3 s，包括约 1.5k token 的预填和约 150 token 的输出），`D` 为每局决策数（约 94）。
 
 - 单局耗时 `t_ep ≈ D·t_d + t_reflect` ≈ **5 分钟**。
-- 每代局数 `E_gen = K + H + C·(S + H)`：训练 K=30，parent heldout H=40（与候选使用同一个冻结的记忆快照，所以每代都要重跑），候选数 C=**2**（上限 3），冒烟 S=5。默认值下 E_gen = 30 + 40 + 2×45 = **160 局，约 13 小时/代**。
-- M3 全程为 3 代，加上 fixed_prompt 基线 40 局、消融 2 臂 × 40 局、test 100 局，合计约 **55 小时**，即约 2.3 天的连续推理。
+- 每代局数 `E_gen = K + (H + S) + C·(S + H)`：训练 K=30；parent 的 heldout H=40 与冒烟 S=5（与候选使用同一个冻结的记忆快照，所以每代都要重跑）；候选数 C=**2**（上限 3），每个候选也跑冒烟 S 与 heldout H。默认值下 E_gen = 30 + 45 + 2×45 = **165 局，约 14 小时/代**。
+- M3 全程为 3 代，加上 gen-000 基线 40 局、fixed_prompt 基线 40 局、消融 2 臂 × 40 局、test 100 局，合计约 **60 小时**，即约 2.5 天的连续推理。
 
 **硬约束**：
-- `E_gen` 由 MOD-06 按上式统一计算，超出 `loop.max_episodes_per_generation`（默认 160）即拒绝启动。MOD-07 不再单独设成本上限。
+- `E_gen` 由 MOD-06 按上式统一计算，超出 `loop.max_episodes_per_generation`（默认 170）即拒绝启动。MOD-07 不再单独设成本上限。
 - 并发一律采用 P-10 的「局级并发 + 共享串行推理队列」，不得每个 worker 各载一份模型。
 - 任何声称「n 局在 x 分钟内完成」的 NFR 都必须由本式推出。
 
@@ -516,7 +517,7 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 | B-10 | P-29 | agent 侧观测 `obs-agent-1.0.0` = GAME `obs-1.0.0` 的键子集 + `episodeId/decisionIndex/stageCount/lastResult`，保留 camelCase；动作即 GAME 动作对象，`abandon_run` 对 agent 不开放 | §4.1–4.3 |
 | B-11 | P-30 | 难度经 `applyDifficulty` 展开；失心语义同 GAME（`virtue` 归零扣 1 心，心数归零才 lose） | §4.1、MOD-01 |
 | B-12 | 评审 P0-1/2 | 决策点粒度：战斗内每回合产出一个计划，其余每步一次；默认局为 hard × 6 关（GAME D-34）；上限统一为 `episode.max_env_steps` / `episode.max_decisions` | §4.3、§8.6 |
-| B-13 | 评审 P0-3 | 成本模型 `E_gen = K + H + C·(S+H)`，默认 C=2、每代约 160 局、约 13 小时；局级并发 + 共享推理队列 | §8.6 |
+| B-13 | 评审 P0-3 | 成本模型 `E_gen = K + (H+S) + C·(S+H)`，默认 C=2、每代 165 局、约 14 小时；局级并发 + 共享推理队列 | §8.6 |
 | B-14 | 评审 P0-4 | 评估温度统一为 0.0 + 显式 seed，harness 不可覆盖 | §8.1 |
 | B-15 | 评审 P0-5 | 三层校验唯一口径：L0 修复不计非法；每个决策最多 3 次尝试，失败走 fallback；只有 SandboxEnv 判负（连续 3 个 `final` 失败 → `policy_failure`） | §4.3 |
 | B-16 | 评审 P1-5/6/10 | 轨迹路径 `episodes/<split>/<episode_key>.jsonl`；`gen-000` 为基线；report 用唯一 schema 文件，写入分工为 MOD-08/07/09 | §4.5 |

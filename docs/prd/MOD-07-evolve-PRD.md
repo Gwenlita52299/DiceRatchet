@@ -262,7 +262,7 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | `E_EVAL_INV5_LEAK`（v0.1 的 `E_EVOLVE_HOLDOUT_LEAK` 并入，Spec §8.3） | 证据束含非 train split 或 heldout seed 字面量 | **致命**：中止本代 + 写 `audit/` 告警；连续 2 次中止 run（INV-5） | 否 |
 | `E_EVOLVE_PATCH_INVALID` | `validate_candidate` 失败（行数/文件/签名/依赖/白名单） | 该候选 reject，继续下一候选 | 否 |
 | `E_EVOLVE_SCAN_FAILED` | MOD-02 `guard.gate` 返回 `fail` | 该候选 reject，`violations` 落 `candidates/{id}.json` | 否 |
-| `E_EVOLVE_LOAD_FAILED` | `load_restricted` 抛错 | 已 accept 则立即回滚 `parent_version`，否则 reject | 是（已发生） |
+| `E_EVOLVE_LOAD_FAILED` | `guard.load_harness_tools` 抛错（worker 启动或加载失败） | 已 accept 则立即回滚 `parent_version`，否则 reject | 是（已发生） |
 | `E_EVOLVE_SMOKE_FAILED` | 冒烟快速淘汰命中 / 冒烟异常 | reject，不进 heldout | 否（仅 5 局 train） |
 | `E_EVOLVE_EVAL_FAILED` | MOD-08 超时/异常 | reject（保守），保留当前 harness | 是 |
 | `E_EVOLVE_NO_GAIN` / `E_EVOLVE_ILLEGAL_RATE` | C1、C2 或 C5 失败 | reject（C5 记 `illegal_rate`/`fallback_rate`/`truncation_rate` 明细） | 是 |
@@ -285,7 +285,7 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 5. 判定表表驱动 12 例：C1 降 0.01 → reject(`E_EVOLVE_NO_GAIN`)；C2 `significant=False` → reject；C3 `gap=0.19>0.15` → reject(`overfit_suspect`)；C4 `collapse_flag=True` → reject；C5 `illegal_rate=0.11` → reject；六项全真 → accept；并覆盖短路顺序。
 6. 给定已存在 `(run_id, gen)`，当重复 `accept`，则返回首次结果且 `harness/versions/` 无新增目录（幂等）；给定 current=5，当 `rollback(2)`，则 `harness/` 的 sha256 等于 `versions/v2/`，`version.json.parent==5`，产生 `revert.patch`；给定 `evolve.hitl=false`，当 accept，则不写 `gate.json` 且 `decided_by="auto"`；给定 `hitl=true` 且 gate 未响应至超时，则 `decision="rollback"`、`reason="hitl_timeout"`。
 
-**集成（`tests/integration/evolve/`）**：① 给定 stub LLM + 缩配（`smoke_seeds=train:1000-1001`、`heldout_seeds=heldout:2000-2005`），当跑 `run_generation`，则产出 `report.json` 且通过 §6.3 Schema（G5 round-trip）；② 给定 3 代 run（`--hitl`）且每代 `evolve approve`，则 `harness/version.json.version == 3` 且 `harness/v1..v3` 三个 commit 存在（G6）；③ 给定 MOD-08 抛 `E_EVAL_TIMEOUT`，当 `evaluate_candidate`，则候选 reject 且当前 harness 不变（NFR-07-7）；④ 给定 run 全目录，当 `audit leak --run <run_id>`，则在 MOD-07 产出物上 0 告警（G4）。
+**集成（`tests/integration/evolve/`）**：① 给定 stub LLM + 缩配（`smoke_seeds=train:1000-1001`、`heldout_seeds=heldout:2000-2005`），当跑 `run_generation`，则产出 `report.json` 且通过 §6.3 Schema（G5 round-trip）；② 给定 3 代 run（`--hitl`）且每代 `evolve approve`，则 `harness/version.json.version == 3` 且 `harness/v1..v3` 三个 commit 存在（G6）；③ 给定 MOD-08 抛 `E_EVAL_TIMEOUT`，当 `evaluate_candidate`，则候选 reject 且当前 harness 不变（NFR-07-7）；④ 给定 run 全目录，当 `audit leak --run-id <run_id>`，则在 MOD-07 产出物上 0 告警（G4）。
 
 **安全用例（恶意候选被拒，`tests/unit/evolve/test_malicious_candidates.py`；全部期望 0 局 heldout 消耗）**
 
@@ -340,7 +340,7 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 
 ## 16. 开放问题
 
-1. `paired_significance` 方法与最小样本量归 MOD-08：40 局能否检出 +5% 胜率提升？若不能，C2 是否退化为"CI 不重叠 + 效应量 ≥ 0.05"？
+1. `compare_paired` 的方法与最小样本量归 MOD-08：40 局能否检出 +5% 胜率提升？若不能，C2 是否退化为"CI 不重叠 + 效应量 ≥ 0.05"？
 2. `versions/v{N}/` 全量拷贝 vs 只存 `diff.patch` 按需重建（仓库膨胀 vs 可审计）；多候选同时通过时只接受 1 个（当前决策）是否低估单代增益，是否允许"1 个 canonical + 1 个 config_patch"？
 3. Tie 语义：`win_rate` 相同但 `mean_stages_cleared` 显著提升时，C1 当前按"不降"通过——是否应额外要求次级指标不得恶化？`E_EVAL_INV5_LEAK` 处置是否过重（替代：告警 + 该代作废 + 移交人工）？
 4. MOD-10 介入后 harness 与模型权重需联合版本化：`version.json` 是否新增 `base_model`（改 Spec §4.4，需先回填）？`harness/` 整体入 git（含 `versions/`）还是只提交生效工件 + `diff.patch`（影响 `rollback` 的 git 语义）？

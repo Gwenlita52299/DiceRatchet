@@ -263,7 +263,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 
 Golden `tests/golden/`：给定 `src/game/tests/golden/g5_hard_six_stage.jsonl` 的动作脚本，当 经 SandboxEnv 重放，则 agent 侧 `obs_digest` 序列与 `golden/sandbox/g5_obs_agent.txt` 逐字节相同、`render_compact` 输出与 `golden/sandbox/g5_render.txt` 相同（G2/G3）；给定 clean run，当 审计，则报告除 `generated_at` 外与 `golden/leak-report-clean.json` 相同（NFR-02-3）。
 
-集成 `tests/integration/`：给定 含 canary 的 fake run，当 `python -m gamer_rsi audit leak --run <id>`，则退出码 2、`verdict="critical"`、`leak_counts.canary_leak>=1`；给定 干净自测 run，当 审计，则退出码 0、`findings==[]`、`honeypot.caught_rate==1.0`（G4）；给定 JSONL 损坏一行，当 审计，则 `E_ENV_AUDIT_IO` 且判 `critical`；给定 `FullState` 字段清单快照变更，当 `test_env_sandbox_contract.py`，则注册表漂移被捕获。
+集成 `tests/integration/`：给定 含 canary 的 fake run，当 `python -m gamer_rsi audit leak --run-id <id>`，则退出码 2、`verdict="critical"`、`leak_counts.canary_leak>=1`；给定 干净自测 run，当 审计，则退出码 0、`findings==[]`、`honeypot.caught_rate==1.0`（G4）；给定 JSONL 损坏一行，当 审计，则 `E_ENV_AUDIT_IO` 且判 `critical`；给定 `FullState` 字段清单快照变更，当 `test_env_sandbox_contract.py`，则注册表漂移被捕获。
 
 ## 12. 验收标准（DoD，对齐 Spec §9 质量门 G1–G6）
 
@@ -276,7 +276,7 @@ Golden `tests/golden/`：给定 `src/game/tests/golden/g5_hard_six_stage.jsonl` 
 | G3 确定性 | 同 seed 双跑 `obs_digest`/`state_hash` 序列逐字节相同（CI diff） |
 | G4 泄漏审计 | 自测 run `audit leak` 0 告警；12/12 蜜罐用例被抓到；故意注入 canary 100% 触发 P0 |
 | G5 Schema | `Observation`、`report.schema.json`、`harness-gate.json` 有 schema + round-trip 测试 |
-| G6 命令 | 可直接复制：`python -m gamer_rsi env selftest --seed 1`、`python -m gamer_rsi audit leak --run <run_id>`、`pytest tests/unit/test_sandbox_projection.py -q` |
+| G6 命令 | 可直接复制：`python -m gamer_rsi env selftest --seed 1`、`python -m gamer_rsi audit leak --run-id <run_id>`、`pytest tests/unit/test_sandbox_projection.py -q` |
 | M0 交付 | `SandboxEnv` 可用且不暴露 `FullState`；L1 import env 的 CI 门禁上线；`OBSERVATION_CHANGELOG.md` 写入 1.0.0 |
 
 **与不变量逐条对应**：
