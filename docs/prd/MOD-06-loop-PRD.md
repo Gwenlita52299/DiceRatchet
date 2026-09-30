@@ -1,6 +1,6 @@
 # MOD-06 loop 技术 PRD
 
-> 版本：v1.1（2026-09-30 17:21 按 Spec v1.3 修订，见 §17）· 状态：草案（待评审）· 所属里程碑：M2 · 上游 Spec：[模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源，冲突时以 Spec 为准）· 作者：MOD-06 模块作者
+> 版本：v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：草案（待评审）· 所属里程碑：M2 · 上游 Spec：[模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源，冲突时以 Spec 为准）· 作者：MOD-06 模块作者
 > 代码路径：`gamer_rsi/loop/{runner.py, reflect.py, generation.py}` · 产物路径：`runs/<run_id>/`
 
 ## 1. 背景与目标
@@ -205,7 +205,7 @@ runs/<run_id>/
 - **计分幂等**：`episode_key = f"e-{seed:06d}-g{generation:03d}-{arm}"`（Spec v1.3 §4.5 / B-16，取代 P-13 的旧格式）。同一 seed 在不同代、不同臂下各计一条记录，同代同臂内重复执行只保留一条。
 - **周期幂等**：`cycle_index = len(completed_train_seeds) // k`，以 `last_completed_cycle` + `evolving_cycle` + MOD-07 产物存在性三重校验。
 - **反思幂等**：`reflections/<seed>.json` 已 `status=="ok"` 则跳过；`skipped` 需 `--retry-reflections` 显式重试。
-- **决策（本 PRD 提出，待回填 Spec）**：训练/评估 seed **必须**经 MOD-08 `split` 协议取用，MOD-06 不得自行按 `seed % 2` 之类规则切分；仅校验传入 seed 的 split 标签与 MOD-08 注册表一致，不一致立即抛 `E_EVAL_SPLIT_VIOLATION`（守 INV-5）。
+- **已裁决（Spec v1.4 B-36，与 P-14 一致）**：训练/评估 seed **必须**经 MOD-08 `evals.seeds.take` 取用，MOD-06 不得自行按 `seed % 2` 之类规则切分；仅校验传入 seed 的 split 标签与 MOD-08 注册表一致，不一致立即抛 `E_EVAL_SPLIT_VIOLATION`（守 INV-5）。
 
 ## 8. 关键流程（伪代码或时序）
 
@@ -424,3 +424,4 @@ def run(self, seeds=None, *, resume=False):
 |---|---|---|
 | v1.0 | 2026-09-30 | 首版 |
 | v1.1 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：单局循环改为调用 `play_decision`，终止只看 MOD-02 的 terminated/truncated，删除 `max_steps=120` 与自有的 illegal_streak（P0-2/5）；对 MOD-04/05 的调用签名改为 Spec §4.7（P1-1/2）；轨迹路径与 `episode_key` 改为 `e-{seed}-g{gen}-{arm}`（P1-10）；成本闸门按 `E_gen` 公式统一计算，并作为全系统唯一上限（P0-3、P1-8）；评估改为局级并发 + 共享推理队列，委托 MOD-08（P1-9）；新增 gen-000 基线与逻辑时钟 tick；错误码、退出码、CLI、事件名对齐 MOD-09 注册表（P1-11～14） |
+| v1.2 | 2026-09-30 17:49 | seed 取用规则回填为 Spec B-36；HITL 挂起语义以 Spec §4.5 B-32 为准 |

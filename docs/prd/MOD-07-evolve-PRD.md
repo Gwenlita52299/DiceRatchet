@@ -1,6 +1,6 @@
 # MOD-07 evolve 技术 PRD
 
-> **版本**：v0.2（2026-09-30 17:21 按 Spec v1.3 修订，见 §17）· **状态**：待评审 · **所属里程碑**：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）· **作者**：GameRSI 技术文档 · 日期：2026-09-30
+> **版本**：v0.3（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· **状态**：待评审 · **所属里程碑**：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）· **作者**：GameRSI 技术文档 · 日期：2026-09-30
 > **上游 Spec**：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（v1.3，**唯一事实来源**；冲突以 Spec 为准）· **关联不变量**：INV-3/INV-4/INV-5/INV-7
 > **代码位置**：`gamer_rsi/evolve/{proposer,judge,versioning,gate}.py`、`harness/`、`runs/<run_id>/generations/`
 
@@ -154,7 +154,7 @@ harness/                     # 当前生效工件（MOD-04 只读）
 runs/<run_id>/generations/gen-{N}/    # report.json  gate.json  decision.jsonl + candidates/{id}.json + patches/{id}.patch
 ```
 
-**决策（本 PRD 提出，待回填 Spec）**：`versions/v{N}/` 子目录、`gate.json`、`candidates/`/`patches/` 布局与 `evolve.*` 键名为 Spec §4.4/§5 未覆盖项。
+**已裁决（Spec v1.4 B-29/B-32/B-33）**：`harness/versions/v{N}/` 只放不可变快照（`version.json` + `diff.patch` + 全量工件）；`candidates/`、`patches/`、`gate.json` 放在 `runs/<run_id>/generations/gen-{NNN}/`；HITL 挂起以退出码 0 结束，超时 24h 保守回滚；`version.json.base_model` 预留给 MOD-10，M0–M3 恒为 `null`。
 
 ## 7. 数据模型与存储
 
@@ -341,9 +341,9 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 ## 16. 开放问题
 
 1. `compare_paired` 的方法与最小样本量归 MOD-08：40 局能否检出 +5% 胜率提升？若不能，C2 是否退化为"CI 不重叠 + 效应量 ≥ 0.05"？
-2. `versions/v{N}/` 全量拷贝 vs 只存 `diff.patch` 按需重建（仓库膨胀 vs 可审计）；多候选同时通过时只接受 1 个（当前决策）是否低估单代增益，是否允许"1 个 canonical + 1 个 config_patch"？
+2. ~~`versions/v{N}/` 全量拷贝 vs 只存 `diff.patch`~~：已裁决为全量拷贝 + `diff.patch`（B-29）；多候选同时通过时只接受 1 个（当前决策）是否低估单代增益，是否允许"1 个 canonical + 1 个 config_patch"？
 3. Tie 语义：`win_rate` 相同但 `mean_stages_cleared` 显著提升时，C1 当前按"不降"通过——是否应额外要求次级指标不得恶化？`E_EVAL_INV5_LEAK` 处置是否过重（替代：告警 + 该代作废 + 移交人工）？
-4. MOD-10 介入后 harness 与模型权重需联合版本化：`version.json` 是否新增 `base_model`（改 Spec §4.4，需先回填）？`harness/` 整体入 git（含 `versions/`）还是只提交生效工件 + `diff.patch`（影响 `rollback` 的 git 语义）？
+4. MOD-10 介入后 harness 与模型权重需联合版本化：`base_model` 字段已预留（B-33），启用后计入 `artifact_hash`；`harness/` 整体入 git（含 `versions/`）还是只提交生效工件 + `diff.patch`（影响 `rollback` 的 git 语义）？
 
 ## 17. 变更记录
 
@@ -351,3 +351,4 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 |---|---|---|
 | v0.1 | 2026-09-30 | 首版 |
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：MOD-08/MOD-02 调用改为 Spec §4.7 签名（P1-3/16）；显著性方法归 MOD-08（P1-4）；report 改为引用唯一 schema，本模块只填写决策段（P1-5/6）；删除 `train_eval_seeds`（与训练块重叠，P1-7）；成本算术改正、候选数默认 2（P1-8、Spec §8.6）；parent 与候选共用冻结记忆快照；冒烟 seed 改为本代训练块末尾；补充 `better()` 定义；C5 改为 illegal/fallback/truncation；git 改为只打 tag `harness-v{N}`（P1-15）；M3 追加「≥1 次 accept」防止退化通过 |
+| v0.3 | 2026-09-30 17:49 | P-17/P-26/P-27 裁决回填为 Spec B-29/B-32/B-33；开放问题 2、4 部分结案 |

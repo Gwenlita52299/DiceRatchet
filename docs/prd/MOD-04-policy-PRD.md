@@ -1,8 +1,8 @@
 # MOD-04 policy 技术 PRD
-> 版本：v0.2（2026-09-30 17:21 按 Spec v1.3 修订，见 §17）· 状态：待评审 · 所属里程碑：M1（L1 智能体层）
+> 版本：v0.3（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：待评审 · 所属里程碑：M1（L1 智能体层）
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源；与本文件冲突时以 Spec 为准）
 > 作者：MOD-04 owner（GameRSI 技术文档）· 日期：2026-09-30
-> 标注「决策（本 PRD 提出，待回填 Spec）」的条目是 Spec 未覆盖处的临时决策，需回填 Spec 后转正。
+> v0.3 起本 PRD 的临时决策均已由 Spec v1.4 裁决回填，原「决策（本 PRD 提出，待回填 Spec）」标注已改为「已裁决（Spec B-xx）」。
 
 ## 1. 背景与目标
 M1 交付「8B agent + 三基线」，而计划 §8 已点名最大风险：**LLM 输出非 JSON / 非法动作多**。MOD-04 是该风险的唯一收口处：把 `Observation` 变成 prompt，把 LLM 原始文本变成 `Action`，并保证模型再离谱也不污染环境与指标。
@@ -145,7 +145,7 @@ LLM 输出 schema：唯一文件为 `schemas/decision.schema.json`（Spec v1.3 �
 | `end_turn` / `shop_refresh` / `shop_leave` | — | — |
 
 动作即 GAME 动作对象（dict，camelCase），`canonical()` = MOD-01 `stable_stringify(action)`。
-**决策（本 PRD 提出，待回填 Spec）**：`Action` 类型仍定义在 `gamer_rsi/env/actions.py`（Spec §5），但由 `gamer_rsi/sandbox/api.py` re-export，L1 只允许从 sandbox 门面导入——否则 INV-1（禁 import `gamer_rsi.env.*`）与 §4.3「MOD-04 产出动作」互相矛盾；§4.3 的「产出」解释为产出 Action **值**而非类定义。
+**已裁决（Spec v1.4 B-23）**：`Action` 类型仍定义在 `gamer_rsi/env/actions.py`（Spec §5），但由 `gamer_rsi/sandbox/api.py` re-export，L1 只允许从 sandbox 门面导入——否则 INV-1（禁 import `gamer_rsi.env.*`）与 §4.3「MOD-04 产出动作」互相矛盾；§4.3 的「产出」解释为产出 Action **值**而非类定义。
 
 ## 7. 数据模型与存储
 | 对象 | 位置 | 生命周期 | 说明 |
@@ -155,10 +155,10 @@ LLM 输出 schema：唯一文件为 `schemas/decision.schema.json`（Spec v1.3 �
 | 轨迹行 | `runs/<run_id>/episodes/<split>/<episode_key>.jsonl`（MOD-09 写） | 永久 | Spec §4.5 字段 + **新增** `prompt_hash`、`memory_ids`、`decision_source`、`attempts`、`error_codes`、`mode`、`tool_hash` |
 | prompt 快照 | `runs/<run_id>/prompts/<prompt_hash>.txt` | 随 run | 按 hash 去重落盘，供 `audit leak` 与人工复现 |
 | harness 工件 | `harness/{version.json,prompts/decision.md,tools/*.py,config.json}` | 按 `harness_version` | 只读消费（Spec §4.4）；MOD-04 不写 |
-| 任务说明 | `gamer_rsi/agent/prompts/task.md` | 人工版本化 | INV-3 第 ④ 来源，**非**演化对象，改动需人工 + CHANGELOG |
+| 任务说明 | `gamer_rsi/agent/prompts/task.md` | 人工版本化 | INV-3 第 ④ 来源，**非**演化对象（Spec v1.4 B-27），改动需人工 + CHANGELOG |
 | 冻结基线模板 | `gamer_rsi/agent/prompts/fixed_v1.md` | 冻结 | 供 MOD-08 `fixed_prompt` 基线 |
 
-**决策（本 PRD 提出，待回填 Spec §4.5/§5）**：轨迹新增字段与 prompt 快照落盘两项目前 Spec 未定义，需 MOD-09/08 确认后回填。MOD-04 不自建存储、不自建目录、不写日志文件。
+**已裁决（Spec B-03 / P-04 / P-19）**：轨迹新增字段已写入 Spec §4.5，prompt 快照目录为 `runs/<run_id>/prompts/`。MOD-04 不自建存储、不自建目录、不写日志文件。
 
 ## 8. 关键流程（伪代码或时序）
 ```
@@ -192,7 +192,7 @@ play_decision(env, obs, ctx):
 时序（一个决策点）：`MOD-06 → play_decision(env, obs, ctx) → [assemble → scan_text → LLM(MOD-03) → ① → 逐个动作：② → env.step → ③] → DecisionResult.steps → MOD-06 逐行写轨迹（MOD-09 schema）`。
 
 ## 9. 配置项（键名、类型、默认值、含义）
-优先级：CLI 参数 > 环境变量 `GAMERSI_POLICY_*` > `harness/config.json` > `configs/default.yaml`。**决策（本 PRD 提出，待回填 Spec §5）**：Spec 只规定「CLI > env > default.yaml」，此处把可演化的 `harness/config.json` 插在 env 与 default 之间；其结构为 `{"version": int, "policy": {...}}`，键名为下表去掉 `policy.` 前缀。
+优先级：CLI 参数 > 环境变量 `GAMERSI_POLICY_*` > `harness/config.json` > `configs/default.yaml`。**已裁决（Spec v1.4 B-26）**：可演化的 `harness/config.json` 插在 env 与 default 之间，只允许白名单键（`policy.*` 训练期采样参数、`memory.retrieve.*`、`agent.tools.*`），不得覆盖评估温度；其结构为 `{"version": int, "policy": {...}}`，键名为下表去掉 `policy.` 前缀。
 | 键 | 类型 | 默认 | 含义 |
 |---|---|---|---|
 | `policy.mode` | str | `"play"` | `play`/`eval`/`baseline_fixed_prompt`/`baseline_heuristic` |
@@ -231,7 +231,7 @@ play_decision(env, obs, ctx):
 | `E_LLM_SCHEMA_INVALID` | MOD-03 三级修复耗尽 | 计为该决策的一次失败尝试（FR-04-9），不是局级降级 |
 
 降级阶梯：`LLM(合法) → LLM(重试) → harness 工具重排 → heuristic → 判负`。任何一级都必须产出 `PolicyStep`，禁止异常穿透到 MOD-06。
-**决策（本 PRD 提出，待回填 Spec §4.1/§4.3）**：一级失败（无 Action 可构造）也要产生带 `illegal_reason` 的 Observation 与 `-0.05`，故需 MOD-02 新增 `SandboxEnv.reject(*, stage, reason, raw) -> StepResult`：不改环境状态、返回当前投影 Observation、`info={"illegal":True,"illegal_reason":reason,...}`、由 MOD-01 记账 `reward=-0.05`。二级失败优先复用 `step()` 的自然非法路径，MOD-01 未覆盖时以 `reject()` 兜底；若 MOD-02 拒绝该 API，备选方案是由 MOD-06 代记账。
+**已裁决（Spec v1.3 P-02 → B-15）**：一级失败（无 Action 可构造）也要产生带 `illegal_reason` 的 Observation 与 `-0.05`，故需 MOD-02 新增 `SandboxEnv.reject(*, stage, reason, raw) -> StepResult`：不改环境状态、返回当前投影 Observation、`info={"illegal":True,"illegal_reason":reason,...}`、由 MOD-01 记账 `reward=-0.05`。二级失败优先复用 `step()` 的自然非法路径，MOD-01 未覆盖时以 `reject()` 兜底；若 MOD-02 拒绝该 API，备选方案是由 MOD-06 代记账。
 
 ## 11. 测试计划（单测/集成，用「给定-当-则」写验收用例）
 单测（`tests/unit/test_policy_*.py`，用例编号 U1–U10，每条均为「给定-当-则」）：
@@ -323,3 +323,4 @@ play_decision(env, obs, ctx):
 |---|---|---|
 | v0.1 | 2026-09-30 | 首版 |
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：入口改为 `play_decision(env, obs, ctx)`，引入决策点与动作计划（P0-2/3、P1-1）；重试按决策计、换 seed，尝试耗尽走 fallback，本模块不判负（P0-5）；评估温度改为 0.0（P0-4）；schema 改为共用 `decision.schema.json`（P1-19）；启发式改为移植 GAME `greedy_counter`，与 MOD-08 基线共用（P0-1、P1-16）；MOD-02 调用名对齐 §4.7；修正围栏用例的自相矛盾 |
+| v0.3 | 2026-09-30 17:49 | P-01/P-03/P-05 裁决回填为 Spec B-23/B-26/B-27；其余临时决策标注改为已裁决的出处 |

@@ -1,6 +1,6 @@
 # MOD-08 evals 技术 PRD
 
-> 版本：v0.2（2026-09-30 17:21 按 Spec v1.3 修订，见 §17）· 状态：待评审 · 所属里程碑：M1（基线）→ M2（执行器/指标）→ M3（完整：坍缩 + 消融 + test 终检）
+> 版本：v0.3（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：待评审 · 所属里程碑：M1（基线）→ M2（执行器/指标）→ M3（完整：坍缩 + 消融 + test 终检）
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（**唯一事实来源**，冲突以 Spec 为准）· 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md)（§5 防坍缩、§6 三项验收、§8 沙箱泄漏）
 > 作者：MOD-08 owner · 落地：`gamer_rsi/evals/{harness,metrics,diversity,ablation,baselines}.py`
 
@@ -167,7 +167,7 @@ class CollapseVerdict:    # collapse_reasons 落 ext 文件，不进 report.json
 | `ablation/gen-003.json` | 消融三臂结果 + 归因 | 否 |
 | （v0.2 删除 `eval/eval_index.jsonl`，改为 `events.jsonl` 中的 `eval.report` 事件） | — | — |
 
-数值序列化统一 `round(x, 4)`；Spec §4.5 示例中的 2 位小数仅为展示。**决策（本 PRD 提出，待回填 Spec）**：报告精度统一 4 位。
+数值序列化统一 `round(x, 4)`；Spec §4.5 示例中的 2 位小数仅为展示。**已裁决（Spec v1.4 B-34）**：报告精度统一为 4 位小数。
 
 ## 8. 关键流程（伪代码或时序）
 
@@ -304,7 +304,7 @@ python -m gamer_rsi eval ablation --run-id <run_id> --generation 3 --arms no_ref
 python -m gamer_rsi eval test --run-id <run_id> --unlock-once --attestation runs/<run_id>/generations/gen-003/test_attestation.json
 ```
 
-**决策（本 PRD 提出，待回填 Spec）**：新增 `--basket` 选项、`eval ablation`、`eval test` 参数/子命令（Spec §4.6 未列）。
+**已回填 Spec v1.3 §4.6**：`--basket` 选项、`eval ablation`、`eval test` 子命令。
 
 | 计划 §6 验收 | 判定指标 | 判定命令 | 通过条件 |
 |---|---|---|---|
@@ -357,3 +357,4 @@ python -m gamer_rsi eval test --run-id <run_id> --unlock-once --attestation runs
 |---|---|---|
 | v0.1 | 2026-09-30 | 首版 |
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：指标改为 INV-7 新口径（outcome/stages_cleared/hearts_left/battles_won），新增 fallback/truncation/degraded（P0-1）；步数上限改读 Spec §8.6，删除 `max_steps=60`（P0-2）；NFR-08-05 改由成本模型推出（P0-3）；`KIND_SPACE` 改为 16 个 GAME kind，熵曲线横轴改为决策点；修正 T-02 手算值；dropped 计为 lose（防幸存者偏差）；新增 FR-08-25 MOD-07 门面（P1-3/4）；report schema 改为引用唯一文件（P1-5/6）；heuristic 改为委托 `heuristic_policy`（P1-16）；事件改名为 `eval.*` |
+| v0.3 | 2026-09-30 17:49 | 报告精度回填为 Spec B-34；CLI 标注改为已回填 §4.6 |

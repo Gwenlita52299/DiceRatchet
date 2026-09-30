@@ -1,6 +1,6 @@
 # MOD-02 env-sandbox 技术 PRD
 
-> 版本：v1.1（2026-09-30 17:21 按 Spec v1.3 修订，见 §17）· 状态：草案（待复核）· 所属里程碑：M0（`SandboxEnv` + 投影 + 审计器 + 蜜罐自测全部交付）
+> 版本：v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：草案（待复核）· 所属里程碑：M0（`SandboxEnv` + 投影 + 审计器 + 蜜罐自测全部交付）
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源，冲突以 Spec 为准）· 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md) §3/§8
 > 作者：GameRSI 技术文档（MOD-02 负责模块）
 
@@ -325,10 +325,10 @@ Golden `tests/golden/`：给定 `src/game/tests/golden/g5_hard_six_stage.jsonl` 
 关键路径：MOD-01 → MOD-02 → MOD-03/04；M0.1–M0.5 是解锁 MOD-04 的前置。
 ## 16. 开放问题
 
-1. **决策（本 PRD 提出，待回填 Spec）**：`FullState` 只经 `build_full_state() -> Mapping[str, Any]` 暴露一次，且该名在 `BLOCKED_MODULES` 语义下不可被 L1+ 调用；若 MOD-01 选择完全私有化，则 `SandboxEnv` 与 MOD-01 的适配层归属需 Spec 明确。`OBSERVATION_SCHEMA` 与 `FullState` 字段清单的契约测试落在 `tests/integration/test_env_sandbox_contract.py`，双方 PRD 各引用一次。
-2. **决策（本 PRD 提出，待回填 Spec）**：审计器只做黑名单扫描 + canary 探针，不做「prompt 中每个数值都必须归因到 `VisibleSet`」的正向校验（噪声大）；若 M1 后仍出现未知泄漏再升级。
+1. **已裁决（Spec v1.4 B-24）**：全状态只由 `SandboxEnv._engine` 私有持有，`gamer_rsi.env` 列入 `BLOCKED_MODULES`，对 L1+ 不可导入。由于 MOD-01 v1.0 改为移植 GAME 内核，原 `build_full_state()` 方案已不再适用，改用这种等价封装；适配层归 MOD-02（`sandbox/api.py`）。`OBSERVATION_SCHEMA` 与 `FullState` 字段清单的契约测试落在 `tests/integration/test_env_sandbox_contract.py`，双方 PRD 各引用一次。
+2. **已裁决（Spec v1.4 B-25）**：审计器只做黑名单扫描 + canary 探针，不做「prompt 中每个数值都必须归因到 `VisibleSet`」的正向校验（噪声大）；若 M1 后仍出现未知泄漏再升级。
 3. **待定**：canary 是否按 `run_id` 派生（`reset_canary(salt=run_id)`）？跨 run 复用便于测试，但可能被 harness 长期记住；倾向按 run 派生。`sandbox.audit.fail_on` 是否允许 `warn`（本地调试）需 MOD-09 确认，CI 建议恒为 `critical`。
-4. **待定**：`phase="shop"` 时 `allowed_actions` 是否携带商品 `item_id`？Spec §4.2 称其「不含隐藏信息」，故本 PRD 采用仅 kind；但 MOD-04 需要 id 才能 `shop_buy`，需在 MOD-04 PRD 明确「进入 shop 后逐步揭示的商品列表」如何以 1.1.0 版本加入 `OBSERVATION_SCHEMA`（预期新增可选字段 `shop_items`）。
+4. **已结案（Spec v1.3 P-08 → B-10）**：`phase="shop"` 时，陈列随 `obs-agent-1.0.0` 的 `shop` 字段给出，`legal_actions()` 直接带 `itemId`，不再需要单独的 `shop_items` 扩展。
 
 ---
 
@@ -340,3 +340,4 @@ Golden `tests/golden/`：给定 `src/game/tests/golden/g5_hard_six_stage.jsonl` 
 |---|---|---|
 | v1.0 | 2026-09-30 | 首版 |
 | v1.1 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：投影源改为 GAME `observe`，产出 `obs-agent-1.0.0`，新增紧凑渲染（P0-1）；新增 `reject(final)` 与唯一判负 `policy_failure`（P0-5）；工具执行改为常驻子进程 worker，主进程不设 rlimit（P0-6）；AST 改为节点黑名单 + 调用白名单，放行运算符（P0-6）；import hook 按调用方判定（P0-6）；蜜罐注入点改为 GAME 的隐藏位置；canonical JSON 统一为 `ensure_ascii=True`（P1-18）；CHANGELOG 校验移到 CI；函数名对齐 Spec §4.7（P1-16）；`min:N` 改为 GAME DSL |
+| v1.2 | 2026-09-30 17:49 | P-06/P-07 裁决回填为 Spec B-24/B-25（全状态封装按 MOD-01 v1.0 改为等价形式）；开放问题 4 按 B-10 结案 |

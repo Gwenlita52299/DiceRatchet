@@ -1,6 +1,6 @@
 # MOD-05 memory 技术 PRD
 
-> 版本：v1.1（2026-09-30 17:21 按 Spec v1.3 修订，见 §17）· 状态：草案（待复核） · 所属里程碑：M2（MOD-05/06/07 初版） · 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源，冲突以 Spec 为准） · 作者：MOD-05 技术文档 author
+> 版本：v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：草案（待复核） · 所属里程碑：M2（MOD-05/06/07 初版） · 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源，冲突以 Spec 为准） · 作者：MOD-05 技术文档 author
 
 ## 1. 背景与目标
 MOD-05 是 L1 层的**策略记忆与反思库**：把 MOD-06 局末产出的反思文本转成可检索、可度量、可淘汰、可回滚的结构化记忆，供 MOD-04 组装 prompt 时按当前 `Observation` 取用。它是「反思注入」演化对象（项目计划 §5 改进对象 a/c）的落地载体，也是 MOD-07 可回滚的演化对象之一（Spec §3 MOD-05）。目标：① 写入→去重→冲突裁决→检索→淘汰→快照/回滚 全链路**确定性可复现**；② 效用证据只用**环境原生胜负**（Spec INV-7），避免自证式膨胀（调研纪要 §4.1）；③ 硬性落实 **INV-5**：heldout/test 的 seed 与相关信息**永不进入记忆**，四拦截点可审计。非目标见 §2.2——本模块只做存储、检索与生命周期，不生成反思文本，也不判定记忆价值。
@@ -58,7 +58,7 @@ MOD-05 是 L1 层的**策略记忆与反思库**：把 MOD-06 局末产出的反
 ### 6.1 模块布局（对齐 Spec §5；`snapshot.py` 为新增）
 ```python
 # gamer_rsi/memory/schemas.py 类型 + JSON Schema + round-trip；store.py MemoryStore：写入/去重/冲突/淘汰/快照/回滚
-# gamer_rsi/memory/retriever.py retrieve() 打分与预算裁剪；snapshot.py memory_v{N}.jsonl 读写、sha256、回滚  ← 决策（待回填 Spec §5）
+# gamer_rsi/memory/retriever.py retrieve() 打分与预算裁剪；snapshot.py memory_v{N}.jsonl 读写、sha256、回滚  ← 已回填 Spec §5（B-35）
 ```
 ### 6.2 数据类与函数签名
 ```python
@@ -178,7 +178,7 @@ runs/<run_id>/metrics/memory.jsonl                                    # §13 埋
 ### 7.3 检索输出（给 MOD-04）
 `render_entries()` 每条一行：`"[combat|low_virtue|defense] 净化值低于 25%…（hint=play_face→defense, conf=0.70, util=0.42）"`，按分数顺序 `\n` 连接；`RetrieveResult.text` 即 `{{memory}}` 的填充值。
 
-### 7.4 CLI（走 MOD-09 CLI 注册；**决策（本 PRD 提出，待回填 Spec §4.6）**）
+### 7.4 CLI（走 MOD-09 CLI 注册；已回填 Spec §4.6，B-08）
 ```bash
 python -m gamer_rsi memory stats|snapshot|rollback|verify|retrieve --run-id <run_id> [--reason gen-003] [--to-version 4] [--dry-run] [--full] [--obs <obs.json>] [--top-k 8] [--token-budget 900]
 # 例：python -m gamer_rsi memory snapshot --run-id <run_id> --reason gen-003
@@ -228,7 +228,7 @@ rollback(target, dry_run): 文件不存在 → E_IO_SNAPSHOT_MISSING（退出码
 S4 时序：MOD-07 判负 → 恢复 `harness/version.json` 到 v6 → `memory.rollback(同代快照)` → MOD-07 重跑 heldout 确认 → 报告记录 `(generation, harness_version=6, memory_version=6)`。
 
 ## 9. 配置项
-`configs/default.yaml` 的 `memory:` 段；优先级（Spec §5）：CLI > 环境变量 > 默认值，嵌套键用 `__`（如 `GAMERSI_MEMORY_RETRIEVE__TOP_K`）——决策，待回填 Spec §5。
+`configs/default.yaml` 的 `memory:` 段；优先级（Spec §5）：CLI > 环境变量 > 默认值，嵌套键用 `__`（如 `GAMERSI_MEMORY_RETRIEVE__TOP_K`），已回填 Spec §5（B-30）。`memory.retrieve.*` 属于 `harness/config.json` 的白名单键，可被演化（B-26）。
 
 | 键 | 类型 | 默认 | 含义 |
 |---|---|---|---|
@@ -334,3 +334,4 @@ S4 时序：MOD-07 判负 → 恢复 `harness/version.json` 到 v6 → `memory.r
 |---|---|---|
 | v1.0 | 2026-09-30 | 首版 |
 | v1.1 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：时间改为逻辑时钟 `tick`（训练局序号），`ttl_ticks=300`、`min_age_ticks=30`，修复淘汰永不生效和 G3 不成立的问题；`SituationKey`、tags、`ReflectionEntry` 改为 GAME/INV-7 口径（P0-1）；`adopted` 改为 `(kind, slotKind, school)` 三元组判定，由 MOD-04 给出、MOD-06 在局末调用 `record_usage`（P1-2）；新增 `frozen()` 只读视图；`scan_text` 改为 `sandbox.audit`（P1-16）；`E_EVAL_SEED_LEAK` 统一为 `E_EVAL_INV5_LEAK`（P1-12）；schema_version 升为 1.1 |
+| v1.2 | 2026-09-30 17:49 | P-18 裁决回填为 Spec B-30；snapshot.py 回填为 B-35；CLI 标注改为 B-08 |

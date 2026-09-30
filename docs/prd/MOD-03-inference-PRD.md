@@ -1,6 +1,6 @@
 # MOD-03 inference 技术 PRD
 
-> 版本：v1.1（2026-09-30 17:21 按 Spec v1.3 修订，见 §17）· 状态：草案（待复核）· 所属里程碑：M1
+> 版本：v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：草案（待复核）· 所属里程碑：M1
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（**唯一事实来源**；冲突以 Spec 为准）
 > 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md) §4 技术栈（Mac M5 24GB / MLX 或 llama.cpp / Qwen3-8B → 27B Q4）、§8 风险（LLM 输出非 JSON）
 > 作者：GameRSI 技术文档（MOD-03 负责模块）· 依赖：MOD-09 infra（配置、日志、run_id、CLI）
@@ -17,7 +17,7 @@ MOD-03 是 L1 层唯一的"模型出口"：把 `Mac M5 24GB + 全程离线` 的�
 - `gamer_rsi/inference/backend.py`：`Backend` Protocol、`Message`/`Usage`/`GenerationResult`/`BackendHealth`/`ModelSpec`、`MockBackend`、`BackendManager`。
 - `gamer_rsi/inference/mlx_backend.py`：`MLXBackend`（`mlx-lm` 进程内；LoRA 挂载点预留给 MOD-10）。
 - `gamer_rsi/inference/llama_backend.py`：`LlamaCppBackend`（`llama-cpp-python` 进程内）与 `LlamaServerBackend`（`llama-server` 子进程 + HTTP + GBNF）。
-- `gamer_rsi/inference/schema.py`：JSON Schema 子集 → GBNF 编译器、`validate()`、修复 prompt 渲染；加载 `schemas/decision.schema.json`（Spec v1.3 §4.3 的唯一决策 schema，本模块与 MOD-04 共用，不再各自维护）。
+- `gamer_rsi/inference/schema.py`：JSON Schema 子集 → GBNF 编译器、`validate()`、修复 prompt 渲染（独占拥有，MOD-04 与 harness 都不得覆盖，Spec v1.4 B-28）；加载 `schemas/decision.schema.json`（Spec v1.3 §4.3 的唯一决策 schema，本模块与 MOD-04 共用，不再各自维护）。
 - `configs/models.yaml` 模型注册表；采样参数管控、超时/取消、重试退避、token/延迟埋点、`E_LLM_*` 错误码与降级信号。
 
 ### 2.2 范围外（非目标）
@@ -213,7 +213,7 @@ models:
     perf_budget: {p95_latency_ms: 8000, min_tok_per_s: 12}
 ```
 
-**内存预算公式**：`required_gb = resident_gb_est + kv_gb_per_1k_tokens × (context_length/1000) × max_inflight + 1.0`（1.0 = 临时缓冲）。`required_gb > ram_budget_gb` → 在 acquire 前拒绝并抛 `E_LLM_OOM`。代入 30B：`32768/4` → `18.8 + 0.05×32×4 + 1.0 = 26.2 > 20.0`（拒绝）；`16384/2` → `21.4`（拒绝）；`8192/1` → `20.2`（临界，需实测调 `kv_cache_bits=4` 或修正 `resident_gb_est`）。**决策（本 PRD 提出，待回填 Spec）**：30B-A3B 在 24GB 机器上默认 `context_length=8192, max_inflight=1`；"评估要并发跑多局"通过**局级并发（4 个 episode 共享一个串行推理队列）**实现，而非模型级批处理——与 Spec §8.6 成本可控一致，并避免 OOM 抖动。
+**内存预算公式**：`required_gb = resident_gb_est + kv_gb_per_1k_tokens × (context_length/1000) × max_inflight + 1.0`（1.0 = 临时缓冲）。`required_gb > ram_budget_gb` → 在 acquire 前拒绝并抛 `E_LLM_OOM`。代入 30B：`32768/4` → `18.8 + 0.05×32×4 + 1.0 = 26.2 > 20.0`（拒绝）；`16384/2` → `21.4`（拒绝）；`8192/1` → `20.2`（临界，需实测调 `kv_cache_bits=4` 或修正 `resident_gb_est`）。**已裁决（Spec v1.3 P-10 → §8.6）**：30B-A3B 在 24GB 机器上默认 `context_length=8192, max_inflight=1`；"评估要并发跑多局"通过**局级并发（`loop.eval_concurrency` 个 episode，默认 2，共享一个串行推理队列）**实现，而非模型级批处理——与 Spec §8.6 成本可控一致，并避免 OOM 抖动。
 
 **存储落点（均由 MOD-09 写，本模块只产出对象）**：`runs/<run_id>/metrics/llm_calls.jsonl`（每次尝试一行，§13）；`runs/<run_id>/episodes/<split>/<episode_key>.jsonl` 步内嵌 `llm_latency_ms`/`prompt_tokens`/`completion_tokens`/`llm_raw`（Spec §4.5）；配置来源 `configs/models.yaml` + `harness/config.json#inference`，二者均被 `config_hash` 覆盖。无独立数据库。
 
@@ -251,7 +251,7 @@ async def _attempt_loop(spec, messages, schema, grammar, sampling, deadline) -> 
             convo = repair_messages(messages, bad=out.text, error=render_error(e), schema=schema)  # ③
 ```
 
-**修复 prompt（`schema.py::repair_messages`，只纠错、零领域知识）**：在 MOD-04 传入的 `messages` 之后追加一轮对话。system："你是 JSON 修复器。只输出一个符合给定 JSON Schema 的 JSON 对象，不要解释，不要 markdown 代码块。"；user："你的上一次输出无法通过校验。--- 原始输出 --- {bad_output} --- 校验错误 --- {jsonschema message} @ {json_path} --- 目标 Schema --- {schema_json} 请输出修正后的 JSON。"。**决策（本 PRD 提出，待回填 Spec）**：Spec §4.3 规定了三级校验与 `R=2`，未规定修复 prompt 的存在与全文；此处定义该模板并由 `schema.py` 独占拥有，MOD-04 不得覆盖本模板。
+**修复 prompt（`schema.py::repair_messages`，只纠错、零领域知识）**：在 MOD-04 传入的 `messages` 之后追加一轮对话。system："你是 JSON 修复器。只输出一个符合给定 JSON Schema 的 JSON 对象，不要解释，不要 markdown 代码块。"；user："你的上一次输出无法通过校验。--- 原始输出 --- {bad_output} --- 校验错误 --- {jsonschema message} @ {json_path} --- 目标 Schema --- {schema_json} 请输出修正后的 JSON。"。**已裁决（Spec v1.4 B-28）**：修复 prompt 模板由本节定义，并由 `schema.py` 独占拥有，MOD-04 与 harness 都不得覆盖。
 
 **时序**：MOD-04 → `generate_json(messages, DECISION_SCHEMA)` → 校验采样参数（越界 `E_LLM_BACKEND_ERROR`）→ 内存预算检查（超则 `E_LLM_OOM`，零提交）→ `acquire(semaphore)` → attempt 1..3：`generate(grammar, json_mode)` → `json.loads` → `jsonschema.validate`；失败则 `sleep(200/400)` + `repair_messages` 再试 → 成功返回 `GenerationResult(parsed, usage, attempts, retry_reasons)` → MOD-04 做语义校验（`legal_actions()`）后 `step`。
 
@@ -293,7 +293,7 @@ class InferenceError(RuntimeError):
 | `E_LLM_CONTEXT_OVERFLOW` | `prompt_tokens + max_tokens > context_length` 且策略 `reject` | False | MOD-04 缩短上下文后重试（上下文裁剪策略归 MOD-04） |
 | `E_LLM_BACKEND_ERROR` | 采样参数越界、server 5xx、grammar 编译失败且后端无 JSON mode | 参数类 False / 后端类 True（1 次） | 参数类直接上报；后端类重试后仍失败 → fallback heuristic |
 
-**降级契约**：① 本模块**只抛码，绝不静默兜底**——不返回空动作、不猜测 JSON。② `outcome_kind="degraded"` 仅用于"约束解码不可用但 JSON 校验通过"这类可用但质量降级的情形（如 `supports_grammar=false` 时纯 JSON mode 一次通过），原因记 `degraded_reason`。③ **局级降级**（模型不可用/超时/OOM → heuristic agent）由 MOD-04/06 执行，必须写 `episode_end.degraded=true` + `exclude_reason=<E_LLM_*>`，MOD-08 据此把该局从评估样本剔除（Spec §8.5）。**决策（本 PRD 提出，待回填 Spec）**：Spec 只写"不计入评估样本"，未定义字段名；此处提议 `degraded: bool` 与 `exclude_reason: str|null`，需 MOD-08/09 确认。
+**降级契约**：① 本模块**只抛码，绝不静默兜底**——不返回空动作、不猜测 JSON。② `outcome_kind="degraded"` 仅用于"约束解码不可用但 JSON 校验通过"这类可用但质量降级的情形（如 `supports_grammar=false` 时纯 JSON mode 一次通过），原因记 `degraded_reason`。③ **局级降级**（模型不可用/超时/OOM → heuristic agent）由 MOD-04/06 执行，必须写 `episode_end.degraded=true` + `exclude_reason=<E_LLM_*>`，MOD-08 据此把该局从评估样本剔除（Spec §8.5）。**已回填（Spec v1.3 §4.5 `episode_end` 行，P-12）**：字段名为 `degraded: bool` 与 `exclude_reason: str|null`。
 
 ## 11. 测试计划
 
@@ -390,7 +390,7 @@ class InferenceError(RuntimeError):
 
 | # | 问题 | 影响 | 建议决策 |
 |---|---|---|---|
-| Q-1 | M1 是否必须同时维护 MLX 与 llama.cpp 两个后端（+4.5 人日）？ | 决定 §15 能否砍 2.5 人日 | 建议 M1 只交付 `MLXBackend` + `MockBackend`，`LlamaCppBackend` 与阶段二 30B 一起上；但 `Backend` 契约与一致性套件必须在 M1 定稿 |
+| Q-1 | **已裁决（Spec v1.4 B-31）** M1 是否必须同时维护 MLX 与 llama.cpp 两个后端（+4.5 人日）？ | §15 砍 2.5 人日 | M1 只交付 `MLXBackend` + `MockBackend`，`LlamaCppBackend` 与阶段二 30B 一起上；但 `Backend` 契约与一致性套件必须在 M1 定稿 |
 | Q-2 | 30B-A3B 在 24GB 上 `concurrent>1` 是否可行？需实测 MoE 真实常驻值（MLX 4bit vs GGUF Q4_K_M） | 决定评估并发是局级排队还是真批处理 | M1 结束前用 `inference bench` 实测并回填 `resident_gb_est`，再定 §7 的 `max_inflight` |
 | Q-3 | 评估模式 `temperature=0` 是否会让 MOD-08 的动作熵/坍缩监控失真？ | 影响 `action_entropy_curve` 的解释 | 评估模式保持 `temperature=0` 保可比性；坍缩监控另开"训练模式同 seed 多采样 k=5"专项 run，由 MOD-08 定义 |
 | Q-4 | `kv_cache_bits=4` 对 JSON 格式鲁棒性的实测影响未知 | 内存换质量的应急开关 | 默认 8；开启后必须重跑 `format_robustness` 做前后对比 |
@@ -403,3 +403,4 @@ class InferenceError(RuntimeError):
 |---|---|---|
 | v1.0 | 2026-09-30 | 首版 |
 | v1.1 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：评估温度固定为 0.0（P0-4）；`ACTION_SCHEMA` 改为扁平的 `DECISION_SCHEMA`（动作计划，GBNF 可编译，与 MOD-04 共用同一文件，P1-19）；L0 修复失败计为一次尝试（P0-5）；评估并发默认 2 局、共享推理队列；删除误写的父类 `BuildManagerFacade` |
+| v1.2 | 2026-09-30 17:49 | P-11、P-24 裁决回填为 Spec B-28/B-31；Q-1 结案 |

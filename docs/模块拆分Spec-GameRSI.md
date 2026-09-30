@@ -1,6 +1,6 @@
 # GameRSI 模块拆分 Spec
 
-> 版本：v1.3（2026-09-30 17:21，按 MOD PRD 评审修订，见 §12）· 状态：待评审· 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
+> 版本：v1.4（2026-09-30 17:49，全部待裁决条目已裁决，见 §11/§12）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
 > 上游：[项目计划-GameRSI.md](../项目计划-GameRSI.md) · [RSI调研纪要.md](../RSI调研纪要.md)
 > 游戏本体：`docs/prd/GAME-00/01/02`（规则、观测、动作的游戏侧事实来源，B-09）
 > 下游：`docs/prd/MOD-*.md`（每个模块的技术 PRD 必须与本文件一致；冲突时以本文件为准）
@@ -45,11 +45,16 @@
 |---|---|---|
 | INV-1 | agent 只能通过 `SandboxEnv.observe/step` 触达环境；L1 及以上代码 **禁止 import `gamer_rsi.env.*` 内部模块** | MOD-02 静态检查 + MOD-09 import 门禁 |
 | INV-2 | `Observation` 是白名单投影，任何新字段必须在 `OBSERVATION_SCHEMA` 登记 | MOD-02 |
-| INV-3 | 进入 prompt 的上下文只允许：当前 Observation + 检索到的 memory + 当前 harness 工件 + 任务说明 | MOD-04 |
+| INV-3 | 进入 prompt 的上下文只允许：当前 Observation + 检索到的 memory + 当前 harness 工件 + 任务说明（`gamer_rsi/agent/prompts/task.md`，人工版本化，**不属**演化对象，B-27） | MOD-04 |
 | INV-4 | harness 自编辑产出的代码在受限执行环境运行：无网络、无文件写、无 subprocess、无 env 内部访问 | MOD-02 + MOD-07 |
 | INV-5 | train / heldout / test 三类 seed 严格隔离；heldout 与 test 的 seed 值不得进入任何 prompt 或记忆 | MOD-08 + MOD-09 |
 | INV-6 | 所有随机性来自显式 seed（`env`、采样、演化），禁用全局 `random`/时间相关随机 | MOD-01 + MOD-09 |
 | INV-7 | 评估主指标只用**环境原生结果**：`outcome`（win/lose，截断一律计 lose）为第一主指标，`stages_cleared` / `hearts_left` / `battles_won` 为并列次指标（全部取自 GAME `stats` 与 `player`）；shaped reward 仅用于学习与调试 | MOD-08 |
+
+**不变量实施细则（v1.4 裁决）**：
+- **INV-1 类型导入（B-23）**：动作类型 `Action`（GAME 动作对象的 TypedDict）与 `ACTION_KINDS` 定义在 `gamer_rsi/env/actions.py`，由 `gamer_rsi/sandbox/api.py` re-export。L1+ 只许 `from gamer_rsi.sandbox.api import Action`；直接 import `gamer_rsi.env.*` 一律由 import 门禁拒绝。
+- **INV-1 全状态封装（B-24）**：MOD-01 的 `GameState` 只由 `SandboxEnv._engine` 私有持有，没有任何返回全状态、engine 或 rng 状态的公开成员。`gamer_rsi.env` 在 MOD-02 的 `BLOCKED_MODULES` 中对 L1+ 不可导入。v1.2 登记时的 `build_full_state()` 方案，因 MOD-01 v1.0 改为移植 GAME 内核而失去对象，改用上述等价的封装形式。
+- **INV-2/INV-3 审计口径（B-25）**：MOD-02 审计器只做黑名单扫描 + canary 探针，不做"prompt 中每个数值都归因到可见集"的正向校验，因为那样噪声太大；M1 后若仍出现未知泄漏，再升级为正向校验。
 
 ---
 
@@ -196,6 +201,7 @@ agent 侧观测 = GAME `observe(state, "full")`（GAME-00 §9.4 `obs-1.0.0`）�
 | L1 语法 / L2 语义 | MOD-04（schema + 当前 `legal_actions()`） | `env.reject(final=False)`：不改状态，`illegal_count += 1`，shaped `-0.05`；带 `lastResult` 重试 | 是（每次尝试计 1） |
 | L3 执行 | MOD-01 `reduce` 拒绝 | 同 L2 | 是 |
 
+- L1 的**修复 prompt 模板**由 MOD-03 `inference/schema.py::repair_messages` 独占拥有（只纠错、零领域知识），MOD-04 与 harness 都不得覆盖（B-28）。
 - 每个决策最多 **3 次尝试**（首次 + `R=2` 次重试）。重试时换采样 seed：`derive_seed(run, episode, decision, attempt)`。
 - 3 次都失败 → `env.reject(final=True)`，然后由**启发式 fallback** 执行 1 个动作（`source="fallback"`），决策完成。
 - **判负只由 MOD-02 `SandboxEnv` 负责**：连续 3 个决策都以 `final=True` 结束 → `truncated=True, truncation_reason="policy_failure"`，主指标计为 lose。MOD-04/06 只读 `info`，不另行判负。
@@ -215,6 +221,8 @@ harness/
 
 - `artifact_hash = sha256(按路径排序的 (相对路径, 文件 sha256) 列表)`，由 MOD-09 计算（B-19）。
 - git tag 统一为 `harness-v{N}`（不建同名分支，B-22）。
+- **历史快照布局（B-29）**：`harness/versions/v{N}/` 是不可变快照，内容为 `version.json` + `diff.patch`（相对 parent）+ `prompts/` + `tools/` + `config.json`（全量拷贝）。候选与门禁记录不进 `harness/`，写到 `runs/<run_id>/generations/gen-{NNN}/{candidates/,patches/,gate.json}`。
+- `version.json.base_model` 为 MOD-10 预留：M0–M3 恒为 `null`，启用 LoRA 新基座后记录基座标识，并参与 `artifact_hash`（B-33）。
 
 工具函数唯一签名（**禁止变更**）：
 
@@ -278,6 +286,10 @@ arm ∈ train | parent | cand-{id} | baseline-{random|heuristic|fixed_prompt} | 
  "decision":"reject","decided_by":"auto","reason":"C2 未显著"}
 ```
 
+**HITL 挂起（B-32）**：`--hitl` 时，MOD-07 写 `generations/gen-{NNN}/gate.json`（`status="pending"`）；MOD-06 置 `phase="hitl_wait"` 并以**退出码 0** 结束，可用 `--resume` 续跑。挂起超过 `evolve.hitl_timeout_h`（默认 24）仍未批复的，下次 `--resume` 时保守回滚到 parent（`reason="hitl_timeout"`，`E_EVOLVE_GATE_TIMEOUT`）。
+
+**数值精度（B-34）**：`report.json`、`metrics/*.json`、`generations.csv` 中的浮点数一律 `round(x, 4)`；本文示例中的 2 位小数只是展示。
+
 ### 4.6 命令面（MOD-09 统一暴露；新增命令必须回填本节）
 
 ```bash
@@ -331,7 +343,7 @@ gamer_rsi/
   sandbox/    api.py projection.py guard.py audit.py honeypot.py  # MOD-02
   inference/  backend.py mlx_backend.py llama_backend.py schema.py # MOD-03
   agent/      policy.py parser.py heuristic.py prompts/ tools/  # MOD-04
-  memory/     store.py retriever.py schemas.py            # MOD-05
+  memory/     store.py retriever.py snapshot.py schemas.py  # MOD-05（snapshot.py：memory_v{N}.jsonl 读写与回滚，B-35）
   loop/       runner.py reflect.py generation.py          # MOD-06
   evolve/     proposer.py judge.py versioning.py gate.py  # MOD-07
   evals/      baselines.py harness.py metrics.py diversity.py ablation.py # MOD-08
@@ -348,7 +360,10 @@ tests/       unit/ integration/ golden/
 docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 ```
 
-**配置优先级**：CLI 参数 > 环境变量 `GAMERSI_*` > `configs/default.yaml` 默认值。
+**配置优先级（B-26）**：CLI 参数 > 环境变量 `GAMERSI_*` > `harness/config.json`（可演化层）> `configs/default.yaml` 默认值。
+- `harness/config.json` 只能包含白名单键：`policy.*` 的训练期采样参数、`memory.retrieve.*`、`agent.tools.*`。它不得包含 `episode.*`、`seeds.*`、`loop.*`、`evolve.*` 等静态键，也不得覆盖 §8.1 的评估温度；违规时 MOD-07 在 C3 门禁拒绝，MOD-09 加载时抛 `E_IO_CONFIG_INVALID`。
+- 这一层属于 harness，因此计入 `artifact_hash`、不计入 `config_hash`（B-19）。
+- **环境变量命名（B-30）**：嵌套键用 `__` 分隔，如 `GAMERSI_MEMORY_RETRIEVE__TOP_K=8` 对应 `memory.retrieve.top_k`。
 **run_id** = `{git_short_sha}-{config_hash[:8]}-{utc_ts}`。`config_hash` 只覆盖**静态配置**（configs + EpisodeConfig），用于判定 run 身份与 `--resume` 一致性；harness 的变化由逐代记录的 `artifact_hash` 表达（B-19）。否则第一代被接受后 `--resume` 必然冲突。
 **内容配表**：MOD-01 直接读取 `src/game/content/*.json`，与 JS 内核共用同一份，不另建 `configs/enemies.yaml`。
 **忽略规则**：`runs/` 必须写进 `.gitignore`，否则 MOD-07 的 `worktree_clean_check()` 永远判定为 dirty。
@@ -379,7 +394,7 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 | 里程碑 | 覆盖模块 | 交付物 | 验收（源自计划 §7） |
 |---|---|---|---|
 | M0 | MOD-01、MOD-02、MOD-09（骨架） | Python 移植 + 观测投影 + 审计器 + 单测 | `src/game/tests/golden` 4 组逐行对拍全过；同一 seed 两次运行 `state_hash` 序列完全一致；Python 版 heuristic 在默认局（§8.6）上的通关率与 JS `greedy_counter` 相差 ≤ 3pp（n=200） |
-| M1 | MOD-03、MOD-04、MOD-08（基线部分） | 8B agent + random/heuristic/fixed-prompt 三基线 | 三个基线的 held-out 分数入档；JSON 格式鲁棒性报告 |
+| M1 | MOD-03、MOD-04、MOD-08（基线部分） | 8B agent + random/heuristic/fixed-prompt 三基线；推理后端只交付 `MLXBackend` + `MockBackend`，`LlamaCppBackend` 与阶段二 30B 同期上线，但 `Backend` 契约与一致性套件在 M1 定型（B-31） | 三个基线的 held-out 分数入档；JSON 格式鲁棒性报告 |
 | M2 | MOD-05、MOD-06、MOD-07（初版） | 反思 + 记忆 + K 局自动演化 + HITL 门 | 闭环跑通 ≥1 轮演化，产出 diff 与决策记录 |
 | M3 | MOD-08（完整）、MOD-07（回滚/消融） | 评估报告 + 曲线图 + 消融结论 | 计划 §6 三项验收全部通过 |
 | M4（可选） | MOD-10 | STaR 筛选 + LoRA 新基座 | 跨代增益 vs 推理时演化增益对比 |
@@ -552,23 +567,30 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 | P-29 | 采纳，即 B-10/B-12 |
 | P-30 | 采纳，即 B-11 |
 
-### 11.2 待裁决（v1.3 剩余 11 项）
+### 11.1c v1.4 已回填（2026-09-30 17:49，11 项待裁决全部确认，另收录 PRD 内 3 项未登记决策）
 
-| # | 提出方 | 决策（当前实现依据） | 影响面 |
+| # | 来源 | 决策 | 回填位置 |
 |---|---|---|---|
-| P-01 | MOD-04 | `Action` 类仍定义在 `gamer_rsi/env/actions.py`，但由 `sandbox/api.py` re-export，L1+ 只许从门面导入——用于消解 INV-1 与 §4.3 的表面冲突 | INV-1、§4.3 |
-| P-03 | MOD-04 | 配置优先级插入可演化的 `harness/config.json`：CLI > `GAMERSI_*` > `harness/config.json` > `default.yaml` | §5 配置契约 |
-| P-05 | MOD-04 | `agent/prompts/task.md` 为 INV-3 的第 ④ 类白名单上下文，且**不属**演化对象 | INV-3 |
-| P-06 | MOD-02 | `FullState` 只经 `build_full_state() -> Mapping[str, Any]` 暴露一次，L1+ 在 `BLOCKED_MODULES` 语义下不可调用 | INV-1、MOD-01 接口 |
-| P-07 | MOD-02 | 审计器只做黑名单扫描 + canary 探针，不做「prompt 中每个数值都归因到 `VisibleSet`」的正向校验 | INV-2/INV-3 |
-| P-11 | MOD-03 | 修复 prompt 模板由 `inference/schema.py` 独占拥有，MOD-04 不得覆盖 | §4.3、MOD-04/03 边界 |
-| P-17 | MOD-07 | `harness/versions/v{N}/` 布局：`version.json` / `gate.json` / `candidates/` / `patches/` | §4.4 |
-| P-18 | MOD-05 | 记忆配置嵌套键用 `__`（如 `GAMERSI_MEMORY_RETRIEVE__TOP_K`）；新增 `memory` 子命令族；中文分词用字符 unigram/bigram（零依赖）；去重阈值 `sim≥0.85` 且 `situation_key` 相同 | §5、§4.6 |
-| P-24 | MOD-03 | **M1 只交付 `MLXBackend` + `MockBackend`**，`LlamaCppBackend` 与阶段二 30B 同期上（省约 2.5 人日） | §4 技术栈、M1 范围 |
-| P-26 | MOD-07 | HITL 挂起写 `gen-{N}/gate.json(status=pending)` 并以退出码 0 结束（可续跑）；超时 24h 保守回滚（`hitl_timeout`） | §4.5、§5 |
-| P-27 | MOD-07 | `version.json` 预留 `base_model` 字段以承接 MOD-10（会改 §4.4 契约） | §4.4、MOD-10 |
+| B-23 | P-01（MOD-04） | `Action` 定义在 `env/actions.py`，由 `sandbox/api.py` re-export，L1+ 只许从门面导入 | §1 实施细则 |
+| B-24 | P-06（MOD-02） | 全状态只由 `SandboxEnv` 私有持有，`gamer_rsi.env` 对 L1+ 不可导入（原 `build_full_state()` 方案按 MOD-01 v1.0 改为等价封装） | §1 实施细则 |
+| B-25 | P-07（MOD-02） | 审计器只做黑名单扫描 + canary 探针，不做正向归因 | §1 实施细则 |
+| B-26 | P-03（MOD-04） | 配置优先级 CLI > env > `harness/config.json` > default.yaml；harness 层只含白名单键、不得覆盖评估温度 | §5 |
+| B-27 | P-05（MOD-04） | `agent/prompts/task.md` 是 INV-3 的第 ④ 类上下文，不属演化对象 | §1 INV-3 |
+| B-28 | P-11（MOD-03） | 修复 prompt 由 `inference/schema.py` 独占 | §4.3 |
+| B-29 | P-17（MOD-07） | `harness/versions/v{N}/` 只放不可变快照；候选、patches、gate.json 放在 `runs/<run_id>/generations/gen-{NNN}/`（按 MOD-07 v0.2 实际设计调整了 v1.2 的登记文字） | §4.4 |
+| B-30 | P-18（MOD-05） | 环境变量嵌套键用 `__`；中文分词用字符 unigram/bigram；去重阈值 `sim≥0.85` 且 `situation_key` 相同（后两项属于 MOD-05 内部口径） | §5、MOD-05 |
+| B-31 | P-24（MOD-03） | M1 只交付 `MLXBackend` + `MockBackend` | §7 M1 |
+| B-32 | P-26（MOD-07） | HITL 挂起写 gate.json(pending) 并以退出码 0 结束；超时 24h 保守回滚 | §4.5 |
+| B-33 | P-27（MOD-07） | `version.json.base_model` 预留给 MOD-10，M0–M3 恒为 null | §4.4 |
+| B-34 | MOD-08 §6 | 报告数值统一保留 4 位小数 | §4.5 |
+| B-35 | MOD-05 §3 | 新增 `memory/snapshot.py` | §5 |
+| B-36 | MOD-06 §7 | seed 只能经 `evals.seeds.take` 取用，MOD-06 只校验 split 标签（与 P-14 结论一致） | §4.7 |
 
-**裁决原则**：涉及 **INV-1/INV-2/INV-5** 的剩余条目（P-01、P-06、P-07）优先级最高，必须在 M0/M1 评审时先行裁决，其余可在对应里程碑裁决。**B-07（seed 协议）已裁决并全量对齐**，后续任何 seed 区间引用必须回查 MOD-08 PRD §4。
+### 11.2 待裁决
+
+（无。v1.4 起，新的 PRD 临时决策登记到这里，编号从 P-31 开始。）
+
+**裁决原则**：涉及 **INV-1/INV-2/INV-5** 的条目优先级最高，必须在所属里程碑开工前裁决。**B-07（seed 协议）已裁决并全量对齐**，后续任何 seed 区间引用必须回查 MOD-08 PRD §4。
 
 ---
 
@@ -579,4 +601,5 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 | v1.0 | 2026-09-30 | 首版：9 模块 + MOD-10 预留、7 条不变量、全局契约、质量门 |
 | v1.1 | 2026-09-30 | 配套 9 份模块 PRD 产出；回填 8 项跨模块契约（B-01..B-08，含 seed 协议全量对齐与 `generations.csv` 归属裁定）；新增 §11 待回填决策登记表（27 项待裁决） |
 | v1.2 | 2026-09-30 | 新增 GAME 系列 PRD（游戏本体：GAME-00/01/02，见 [docs/README.md](README.md)）；登记 P-28..P-30：游戏本体改为前后端分离网页实现（MOD-11 待立项，MOD-01 转为纯 Python 等价移植）、动作集统一与新增、难度配置化与失心粒度上移 |
-| v1.3（待评审） | 2026-09-30 17:21 | 按 [MOD PRD 评审](reviews/2026-09-30-MOD-PRD评审.md) 修订：裁决 P-28/29/30 并结案 19 项待裁决条目；§4 全面对齐 GAME（obs-agent-1.0.0、决策计划、三层校验唯一口径、轨迹路径与 report 写入分工）；新增 §4.7 模块间调用签名表；§8 拆分为 8.1–8.6，新增「一局」定义与成本模型；INV-7 主指标改为 outcome/stages_cleared/hearts_left/battles_won；新登记 B-09..B-22 |
+| v1.3 | 2026-09-30 17:21 | 按 [MOD PRD 评审](reviews/2026-09-30-MOD-PRD评审.md) 修订：裁决 P-28/29/30 并结案 19 项待裁决条目；§4 全面对齐 GAME（obs-agent-1.0.0、决策计划、三层校验唯一口径、轨迹路径与 report 写入分工）；新增 §4.7 模块间调用签名表；§8 拆分为 8.1–8.6，新增「一局」定义与成本模型；INV-7 主指标改为 outcome/stages_cleared/hearts_left/battles_won；新登记 B-09..B-22 |
+| v1.4 | 2026-09-30 17:49 | 确认 v1.3 全部裁决；剩余 11 项待裁决全部确认并回填正文（B-23..B-33），另收录 3 项 PRD 内未登记决策（B-34..B-36）；新增 §1「不变量实施细则」；P-06、P-17 的登记文字按 v1.3 后的实际设计调整；§11.2 清零 |

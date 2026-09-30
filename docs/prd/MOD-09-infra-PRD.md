@@ -1,9 +1,9 @@
 # MOD-09 infra 技术 PRD
 
-> 版本：v0.2（2026-09-30 17:21 按 Spec v1.3 修订，见 §17）· 状态：待评审 · 所属里程碑：M0–M3（L3 工程层，横切全模块）
+> 版本：v0.3（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：待评审 · 所属里程碑：M0–M3（L3 工程层，横切全模块）
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源；与本文件冲突时以 Spec 为准）
 > 作者：主代理（MOD-09 owner）· 日期：2026-09-30
-> 标注「决策（本 PRD 提出，待回填 Spec）」的条目是 Spec 未覆盖处的临时决策，需回填 Spec 后转正。
+> v0.3 起 Spec §11.2 已清零；新的临时决策按 Spec §11.2 从 P-31 起登记。
 
 ## 1. 背景与目标
 
@@ -57,10 +57,10 @@ MOD-09 是 Spec §6 依赖矩阵中**唯一不被任何人阻塞、却阻塞所�
 
 ## 4. 功能需求（FR-09-x，编号，每条可测试）
 
-- **FR-09-1 配置优先级**：合并顺序 `CLI 显式参数 > GAMERSI_* 环境变量 > configs/default.yaml > 代码内 dataclass 默认值`。环境变量命名规则 `GAMERSI_<SECTION>__<KEY>`（双下划线分层），未知键 → 记 `E_IO_CONFIG_UNKNOWN` 并**忽略**（不中断），未知键清单写入 run 启动日志。
+- **FR-09-1 配置优先级（Spec v1.4 B-26）**：合并顺序 `CLI 显式参数 > GAMERSI_* 环境变量 > harness/config.json（可演化层）> configs/default.yaml > 代码内 dataclass 默认值`。harness 层只接受白名单键（`policy.*` 训练期采样参数、`memory.retrieve.*`、`agent.tools.*`），出现其他键或试图设置评估温度 → `E_IO_CONFIG_INVALID`（退出码 2）；这一层计入 `artifact_hash`，不计入 `config_hash`。环境变量命名规则 `GAMERSI_<SECTION>__<KEY>`（双下划线分层），未知键 → 记 `E_IO_CONFIG_UNKNOWN` 并**忽略**（不中断），未知键清单写入 run 启动日志。
 - **FR-09-2 schema 校验**：`AppConfig` 为 frozen dataclass + 显式 `validate()`（避免引入 pydantic 作为阶段一硬依赖）；类型不符或越界 → `E_IO_CONFIG_INVALID` 并以退出码 2 终止，错误信息必须指出键路径与期望类型。
 - **FR-09-3 config_hash**：`config_hash = sha256(json.dumps(_canonical(cfg), sort_keys=True, separators=(",",":"), ensure_ascii=False))[:16]`；`_canonical` **排除**易变字段（`run_id`、`created_at`、`log_level`、`paths.runs_root`）与所有绝对路径，**不包含** `harness_version`（Spec v1.3 B-19：否则第一代被接受后 `--resume` 必然冲突）。harness 的变化由 `artifact_hash(harness_dir)` 表达：对 `(相对路径, 文件 sha256)` 按路径排序后整体 sha256，逐代写入 `version.json` 与 report。
-- **FR-09-4 run_id**：`run_id = f"{git_short_sha}-{config_hash[:8]}-{utc_ts}"`，`utc_ts = YYYYMMDDTHHMMSSZ`；`git_short_sha` 取自 `git rev-parse --short HEAD`，仓库不可用（无 git / dirty 之外的情况）→ 用 `nogit` 占位并记 `E_IO_GIT_UNAVAILABLE`。**决策（本 PRD 提出，待回填 Spec）**：`--run-id` 显式指定时以显式值为准，用于复现与测试。
+- **FR-09-4 run_id**：`run_id = f"{git_short_sha}-{config_hash[:8]}-{utc_ts}"`，`utc_ts = YYYYMMDDTHHMMSSZ`；`git_short_sha` 取自 `git rev-parse --short HEAD`，仓库不可用（无 git / dirty 之外的情况）→ 用 `nogit` 占位并记 `E_IO_GIT_UNAVAILABLE`。**已回填（Spec v1.3 §4.6）**：`--run-id` 显式指定时以显式值为准，用于复现与测试。
 - **FR-09-5 目录初始化**：`init_run_dir(run_id, cfg) -> RunPaths` 幂等创建 Spec §5 的目录树（`config.json`、`events.jsonl`、`episodes/<split>/`、`reflections/`、`generations/`、`metrics/`、`plots/`、`audit/`）。目录已存在且 `config.json` 的 `config_hash` 不一致 → `E_IO_RUN_CONFLICT` 并退出码 2（禁止两套配置写同一 run）。
 - **FR-09-6 JsonlWriter 写入语义**：每行 `json.dumps(..., ensure_ascii=False)` + `\n`；每次 `write()` 后 `flush()`；`infra.fsync_every`（默认 0 = 不 fsync，>0 表示每 N 行 `os.fsync`）。**崩溃安全**：读取端必须容忍末行截断（`json.JSONDecodeError` 时丢弃最后一行并记 `E_IO_TRAILING_TRUNCATED`）；写入端保证「一行要么完整要么不存在」——先构造整行字符串再单次 `write`。
 - **FR-09-7 事件注册表**（Spec v1.3 §8.2）：
@@ -433,3 +433,4 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
 |---|---|---|
 | v0.1 | 2026-09-30 | 首版 |
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：`config_hash` 不再包含 harness_version，新增 `artifact_hash`（P0-7）；redaction 只作用于 prompt/memory/reflection（P0-7）；事件改为 `<module>.<event>` 注册表并统一落到 `events.jsonl`（P1-11）；轨迹 schema 对齐 §4.5 新字段与 `episode_key` 路径（P1-10）；退出码新增 5（P1-13）；CLI 对齐 §4.6，统一使用 `--run-id`（P1-14）；git tag 改为 `harness-v{N}`（P1-15）；新增 FR-09-18 schema 与原子写、FR-09-19 `runs/` 忽略检查 |
+| v0.3 | 2026-09-30 17:49 | FR-09-1 按 Spec B-26 插入 harness/config.json 层及白名单校验 |
