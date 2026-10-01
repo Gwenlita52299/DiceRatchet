@@ -14,6 +14,9 @@ logs/
 # Large binaries (papers kept locally)
 papers/*.pdf
 
+# Third-party reference repos cloned under ref/ (kept locally)
+ref/
+
 # Game runtime logs
 src/game/runs/
 runs/
