@@ -1,0 +1,233 @@
+# configs/default.yaml —— MOD-09 配置合并的基座（Spec §5 / B-26）
+# 优先级：CLI 参数 > GAMERSI_* 环境变量 > harness/config.json > 本文件 > 代码默认值
+# 键路径与 gamer_rsi/infra/config.py 的 AppConfig 一一对应（见该文件 docstring 的映射表）。
+# 浮点精度：report.json / metrics 一律 round(x,4)（Spec §4.5 B-34）。
+
+# ============ env（MOD-01 环境规则 + MOD-02 沙箱 + 局配置）============
+env:
+  content_dir: src/game/content
+  golden_dir: src/game/tests/golden
+  check_invariants: true
+  episode: # 默认局（Spec §8.6）：hard × 6 关，启发式通关率约 45%
+    difficulty: hard
+    stage_count: 6
+    character: warrior
+    toggles: [relics, forge, shop, events, shrines, blessings]
+    max_env_steps: 1000 # env 步硬上限（唯一键，各模块只读）
+    max_decisions: 300 # 决策点上限
+  sandbox: # MOD-02
+    projection:
+      mode: strict
+      schema_version: obs-agent-1.0.0
+    render:
+      max_tokens_p95: 1500
+    guard:
+      enforce: enforce
+      scan_roots:
+        - gamer_rsi/agent
+        - gamer_rsi/memory
+        - gamer_rsi/loop
+        - gamer_rsi/evolve
+        - gamer_rsi/evals
+        - gamer_rsi/inference
+      process_boundary: false
+    exec:
+      timeout_s: 2.0
+      mem_limit_mb: 256
+      cpu_limit_s: 2
+      max_tools: 32
+    policy_failure_streak: 3
+    audit:
+      enabled: true
+      surfaces: [prompt, memory, log]
+      ruleset: 1.0.0
+      fail_on: critical
+      evidence_chars: 12
+    honeypot:
+      enabled: true
+      plan_path: configs/honeypot.yaml
+      self_test: true
+
+# ============ agent（MOD-04 决策策略；policy.* 为 harness 可演化白名单）============
+agent:
+  policy:
+    mode: play
+    template_path: harness/prompts/decision.md
+    fixed_prompt_path: harness/prompts/fixed_v1.md
+    task_path: harness/prompts/task.md
+    prompt_token_budget: 3072
+    token_estimator: chars_div_3
+    memory_top_k: 5
+    reflection_max: 3
+    retry_max: 2
+    illegal_streak_limit: 3
+    illegal_penalty: -0.05
+    temperature: 0.7 # 训练探索温度（运行期 clamp 0.7–1.2）；评估温度固定 0.0（B-14，无配置键）
+    top_p: 0.95
+    max_tokens: 320
+    max_plan_len: 12
+    tool_timeout_ms: 50
+    tools_enabled: true
+    heuristic_fallback: true
+    reasoning_max_chars: 400
+    sampling_seed_salt: policy-v1
+    leak_scan: true # 恒 true
+  tools: {}
+
+# ============ inference（MOD-03 推理后端）============
+inference:
+  registry_path: configs/models.yaml
+  model_id: qwen3-8b-q4 # 阶段二切 qwen3-30b-a3b-q4
+  mode: train
+  backend: mlx
+  fallback_backend: mock
+  ram_budget_gb: 20.0
+  max_attempts: 3
+  retry_backoff_ms: 200
+  total_timeout_ms: 8000
+  generate_timeout_ms: 30000
+  max_tokens: 256
+  reasoning_max_tokens: 160
+  context_overflow_policy: reject
+  train_temperature_min: 0.7
+  seed: null # 评估模式必须非空（由 MOD-09 seed 注册表传入）
+  cache_prompt: true
+  kv_cache_bits: 4
+  max_inflight: 4 # 评估模式强制 1
+  debug_dump_raw: false
+  skip_hash_check: false
+  llama_server_startup_timeout_ms: 60000
+  llama_server_port: 0
+
+# ============ memory（MOD-05 反思记忆库）============
+memory:
+  enabled: true
+  store_format: jsonl
+  max_entries: 2000
+  ttl_ticks: 300
+  min_age_ticks: 30
+  compact_every: 200
+  extract:
+    max_candidates_per_reflection: 3
+    use_llm: false
+  dedup:
+    sim_threshold: 0.85
+    jaccard_weight: 0.5
+    char3_weight: 0.5
+  conflict:
+    auto_supersede: false
+    min_refs: 5
+    winrate_delta: 0.15
+  retrieve:
+    top_k: 8
+    token_budget: 900
+    min_score: 0.15
+    same_situation_bonus: 0.25
+    weights: {tag: 1.0, bm25: 0.6, vector: 0.0, utility: 0.3, recency: 0.1}
+    bm25: {k1: 1.2, b: 0.75}
+    recency_lambda: 0.01
+  embedding:
+    enabled: false
+    model: bge-small-zh-v1.5
+    dim: 512
+  snapshot:
+    every_generation: true
+  scan:
+    on_write: true
+
+# ============ loop（MOD-06 闭环编排）============
+loop:
+  k: 30 # 每 K 局训练触发一次演化周期
+  max_generations: 3
+  action_retry_r: 2
+  hitl: false
+  reflect_enabled: true
+  reflect_timeout_s: 60.0
+  reflect_context_window: 5
+  train_concurrency: 1 # 固定 1（共享记忆写入）
+  eval_concurrency: 2
+  max_candidates_per_generation: 3 # 硬上限 3
+  eval_seeds_per_candidate: 40
+  max_episodes_per_generation: 170 # 全系统唯一成本上限（E_gen 比较）
+  n_candidates: 2
+  smoke_n: 5
+  heldout_n: 40
+  io_retry: 3
+  io_backoff_ms: 200
+  llm_timeout_s: 90.0
+  fallback_on_llm_failure: true
+  state_fsync: true
+  retry_reflections_on_resume: false
+  max_run_bytes: 2147483648 # 2 GB
+
+# ============ evolve（MOD-07 harness 自进化）============
+evolve:
+  n_candidates: 2
+  n_traj: 20
+  memory_top_k: 12
+  max_diff_lines: 40
+  max_diff_chars: 4000
+  smoke_n: 5
+  min_heldout_n: 20
+  win_rate_tol: 0.0
+  alpha: 0.05
+  gap_threshold: 0.15
+  min_entropy_slope: -0.01
+  max_illegal_rate: 0.05
+  max_fallback_rate: 0.10
+  max_truncation_rate: 0.05
+  hitl: true
+  gate_timeout_hours: 24
+  propose_max_retries: 2
+  evolvable_keys: [retrieval.top_k, sampling.temperature, prompt.show_intent]
+  tool_import_allowlist: [math, re, json, itertools, functools, typing, dataclasses]
+
+# ============ eval（MOD-08 测量）============
+eval:
+  n_heldout: 40 # H1
+  n_test: 100
+  n_ablation: 40 # H2
+  bootstrap_B: 10000
+  alpha: 0.05
+  fdr_q: 0.10
+  gap_threshold: 0.15
+  t_max: 120
+  n_workers: 2
+  seed_timeout_s: 300
+  min_support: 3
+  drop_rate_max: 0.10
+  budget_seconds: null
+  entropy: {base: 2.0, kind_space: 16}
+  collapse:
+    c1_slope_threshold: -0.010
+    c2_ratio_threshold: 0.60
+    c3_jsd_freeze: 0.010
+    c3_winrate_jump: 0.05
+    c4_seq_ratio: 0.50
+    confirm_generations: 2
+  determinism:
+    eval_temperature: 0.0 # Spec §8.1 B-14：固定值，不可配置为其他值
+    train_temperature: 0.7
+    n_rep: 1
+    n_rep_nondeterministic: 3
+    decode_seed: 0
+  baseline:
+    kinds: [random, heuristic, fixed_prompt]
+    archive_dir: baselines
+    fixed_prompt_harness_version: 0
+  ablation:
+    arms: [full, no_reflection, no_self_edit]
+    split_basket: H2
+
+# ============ infra（MOD-09 本模块）============
+infra:
+  runs_root: runs # 不参与 config_hash
+  log_level: INFO # 不参与 config_hash
+  fsync_every: 0 # 0 = 不 fsync；长跑建议 200
+  rotate_max_mb: 512
+  threads: 1 # 传给推理后端与 numpy（确定性）
+  utc: true
+  redaction_enabled: true
+  plot_enabled: true
+  git_enabled: true
+  exit_on_guard: true

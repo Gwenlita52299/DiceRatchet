@@ -1,0 +1,32 @@
+# configs/seeds.yaml —— seed 三方隔离协议（MOD-08 §9 定义；加载与区间校验归 MOD-09）
+# INV-5：train / heldout / test 的 seed 三方隔离，任一重叠 → E_EVAL_SEED_OVERLAP
+version: 1
+hash_algo: sha256
+
+splits:
+  train:
+    start: 1000
+    end: 1999
+    per_generation: 30
+    consume: in_order
+    expose_to: [prompt, memory, reflection] # 训练 seed 可见于 agent
+  heldout:
+    expose_to: [] # heldout seed 不得出现在任何 agent 可见出口
+    baskets:
+      H1: {start: 2000, end: 2039, role: generation_judge} # 代际裁判
+      H2: {start: 2040, end: 2079, role: ablation_final}   # 消融
+      H3: {start: 2080, end: 2099, role: reserve}          # 预留
+  test:
+    start: 9000
+    end: 9099
+    role: final_acceptance
+    locked: true
+    unlock_policy: single_use_per_milestone
+
+exposure_guard:
+  destinations_forbidden: [prompt, memory, reflection]
+  numeric_scan: true # 文本中 4 位数字 token 落 2000-2099 / 9000-9099 即告警
+  forbidden_tokens: [heldout, H1, H2, H3, "2000-2099", "9000-9099"]
+
+# 由 CLI 生成、CI 校验；改动必须同步更新并在 PR 说明
+seeds_hash: "sha256:0000000000000000000000000000000000000000000000000000000000000000"

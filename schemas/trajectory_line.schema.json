@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamersi.local/schemas/trajectory_line.schema.json",
+  "title": "TrajectoryLine",
+  "description": "单步轨迹行（Spec v1.4 §4.5）。局末 episode_end 行走 $defs/EpisodeEnd 分支。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "episode_key", "generation", "harness_version", "arm", "seed", "split", "step",
+    "decision_index", "plan_index", "attempt", "source", "obs_digest", "action",
+    "reward", "cum_reward", "illegal", "mode", "ts"
+  ],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["episode_end"],
+      "description": "仅局末行携带；普通步行动作行不出现该键"
+    },
+    "episode_key": {
+      "type": "string",
+      "pattern": "^e-[0-9]{6}-g[0-9]{3}-(train|parent|cand-[a-z0-9]+|baseline-[a-z_]+|ablation-[a-z_]+)$"
+    },
+    "generation": { "type": "integer", "minimum": 0 },
+    "harness_version": { "type": "integer", "minimum": 0 },
+    "arm": { "type": "string" },
+    "seed": { "type": "integer", "minimum": 0 },
+    "split": { "enum": ["train", "heldout", "test", "demo"] },
+    "step": { "type": "integer", "minimum": 0 },
+    "decision_index": { "type": "integer", "minimum": 0 },
+    "plan_index": { "type": "integer", "minimum": 0 },
+    "attempt": { "type": "integer", "minimum": 1, "maximum": 3 },
+    "source": { "enum": ["llm", "fallback", "heuristic", "random", "scripted"] },
+    "obs_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "action": { "type": ["object", "null"] },
+    "reward": { "type": "number" },
+    "cum_reward": { "type": "number" },
+    "illegal": { "type": "boolean" },
+    "illegal_reason": { "type": ["string", "null"] },
+    "llm_raw": { "type": ["string", "null"] },
+    "llm_latency_ms": { "type": ["integer", "null"], "minimum": 0 },
+    "prompt_tokens": { "type": ["integer", "null"], "minimum": 0 },
+    "completion_tokens": { "type": ["integer", "null"], "minimum": 0 },
+    "prompt_hash": { "type": ["string", "null"] },
+    "memory_ids": { "type": ["array", "null"], "items": { "type": "string" } },
+    "tool_hash": { "type": ["string", "null"] },
+    "mode": { "enum": ["train", "eval"] },
+    "outcome": {
+      "type": ["string", "null"],
+      "description": "仅 episode_end：win|lose|truncated（口径归 MOD-01/08）"
+    },
+    "truncation_reason": { "type": ["string", "null"] },
+    "stages_cleared": { "type": ["integer", "null"], "minimum": 0 },
+    "hearts_left": { "type": ["integer", "null"], "minimum": 0 },
+    "battles_won": { "type": ["integer", "null"], "minimum": 0 },
+    "decisions": { "type": ["integer", "null"], "minimum": 0 },
+    "degraded": { "type": ["boolean", "null"] },
+    "exclude_reason": { "type": ["string", "null"] },
+    "ts": { "type": "string", "format": "date-time", "pattern": "Z$" }
+  },
+  "patternProperties": { "^x_": {} },
+  "if": {
+    "properties": { "type": { "const": "episode_end" } },
+    "required": ["type"]
+  },
+  "then": { "$ref": "#/$defs/EpisodeEnd" },
+  "$defs": {
+    "EpisodeEnd": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type", "episode_key", "generation", "harness_version", "arm", "seed", "split",
+        "step", "outcome", "stages_cleared", "hearts_left", "battles_won",
+        "decisions", "degraded", "mode", "ts"
+      ],
+      "properties": {
+        "type": { "const": "episode_end" },
+        "outcome": { "type": ["string", "null"], "enum": ["win", "lose", "truncated", null] },
+        "truncation_reason": { "type": ["string", "null"] },
+        "stages_cleared": { "type": "integer", "minimum": 0 },
+        "hearts_left": { "type": "integer", "minimum": 0 },
+        "battles_won": { "type": "integer", "minimum": 0 },
+        "decisions": { "type": "integer", "minimum": 0 },
+        "degraded": { "type": "boolean" },
+        "exclude_reason": { "type": ["string", "null"] },
+        "reward": { "type": "number" },
+        "cum_reward": { "type": "number" },
+        "illegal": { "type": "boolean" },
+        "episode_key": { "type": "string" },
+        "seed": { "type": "integer", "minimum": 0 },
+        "generation": { "type": "integer", "minimum": 0 },
+        "harness_version": { "type": "integer", "minimum": 0 },
+        "arm": { "type": "string" },
+        "split": { "enum": ["train", "heldout", "test", "demo"] },
+        "step": { "type": "integer", "minimum": 0 },
+        "decision_index": { "type": "integer", "minimum": 0 },
+        "plan_index": { "type": "integer", "minimum": 0 },
+        "attempt": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "source": { "enum": ["llm", "fallback", "heuristic", "random", "scripted"] },
+        "obs_digest": { "type": ["string", "null"] },
+        "action": { "type": ["object", "null"] },
+        "mode": { "enum": ["train", "eval"] },
+        "ts": { "type": "string", "format": "date-time", "pattern": "Z$" }
+      },
+      "patternProperties": { "^x_": {} }
+    }
+  }
+}

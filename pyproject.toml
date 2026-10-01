@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gamer-rsi"
+version = "0.1.0"
+description = "GameRSI 训练链路：本地小模型在自建骰子 roguelike 里递归自我改进"
+readme = "gamer_rsi/README.md"
+requires-python = ">=3.11"
+license = { text = "All rights reserved" }
+dependencies = [
+    "pyyaml>=6.0",
+    "jsonschema>=4.21", # draft 2020-12，跨模块 schema 校验（Spec §4.5/§9 G5）
+]
+
+[project.optional-dependencies]
+plot = ["matplotlib>=3.8"] # 绘图为可选依赖，缺失时降级（FR-09-13）
+dev = ["pytest>=8.0", "pytest-cov>=5.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["gamer_rsi"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra"
+markers = [
+    "slow: 较慢的集成测试（崩溃安全、跨进程确定性）",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["gamer_rsi/infra"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "raise NotImplementedError", "if TYPE_CHECKING:"]

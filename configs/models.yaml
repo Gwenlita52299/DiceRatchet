@@ -1,0 +1,38 @@
+# configs/models.yaml —— 推理后端注册表（MOD-03 定义 schema；MOD-09 只负责加载）
+# model_id 为全系统引用键；sha256 缺失时跳过校验（CI 要求必须填写）
+
+registry_version: 1
+
+defaults:
+  ram_budget_gb: 20.0
+  context_length: 32768
+  kv_cache_bits: 4
+  max_inflight: 4
+
+models:
+  - id: qwen3-8b-q4
+    family: qwen3
+    path: ~/.cache/huggingface/hub/Qwen3-8B-4bit
+    quant: 4bit
+    params_b: 8.0
+    context_length: 32768
+    sha256: null # 落地后由 MOD-03 填写并锁定（Q-6）
+    notes: 阶段一主力后端（MLX）
+  - id: qwen3-30b-a3b-q4
+    family: qwen3-moe
+    path: ~/.cache/huggingface/hub/Qwen3-30B-A3B-4bit
+    quant: 4bit
+    params_b: 30.0
+    context_length: 32768
+    kv_cache_bits: 4 # MoE 预算救急（Q-4）
+    sha256: null
+    notes: 阶段二后端
+  - id: mock
+    family: mock
+    path: null
+    quant: none
+    params_b: 0.0
+    context_length: 4096
+    notes: 冒烟与单测用的确定性假后端
+
+fallback_backend: mock
