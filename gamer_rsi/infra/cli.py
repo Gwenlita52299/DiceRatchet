@@ -334,15 +334,17 @@ def parse_seeds_spec(spec: str, *, seeds_file_dir: Path = Path(".")) -> dict[str
     返回 ``{split: [seeds]}``；无 split 前缀时键为 ``"default"``。
     """
     spec = spec.strip()
+    # file: 形式可能含绝对路径（macOS 临时目录带连字符），优先单独处理
+    if spec.startswith("file:"):
+        path = Path(seeds_file_dir) / spec[len("file:"):]
+        if not path.is_file():
+            raise InfraError(E.E_IO_CONFIG_INVALID, f"seed 文件不存在：{path}")
+        values = [int(x) for x in re.split(r"[,\s]+", path.read_text(encoding="utf-8"))
+                  if x.strip()]
+        return {"default": values}
     match = _SEEDS_SPEC_RE.match(spec)
     split = (match.group("split") or "default") if match else "default"
     rest = match.group("rest").strip() if match else spec
-    if rest.startswith("file:"):
-        path = Path(seeds_file_dir) / rest[len("file:"):]
-        if not path.is_file():
-            raise InfraError(E.E_IO_CONFIG_INVALID, f"seed 文件不存在：{path}")
-        values = [int(x) for x in re.split(r"[,\s]+", path.read_text(encoding="utf-8")) if x.strip()]
-        return {split: values}
     if "-" in rest and not rest.startswith("-"):
         lo, hi = rest.split("-", 1)
         return {split: list(range(int(lo), int(hi) + 1))}

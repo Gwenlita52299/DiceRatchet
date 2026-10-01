@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Final, Sequence
 
+from . import events
 from .errors import E, InfraError
 
 __all__ = ["plot_generations", "PLOT_FILES", "GENERATIONS_CSV_COLUMNS"]

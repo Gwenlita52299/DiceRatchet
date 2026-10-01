@@ -1,0 +1,194 @@
+"""CLI 测试（FR-09-10/11/12）—— T-09-13 / T-09-15。"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from gamer_rsi.infra import cli, events
+from gamer_rsi.infra.cli import build_parser, main, parse_seeds_spec
+from gamer_rsi.infra.errors import E
+
+REPO = Path(__file__).resolve().parents[3]
+
+
+@pytest.fixture(autouse=True)
+def _clean_events():
+    events.unbind()
+    yield
+    events.unbind()
+
+
+def _run(argv: list[str]) -> tuple[int, str, str]:
+    """直接调用 main（不 re-exec），返回 (exit_code, stdout, stderr)。"""
+    import io
+    import contextlib
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = main(argv, reexec=False)
+    return code, out.getvalue(), err.getvalue()
+
+
+# ---- FR-09-10 子命令树对齐 Spec §4.6 --------------------------------------------------------
+
+SPEC_COMMANDS = [
+    ("env", "selftest"), ("play",), ("baseline",), ("loop", "run"),
+    ("loop", "status"), ("loop", "smoke"), ("evolve", "approve"), ("evolve", "rollback"),
+    ("eval", "report"), ("eval", "ablation"), ("eval", "test"), ("eval", "diversity"),
+    ("audit", "leak"), ("inference", "probe"), ("inference", "bench"),
+    ("inference", "robustness"), ("memory", "stats"), ("memory", "snapshot"),
+    ("memory", "rollback"), ("memory", "verify"), ("memory", "retrieve"),
+    ("guards", "check"),
+]
+
+
+@pytest.mark.parametrize("path", SPEC_COMMANDS)
+def test_spec_commands_registered(path: tuple[str, ...]):
+    # Spec §4.6 的每个命令都必须在 parser 里
+    parser = build_parser()
+    args = parser.parse_args(list(path) + _required_args(path))
+    assert args.command == path[0]
+    assert args.command_path == list(path)
+
+
+def _required_args(path: tuple[str, ...]) -> list[str]:
+    if path == ("evolve", "approve") or path == ("evolve", "rollback"):
+        return ["--generation", "1"]
+    return []
+
+
+def test_pending_module_returns_exit_2():
+    # 尚未落地的模块命令 → E_IO_MODULE_PENDING，退出码 2
+    code, out, err = _run(["env", "selftest", "--seed", "1"])
+    assert code == 2
+    assert E.E_IO_MODULE_PENDING in err
+
+
+def test_guards_check_on_repo_is_clean():
+    code, out, err = _run(["guards", "check", "--root", "gamer_rsi"])
+    assert code == 0, err
+    assert "OK" in out
+
+
+def test_guards_check_dirty_fixture_exits_4():
+    code, out, err = _run(["guards", "check",
+                           "--root", "tests/fixtures/guards/gamer_rsi"])
+    assert code == 4, err
+    assert "E_IO_GUARD_LAYER" in err or "E_IO_GUARD_LAYER" in out
+
+
+def test_guards_check_fix_hints():
+    code, out, err = _run(["guards", "check", "--fix-hints",
+                           "--root", "tests/fixtures/guards/gamer_rsi"])
+    assert code == 4
+    assert "guard: allow" in out
+
+
+def test_guards_check_only_exempted_exits_0(tmp_path):
+    # 全部违例都被白名单豁免 → 0
+    src = tmp_path / "ok.py"
+    src.write_text("import random  # guard: allow E_IO_GUARD_RANDOM reason=t\n",
+                   encoding="utf-8")
+    code, out, err = _run(["guards", "check", "--root", str(tmp_path)])
+    assert code == 0
+    assert "exempted" in out
+
+
+# ---- FR-09-12 dry-run -----------------------------------------------------------------------
+
+def test_dry_run_emits_parseable_json(tmp_path, monkeypatch):
+    monkeypatch.chdir(REPO)
+    code, out, err = _run(["loop", "run", "--generations", "3", "--k", "30", "--dry-run"])
+    assert code == 0, err
+    plan = json.loads(out)
+    assert plan["dry_run"] is True
+    assert plan["config"]["loop"]["k"] == 30
+    assert plan["config"]["loop"]["max_generations"] == 3
+    assert plan["config_hash"]
+
+
+def test_dry_run_writes_nothing_to_runs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "default.yaml").write_text("loop:\n  k: 10\n", encoding="utf-8")
+    code, out, err = _run(["loop", "run", "--dry-run", "--config-dir", "configs"])
+    assert code == 0, err
+    # T-09-13：runs/ 无任何新文件
+    assert not (tmp_path / "runs").exists()
+
+
+def test_dry_run_after_subcommand(tmp_path, monkeypatch):
+    # --dry-run 出现在子命令之后也必须生效
+    monkeypatch.chdir(REPO)
+    code, out, err = _run(["loop", "run", "--dry-run"])
+    assert code == 0, err
+    assert json.loads(out)["dry_run"] is True
+
+
+# ---- FR-09-11 退出码 --------------------------------------------------------------------------
+
+def test_unknown_command_exits_2():
+    code, out, err = _run(["nope"])
+    assert code == 2
+
+
+def test_missing_required_arg_exits_2():
+    code, out, err = _run(["evolve", "approve"])
+    assert code == 2
+
+
+def test_bad_choice_exits_2():
+    code, out, err = _run(["play", "--agent", "bogus"])
+    assert code == 2
+
+
+def test_missing_run_dir_reports_error(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "configs").mkdir()
+    (tmp_path / "configs" / "default.yaml").write_text("", encoding="utf-8")
+    code, out, err = _run(["loop", "status", "--run-id", "ghost", "--config-dir",
+                           "configs"])
+    # 未绑定模块命令：E_IO_MODULE_PENDING（退出码 2）
+    assert code == 2
+
+
+# ---- FR-09-10 --seeds SPEC 解析 ----------------------------------------------------------------
+
+@pytest.mark.parametrize("spec,expected", [
+    ("train:1000-1004", {"train": [1000, 1001, 1002, 1003, 1004]}),
+    ("heldout:2000-2099", {"heldout": list(range(2000, 2100))}),
+    ("9000,9001", {"default": [9000, 9001]}),
+])
+def test_parse_seeds_spec(spec: str, expected: dict):
+    assert parse_seeds_spec(spec) == expected
+
+
+def test_parse_seeds_spec_file(tmp_path):
+    f = tmp_path / "seeds.txt"
+    f.write_text("1000,1001 1002\n", encoding="utf-8")
+    assert parse_seeds_spec(f"file:{f}") == {"default": [1000, 1001, 1002]}
+
+
+def test_parse_seeds_spec_bad_file(tmp_path):
+    from gamer_rsi.infra.errors import InfraError
+    with pytest.raises(InfraError) as exc:
+        parse_seeds_spec(f"file:{tmp_path / 'nope.txt'}")
+    assert exc.value.code == E.E_IO_CONFIG_INVALID
+
+
+# ---- G6 可复现命令（端到端子进程）--------------------------------------------------------------
+
+@pytest.mark.skipif(not (REPO / ".venv" / "bin" / "python").is_file(),
+                    reason="无 .venv")
+def test_end_to_end_guards_check():
+    env = {"MPLCONFIGDIR": "/tmp", "PYTHONHASHSEED": "0", "PATH": "/usr/bin:/bin"}
+    proc = subprocess.run(
+        [str(REPO / ".venv" / "bin" / "python"), "-m", "gamer_rsi",
+         "guards", "check", "--root", "gamer_rsi"],
+        cwd=str(REPO), capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert "guards: OK" in proc.stdout

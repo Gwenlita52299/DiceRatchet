@@ -126,10 +126,13 @@ def snapshot_config(cfg: AppConfig, run_id: str, git_sha: str) -> dict[str, Any]
 
 def _check_runs_ignored(runs_root: Path) -> None:
     """FR-09-19：``runs_root`` 必须被 ``.gitignore`` 覆盖，否则 ``worktree_clean_check`` 永远 dirty。"""
+    runs_root = Path(runs_root)
+    base = runs_root.parent if str(runs_root.parent) else "."
+    # 传相对路径：绝对路径在 macOS 上会因 /tmp -> /private/tmp 的符号链接前缀不匹配
+    rel = runs_root.name or "."
     try:
         out = subprocess.run(
-            ["git", "-C", str(runs_root.parent if runs_root.name else "."), "check-ignore",
-             str(runs_root)],
+            ["git", "-C", str(base), "check-ignore", rel],
             capture_output=True, text=True, timeout=5,
         )
     except (OSError, subprocess.SubprocessError):
@@ -149,14 +152,15 @@ def init_run_dir(run_id: str, cfg: AppConfig,
     目录已存在且 ``config.json`` 的 ``config_hash`` 不一致 → ``E_IO_RUN_CONFLICT``。
     """
     runs_root = Path(runs_root)
-    if git_check:
-        _check_runs_ignored(runs_root)
     root = runs_root / run_id
     paths = RunPaths(root)
     existed = root.is_dir()
     root.mkdir(parents=True, exist_ok=True)
     for d in paths.all_dirs():
         d.mkdir(parents=True, exist_ok=True)
+    # 目录存在后再查 .gitignore：带尾斜杠的模式只匹配已存在的目录（FR-09-19）
+    if git_check:
+        _check_runs_ignored(runs_root)
 
     snap = snapshot_config(cfg, run_id, git_short_sha(runs_root.parent))
     if existed and paths.config.is_file():

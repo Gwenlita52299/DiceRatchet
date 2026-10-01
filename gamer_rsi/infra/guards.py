@@ -121,7 +121,10 @@ def _is_scan_exempt_path(path: Path) -> bool:
     parts = path.parts
     if ".venv" in parts or "site-packages" in parts or "__pycache__" in parts:
         return True
-    # 守卫自身的 fixture 与测试由测试用例显式控制，不进入产品扫描
+    # 守卫 fixture 必须被扫描（G2：fixture 纳入版本控制）；其余 tests/ 内文件豁免
+    # （测试自身常需 import random 等用于构造用例）
+    if "fixtures" in parts:
+        return False
     return "tests" in parts or path.name in ("conftest.py",)
 
 

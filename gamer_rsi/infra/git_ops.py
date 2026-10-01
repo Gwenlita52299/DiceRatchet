@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from typing import Sequence
 
 from . import events
 from .errors import E, InfraError
@@ -49,21 +50,27 @@ def harness_tag(version: int) -> str:
     return f"harness-v{version}"
 
 
-def worktree_clean_check(repo: Path = Path(".")) -> None:
-    """工作区必须干净（演化前门禁）。脏 → ``E_IO_GIT_DIRTY``。"""
+def worktree_clean_check(repo: Path = Path("."), *,
+                         allow: Sequence[str] = ()) -> None:
+    """工作区必须干净（演化前门禁）。脏 → ``E_IO_GUARD_DIRTY``。
+
+    ``allow`` 前缀下的改动被忽略：``commit_harness()`` 用它放行即将提交的 ``harness/``，
+    但仍要求工作区其余部分干净（否则演化会夹带未提交的源码改动）。
+    """
     status = git_run(["status", "--porcelain"], repo)
     dirty = [ln for ln in status.stdout.splitlines()
-             if ln.strip() and not _is_ignored_artifact(ln)]
+             if ln.strip() and not _is_skipped(ln, tuple(allow))]
     if dirty:
         raise InfraError(E.E_IO_GIT_DIRTY,
                          f"git worktree 不干净（{len(dirty)} 项），拒绝演化",
                          hint="先提交或丢弃改动；runs/ 等产物应已在 .gitignore 内（FR-09-19）")
 
 
-def _is_ignored_artifact(line: str) -> bool:
-    """被忽略的产物不应让 worktree 显脏（FR-09-19 的前提）。"""
+def _is_skipped(line: str, allow: tuple[str, ...]) -> bool:
     path = line[3:].strip().strip('"')
-    return path.startswith("runs/") or path.startswith("logs/")
+    if path.startswith("runs/") or path.startswith("logs/"):
+        return True
+    return any(path == a or path.startswith(a.rstrip("/") + "/") for a in allow)
 
 
 def commit_harness(repo: Path, version: int, message: str) -> str:
@@ -74,9 +81,11 @@ def commit_harness(repo: Path, version: int, message: str) -> str:
         raise InfraError(E.E_IO_CONFIG_INVALID,
                          f"harness 目录不存在：{harness}",
                          hint="先初始化 harness/（MOD-07 versioning 负责）")
-    worktree_clean_check(repo)
     full_msg = f"harness(v{version}): {message}"
+    # 先暂存 harness/，再以 allow=harness/ 做门禁：放行即将提交的本目录改动，
+    # 但工作区其余任何改动仍阻断演化
     git_run(["add", HARNESS_DIR], repo)
+    worktree_clean_check(repo, allow=(HARNESS_DIR,))
     # 空提交保护：无变化时 git commit --allow-empty 保留版本动作
     result = git_run(["diff", "--cached", "--quiet"], repo, check=False)
     args = ["commit", "-m", full_msg] if result.returncode != 0 else \

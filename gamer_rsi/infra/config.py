@@ -618,6 +618,41 @@ def _set_by_path(cfg_dict: dict[str, Any], path: str, value: Any) -> None:
 _SECTIONS: Final[tuple[str, ...]] = tuple(f.name for f in fields(AppConfig))
 
 
+# 文档键前缀 → AppConfig 键路径的映射（保持各 PRD 的键名不变）
+# policy.* -> agent.policy.* / episode.* -> env.episode.* / sandbox.* -> env.sandbox.*
+# eval.*   -> evals.*
+_KEY_PREFIX_ALIASES: Final[dict[str, str]] = {
+    "policy.": "agent.policy.",
+    "episode.": "env.episode.",
+    "sandbox.": "env.sandbox.",
+    "eval.": "evals.",
+}
+# YAML 顶层段名归一（目前只有 eval -> evals 一个真实冲突）
+_SECTION_NAME_ALIASES: Final[dict[str, str]] = {"eval": "evals"}
+
+
+def _normalize_flat_key(key: str) -> str:
+    """``eval.n_heldout`` → ``evals.n_heldout`` 等（见模块 docstring 的映射表）。"""
+    for alias, target in _KEY_PREFIX_ALIASES.items():
+        if key == alias[:-1] or key.startswith(alias):
+            return target + key[len(alias):]
+    return key
+
+
+def _normalize_sections(data: dict[str, Any]) -> dict[str, Any]:
+    """YAML 顶层段名归一（``eval:`` → ``evals:``）。"""
+    if not isinstance(data, dict):
+        return data
+    out: dict[str, Any] = {}
+    for key, value in data.items():
+        new_key = _SECTION_NAME_ALIASES.get(key, key)
+        if new_key in out:
+            raise InfraError(E.E_IO_CONFIG_INVALID,
+                             f"配置段 {key} 与 {new_key} 同时出现（互为别名）")
+        out[new_key] = value
+    return out
+
+
 def apply_overrides(cfg_dict: dict[str, Any], overrides: Mapping[str, Any],
                     *, source: str = "cli") -> tuple[dict[str, Any], list[str]]:
     """把扁平 ``{"loop.k": 7}`` 覆盖到嵌套 dict；返回 (新 dict, 未知键清单)。
@@ -628,10 +663,11 @@ def apply_overrides(cfg_dict: dict[str, Any], overrides: Mapping[str, Any],
     unknown: list[str] = []
     legal = _legal_flat_keys()
     for key, value in overrides.items():
-        if key not in legal:
+        nkey = _normalize_flat_key(key)
+        if nkey not in legal:
             unknown.append(key)
             continue
-        _set_by_path(out, key, value)
+        _set_by_path(out, nkey, value)
     return out, unknown
 
 
@@ -682,9 +718,10 @@ def _env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
         if "__" not in body:
             continue
         parts = body.lower().split("__")
-        if not parts or parts[0] not in _SECTIONS:
+        key = _normalize_flat_key(".".join(parts)) # eval.* -> evals.* 等
+        if not key or key.split(".", 1)[0] not in _SECTIONS:
             continue
-        out[".".join(parts)] = _infer_type(raw)
+        out[key] = _infer_type(raw)
     return out
 
 
@@ -717,7 +754,7 @@ def load_config(cli_overrides: Mapping[str, Any] | None = None,
     unknown_all: list[str] = []
 
     # 1) configs/default.yaml（+ 可选的 configs/<profile>.yaml，由 CLI 传 profile）
-    file_cfg = _load_yaml(config_dir / "default.yaml")
+    file_cfg = _normalize_sections(_load_yaml(config_dir / "default.yaml"))
     merged = _merge_dicts(merged, file_cfg)
 
     # 2) harness/config.json（可演化层，白名单校验）
@@ -725,7 +762,7 @@ def load_config(cli_overrides: Mapping[str, Any] | None = None,
     merged = _merge_dicts(merged, harness_cfg)
 
     # 3) GAMERSI_* 环境变量
-    env_over = _env_overrides(env if env is not None else {})
+    env_over = _env_overrides(os.environ if env is None else env)
     if env_over:
         merged, unknown = apply_overrides(merged, env_over, source="env")
         unknown_all.extend(unknown)
@@ -768,7 +805,11 @@ def _merge_dicts(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
 
 
 def _load_harness_config(path: Path) -> dict[str, Any]:
-    """harness/config.json：只接受白名单前缀，否则 E_IO_CONFIG_INVALID（FR-09-1）。"""
+    """harness/config.json：扁平点分键，只接受白名单，否则 E_IO_CONFIG_INVALID（FR-09-1）。
+
+    返回已展开为嵌套结构的 dict（可直接合并）。键名允许用文档短前缀（``policy.*``）
+    或全路径（``agent.policy.*``），统一归一后校验白名单。
+    """
     if not Path(path).is_file():
         return {}
     try:
@@ -778,19 +819,29 @@ def _load_harness_config(path: Path) -> dict[str, Any]:
         raise InfraError(E.E_IO_CONFIG_INVALID, f"harness/config.json 解析失败：{exc}") from exc
     if not isinstance(flat, dict):
         raise InfraError(E.E_IO_CONFIG_INVALID, "harness/config.json 顶层必须是对象")
-    bad = [k for k in flat
-           if not any(k == p.rstrip(".") or k.startswith(p) for p in HARNESS_CONFIG_ALLOWED_PREFIXES)]
+    normalized = {_normalize_flat_key(k): v for k, v in flat.items()}
+    bad = [k for k in normalized
+           if not any(k == p.rstrip(".") or k.startswith(p)
+                      for p in HARNESS_CONFIG_ALLOWED_PREFIXES)]
     if bad:
         raise InfraError(E.E_IO_CONFIG_INVALID,
                          f"harness/config.json 含非白名单键 {bad}（白名单："
                          f"{list(HARNESS_CONFIG_ALLOWED_PREFIXES)}）",
-                         hint="harness 层只能含 policy.* 训练期采样参数、"
+                         hint="harness 层只能含 agent.policy.* 训练期采样参数、"
                               "memory.retrieve.*、agent.tools.*")
-    return flat
+    expanded: dict[str, Any] = {}
+    for key, value in normalized.items():
+        _set_by_path(expanded, key, value)
+    return expanded
 
 
 def _from_dict(merged: Mapping[str, Any]) -> AppConfig:
     """嵌套 dict → AppConfig，未知段/键在构造期即被 dataclass 拒绝。"""
+    unknown_sections = set(merged) - set(_SECTIONS)
+    if unknown_sections:
+        raise InfraError(E.E_IO_CONFIG_INVALID,
+                         f"未知配置段 {sorted(unknown_sections)}",
+                         hint=f"合法段：{', '.join(_SECTIONS)}")
     kwargs: dict[str, Any] = {}
     for name in _SECTIONS:
         sec_data = merged.get(name, {})

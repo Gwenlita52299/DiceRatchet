@@ -20,3 +20,9 @@ ref/
 # Game runtime logs
 src/game/runs/
 runs/
+
+# Python test artifacts
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
