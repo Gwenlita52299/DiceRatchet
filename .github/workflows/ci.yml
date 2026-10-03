@@ -1,9 +1,18 @@
 # .github/workflows/ci.yml —— 门禁接线（M0 验收 F2）
 #
 # 两个作业共用 scripts/ci_gate.sh（本地可原样复跑，见 README「CI 门禁」）：
-#   gate   快速门（约 1 分钟）：guards AST 门禁 + env selftest + pytest -m "not slow" + 跨 PYTHONHASHSEED
-#   parity 深门（约 10 分钟）：全量 pytest（含 5 组 golden、200 局差分、200 局 bot 对拍）
+#   gate   快速门（实测约 4.5 分钟）：guards AST 门禁 + env selftest + pytest -m "not slow" + 跨 PYTHONHASHSEED
+#   parity 深门（实测约 13 分钟）：全量 pytest（含 5 组 golden、200 局差分、200 局 bot 对拍）
 #                              + GAME 侧 node 测试 + golden 基准独立性
+#
+# 触发策略（按需收窄 CI 分钟数：gate ≈5 分、parity ≈13 分/次）：
+#   push                  → 只跑 gate
+#   pull_request          → gate + parity
+#   tag push（refs/tags/）→ gate + parity
+#   workflow_dispatch     → gate + parity（可用 -f slow=false 只跑 gate）
+#
+# 手动触发慢门：
+#   gh workflow run ci.yml -F slow=true
 #
 # 对齐 Spec §9 G1–G6 与 INV-1/INV-6；本地等价命令：
 #   scripts/ci_gate.sh                  # = gate
@@ -18,6 +27,11 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      slow:
+        description: 是否跑「对拍（golden / 200 局差分）」作业（约 13 分钟）
+        type: boolean
+        default: true
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -52,6 +66,11 @@ jobs:
 
   parity:
     name: 对拍（golden / 200 局差分）
+    # 收窄触发：push 不跑慢门，只在 PR / tag / 手动（且 slow=true）时跑
+    if: >-
+      github.event_name == 'pull_request'
+      || startsWith(github.ref, 'refs/tags/')
+      || (github.event_name == 'workflow_dispatch' && inputs.slow)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

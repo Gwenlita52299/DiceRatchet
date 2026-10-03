@@ -87,7 +87,20 @@ python -m gamer_rsi eval report --run-id <id> --split heldout --baseline all
 ./scripts/ci_gate.sh --coverage       # 附带覆盖率报告（G1 判据）
 ```
 
-`guards check` 反例自检也内含其中：门禁必须能拦下 `tests/fixtures/guards/`（退出码 4），否则视为门禁失效。CI 侧见 [.github/workflows/ci.yml](.github/workflows/ci.yml)，两个作业分别调用上述两种模式（Node 22 / Python 3.12）。
+`guards check` 反例自检也内含其中：门禁必须能拦下 `tests/fixtures/guards/`（退出码 4），否则视为门禁失效。
+
+CI 侧（[.github/workflows/ci.yml](.github/workflows/ci.yml)，Node 22 / Python 3.12）把两者拆成两个作业，**按需触发以省 CI 分钟**（实测：快速门 ≈4.5 分钟、深门 ≈13 分钟）：
+
+| 事件 | 快速门 | 深门（对拍） |
+|---|---|---|
+| `push` | ✅ | — |
+| `pull_request` | ✅ | ✅ |
+| tag push（`refs/tags/**`） | ✅ | ✅ |
+| 手动 `workflow_dispatch` | ✅ | ✅（可 `-f slow=false` 关掉） |
+
+```bash
+gh workflow run ci.yml -F slow=true    # 需要时手动补一次慢门（push 不会自动跑）
+```
 
 ## 技术栈
 
