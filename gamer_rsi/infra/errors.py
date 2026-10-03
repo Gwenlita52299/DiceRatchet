@@ -124,6 +124,7 @@ class E(StrEnum):
     E_IO_RUNS_NOT_IGNORED = "E_IO_RUNS_NOT_IGNORED"
     E_IO_GIT_DIRTY = "E_IO_GIT_DIRTY"
     E_IO_GIT_UNAVAILABLE = "E_IO_GIT_UNAVAILABLE" # 降级为 nogit，不中断
+    E_IO_GIT_FAILED = "E_IO_GIT_FAILED" # git 可用但命令失败：环境错误，立即失败
     E_IO_GUARD_RANDOM = "E_IO_GUARD_RANDOM" # 退出码 4
     E_IO_GUARD_LAYER = "E_IO_GUARD_LAYER" # 退出码 4
     E_IO_PLOT_UNAVAILABLE = "E_IO_PLOT_UNAVAILABLE" # 降级为警告，不中断
@@ -145,6 +146,7 @@ EXIT_CODE: Final[Mapping[E, int]] = {
     E.E_IO_RUN_STATE: EXIT_IO,
     E.E_IO_RUNS_NOT_IGNORED: EXIT_CONFIG,
     E.E_IO_GIT_DIRTY: EXIT_SANDBOX,
+    E.E_IO_GIT_FAILED: EXIT_CONFIG, # git 命令失败属环境错误，绝不降级为 0
     E.E_IO_GUARD_RANDOM: EXIT_SANDBOX,
     E.E_IO_GUARD_LAYER: EXIT_SANDBOX,
     E.E_IO_DISK_FULL: EXIT_IO,
@@ -192,6 +194,7 @@ ERROR_MESSAGE: Final[Mapping[E, str]] = {
     E.E_IO_RUNS_NOT_IGNORED: "runs/ 未被 .gitignore 覆盖",
     E.E_IO_GIT_DIRTY: "git worktree 不干净，演化前门禁失败",
     E.E_IO_GIT_UNAVAILABLE: "git 不可用（降级为 nogit 占位）",
+    E.E_IO_GIT_FAILED: "git 命令执行失败（git 可用，属环境错误）",
     E.E_IO_GUARD_RANDOM: "确定性守卫检出未显式 seed 的随机源",
     E.E_IO_GUARD_LAYER: "分层 import 门禁检出越权 import（违反 INV-1）",
     E.E_IO_PLOT_UNAVAILABLE: "matplotlib 不可用，绘图已降级",

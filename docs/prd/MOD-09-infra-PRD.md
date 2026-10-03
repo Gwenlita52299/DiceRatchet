@@ -91,7 +91,7 @@ MOD-09 是 Spec §6 依赖矩阵中**唯一不被任何人阻塞、却阻塞所�
 - **FR-09-16 错误码注册表**：`gamer_rsi/infra/errors.py` 集中定义全部 `E_*` 枚举 + 含义表 + 默认退出码映射；禁止其他模块自定义字符串错误码。
 - **FR-09-18 schema 与原子写**：`schemas/*.schema.json` 由本模块登记并提供 `validate(name, obj)`；`write_json_atomic(path, obj)`（tmp + `os.replace`）是 `report.json`、`state.json`、`version.json` 唯一的写入口。
 - **FR-09-19 git 忽略检查**：`init_run_dir` 检查 `runs_root` 已被 `.gitignore` 覆盖（`git check-ignore`），否则记 `E_IO_RUNS_NOT_IGNORED` 并退出码 2，防止 `worktree_clean_check()` 永远判定为 dirty。
-- **FR-09-17 进程确定性环境**：`bootstrap_process()` 设置 `PYTHONHASHSEED=0`（若未设置则 re-exec 一次）、`TZ=UTC`、`LC_ALL=C.UTF-8`，并把 `infra.threads=1` 传给后端；所有设置记入 `run_start` 事件。
+- **FR-09-17 进程确定性环境**：`bootstrap_process()` 设置 `PYTHONHASHSEED=0`（若未设置则 re-exec 一次）、`TZ=UTC`、`LC_ALL=C.UTF-8`，并把 `infra.threads=1` 传给后端；设置内容经 `process_snapshot()` / `process_fingerprint()` 由**真正的** `infra.run_start` 事件记录（`cli.cli_init_run()`，此时配置与 sink 都已就绪）。`bootstrap_process()` **自身不发事件**：它在 `main()` 最开头执行，既没有 `config_hash` 也没有 `events` sink，早发只会产生一条缺必填字段、且必然被丢弃的 `run_start`（v0.3.1 修复）。
 
 ## 5. 非功能需求（NFR-09-x：确定性/性能/可复现/可观测）
 
@@ -228,9 +228,16 @@ def scan_all(root: Path) -> list[GuardFinding]: ...          # 供 CI 与 CLI �
 | `eval ablation\|test` | `--run-id ID` `--basket {H1,H2,H3}` | 0/1/2/3 |
 | `inference probe\|bench\|robustness` | `--model ID` | 0/1/3 |
 | `memory stats\|snapshot\|rollback\|verify\|retrieve` | `--run-id ID` | 0/1/2 |
-| `audit leak` | `--run-id ID` | 0/4 |
+| `audit leak` | `--run-id ID` `--split {train,heldout,test,demo}` `--out PATH` | 0/1/2/4（注） |
 | `eval diversity` | `--run-id ID` | 0/1/4 |
 | `guards check` | `--root PATH` `--fix-hints` | 0/4 |
+
+> 注（2026-10-03，按评审修订）：`audit leak` 的退出码由**归属模块** MOD-02 决定，是
+> **两根正交轴**——泄漏结论 `0` 无 finding / `1` 仅 medium / `2` 含 critical（FR-02-19、
+> §11 集成用例），以及沙箱守卫违例 `4`（Spec §8.3；蜜罐自测失败等 `E_ENV_HONEYPOT`，
+> 与本模块 `EXIT_CODE[E_ENV_HONEYPOT] = 4` 的登记一致），优先级 `4 > 2 > 1 > 0`。
+> 详见 MOD-02 PRD §18.2。本模块只负责命令面与报告落盘出口
+> （`resolve_run_dir`/`RunPaths`/`infra.io.validate`）。
 
 `--seeds SPEC` 语法：`train:1000-1004`、`heldout:2000-2099`、`9000,9001`、`file:seeds.txt`。`guards check` 已回填 Spec v1.3 §4.6（P-20）。
 
@@ -434,3 +441,4 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
 | v0.1 | 2026-09-30 | 首版 |
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：`config_hash` 不再包含 harness_version，新增 `artifact_hash`（P0-7）；redaction 只作用于 prompt/memory/reflection（P0-7）；事件改为 `<module>.<event>` 注册表并统一落到 `events.jsonl`（P1-11）；轨迹 schema 对齐 §4.5 新字段与 `episode_key` 路径（P1-10）；退出码新增 5（P1-13）；CLI 对齐 §4.6，统一使用 `--run-id`（P1-14）；git tag 改为 `harness-v{N}`（P1-15）；新增 FR-09-18 schema 与原子写、FR-09-19 `runs/` 忽略检查 |
 | v0.3 | 2026-09-30 17:49 | FR-09-1 按 Spec B-26 插入 harness/config.json 层及白名单校验 |
+| v0.3.1 | 2026-10-03 | 修复 `bootstrap_process()` 早发 `infra.run_start`（缺必填 `config_hash`）：`GAMERSI_DEV=1` 下任何命令都会以退出码 1 失败（用 `guards check` 复现）。改为进程快照由 `cli_init_run()` 的 run_start 记录，并新增 `process_snapshot()`（FR-09-17）；`audit leak` 退出码注释同步为 `0/1/2/4` |

@@ -26,7 +26,14 @@ HARNESS_DIR: str = "harness"
 
 def git_run(args: list[str], repo: Path, *, check: bool = True,
             capture: bool = True) -> subprocess.CompletedProcess[str]:
-    """运行 git 子命令；git 不可用抛 ``E_IO_GIT_UNAVAILABLE``。"""
+    """运行 git 子命令。
+
+    区分两类失败（PRD §10「可复现性缺失 → 立即失败，绝不静默继续」）：
+
+    - git **不可用**（找不到可执行文件 / 超时）→ ``E_IO_GIT_UNAVAILABLE``（退出码 0 的降级码）；
+    - git 可用但**命令失败**（如未配置 user.name、hook 拒绝、tag 冲突）→
+      ``E_IO_GIT_FAILED``（退出码 2）——绝不伪装成"不可用"悄悄成功。
+    """
     try:
         return subprocess.run(["git", "-C", str(repo), *args],
                               capture_output=capture, text=True, check=check, timeout=30)
@@ -34,6 +41,13 @@ def git_run(args: list[str], repo: Path, *, check: bool = True,
         raise InfraError(E.E_IO_GIT_UNAVAILABLE, "git 可执行文件未找到") from exc
     except subprocess.TimeoutExpired as exc:
         raise InfraError(E.E_IO_GIT_UNAVAILABLE, f"git 命令超时：{args[:2]}") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "").strip()
+        raise InfraError(E.E_IO_GIT_FAILED,
+                         f"git {' '.join(args[:2])} 失败（exit {exc.returncode}）"
+                         + (f"：{detail.splitlines()[-1]}" if detail else ""),
+                         hint="检查 git 身份配置（user.name/user.email）与仓库状态；"
+                              "该失败不可降级，run 不应继续") from exc
     except subprocess.SubprocessError as exc: # pragma: no cover
         raise InfraError(E.E_IO_GIT_UNAVAILABLE, f"git 调用失败：{exc}") from exc
 
@@ -98,17 +112,17 @@ def commit_harness(repo: Path, version: int, message: str) -> str:
 
 
 def tag_version(repo: Path, version: int) -> str:
-    """打轻量 tag ``harness-v{N}``；已存在则跳过。不建同名分支（避免 refname 歧义）。"""
+    """打轻量 tag ``harness-v{N}``；已存在则跳过。
+
+    **不建同名分支**（避免 ``refname is ambiguous``），也**不删除**任何已存在的分支——
+    PRD FR-09-14 只要求前者；销毁用户数据不属于本函数职责（2026-10-03 审计 P1-11）。
+    rollback/校验一律走全限定 ``refs/tags/harness-v{N}``，因此与同名分支并存无歧义风险。
+    """
     tag = harness_tag(version)
     exists = git_run(["rev-parse", "--verify", "--quiet", f"refs/tags/{tag}"],
                      repo, check=False)
     if exists.returncode == 0:
         return tag
-    # 防御：若同名分支意外存在，先删除本地分支引用（不删 tag）
-    branch = git_run(["rev-parse", "--verify", "--quiet", f"refs/heads/{tag}"],
-                     repo, check=False)
-    if branch.returncode == 0: # pragma: no cover
-        git_run(["branch", "-D", tag], repo, check=False)
     git_run(["tag", tag], repo)
     return tag
 

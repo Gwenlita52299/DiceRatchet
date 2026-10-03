@@ -1,8 +1,10 @@
 """CLI 子命令树（FR-09-10 / FR-09-11 / FR-09-12，对齐 Spec §4.6）。
 
-本模块只负责**解析与转发**：各模块通过 ``register(subparser)`` 挂载自己的命令。
-尚未落地的模块命令以 ``E_IO_MODULE_PENDING``（退出码 2）显式拒绝，保证命令面
-与 Spec §4.6 逐字一致——新增命令必须同步回填 Spec §4.6（FR-09-10）。
+本模块只负责**解析与转发**：命令面（argparse 树、退出码、`--dry-run`/`--resume`）
+在此冻结，各模块的实现经 ``register(path, handler)`` 注入（组合根见 ``gamer_rsi/app.py``，
+NFR-09-5：``infra`` 不 import 任何其他子包）。未注册的命令以 ``E_IO_MODULE_PENDING``
+（退出码 2）显式拒绝，保证命令面与 Spec §4.6 逐字一致——新增命令必须同步回填
+Spec §4.6（FR-09-10）。
 
 退出码（FR-09-11 / Spec §8.3）：``0`` 成功（含 HITL 挂起）；``1`` 领域失败；
 ``2`` 配置/环境错误；``3`` 模型不可用；``4`` 沙箱/守卫违例；``5`` IO 落盘失败；
@@ -12,31 +14,84 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable, Final, Sequence
 
 from . import events, guards
 from .config import canonical_json, config_hash, load_config
-from .errors import EXIT_INTERRUPT, E, InfraError, error_code_of
+from .errors import (EXIT_CONFIG, EXIT_DOMAIN, EXIT_INTERRUPT, E, InfraError,
+                     error_code_of)
 from .run import git_short_sha, init_run_dir, make_run_id, resolve_run_dir
 from .guards import GuardFinding
-from .process import bootstrap_process
+from .process import bootstrap_process, process_fingerprint, process_snapshot
 
-__all__ = ["main", "build_parser", "parse_seeds_spec", "PENDING_MODULES"]
+__all__ = ["main", "build_parser", "parse_seeds_spec", "PENDING_MODULES",
+           "register", "registered_commands", "handler_for", "config_overrides"]
 
-# 各命令的归属模块（尚未落地的模块在 M0 过渡期返回 E_IO_MODULE_PENDING）
+Handler = Callable[[argparse.Namespace], int]
+
+# 各命令的归属模块（未注册实现的命令在 M0 过渡期返回 E_IO_MODULE_PENDING）
 PENDING_MODULES: Final[dict[str, str]] = {
-    "play": "MOD-04 policy", "baseline": "MOD-08 evals",
+    "env": "MOD-01 env-rules", "play": "MOD-04 policy", "baseline": "MOD-08 evals",
     "loop": "MOD-06 loop", "evolve": "MOD-07 evolve", "eval": "MOD-08 evals",
     "audit": "MOD-02 env-sandbox", "inference": "MOD-03 inference",
     "memory": "MOD-05 memory",
 }
 
+#: 命令路径 → 实现（由组合根 ``gamer_rsi/app.py`` 经 ``register()`` 注入）
+_HANDLERS: Final[dict[tuple[str, ...], Handler]] = {}
+
 _SEEDS_SPEC_RE: Final[re.Pattern[str]] = re.compile(
     r"^(?:(?P<split>[a-zA-Z_]+):)?(?P<rest>.+)$")
+
+
+# =====================================================================
+# 注册表（FR-09-10：MOD-09 只解析与转发）
+# =====================================================================
+
+def register(path: Sequence[str] | str, handler: Handler) -> None:
+    """注册某个命令路径的实现；组合根在 ``main()`` 之前调用（幂等覆盖）。"""
+    key = tuple(path.split()) if isinstance(path, str) else tuple(path)
+    if not key:
+        raise InfraError(E.E_IO_CONFIG_INVALID, "register() 的路径不能为空")
+    _HANDLERS[key] = handler
+
+
+def handler_for(path: Sequence[str] | str) -> Handler | None:
+    key = tuple(path.split()) if isinstance(path, str) else tuple(path)
+    return _HANDLERS.get(key)
+
+
+def registered_commands() -> tuple[tuple[str, ...], ...]:
+    return tuple(sorted(_HANDLERS))
+
+
+#: 配表摘要提供者（MOD-01 的 ``content_hash``）：由组合根注册，避免 infra 反向依赖 env
+_CONTENT_HASH_PROVIDER: Callable[[], str | None] | None = None
+
+
+def register_content_hash_provider(provider: Callable[[], str | None] | None) -> None:
+    """注册 ``content_hash`` 提供者（``config.json`` 快照用，Spec §7）。"""
+    global _CONTENT_HASH_PROVIDER
+    _CONTENT_HASH_PROVIDER = provider
+
+
+def _content_hash() -> str | None:
+    if _CONTENT_HASH_PROVIDER is None:
+        return None
+    try:
+        return _CONTENT_HASH_PROVIDER()
+    except Exception: # 提供者失败不应阻断建 run；快照里记 None 即可
+        return None
+
+
+#: 进程内当前活跃 run（``cli_init_run`` 设置，``main`` 收尾时发 ``infra.run_end``）
+_ACTIVE_RUN: dict[str, Any] | None = None
 
 
 # =====================================================================
@@ -46,34 +101,80 @@ _SEEDS_SPEC_RE: Final[re.Pattern[str]] = re.compile(
 def main(argv: Sequence[str] | None = None, *, reexec: bool = True) -> int:
     """CLI 入口；返回退出码（FR-09-11）。"""
     argv = list(sys.argv[1:] if argv is None else argv)
+    code = 0
     try:
         bootstrap_process(reexec=reexec, module="gamer_rsi")
         parser = build_parser()
         args = parser.parse_args(argv)
         if getattr(args, "dry_run", False):
-            return _dry_run(parser, args, argv)
+            return _dry_run(parser, args, argv) # dry-run 不建 run，无需 run_end
         handler = getattr(args, "func", None)
         if handler is None:
             parser.print_help()
             return 0
-        return int(handler(args) or 0)
+        code = int(handler(args) or 0)
     except InfraError as exc:
         print(f"[{exc.code}] {exc.message}", file=sys.stderr)
         if exc.hint:
             print(f"  hint: {exc.hint}", file=sys.stderr)
         print(f"  reproduce: python -m gamer_rsi {' '.join(argv)}", file=sys.stderr)
-        return exc.exit_code
+        code = exc.exit_code
     except KeyboardInterrupt:
         print("\n[interrupted] 用户中断 (Ctrl-C)", file=sys.stderr)
-        return EXIT_INTERRUPT
-    except SystemExit as exc: # argparse 的非法参数（退出码 2）
-        return int(exc.code) if isinstance(exc.code, int) else 2
+        code = EXIT_INTERRUPT
+    except SystemExit as exc: # argparse 的非法参数（退出码 2，T-09-15）
+        code = int(exc.code) if isinstance(exc.code, int) else EXIT_CONFIG
+        if code != 0:
+            # T-09-15：非法参数必须以退出码 2 结束，且 stderr 含错误码
+            print(f"[{E.E_IO_CONFIG_INVALID}] 命令行参数非法"
+                  f"（argparse 细节见上方 usage）", file=sys.stderr)
+            print(f"  reproduce: python -m gamer_rsi {' '.join(argv)}", file=sys.stderr)
+    except BaseException: # 未预期异常：run_end 记领域失败后原样抛出（保留 traceback）
+        code = code or EXIT_DOMAIN
+        raise
+    finally:
+        _finalize_run(code)
+    return code
+
+
+def _finalize_run(code: int) -> None:
+    """收尾：写 ``infra.run_end`` + ``metrics/io_latency.csv``，再解绑事件 sink（§13）。"""
+    global _ACTIVE_RUN
+    run, _ACTIVE_RUN = _ACTIVE_RUN, None
+    if run is None:
+        return
+    try:
+        if events.is_bound():
+            events.emit("infra.run_end", exit_code=code, run_id=run["run_id"],
+                        duration_s=round(time.monotonic() - run["t0"], 4))
+            _write_io_latency(run["paths"], run["run_id"], code)
+    finally:
+        events.unbind()
+
+
+def _write_io_latency(paths: Any, run_id: str, exit_code: int) -> None:
+    """把单行写入耗时 p50/p99 追加进 ``metrics/io_latency.csv``（PRD §13）。"""
+    samples = sorted(events.drain_latency_ms())
+    if not samples:
+        return
+    n = len(samples)
+    p50 = samples[min(n - 1, int(0.50 * n))]
+    p99 = samples[min(n - 1, int(0.99 * n))]
+    path = Path(paths.metrics) / "io_latency.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    new = not path.is_file()
+    with path.open("a", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        if new:
+            writer.writerow(["run_id", "n", "p50_ms", "p99_ms", "max_ms", "exit_code"])
+        writer.writerow([run_id, n, round(p50, 4), round(p99, 4),
+                         round(samples[-1], 4), exit_code])
 
 
 def _dry_run(parser: argparse.ArgumentParser, args: argparse.Namespace,
              argv: Sequence[str]) -> int:
     """FR-09-12：不调模型、不写 runs/，stdout 输出可解析 JSON。"""
-    cfg = load_config(_config_overrides(args), config_dir=Path(args.config_dir))
+    cfg = load_config(config_overrides(args), config_dir=Path(args.config_dir))
     plan = {"command": " ".join(argv), "dry_run": True,
             "config": json.loads(canonical_json(cfg)),
             "config_hash": config_hash(cfg),
@@ -82,13 +183,20 @@ def _dry_run(parser: argparse.ArgumentParser, args: argparse.Namespace,
     return 0
 
 
-def _config_overrides(args: argparse.Namespace) -> dict[str, Any]:
-    """从解析结果提取 ``loop.k`` / ``evolve.*`` 等扁平覆盖。"""
+def config_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    """从解析结果提取 CLI 显式覆盖（FR-09-1：CLI 优先级最高）。
+
+    覆盖 ``--k`` / ``--generations`` / ``--hitl`` / ``--log-level``；
+    其余命令参数由各自模块在实现里读取。
+    """
     out: dict[str, Any] = {}
     for key in ("k", "generations", "hitl"):
         if hasattr(args, key) and getattr(args, key) is not None:
             name = {"k": "loop.k", "generations": "loop.max_generations"}.get(key, f"loop.{key}")
             out[name] = getattr(args, key)
+    log_level = getattr(args, "log_level", None)
+    if log_level:
+        out["infra.log_level"] = log_level
     return out
 
 
@@ -162,6 +270,16 @@ def _pending(module_key: str) -> Callable[[argparse.Namespace], int]:
     return run
 
 
+def _deferred(path: list[str], module_key: str) -> Callable[[argparse.Namespace], int]:
+    """转发到所属模块注册的实现；未注册则按 ``E_IO_MODULE_PENDING`` 拒绝（FR-09-10）。"""
+    def dispatch(args: argparse.Namespace) -> int:
+        handler = _HANDLERS.get(tuple(path))
+        if handler is None:
+            return _pending(module_key)(args)
+        return handler(args)
+    return dispatch
+
+
 def _common_run_id(p: argparse.ArgumentParser) -> None:
     p.add_argument("--run-id", dest="run_id", metavar="ID",
                    help="run 标识（默认由 git sha + config_hash + 时间戳生成）")
@@ -180,14 +298,8 @@ def _add_env(sub: Any) -> None:
     sp = p.add_subparsers(dest="subcommand", metavar="<subcommand>")
     st = _sp(sp, "selftest", help="规则/确定性自检 + GAME golden 对拍")
     st.add_argument("--seed", type=int, default=1, help="自检 seed")
-    _set_func(st, _env_selftest, ["env", "selftest"])
+    _set_func(st, _deferred(["env", "selftest"], "env"), ["env", "selftest"])
     p.set_defaults(func=None)
-
-
-def _env_selftest(args: argparse.Namespace) -> int:
-    from ..env.selftest import run_selftest
-
-    return run_selftest(getattr(args, "seed", 1))
 
 
 def _add_play(sub: Any) -> None:
@@ -199,7 +311,7 @@ def _add_play(sub: Any) -> None:
     p.add_argument("--episodes", type=int, default=1)
     p.add_argument("--mode", choices=["train", "eval"], default="train")
     _common_run_id(p)
-    _set_func(p, _pending("play"), ["play"])
+    _set_func(p, _deferred(["play"], "play"), ["play"])
 
 
 def _add_baseline(sub: Any) -> None:
@@ -209,7 +321,7 @@ def _add_baseline(sub: Any) -> None:
     p.add_argument("--seeds", default="heldout:2000-2039")
     p.add_argument("--basket", default="H1", help="seed 篮子（MOD-08 seeds.yaml）")
     _common_run_id(p)
-    _set_func(p, _pending("baseline"), ["baseline"])
+    _set_func(p, _deferred(["baseline"], "baseline"), ["baseline"])
 
 
 def _add_loop(sub: Any) -> None:
@@ -223,12 +335,12 @@ def _add_loop(sub: Any) -> None:
                      help="每代挂起等人工 approve/rollback")
     run.add_argument("--no-hitl", dest="hitl", action="store_false", default=None)
     _common_run_id(run)
-    _set_func(run, _pending("loop"), ["loop", "run"])
+    _set_func(run, _deferred(["loop", "run"], "loop"), ["loop", "run"])
 
     for name, help_text in (("status", "查看 run 进度"), ("smoke", "冒烟跑一代（5 局 train）")):
         sp_run = _sp(sp, name, help=help_text)
         _common_run_id(sp_run)
-        _set_func(sp_run, _pending("loop"), ["loop", name])
+        _set_func(sp_run, _deferred(["loop", name], "loop"), ["loop", name])
     p.set_defaults(func=None)
 
 
@@ -240,7 +352,7 @@ def _add_evolve(sub: Any) -> None:
         _common_run_id(sp_run)
         sp_run.add_argument("--generation", type=int, required=True)
         sp_run.add_argument("--reason", default="")
-        _set_func(sp_run, _pending("evolve"), ["evolve", name])
+        _set_func(sp_run, _deferred(["evolve", name], "evolve"), ["evolve", name])
     p.set_defaults(func=None)
 
 
@@ -252,17 +364,17 @@ def _add_eval(sub: Any) -> None:
     _common_run_id(rep)
     rep.add_argument("--split", choices=["train", "heldout", "test"], default="heldout")
     rep.add_argument("--baseline", default="none", help="none|all|<kind>")
-    _set_func(rep, _pending("eval"), ["eval", "report"])
+    _set_func(rep, _deferred(["eval", "report"], "eval"), ["eval", "report"])
 
     for name in ("ablation", "test"):
         sp_run = _sp(sp, name)
         _common_run_id(sp_run)
         sp_run.add_argument("--basket", choices=["H1", "H2", "H3"], default="H2")
-        _set_func(sp_run, _pending("eval"), ["eval", name])
+        _set_func(sp_run, _deferred(["eval", name], "eval"), ["eval", name])
 
     div = _sp(sp, "diversity", help="动作熵 / 坍缩监控")
     _common_run_id(div)
-    _set_func(div, _pending("eval"), ["eval", "diversity"])
+    _set_func(div, _deferred(["eval", "diversity"], "eval"), ["eval", "diversity"])
     p.set_defaults(func=None)
 
 
@@ -271,7 +383,13 @@ def _add_audit(sub: Any) -> None:
     sp = p.add_subparsers(dest="subcommand", metavar="<subcommand>")
     leak = _sp(sp, "leak")
     _common_run_id(leak)
-    _set_func(leak, _pending("audit"), ["audit", "leak"])
+    leak.add_argument("--split", choices=["train", "heldout", "test", "demo"],
+                      default="train", help="审计哪个 split 的轨迹（默认 train）")
+    leak.add_argument("--out", default=None, help="报告路径（默认 runs/<id>/audit/leak-leak.json）")
+    leak.add_argument("--no-replay", action="store_true",
+                      help="跳过轨迹重放（future_room/shop 规则集降级）")
+    leak.add_argument("--no-self-test", action="store_true", help="跳过蜜罐自测（不建议）")
+    _set_func(leak, _deferred(["audit", "leak"], "audit"), ["audit", "leak"])
     p.set_defaults(func=None)
 
 
@@ -281,7 +399,7 @@ def _add_inference(sub: Any) -> None:
     for name in ("probe", "bench", "robustness"):
         sp_run = _sp(sp, name)
         sp_run.add_argument("--model", default=None, help="模型 id（默认 inference.model_id）")
-        _set_func(sp_run, _pending("inference"), ["inference", name])
+        _set_func(sp_run, _deferred(["inference", name], "inference"), ["inference", name])
     p.set_defaults(func=None)
 
 
@@ -291,7 +409,7 @@ def _add_memory(sub: Any) -> None:
     for name in ("stats", "snapshot", "rollback", "verify", "retrieve"):
         sp_run = _sp(sp, name)
         _common_run_id(sp_run)
-        _set_func(sp_run, _pending("memory"), ["memory", name])
+        _set_func(sp_run, _deferred(["memory", name], "memory"), ["memory", name])
     p.set_defaults(func=None)
 
 
@@ -360,14 +478,37 @@ def parse_seeds_spec(spec: str, *, seeds_file_dir: Path = Path(".")) -> dict[str
 # ---- 供各模块复用的 run 定位助手 ------------------------------------------------------
 
 def cli_init_run(args: argparse.Namespace) -> tuple[Any, Any, Any]:
-    """CLI 命令通用的启动序列（bootstrap 之后）：load_config → make_run_id → init_run_dir。"""
-    cfg = load_config(_config_overrides(args), config_dir=Path(args.config_dir))
+    """CLI 命令通用的启动序列（bootstrap 之后）：load_config → make_run_id → init_run_dir。
+
+    同时：
+    - 按 ``infra.fsync_every`` / ``infra.rotate_max_mb`` 建事件 sink（PRD §9 的配置真正生效）；
+    - 发 ``infra.run_start``（含进程确定性快照 FR-09-17、未知键清单 FR-09-1）；
+    - 未知键非空时补发 ``infra.config_unknown_key``（E_IO_CONFIG_UNKNOWN）；
+    - 登记本进程活跃 run，供 ``main()`` 收尾发 ``infra.run_end`` 并写 io_latency（§13）。
+    """
+    global _ACTIVE_RUN
+    cfg = load_config(config_overrides(args), config_dir=Path(args.config_dir))
+    unknown = list(getattr(load_config, "unknown_keys", []) or [])
     run_id, _sha = make_run_id(cfg, explicit=getattr(args, "run_id", None))
     if getattr(args, "resume", False):
         paths = resolve_run_dir(run_id, cfg, Path(cfg.infra.runs_root), resume=True)
     else:
-        paths = init_run_dir(run_id, cfg, Path(cfg.infra.runs_root))
-    events.bind(paths.events, run_id)
+        paths = init_run_dir(run_id, cfg, Path(cfg.infra.runs_root),
+                             content_hash=_content_hash())
+    events.bind(paths.events, run_id,
+                fsync_every=cfg.infra.fsync_every,
+                rotate_max_mb=cfg.infra.rotate_max_mb)
+    # FR-09-17：进程确定性环境由**这一次**（已 bind、已加载配置）的 run_start 记录。
+    # 调用序列契约：cli.main() 先 bootstrap_process()（固化 env），再走本函数；
+    # bootstrap_process() 自身不产事件（那里既无 config_hash 也无 sink），
+    # 因此本函数的 process_fingerprint() 才读得到真实 env。
     events.emit("infra.run_start", config_hash=config_hash(cfg),
-                git_sha=git_short_sha(), run_id=run_id)
+                git_sha=git_short_sha(), run_id=run_id,
+                env=dict(process_snapshot()), unknown_keys=unknown,
+                **process_fingerprint())
+    if unknown: # FR-09-1：未知键 → 记 E_IO_CONFIG_UNKNOWN 并忽略（不中断）
+        events.emit("infra.config_unknown_key", keys=unknown,
+                    code=E.E_IO_CONFIG_UNKNOWN)
+    _ACTIVE_RUN = {"run_id": run_id, "paths": paths, "t0": time.monotonic()}
     return paths, cfg, run_id
+

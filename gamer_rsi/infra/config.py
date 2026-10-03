@@ -28,9 +28,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import types
 from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any, Final, Mapping
+from typing import (Any, Final, Mapping, Sequence, Union, get_args, get_origin)
 
 import yaml
 
@@ -42,6 +43,7 @@ __all__ = [
     "EvalConfig", "InfraConfig", "SeedsProtocol",
     "load_config", "load_seeds", "load_models", "config_hash", "canonical_json",
     "derive_seed", "artifact_hash", "flatten_config", "apply_overrides",
+    "harness_overridden_keys", "env_applied_keys", "full_config",
 ]
 
 # harness/config.json 白名单前缀（FR-09-1 / Spec §5 B-26）
@@ -53,7 +55,14 @@ ENV_PREFIX: Final[str] = "GAMERSI_"
 # 不参与 config_hash 的易变键（FR-09-3）
 _HASH_VOLATILE_KEYS: Final[frozenset[str]] = frozenset({
     "infra.runs_root", "infra.log_level", "infra.threads",
+    "infra.config_dir", "infra.schemas_dir",
 })
+
+# 私有溯源属性：由 ``load_config()`` 挂到 AppConfig 实例上（不参与 dataclass 字段/asdict/相等性）
+#   _HARNESS_STATIC_ATTR: {键路径: (静态基线是否存在, 静态值)}，供 config_hash 回退 harness 覆盖
+#   _ENV_APPLIED_ATTR:   真正生效的 GAMERSI_* 变量名，供 config.json 的环境变量白名单
+_HARNESS_STATIC_ATTR: Final[str] = "_harness_static_values"
+_ENV_APPLIED_ATTR: Final[str] = "_env_applied_keys"
 
 
 # =====================================================================
@@ -518,7 +527,12 @@ class AppConfig:
     infra: InfraConfig = field(default_factory=InfraConfig)
 
     def validate(self) -> None:
-        """显式校验（FR-09-2）：失败抛 E_IO_CONFIG_INVALID，信息含键路径与期望类型。"""
+        """显式校验（FR-09-2）：失败抛 E_IO_CONFIG_INVALID，信息含键路径与期望类型。
+
+        先按 dataclass 注解递归做**类型**校验（覆盖全部字段），各段 ``validate()``
+        再补区间/枚举/跨段一致性。
+        """
+        _validate_types(self)
         self.env.validate()
         self.agent.validate()
         self.inference.validate()
@@ -545,11 +559,13 @@ class AppConfig:
 def _check(path: str, value: Any, typ: type, *, minv: Any = None, maxv: Any = None,
            choices: Any = None, extra: str | None = None) -> None:
     """单字段类型/区间校验，错误信息必含键路径与期望类型（FR-09-2）。"""
-    if typ is float and isinstance(value, bool):
-        raise _type_error(path, value, typ)
-    if typ is int and isinstance(value, bool):
-        raise _type_error(path, value, typ)
-    if not isinstance(value, typ):
+    if typ is float:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise _type_error(path, value, typ)
+    elif typ is int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise _type_error(path, value, typ)
+    elif not isinstance(value, typ):
         raise _type_error(path, value, typ)
     if minv is not None and value < minv:
         raise InfraError(E.E_IO_CONFIG_INVALID,
@@ -568,6 +584,88 @@ def _type_error(path: str, value: Any, typ: type) -> InfraError:
                       f"期望 {typ.__name__}",
                       hint="检查 configs/default.yaml、harness/config.json、"
                            "GAMERSI_* 环境变量或 CLI 覆盖")
+
+
+# =====================================================================
+# 由 dataclass 注解派生的类型校验（FR-09-2：类型不符 → E_IO_CONFIG_INVALID）
+# =====================================================================
+
+def _hint_label(hint: Any) -> str:
+    if isinstance(hint, str):
+        return hint
+    return getattr(hint, "__name__", None) or str(hint).replace("typing.", "")
+
+
+def _matches_hint(value: Any, hint: Any) -> bool:
+    """值是否符合注解（``int | None`` / ``tuple[str, ...]`` / ``dict[str, float]`` 等）。
+
+    标量策略：``bool`` 必须恰好是 bool；``int`` 拒绝 bool；``float`` 接受 int
+    （YAML/环境变量里的 ``1`` 与 ``1.0`` 等价）。无法解析的注解（字符串）不阻塞。
+    """
+    if hint is Any or hint is object or hint is None or isinstance(hint, str):
+        return True
+    origin = get_origin(hint)
+    if origin is Union or origin is types.UnionType:
+        return any(_matches_hint(value, arg) for arg in get_args(hint))
+    if hint is bool:
+        return isinstance(value, bool)
+    if hint is int:
+        return isinstance(value, int) and not isinstance(value, bool)
+    if hint is float:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if hint is str:
+        return isinstance(value, str)
+    if origin is tuple:
+        if not isinstance(value, (tuple, list)):
+            return False
+        args = get_args(hint)
+        if not args:
+            return True
+        if len(args) == 2 and args[1] is Ellipsis:
+            return all(_matches_hint(v, args[0]) for v in value)
+        return len(args) == len(value) and all(
+            _matches_hint(v, a) for v, a in zip(value, args))
+    if origin is list:
+        if not isinstance(value, (list, tuple)):
+            return False
+        args = get_args(hint)
+        return all(_matches_hint(v, args[0]) for v in value) if args else True
+    if origin in (dict, Mapping):
+        if not isinstance(value, Mapping):
+            return False
+        args = get_args(hint)
+        if len(args) != 2:
+            return True
+        return all(_matches_hint(k, args[0]) and _matches_hint(v, args[1])
+                   for k, v in value.items())
+    if isinstance(hint, type):
+        return isinstance(value, hint)
+    return True
+
+
+def _validate_types(obj: Any, prefix: str = "") -> None:
+    """递归按注解校验全部配置段（覆盖 182 个标量键，补齐手写 ``_check`` 的盲区）。"""
+    hints = _resolved_hints(type(obj))
+    for f in fields(obj):
+        value = getattr(obj, f.name)
+        path = f"{prefix}.{f.name}" if prefix else f.name
+        if is_dataclass(value) and not isinstance(value, type):
+            _validate_types(value, path)
+            continue
+        hint = hints.get(f.name, f.type)
+        if not _matches_hint(value, hint):
+            raise InfraError(E.E_IO_CONFIG_INVALID,
+                             f"配置项 {path} 的值 {value!r} 类型为 {type(value).__name__}，"
+                             f"期望 {_hint_label(hint)}",
+                             hint="检查 configs/default.yaml、harness/config.json、"
+                                  "GAMERSI_* 环境变量或 CLI 覆盖")
+
+
+def _coerce_value(value: Any, hint: Any) -> Any:
+    """YAML 的 list → 注解声明的 tuple（保持 frozen dataclass 的类型契约）。"""
+    if get_origin(hint) is tuple and isinstance(value, list):
+        return tuple(value)
+    return value
 
 
 # =====================================================================
@@ -704,12 +802,17 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
-def _env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
+def _env_overrides(env: Mapping[str, str]
+                   ) -> tuple[dict[str, Any], list[str], dict[str, str]]:
     """``GAMERSI_<SECTION>__<KEY>`` → ``{"section.key": value}``（B-30，``__`` 分层）。
 
-    值做轻量类型推断：``true/false`` → bool，纯整数 → int，其余保持 str。
+    返回 ``(覆盖, 未知清单, 生效变量名)``。未知键**不中断**（FR-09-1）：既记录
+    推导出的键路径，也记录原始变量名，便于直接定位拼写错误。值做轻量类型推断：
+    ``true/false`` → bool，纯整数 → int，其余保持 str。
     """
     out: dict[str, Any] = {}
+    unknown: list[str] = []
+    applied: dict[str, str] = {}
     for name, raw in env.items():
         if not name.startswith(ENV_PREFIX):
             continue
@@ -720,9 +823,12 @@ def _env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
         parts = body.lower().split("__")
         key = _normalize_flat_key(".".join(parts)) # eval.* -> evals.* 等
         if not key or key.split(".", 1)[0] not in _SECTIONS:
+            # 未知段：记录后忽略（FR-09-1 的「记 E_IO_CONFIG_UNKNOWN 并忽略」）
+            unknown.extend([key, name] if key else [name])
             continue
         out[key] = _infer_type(raw)
-    return out
+        applied[key] = name
+    return out, unknown, applied
 
 
 def _infer_type(raw: Any) -> Any:
@@ -756,16 +862,23 @@ def load_config(cli_overrides: Mapping[str, Any] | None = None,
     # 1) configs/default.yaml（+ 可选的 configs/<profile>.yaml，由 CLI 传 profile）
     file_cfg = _normalize_sections(_load_yaml(config_dir / "default.yaml"))
     merged = _merge_dicts(merged, file_cfg)
+    # 静态基线：harness 层之前的视图，供 config_hash 回退 harness 覆盖（B-19）
+    static_baseline = _deep_copy(merged)
 
-    # 2) harness/config.json（可演化层，白名单校验）
-    harness_cfg = _load_harness_config(harness_config)
+    # 2) harness/config.json（可演化层，白名单校验；计入 artifact_hash，不计入 config_hash）
+    harness_keys, harness_cfg = _load_harness_config(harness_config)
     merged = _merge_dicts(merged, harness_cfg)
 
     # 3) GAMERSI_* 环境变量
-    env_over = _env_overrides(os.environ if env is None else env)
+    env_over, env_unknown, env_applied = _env_overrides(os.environ if env is None else env)
+    unknown_all.extend(env_unknown)
+    applied_names: list[str] = []
     if env_over:
         merged, unknown = apply_overrides(merged, env_over, source="env")
         unknown_all.extend(unknown)
+        rejected = set(unknown)
+        applied_names = [env_applied[k] for k in sorted(env_over)
+                         if k not in rejected and k in env_applied]
 
     # 4) CLI 显式参数（最高优先级）
     if cli_overrides:
@@ -774,8 +887,29 @@ def load_config(cli_overrides: Mapping[str, Any] | None = None,
 
     cfg = _from_dict(merged)
     cfg.validate()
+    # 溯源信息挂在实例私有属性上：不参与 asdict / 字段列表 / 相等性 / JSON 快照
+    object.__setattr__(cfg, _HARNESS_STATIC_ATTR,
+                       _harness_static_values(static_baseline, harness_keys))
+    object.__setattr__(cfg, _ENV_APPLIED_ATTR, tuple(applied_names))
     load_config.unknown_keys = unknown_all # type: ignore[attr-defined]
     return cfg
+
+
+def _harness_static_values(static: Mapping[str, Any],
+                           keys: Sequence[str]) -> dict[str, tuple[bool, Any]]:
+    """harness 覆盖键 → ``(静态基线是否存在, 静态值)``（B-19 的 hash 回退依据）。"""
+    out: dict[str, tuple[bool, Any]] = {}
+    for key in keys:
+        node: Any = static
+        found = True
+        for part in key.split("."):
+            if isinstance(node, dict) and part in node:
+                node = node[part]
+            else:
+                found = False
+                break
+        out[key] = (found, _deep_copy(node) if found else None)
+    return out
 
 
 def _to_plain(obj: Any) -> Any:
@@ -804,14 +938,15 @@ def _merge_dicts(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _load_harness_config(path: Path) -> dict[str, Any]:
-    """harness/config.json：扁平点分键，只接受白名单，否则 E_IO_CONFIG_INVALID（FR-09-1）。
+def _load_harness_config(path: Path) -> tuple[list[str], dict[str, Any]]:
+    """harness/config.json：扁平点分键，只接受白名单，否则 ``E_IO_CONFIG_INVALID``（FR-09-1）。
 
-    返回已展开为嵌套结构的 dict（可直接合并）。键名允许用文档短前缀（``policy.*``）
-    或全路径（``agent.policy.*``），统一归一后校验白名单。
+    返回 ``(归一化后的键路径列表, 已展开为嵌套结构的 dict)``。键名允许用文档短前缀
+    （``policy.*``）或全路径（``agent.policy.*``），统一归一后校验白名单。键路径列表
+    是 B-19 的 hash 回退依据：这一层不计入 ``config_hash``。
     """
     if not Path(path).is_file():
-        return {}
+        return [], {}
     try:
         with Path(path).open("r", encoding="utf-8") as fh:
             flat = json.load(fh)
@@ -832,7 +967,7 @@ def _load_harness_config(path: Path) -> dict[str, Any]:
     expanded: dict[str, Any] = {}
     for key, value in normalized.items():
         _set_by_path(expanded, key, value)
-    return expanded
+    return list(normalized), expanded
 
 
 def _from_dict(merged: Mapping[str, Any]) -> AppConfig:
@@ -890,7 +1025,7 @@ def _build_section(typ: type, data: Mapping[str, Any], prefix: str) -> Any:
                                  f"{prefix}.{key} 必须是对象，实际是 {type(value).__name__}")
             kwargs[key] = _build_section(ftype, value, f"{prefix}.{key}")
         else:
-            kwargs[key] = value
+            kwargs[key] = _coerce_value(value, ftype)
     return typ(**kwargs)
 
 
@@ -898,13 +1033,49 @@ def _build_section(typ: type, data: Mapping[str, Any], prefix: str) -> Any:
 # 哈希与种子（FR-09-3 / NFR-09-3）
 # =====================================================================
 
-def _canonical(cfg: AppConfig) -> dict[str, Any]:
-    """排除易变字段与所有绝对路径后的可哈希视图（FR-09-3）。"""
+def _canonical(cfg: AppConfig, *, harness_neutral: bool = False) -> dict[str, Any]:
+    """排除易变字段与所有绝对路径后的可哈希视图（FR-09-3）。
+
+    ``harness_neutral=True`` 时额外把 ``harness/config.json`` 覆盖过的键**回退到静态基线**
+    （``configs/default.yaml`` + dataclass 默认值）。这是 B-19 的要求：harness 层计入
+    ``artifact_hash``、不计入 ``config_hash``，否则第一代被接受后 ``--resume`` 必然冲突。
+    基线中不存在的键（如 harness 新增的 ``agent.tools.*``）整键删除。
+    """
     data = json.loads(json.dumps(asdict(cfg), default=_json_default))
+    if harness_neutral:
+        for path, (present, value) in getattr(cfg, _HARNESS_STATIC_ATTR, {}).items():
+            baseline = json.loads(json.dumps(value, default=_json_default)) if present else None
+            _restore_path(data, path, baseline, present)
     for key in _HASH_VOLATILE_KEYS:
         _del_path(data, key)
     _strip_absolute_paths(data)
     return data
+
+
+def _restore_path(data: dict[str, Any], path: str, value: Any, present: bool) -> None:
+    """把 ``path`` 回退为静态基线（``present=False`` 时删除该键）。"""
+    parts = path.split(".")
+    node: Any = data
+    for p in parts[:-1]:
+        if not isinstance(node, dict) or p not in node:
+            return
+        node = node[p]
+    if not isinstance(node, dict):
+        return
+    if present:
+        node[parts[-1]] = value
+    else:
+        node.pop(parts[-1], None)
+
+
+def harness_overridden_keys(cfg: AppConfig) -> tuple[str, ...]:
+    """``harness/config.json`` 覆盖过的键路径（不参与 ``config_hash``，见 B-19）。"""
+    return tuple(sorted(getattr(cfg, _HARNESS_STATIC_ATTR, {})))
+
+
+def env_applied_keys(cfg: AppConfig) -> tuple[str, ...]:
+    """本次加载真正生效的 ``GAMERSI_*`` 变量名（供 config.json 环境变量白名单）。"""
+    return tuple(getattr(cfg, _ENV_APPLIED_ATTR, ()))
 
 
 def _del_path(data: dict[str, Any], path: str) -> None:
@@ -938,18 +1109,31 @@ def _json_default(obj: Any) -> Any:
     raise TypeError(f"不可 JSON 序列化：{type(obj).__name__}")
 
 
+def full_config(cfg: AppConfig) -> dict[str, Any]:
+    """**完整**生效配置（含 volatile 字段与绝对路径），供 ``config.json`` 快照（Spec §7）。
+
+    与 ``canonical_json()`` 的区别：后者为 hash/复现裁剪（剔除易变字段与绝对路径），
+    前者必须是忠实的 AppConfig 快照，读者可据此独立复现该次 run 的环境。
+    """
+    return json.loads(json.dumps(_to_plain(cfg), default=_json_default))
+
+
+def _dumps(data: Any) -> str:
+    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
 def canonical_json(cfg: AppConfig) -> str:
-    """规范 JSON 文本（排序、紧凑、非 ASCII 保留）。"""
-    return json.dumps(_canonical(cfg), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    """规范 JSON 文本（排序、紧凑、非 ASCII 保留）——**生效视图**（含 harness 覆盖）。"""
+    return _dumps(_canonical(cfg))
 
 
 def config_hash(cfg: AppConfig) -> str:
-    """``sha256(canonical_json(cfg))[:16]``（FR-09-3）。
+    """``sha256(canonical_json(cfg))[:16]``（FR-09-3），**不含 harness 层**（B-19）。
 
-    不含 ``harness_version``（B-19：否则第一代被接受后 ``--resume`` 必然冲突）；
-    harness 的变化由 ``artifact_hash`` 表达。
+    harness 的变化由 ``artifact_hash`` 表达；否则第一代被接受后 ``--resume`` 必然冲突。
     """
-    return hashlib.sha256(canonical_json(cfg).encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(_dumps(_canonical(cfg, harness_neutral=True)).encode("utf-8")
+                          ).hexdigest()[:16]
 
 
 def artifact_hash(harness_dir: Path) -> str:

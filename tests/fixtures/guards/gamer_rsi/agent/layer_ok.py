@@ -5,7 +5,7 @@
 - ``det_ok.py``：确定性代码（用 derive_seed）。
 - ``det_bad.py``：未豁免的 ``random.random()`` / ``time.time()`` / ``uuid4()``。
 - ``det_exempt.py``：同上但带 ``# guard: allow ... reason=...`` 白名单注释。
-- ``det_infra_bad.py``：infra 反向依赖其他子包（违反 NFR-09-5）。
+- ``../infra/dep_bad.py``：infra 反向依赖其他子包（违反 NFR-09-5）。
 """
 
 # layer_ok.py —— agent 侧合法：只经 SandboxEnv 触达环境（INV-1 允许）

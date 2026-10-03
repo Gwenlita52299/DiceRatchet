@@ -12,14 +12,14 @@
 
 from __future__ import annotations
 
-import json
 import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import AppConfig, artifact_hash, config_hash
+from .config import (AppConfig, config_hash, env_applied_keys, full_config,
+                     harness_overridden_keys)
 from .errors import E, InfraError
 from .io import read_json, write_json_atomic
 
@@ -112,20 +112,33 @@ def make_run_id(cfg: AppConfig, *, now: datetime | None = None,
 
 # ---- 目录初始化（FR-09-5 / FR-09-19）--------------------------------------------------
 
-def snapshot_config(cfg: AppConfig, run_id: str, git_sha: str) -> dict[str, Any]:
-    """落盘到 ``config.json`` 的快照（Spec §7）。"""
-    from .config import canonical_json
+def snapshot_config(cfg: AppConfig, run_id: str, git_sha: str,
+                    content_hash: str | None = None) -> dict[str, Any]:
+    """落盘到 ``config.json`` 的快照（Spec §7 / FR-09-5）。
+
+    含：完整 AppConfig（``full_config``，非 hash 裁剪视图）、``config_hash``、
+    ``content_hash``（MOD-01 配表摘要，可缺省）、git sha、生效的 ``GAMERSI_*`` 白名单，
+    以及被 harness 层覆盖的键（B-19：这些键不计入 config_hash）。
+    """
     return {
         "run_id": run_id,
         "git_sha": git_sha,
         "config_hash": config_hash(cfg),
-        "config": json.loads(canonical_json(cfg)),
+        "content_hash": content_hash,
         "harness_config_path": "harness/config.json",
+        "harness_overridden_keys": list(harness_overridden_keys(cfg)),
+        "env_whitelist": list(env_applied_keys(cfg)),
+        "config": full_config(cfg),
     }
 
 
 def _check_runs_ignored(runs_root: Path) -> None:
-    """FR-09-19：``runs_root`` 必须被 ``.gitignore`` 覆盖，否则 ``worktree_clean_check`` 永远 dirty。"""
+    """FR-09-19：``runs_root`` 必须被 ``.gitignore`` 覆盖，否则 ``worktree_clean_check`` 永远 dirty。
+
+    ``git check-ignore`` 的退出码语义：``0`` 已忽略 / ``1`` 未忽略 / ``>=2`` 出错误
+    （不是 git 仓库、git 太旧等）。出错误时按"可观测性缺失 → 降级"处理（PRD §10），
+    只有明确的"未忽略"才阻断——否则在非 git 目录里连一次冒烟 run 都建不起来。
+    """
     runs_root = Path(runs_root)
     base = runs_root.parent if str(runs_root.parent) else "."
     # 传相对路径：绝对路径在 macOS 上会因 /tmp -> /private/tmp 的符号链接前缀不匹配
@@ -138,7 +151,9 @@ def _check_runs_ignored(runs_root: Path) -> None:
     except (OSError, subprocess.SubprocessError):
         return # git 不可用时降级（E_IO_GIT_UNAVAILABLE 已在 run_id 记录）
     if out.returncode == 0:
-        return
+        return # 已忽略
+    if out.returncode != 1:
+        return # >=2：git 不可用/非仓库 → 降级，不阻断
     raise InfraError(E.E_IO_RUNS_NOT_IGNORED,
                      f"{runs_root} 未被 .gitignore 覆盖",
                      hint=f"在 .gitignore 加一行：{runs_root.name}/")
@@ -146,10 +161,17 @@ def _check_runs_ignored(runs_root: Path) -> None:
 
 def init_run_dir(run_id: str, cfg: AppConfig,
                  runs_root: Path = Path("runs"),
-                 *, git_check: bool = True) -> RunPaths:
+                 *, git_check: bool = True,
+                 content_hash: str | None = None) -> RunPaths:
     """幂等创建 Spec §5 目录树（FR-09-5）。
 
-    目录已存在且 ``config.json`` 的 ``config_hash`` 不一致 → ``E_IO_RUN_CONFLICT``。
+    创建 ``config.json``、``events.jsonl``、``episodes/<split>/``（四个 split）、
+    ``reflections/``、``generations/``、``metrics/``、``plots/``、``audit/``、
+    ``prompts/``、``memory/``。目录已存在且 ``config.json`` 的 ``config_hash``
+    不一致 → ``E_IO_RUN_CONFLICT``（禁止两套配置写同一 run）。
+
+    ``content_hash`` 由调用方（组合根经 ``cli.register_content_hash_provider``）传入，
+    MOD-01 的配表摘要不该让 infra 反向依赖 env（NFR-09-5）。
     """
     runs_root = Path(runs_root)
     root = runs_root / run_id
@@ -158,11 +180,17 @@ def init_run_dir(run_id: str, cfg: AppConfig,
     root.mkdir(parents=True, exist_ok=True)
     for d in paths.all_dirs():
         d.mkdir(parents=True, exist_ok=True)
+    # FR-09-5：episodes/<split>/ 四类 split 必须一次建全（下游按 Spec §5 假设存在）
+    for split in paths.splits:
+        paths.episodes_split(split)
+    # events.jsonl 先落空文件，保证「run 目录即完整可读」
+    paths.events.touch(exist_ok=True)
     # 目录存在后再查 .gitignore：带尾斜杠的模式只匹配已存在的目录（FR-09-19）
     if git_check:
         _check_runs_ignored(runs_root)
 
-    snap = snapshot_config(cfg, run_id, git_short_sha(runs_root.parent))
+    snap = snapshot_config(cfg, run_id, git_short_sha(runs_root.parent),
+                           content_hash=content_hash)
     if existed and paths.config.is_file():
         prev_hash = read_json(paths.config).get("config_hash")
         if prev_hash != snap["config_hash"]:

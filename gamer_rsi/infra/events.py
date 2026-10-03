@@ -17,13 +17,15 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Final, Mapping
+from typing import Any, Callable, Final, Mapping
 
 from .errors import E, InfraError
-from .logging import JsonlWriter
+from .logging import REDACTED_SURFACES, JsonlWriter
 
 __all__ = ["EventSpec", "EVENT_REGISTRY", "emit", "bind", "unbind", "is_registered",
-           "set_dev_mode", "dev_mode", "event_names", "stats", "redaction_event"]
+           "set_dev_mode", "dev_mode", "event_names", "stats", "redaction_hit",
+           "is_bound", "drain_latency_ms", "make_redacted_writer",
+           "register_redaction_alert"]
 
 _DEV_ENV: Final[str] = "GAMERSI_DEV"
 
@@ -68,7 +70,9 @@ def _build_registry() -> dict[str, EventSpec]:
     for ev, req in [("gate_pass", frozenset({"harness_version"})),
                     ("gate_reject", frozenset({"violations"})),
                     ("tool_timeout", frozenset({"tool"})),
+                    ("exec", frozenset({"tool", "duration_ms", "outcome"})),
                     ("honeypot_hit", frozenset({"sentinel"})),
+                    ("honeypot_selftest", frozenset({"cases", "caught"})),
                     ("audit_finding", frozenset({"severity"}))]:
         entries.append(_spec("sandbox", ev, "MOD-02 沙箱门禁/审计事件", req))
     # ---- llm（MOD-03）--------------------------------------------------------------
@@ -173,12 +177,17 @@ def dev_mode() -> bool:
     return _dev
 
 
-def bind(events_path: Path, run_id: str, *, append: bool = True) -> JsonlWriter:
-    """绑定 ``events.jsonl`` 作为唯一落点（bootstrap 调用，Spec §8）。"""
+def bind(events_path: Path, run_id: str, *, append: bool = True,
+         fsync_every: int = 0, rotate_max_mb: int = 512) -> JsonlWriter:
+    """绑定 ``events.jsonl`` 作为唯一落点（bootstrap 调用，Spec §8）。
+
+    ``fsync_every`` / ``rotate_max_mb`` 来自 ``infra.*`` 配置（PRD §9），由调用方传入。
+    """
     global _sink, _run_id
     unbind()
     _run_id = run_id
-    _sink = JsonlWriter(Path(events_path), append=append)
+    _sink = JsonlWriter(Path(events_path), append=append, fsync_every=fsync_every,
+                        rotate_max_mb=rotate_max_mb)
     return _sink
 
 
@@ -188,6 +197,15 @@ def unbind() -> None:
         _sink.close()
     _sink = None
     _run_id = None
+
+
+def is_bound() -> bool:
+    return _sink is not None
+
+
+def drain_latency_ms() -> list[float]:
+    """取出（并清空）事件 sink 的单行写入耗时样本，供 ``metrics/io_latency.csv``（§13）。"""
+    return _sink.drain_latency_ms() if _sink is not None else []
 
 
 def is_registered(event: str) -> bool:
@@ -244,8 +262,44 @@ def _write(name: str, row: dict[str, Any]) -> None:
 
 
 def redaction_hit(hits: int, **extra: Any) -> None:
-    """FR-09-9：redaction 命中 > 0 时写 ``infra.redaction_hit``。"""
-    emit("infra.redaction_hit", hits=hits, **extra)
+    """FR-09-9：redaction 命中 > 0 时写 ``infra.redaction_hit``（并带 E_IO_REDACTION_HIT）。"""
+    emit("infra.redaction_hit", hits=hits, code=E.E_IO_REDACTION_HIT, **extra)
+
+
+# MOD-02 告警回调：redaction 命中本身说明发生了 INV-5 泄漏，只擦除不阻断（FR-09-9）
+_ALERT_CALLBACK: Callable[[int, Any], None] | None = None
+
+
+def register_redaction_alert(callback: Callable[[int, Any], None] | None) -> None:
+    """注册 MOD-02 告警回调（``callback(hits, scrubbed_obj)``）；组合根或 MOD-02 调用。"""
+    global _ALERT_CALLBACK
+    _ALERT_CALLBACK = callback
+
+
+def make_redacted_writer(path: Path, redactor: Any, *, surface: str,
+                         fsync_every: int = 0,
+                         rotate_max_mb: int = 512) -> JsonlWriter:
+    """为 agent 可见的**三个出口**构造带 redaction 的 JSONL 写入器（FR-09-9 / B-19）。
+
+    ``surface`` 必须是 ``prompts`` / ``memory`` / ``reflections`` 之一——作用域在 API 层
+    强制，避免轨迹（``episodes/``）、``events.jsonl``、``generations/`` 被误加 redaction
+    （它们是审计侧，MOD-08 的配对检验需要原始 seed）。
+
+    命中 > 0 时：写 ``infra.redaction_hit`` 事件 + 触发已注册的 MOD-02 告警回调。
+    """
+    if surface not in REDACTED_SURFACES:
+        raise InfraError(E.E_IO_CONFIG_INVALID,
+                         f"redaction 只允许作用于 {REDACTED_SURFACES}，收到 surface={surface!r}",
+                         hint="轨迹/事件/generations 属审计侧，不做 redaction（B-19）")
+    path = Path(path)
+
+    def _on_hit(hits: int, scrubbed: Any) -> None:
+        redaction_hit(hits, surface=surface, path=str(path))
+        if _ALERT_CALLBACK is not None:
+            _ALERT_CALLBACK(hits, scrubbed)
+
+    return JsonlWriter(path, fsync_every=fsync_every, rotate_max_mb=rotate_max_mb,
+                       redactor=redactor, on_redaction_hit=_on_hit)
 
 
 def stats() -> dict[str, int]:
