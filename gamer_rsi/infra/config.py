@@ -71,13 +71,20 @@ _ENV_APPLIED_ATTR: Final[str] = "_env_applied_keys"
 
 @dataclass(frozen=True)
 class EpisodeConfig:
-    """默认局（Spec §8.6）+ 只读上限。config_hash 覆盖此段（Spec §5）。"""
+    """默认局（Spec §8.6）+ 只读上限。config_hash 覆盖此段（Spec §5）。
+
+    ``toggles`` 是 GAME 内核 ``TOGGLE_KEYS`` 的**开启清单**：列出为开、未列出为关
+    （默认列全 = 全开）。``infra`` 不得 import ``gamer_rsi.env``（NFR-09-5），
+    因此名字合法性**不在本段校验**，由 MOD-02 ``SandboxEnv`` 经
+    ``sandbox/api.py::EpisodeConfig.from_any`` 对照 ``TOGGLE_KEYS`` 校验，
+    未登记的名字报 ``E_ENV_CONFIG_INVALID``（M0 验收 F1）。
+    """
 
     difficulty: str = "hard"
     stage_count: int = 6
     character: str = "warrior"
     toggles: tuple[str, ...] = (
-        "relics", "forge", "shop", "events", "shrines", "blessings",
+        "mapBranching", "relics", "events", "shops", "schoolCounter",
     )
     max_env_steps: int = 1000 # env 步硬上限（6 关实测最大约 350）
     max_decisions: int = 300 # 决策点上限

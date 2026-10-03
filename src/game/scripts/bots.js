@@ -200,11 +200,24 @@ export function chooseAction(state, tables, strategy, rnd) {
   }
 }
 
+/**
+ * 「决策点」键（Spec §4.3 / B-12，与 MOD-02 `SandboxEnv._refresh` 的 `decisionIndex` 同规则）：
+ * `player_turn` 每回合算 1 个决策点；其余 phase 每 env 步算 1 个。
+ * 初始观测即 `decisionIndex == 0`，因此计数从 0 起、每次键变化 +1。
+ */
+export function decisionKey(state, envSteps) {
+  return state.phase === 'player_turn'
+    ? `${state.phase}|${state.turn}`
+    : `${state.phase}|${state.turn}|${envSteps}`;
+}
+
 export function runGame({ difficulty = 'medium', seed = 1, strategy = 'greedy_damage', toggles = {}, maxSteps = 20000, tables, record = false, stopAtStage = null, stageCount = null }) {
   const rnd = botRng(seed + 7);
   let state = K.createGame({ difficulty, seed, toggles, stageCount, runId: `r-bot${seed}` }, tables);
   const actions = [];
   let steps = 0;
+  let decisions = 0; // 终值 = 该局的 `decisionIndex`（Spec §4.3 / B-12）
+  let prevKey = decisionKey(state, 0);
   while (state.phase !== 'settle' && steps < maxSteps) {
     if (stopAtStage && state.stage > stopAtStage) break;
     const a = chooseAction(state, tables, strategy, rnd);
@@ -214,8 +227,13 @@ export function runGame({ difficulty = 'medium', seed = 1, strategy = 'greedy_da
     if (record) actions.push(a);
     state = r.state;
     steps += 1;
+    const key = decisionKey(state, steps);
+    if (key !== prevKey) {
+      prevKey = key;
+      decisions += 1;
+    }
   }
-  return { state, outcome: state.outcome, stage: state.stage, steps, actions, stats: state.stats };
+  return { state, outcome: state.outcome, stage: state.stage, steps, decisions, actions, stats: state.stats };
 }
 
 /** 单场战斗对拍（验收 A6）：给定骰池与编队，跑一场战斗 */

@@ -36,6 +36,49 @@ ALL_ON_TOGGLES: Final[Mapping[str, bool]] = {k: True for k in TOGGLE_KEYS}
 REWARD_PLACEHOLDER: Final[float] = 0.0
 
 
+def _toggle_error(detail: str, hint: str) -> InfraError:
+    return InfraError(E.E_ENV_CONFIG_INVALID, detail, hint=hint)
+
+
+def _normalize_toggles(value: Any) -> dict[str, bool]:
+    """把 ``toggles`` 归一为恰好 ``TOGGLE_KEYS`` 的 ``{name: bool}``（M0 验收 F1）。
+
+    两种写法，各有明确语义：
+
+    ① ``Mapping[str, bool]``——Spec §4.1 的 GAME ``createGame`` 原生形态：显式给出的键
+       取给定值，**未给出的键取内核默认 ``True``**（与 ``env/engine.py::apply_difficulty``
+       逐位一致，不改内核行为）。
+    ② ``Sequence[str]``——MOD-09 ``configs/default.yaml`` 的 ``env.episode.toggles``：
+       语义是**开启清单**，列出为开、未列出为关；空清单 = 全关（g1 golden 的合法配置）。
+
+    未在 ``TOGGLE_KEYS`` 登记的名字一律 ``E_ENV_CONFIG_INVALID``（fail-closed）。原因：
+    内核 ``createGame`` 对未知键**静默忽略**、对缺失键默认 ``True``，所以把配置里的名字
+    直接透传会让「关掉某个模块」的配置**静默失效**——这正是 M0 验收发现的缺陷
+    （``configs/default.yaml`` 曾写 6 个名字，其中 4 个不是内核开关，且被整体忽略）。
+    """
+    if value is None:
+        return dict(ALL_ON_TOGGLES)
+    if isinstance(value, Mapping):
+        unknown = sorted(str(k) for k in value if k not in ALL_ON_TOGGLES)
+        if unknown:
+            raise _toggle_error(
+                f"toggles 含未登记的开关名 {unknown}",
+                f"合法开关名（GAME kernel TOGGLE_KEYS）：{list(TOGGLE_KEYS)}")
+        return {k: bool(value[k]) if k in value else True for k in TOGGLE_KEYS}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        unknown = sorted({str(n) for n in value if n not in ALL_ON_TOGGLES})
+        if unknown:
+            raise _toggle_error(
+                f"toggles 开启清单含未登记的开关名 {unknown}",
+                f"合法开关名（GAME kernel TOGGLE_KEYS）：{list(TOGGLE_KEYS)}")
+        on = {str(n) for n in value}
+        return {k: k in on for k in TOGGLE_KEYS}
+    raise _toggle_error(
+        f"toggles 的值 {value!r} 类型为 {type(value).__name__}，"
+        f"期望 Mapping[str, bool]（GAME 原生）或 Sequence[str]（开启清单）",
+        f"合法开关名（GAME kernel TOGGLE_KEYS）：{list(TOGGLE_KEYS)}")
+
+
 @dataclass(frozen=True)
 class EpisodeConfig:
     """一局配置，展开为 GAME ``createGame`` 输入（Spec §4.1 / §8.6 默认局）。"""
@@ -57,8 +100,9 @@ class EpisodeConfig:
     def from_any(cls, value: Any) -> "EpisodeConfig":
         """接受 ``EpisodeConfig`` / Mapping / MOD-09 的 ``env.episode`` 配置对象。
 
-        MOD-09 的 ``EpisodeConfig`` 字段名是 ``stage_count``、``toggles`` 为 tuple，
-        这里做一次显式适配（Spec §4.1 与 §5 的两处同名类不同源）。
+        MOD-09 的 ``EpisodeConfig`` 字段名是 ``stage_count``、``toggles`` 为**开启清单**
+        （``tuple[str, ...]``），这里做一次显式适配（Spec §4.1 与 §5 的两处同名类不同源），
+        并按 ``_normalize_toggles`` 校验开关名——配置里的 ``toggles`` 必须真的生效。
         """
         if isinstance(value, cls):
             return value
@@ -66,19 +110,16 @@ class EpisodeConfig:
             return cls()
         if isinstance(value, Mapping):
             data = dict(value)
-            toggles = data.get("toggles")
-            if not isinstance(toggles, Mapping):
-                toggles = dict(ALL_ON_TOGGLES)
             return cls(difficulty=str(data.get("difficulty", "hard")),
                        stage_count=int(data.get("stage_count", data.get("stageCount", 6))),
-                       toggles={str(k): bool(v) for k, v in toggles.items()},
+                       toggles=_normalize_toggles(data.get("toggles")),
                        character=str(data.get("character", "warrior")),
                        max_env_steps=int(data.get("max_env_steps", 1000)),
                        max_decisions=int(data.get("max_decisions", 300)))
         return cls(
             difficulty=str(getattr(value, "difficulty", "hard")),
             stage_count=int(getattr(value, "stage_count", 6)),
-            toggles=dict(ALL_ON_TOGGLES),
+            toggles=_normalize_toggles(getattr(value, "toggles", None)),
             character=str(getattr(value, "character", "warrior")),
             max_env_steps=int(getattr(value, "max_env_steps", 1000)),
             max_decisions=int(getattr(value, "max_decisions", 300)))

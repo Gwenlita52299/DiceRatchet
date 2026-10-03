@@ -84,3 +84,58 @@ def test_greedy_counter_win_rate_matches_js(python_outcomes, js_outcomes) -> Non
 def test_greedy_bot_no_kernel_errors(python_outcomes) -> None:
     errors = [x for x in python_outcomes if x.get("error")]
     assert not errors, f"Python bot 触发内核错误/非法动作：{errors[:3]}"
+
+
+# ---- Spec §8.6「决策点」口径守卫 ------------------------------------------------------
+
+_JS_RECORD = """
+import {{ loadTables }} from '{repo}/src/game/kernel/loader.js';
+import {{ runGame }} from '{repo}/src/game/scripts/bots.js';
+
+const tables = loadTables();
+const out = {{}};
+for (const seed of {seeds}) {{
+  const r = runGame({{ difficulty: '{difficulty}', seed, strategy: 'greedy_counter',
+                      stageCount: {stages}, tables, maxSteps: 4000, record: true }});
+  out[seed] = {{ steps: r.steps, decisions: r.decisions, outcome: r.outcome, actions: r.actions }};
+}}
+console.log(JSON.stringify(out));
+"""
+
+
+@pytest.mark.slow
+def test_js_decisions_match_sandboxenv_decision_index(engine, tmp_path) -> None:
+    """Spec §8.6 的「决策点」列取自 ``bots.js::runGame`` 的 ``decisions``。
+
+    该列必须与 **MOD-02 ``SandboxEnv`` 的 ``decisionIndex``**（Spec §4.3 / B-12 的权威定义）
+    同口径，否则 Spec §8.6 的数字会在换定义后悄悄失义。做法：让 JS 侧带 ``record`` 跑几局，
+    把动作脚本回放进 ``SandboxEnv``，逐局比对 ``steps`` 与 ``decisions``。
+    """
+    if not shutil.which("node"):
+        pytest.skip("node 不可用")
+    seeds = [1, 2, 42]
+    script = tmp_path / "record.mjs"
+    script.write_text(_JS_RECORD.format(repo=_REPO_ROOT, seeds=json.dumps(seeds),
+                                        difficulty=_DIFFICULTY, stages=_STAGE_COUNT),
+                      encoding="utf-8")
+    proc = subprocess.run(["node", str(script)], cwd=_REPO_ROOT,
+                          capture_output=True, text=True, timeout=600)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    js = {int(k): v for k, v in json.loads(proc.stdout).items()}
+
+    from gamer_rsi.sandbox.api import EpisodeConfig, SandboxEnv
+
+    for seed, rec in js.items():
+        env = SandboxEnv(engine=engine, episode_config=EpisodeConfig(
+            difficulty=_DIFFICULTY, stage_count=_STAGE_COUNT), episode_id=f"e-{seed:06d}-g000-train")
+        env.reset(seed)
+        obs = env.observe()
+        for action in rec["actions"]:
+            env.step(action)
+            obs = env.observe()
+        env.close()
+        assert len(rec["actions"]) == rec["steps"], (
+            f"seed {seed}: JS 记录的 actions 数 {len(rec['actions'])} != steps {rec['steps']}")
+        assert obs["decisionIndex"] == rec["decisions"], (
+            f"seed {seed}: JS decisions={rec['decisions']} 与 SandboxEnv decisionIndex="
+            f"{obs['decisionIndex']} 口径不一致（Spec §8.6 决策点列失义）")

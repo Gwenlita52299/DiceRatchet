@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from gamer_rsi.env import TOGGLE_KEYS
 from gamer_rsi.infra.errors import E, InfraError
 from gamer_rsi.sandbox.api import (ALL_ON_TOGGLES, EpisodeConfig, SandboxEnv, StepResult,
                                    make_default_env)
@@ -207,6 +208,57 @@ def test_episode_config_from_mapping_and_mod09_style_object():
         max_decisions = 300
 
     assert EpisodeConfig.from_any(Mod09Style()).stage_count == 6
+
+
+# ---- M0 验收 F1：toggles 必须真的生效，未登记开关名必须报错 -------------------------
+
+def test_toggles_on_list_from_mod09_style_object_is_effective(engine):
+    """MOD-09 ``env.episode.toggles``（``tuple[str, ...]``）是开启清单，必须真的生效。"""
+
+    class Mod09Style:
+        difficulty = "hard"
+        stage_count = 6
+        character = "warrior"
+        toggles = ("relics",)
+        max_env_steps = 1000
+        max_decisions = 300
+
+    cfg = EpisodeConfig.from_any(Mod09Style())
+    assert set(cfg.toggles) == set(TOGGLE_KEYS)
+    assert cfg.toggles == {k: k == "relics" for k in TOGGLE_KEYS}
+
+    # 端到端：配置真的传导到内核
+    state = engine.create(cfg.to_game_input(7))
+    assert state["config"]["toggles"] == cfg.toggles
+
+
+def test_toggles_on_list_from_mapping_is_effective_and_empty_means_all_off():
+    """list 形态的开启清单：只开列出的；空清单 = 全关（g1 golden 的合法配置）。"""
+    assert EpisodeConfig.from_any({"toggles": ["relics", "events"]}).toggles == {
+        k: k in ("relics", "events") for k in TOGGLE_KEYS}
+    assert EpisodeConfig.from_any({"toggles": []}).toggles == {k: False for k in TOGGLE_KEYS}
+
+
+def test_toggles_mapping_keeps_kernel_default_true(engine):
+    """Mapping 形态保持内核语义：显式键取给定值，缺失键取默认 True（不静默改行为）。"""
+    cfg = EpisodeConfig.from_any({"toggles": {"relics": False}})
+    assert cfg.toggles["relics"] is False
+    assert all(cfg.toggles[k] is True for k in TOGGLE_KEYS if k != "relics")
+    assert engine.create(cfg.to_game_input(7))["config"]["toggles"] == cfg.toggles
+
+
+@pytest.mark.parametrize("bad", [
+    ["relics", "forge"],                 # 开启清单里的未登记名（M0 验收 F1 的原缺陷）
+    {"relics": True, "schoolCounter": True, "blessings": True}, # 映射里的未登记键
+    "relics",                            # 裸字符串不是合法形态
+    42,
+])
+def test_unknown_toggle_name_is_rejected(bad):
+    """未登记开关名 fail-closed：内核会静默忽略未知键，透传即静默失效。"""
+    with pytest.raises(InfraError) as exc:
+        EpisodeConfig.from_any({"toggles": bad})
+    assert exc.value.code == E.E_ENV_CONFIG_INVALID
+    assert "toggles" in str(exc.value)
 
 
 def test_close_then_use_raises(engine):

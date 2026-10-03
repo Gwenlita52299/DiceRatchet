@@ -8,11 +8,14 @@ env:
   content_dir: src/game/content
   golden_dir: src/game/tests/golden
   check_invariants: true
-  episode: # 默认局（Spec §8.6）：hard × 6 关，启发式通关率约 45%
+  episode: # 默认局（Spec §8.6）：hard × 6 关，greedy_counter 通关率 45.5%（n=200，seed 1–200；复现命令见 Spec §8.6）
     difficulty: hard
     stage_count: 6
     character: warrior
-    toggles: [relics, forge, shop, events, shrines, blessings]
+    # 开启清单：列出为开、未列出为关。名字必须与 GAME 内核 TOGGLE_KEYS 完全一致
+    # （mapBranching/relics/events/shops/schoolCounter），否则 SandboxEnv 报
+    # E_ENV_CONFIG_INVALID（fail-closed；M0 验收 F1：曾误写 forge/shop/shrines/blessings）。
+    toggles: [mapBranching, relics, events, shops, schoolCounter]
     max_env_steps: 1000 # env 步硬上限（唯一键，各模块只读）
     max_decisions: 300 # 决策点上限
   sandbox: # MOD-02

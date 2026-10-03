@@ -1,0 +1,84 @@
+# .github/workflows/ci.yml —— 门禁接线（M0 验收 F2）
+#
+# 两个作业共用 scripts/ci_gate.sh（本地可原样复跑，见 README「CI 门禁」）：
+#   gate   快速门（约 1 分钟）：guards AST 门禁 + env selftest + pytest -m "not slow" + 跨 PYTHONHASHSEED
+#   parity 深门（约 10 分钟）：全量 pytest（含 5 组 golden、200 局差分、200 局 bot 对拍）
+#                              + GAME 侧 node 测试 + golden 基准独立性
+#
+# 对齐 Spec §9 G1–G6 与 INV-1/INV-6；本地等价命令：
+#   scripts/ci_gate.sh                  # = gate
+#   scripts/ci_gate.sh --with-slow      # = parity
+#
+# 说明：Node 固定 22（GAME 侧 `node --test "tests/**/*.test.js"` 的 glob 支持需 ≥ 21）；
+# Python 固定 3.12（pyproject 要求 ≥ 3.11，用到了 StrEnum）。
+
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  gate:
+    name: 门禁（快速）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,plot]"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: scripts/ci_gate.sh --coverage
+        run: ./scripts/ci_gate.sh --coverage
+
+  parity:
+    name: 对拍（golden / 200 局差分）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,plot]"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: scripts/ci_gate.sh --with-slow
+        run: ./scripts/ci_gate.sh --with-slow
+
+      - name: 失败时保留审计与轨迹产物
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-artifacts
+          path: |
+            runs/
+            .coverage
+          if-no-files-found: ignore

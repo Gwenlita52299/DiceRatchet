@@ -104,3 +104,34 @@ def test_registry_keeps_only_spec_allowed_sources(state):
         assert root not in view, f"{root} 不得出现在 Observation（Spec §4.2）"
     assert view["schemaVersion"] == P.OBSERVATION_SCHEMA_VERSION
     env.close()
+
+
+# ---- MOD-09 configs/default.yaml × MOD-01 TOGGLE_KEYS（M0 验收 F1）------------------
+
+def test_default_config_toggle_names_match_kernel_toggle_keys():
+    """``configs/default.yaml`` 的 ``env.episode.toggles`` 必须恰好是内核 ``TOGGLE_KEYS``。
+
+    ``infra`` 不能 import ``gamer_rsi.env``（NFR-09-5），所以这条跨模块契约只能在这里守：
+    名字写错时内核会**静默忽略**未知键、并把缺失键默认为 True，配置会静默失效
+    （M0 验收 F1：原值含 ``forge/shop/shrines/blessings`` 四个不存在的开关名）。
+    """
+    from gamer_rsi.env import TOGGLE_KEYS
+    from gamer_rsi.infra.config import load_config
+
+    declared = load_config().env.episode.toggles
+    assert set(declared) == set(TOGGLE_KEYS), (
+        f"default.yaml 的 toggles={list(declared)} 与内核 TOGGLE_KEYS={list(TOGGLE_KEYS)} 不一致")
+    assert len(declared) == len(set(declared)), "toggles 开启清单有重复项"
+
+
+def test_default_config_episode_is_all_on_and_effective(state):
+    """默认局（Spec §8.6）必须是**全开**，且该配置真的传导到内核（不是死配置）。"""
+    from gamer_rsi.env import TOGGLE_KEYS
+    from gamer_rsi.infra.config import load_config
+    from gamer_rsi.sandbox.api import EpisodeConfig
+
+    engine, _ = state
+    cfg = EpisodeConfig.from_any(load_config().env.episode)
+    assert all(cfg.toggles.values()), "默认局必须全开（Spec §8.6）"
+    assert set(cfg.toggles) == set(TOGGLE_KEYS)
+    assert engine.create(cfg.to_game_input(1))["config"]["toggles"] == cfg.toggles
