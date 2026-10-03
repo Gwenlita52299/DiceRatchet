@@ -134,3 +134,37 @@ def test_commit_harness_requires_dir(tmp_path: Path):
     with pytest.raises(InfraError) as exc:
         commit_harness(tmp_path, 1, "x")
     assert exc.value.code == E.E_IO_CONFIG_INVALID
+
+
+# ---- 回归（2026-10-03 审计 P1-5/P1-11）--------------------------------------------------
+
+@pytest.mark.skipif(not git_available(), reason="git 不可用")
+def test_git_command_failure_is_not_masked_as_unavailable(tmp_path: Path):
+    """git 可用但命令失败 → E_IO_GIT_FAILED（退出码 2），绝不降级为退出码 0。
+
+    回归：旧实现把 ``CalledProcessError`` 归入 ``E_IO_GIT_UNAVAILABLE``（EXIT_OK=0），
+    于是"harness 从未提交"会被上层当作成功。
+    """
+    repo = tmp_path / "no-identity"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True, capture_output=True)
+    harness = repo / "harness"
+    harness.mkdir()
+    (harness / "a.py").write_text("x\n", encoding="utf-8")
+    with pytest.raises(InfraError) as exc:
+        commit_harness(repo, 1, "msg") # 未配置 user.name/user.email
+    assert exc.value.code == E.E_IO_GIT_FAILED
+    assert exc.value.exit_code == 2
+    assert "git commit" in exc.value.message
+
+
+@pytest.mark.skipif(not git_available(), reason="git 不可用")
+def test_tag_version_does_not_delete_same_named_branch(repo: Path, harness: Path):
+    """FR-09-14 只要求"不建同名分支"；已有同名分支不得被本函数删除（P1-11）。"""
+    commit_harness(repo, 1, "v1")
+    _git(repo, "branch", "harness-v9")
+    assert tag_version(repo, 9) == "harness-v9"
+    assert "harness-v9" in _git(repo, "branch", "--list", "harness-v9")
+    assert _git(repo, "tag", "-l", "harness-v9").strip() == "harness-v9"
+    # 回滚/校验走全限定 ref，与同名分支并存也无歧义
+    assert len(_git(repo, "rev-parse", "refs/tags/harness-v9")) == 40

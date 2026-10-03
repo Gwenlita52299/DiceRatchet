@@ -48,6 +48,36 @@ def test_init_run_dir_creates_full_tree(runs, cfg):
     assert paths.state.name == "state.json"
 
 
+def test_init_run_dir_creates_split_dirs_and_events_file(runs, cfg):
+    """FR-09-5（P1-9）：episodes/<split>/ 四个 split 与 events.jsonl 必须在建 run 时齐备。"""
+    paths = _init(runs, cfg)
+    for split in ("train", "heldout", "test", "demo"):
+        assert (paths.episodes / split).is_dir(), split
+    assert paths.events.is_file() and paths.events.stat().st_size == 0
+
+
+def test_config_snapshot_is_complete(runs, cfg, monkeypatch):
+    """Spec §7 / P1-8：快照含完整 AppConfig、content_hash、env 白名单与 harness 覆盖键。"""
+    monkeypatch.setenv("GAMERSI_LOOP__K", "12")
+    cfg2 = load_config(config_dir=CONFIGS)
+    paths = init_run_dir("r-snap", cfg2, runs_root=runs, git_check=False,
+                         content_hash="content-abc")
+    snap = json.loads(paths.config.read_text(encoding="utf-8"))
+    assert snap["content_hash"] == "content-abc"
+    assert snap["env_whitelist"] == ["GAMERSI_LOOP__K"]
+    assert snap["harness_overridden_keys"] == []
+    # 完整 AppConfig：volatile 字段也在（canonical_json 会裁掉它们）
+    assert snap["config"]["infra"]["log_level"] == "INFO"
+    assert snap["config"]["infra"]["runs_root"] == "runs"
+    assert snap["config"]["loop"]["k"] == 12
+
+
+def test_runs_ignored_degrades_outside_git_repo(tmp_path, cfg):
+    """非 git 目录（git check-ignore 退出码 ≥2）按可观测性缺失降级，不阻断建 run。"""
+    paths = init_run_dir("r-nogit", cfg, runs_root=tmp_path / "runs")
+    assert paths.root.is_dir()
+
+
 def test_init_run_dir_is_idempotent(runs, cfg):
     a = _init(runs, cfg)
     b = _init(runs, cfg)
@@ -182,7 +212,37 @@ def test_resume_rejects_config_mismatch(runs, cfg):
     assert exc.value.code == E.E_IO_RUN_CONFLICT
 
 
-def test_resume_tolerates_harness_change(runs, cfg, tmp_path):
+def test_resume_tolerates_real_harness_change(runs, cfg, tmp_path):
+    """T-09-16（真实版）：harness 演化后 `--resume` 必须通过 config_hash 校验（B-19）。
+
+    回归（2026-10-03 审计 P0-1）：旧用例只是复用同一个 cfg，从未改动 harness 文件，
+    因此没能发现"harness 层被算进 config_hash"的问题。
+    """
+    paths = _init(runs, cfg)
+    write_state(paths, {"phase": "train"})
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    (harness / "config.json").write_text(
+        json.dumps({"agent.policy.temperature": 0.95, "memory.retrieve.top_k": 3}),
+        encoding="utf-8")
+    evolved = load_config(config_dir=CONFIGS, harness_config=harness / "config.json")
+    assert evolved.agent.policy.temperature == 0.95 # 生效视图确实演化过
+    again = resolve_run_dir("r-0001", evolved, runs_root=runs, resume=True)
+    assert again.root == paths.root
+    # 幂等再 init 同样不得冲突（演化后的 run 仍属同一 run 身份）
+    assert init_run_dir("r-0001", evolved, runs_root=runs, git_check=False).root == paths.root
+
+
+def test_resume_rejects_static_config_change(runs, cfg):
+    """反向用例：静态配置变了 → 仍必须拒绝续跑（config_hash 覆盖静态配置）。"""
+    _init(runs, cfg)
+    other = load_config(cli_overrides={"infra.fsync_every": 7}, config_dir=CONFIGS)
+    with pytest.raises(InfraError) as exc:
+        resolve_run_dir("r-0001", other, runs_root=runs)
+    assert exc.value.code == E.E_IO_RUN_CONFLICT
+
+
+def test_resume_tolerates_harness_change(runs, cfg):
     # B-19：config_hash 不含 harness，所以演化过的 run 也能续跑
     _init(runs, cfg)
     # harness 变化不改变 config_hash —— 直接复用同一 cfg 即可证明
@@ -259,3 +319,69 @@ def test_registry_has_spec_sections():
                "policy.decision", "memory.add", "loop.episode_end",
                "evolve.decision", "eval.report"]:
         assert ev in names, ev
+
+
+# ---- FR-09-17：进程环境快照记入**真正的** run_start --------------------------------
+
+def test_cli_init_run_start_carries_process_env(tmp_path, monkeypatch):
+    from argparse import Namespace
+
+    from gamer_rsi.infra import cli, events as ev
+    from gamer_rsi.infra import process as P
+    from gamer_rsi.infra import run as run_mod
+
+    # 临时目录不在 git 仓库里：跳过 runs/ 的 .gitignore 检查，只验 run_start 字段
+    real_init = run_mod.init_run_dir
+    monkeypatch.setattr(cli, "init_run_dir",
+                        lambda *a, **k: real_init(*a, **{**k, "git_check": False}))
+    monkeypatch.chdir(tmp_path)
+    # 真实入口顺序（cli.main）：先 bootstrap_process() 固化环境，再 cli_init_run()。
+    # 这里显式重放该顺序：指纹读的是**真实** env，不能依赖别的用例的副作用。
+    monkeypatch.delenv("PYTHONHASHSEED", raising=False)
+    monkeypatch.setattr(P, "_SNAPSHOT", None)
+    P.bootstrap_process(reexec=False)
+    events.unbind()
+    ev.set_dev_mode(True)
+    try:
+        paths, cfg, run_id = cli.cli_init_run(Namespace(
+            config_dir=str(CONFIGS), run_id="r-proc-env", resume=False, dry_run=False))
+        rows, _ = read_jsonl(paths.events)
+    finally:
+        events.unbind()
+        ev.set_dev_mode(False)
+    start = next(r for r in rows if r["event"] == "infra.run_start")
+    assert start["config_hash"] == config_hash(cfg) and start["run_id"] == run_id
+    assert start["env"]["PYTHONHASHSEED"] == "0" and start["env"]["TZ"] == "UTC"
+    assert start["pythonhashseed"] == "0" and start["tz"] == "UTC"
+    assert start["threads"] == 1
+    assert start["unknown_keys"] == [] or isinstance(start["unknown_keys"], list)
+    assert sum(1 for r in rows if r["event"] == "infra.run_start") == 1 # 只发一次
+
+
+def test_unknown_keys_recorded_in_run_start_and_event(tmp_path, monkeypatch):
+    """回归（P1-3）：FR-09-1 的「未知键清单写入 run 启动日志」+ E_IO_CONFIG_UNKNOWN 留痕。"""
+    from argparse import Namespace
+
+    from gamer_rsi.infra import cli
+    from gamer_rsi.infra import run as run_mod
+
+    real_init = run_mod.init_run_dir
+    monkeypatch.setattr(cli, "init_run_dir",
+                        lambda *a, **k: real_init(*a, **{**k, "git_check": False}))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GAMERSI_LOOP__NOPE", "1")
+    monkeypatch.setenv("GAMERSI_FOO__BAR", "1")
+    events.unbind()
+    events.set_dev_mode(True)
+    try:
+        paths, _cfg, _rid = cli.cli_init_run(Namespace(
+            config_dir=str(CONFIGS), run_id="r-unknown", resume=False, dry_run=False))
+        rows, _ = read_jsonl(paths.events)
+        events.unbind()
+    finally:
+        events.unbind()
+        events.set_dev_mode(False)
+    start = next(r for r in rows if r["event"] == "infra.run_start")
+    assert set(start["unknown_keys"]) == {"loop.nope", "foo.bar", "GAMERSI_FOO__BAR"}
+    unknown_event = next(r for r in rows if r["event"] == "infra.config_unknown_key")
+    assert E.E_IO_CONFIG_UNKNOWN == unknown_event["code"]

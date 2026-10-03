@@ -12,6 +12,7 @@ import pytest
 from gamer_rsi.infra import cli, events
 from gamer_rsi.infra.cli import build_parser, main, parse_seeds_spec
 from gamer_rsi.infra.errors import E
+from gamer_rsi.infra.io import read_jsonl
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -146,6 +147,108 @@ def test_bad_choice_exits_2():
     assert code == 2
 
 
+def test_invalid_args_stderr_contains_error_code():
+    """T-09-15（P1-10）：非法参数 → 退出码 2 且 stderr 含错误码。"""
+    code, out, err = _run(["play", "--agent", "bogus"])
+    assert code == 2
+    assert E.E_IO_CONFIG_INVALID in err
+    code, out, err = _run(["nope"])
+    assert code == 2 and E.E_IO_CONFIG_INVALID in err
+
+
+# ---- 回归（2026-10-03 审计 P1-2/P1-7/P1-12）：注册表 + run 生命周期 --------------------
+
+@pytest.fixture()
+def clean_registry():
+    """保存/恢复命令注册表与活跃 run，避免用例间串味。"""
+    saved = dict(cli._HANDLERS)
+    saved_active = cli._ACTIVE_RUN
+    saved_provider = cli._CONTENT_HASH_PROVIDER
+    yield
+    cli._HANDLERS.clear()
+    cli._HANDLERS.update(saved)
+    cli._ACTIVE_RUN = saved_active
+    cli._CONTENT_HASH_PROVIDER = saved_provider
+
+
+def test_register_extension_point_overrides_pending(clean_registry):
+    """FR-09-10：实现由模块经 register() 注入，未注册才落 E_IO_MODULE_PENDING。"""
+    assert E.E_IO_MODULE_PENDING in _run(["play"])[2] # 默认待落地模块
+    cli.register(["play"], lambda args: 0)
+    code, out, err = _run(["play", "--seeds", "train:1000-1000"])
+    assert code == 0, err
+    assert (("play",) in cli.registered_commands())
+
+
+def test_run_end_and_io_latency_written(tmp_path, monkeypatch, clean_registry):
+    """P1-2：命令结束必须发 infra.run_end（含 exit_code/duration_s）并写 io_latency.csv。"""
+    from argparse import Namespace
+
+    from gamer_rsi.infra import events
+    from gamer_rsi.infra import run as run_mod
+
+    monkeypatch.chdir(tmp_path)
+    real_init = run_mod.init_run_dir
+    monkeypatch.setattr(cli, "init_run_dir",
+                        lambda *a, **k: real_init(*a, **{**k, "git_check": False}))
+
+    def handler(args: Namespace) -> int:
+        cli.cli_init_run(Namespace(config_dir=str(REPO / "configs"), run_id="r-end",
+                                   resume=False, dry_run=False))
+        events.emit("evolve.version", from_version=0, to_version=1, git_commit="abc")
+        return 7
+
+    cli.register(["loop", "run"], handler)
+    code, out, err = _run(["loop", "run", "--generations", "1"])
+    assert code == 7, err
+    rows, _ = read_jsonl(tmp_path / "runs" / "r-end" / "events.jsonl")
+    names = [r["event"] for r in rows]
+    assert names[0] == "infra.run_start" and names[-1] == "infra.run_end"
+    end = rows[-1]
+    assert end["exit_code"] == 7 and end["duration_s"] >= 0
+    latency = tmp_path / "runs" / "r-end" / "metrics" / "io_latency.csv"
+    assert latency.is_file()
+    header, *body = latency.read_text(encoding="utf-8").strip().splitlines()
+    assert header == "run_id,n,p50_ms,p99_ms,max_ms,exit_code"
+    assert body[0].startswith("r-end,") and body[0].endswith(",7")
+    assert not events.is_bound() # 收尾必须解绑
+
+
+def test_content_hash_provider_feeds_snapshot(tmp_path, monkeypatch, clean_registry):
+    """Spec §7：content_hash 由组合根注入的提供者写入 config.json。"""
+    from argparse import Namespace
+
+    from gamer_rsi.infra import run as run_mod
+
+    monkeypatch.chdir(tmp_path)
+    real_init = run_mod.init_run_dir
+    monkeypatch.setattr(cli, "init_run_dir",
+                        lambda *a, **k: real_init(*a, **{**k, "git_check": False}))
+    cli.register_content_hash_provider(lambda: "sha256:content-hash")
+
+    def handler(args: Namespace) -> int:
+        paths, _cfg, _rid = cli.cli_init_run(Namespace(
+            config_dir=str(REPO / "configs"), run_id="r-hash", resume=False, dry_run=False))
+        assert json.loads(paths.config.read_text(encoding="utf-8"))["content_hash"] \
+            == "sha256:content-hash"
+        return 0
+
+    cli.register(["loop", "run"], handler)
+    assert _run(["loop", "run"])[0] == 0
+
+
+def test_config_overrides_maps_log_level():
+    """P1-7：--log-level 必须真正进入配置覆盖（旧实现是 no-op）。"""
+    from argparse import Namespace
+
+    from gamer_rsi.infra.config import load_config
+
+    assert cli.config_overrides(Namespace(log_level="DEBUG")) == {"infra.log_level": "DEBUG"}
+    cfg = load_config(cli.config_overrides(Namespace(log_level="DEBUG")),
+                      config_dir=REPO / "configs")
+    assert cfg.infra.log_level == "DEBUG"
+
+
 def test_missing_run_dir_reports_error(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "configs").mkdir()
@@ -192,3 +295,18 @@ def test_end_to_end_guards_check():
         cwd=str(REPO), capture_output=True, text=True, env=env)
     assert proc.returncode == 0, proc.stderr
     assert "guards: OK" in proc.stdout
+
+
+@pytest.mark.skipif(not (REPO / ".venv" / "bin" / "python").is_file(),
+                    reason="无 .venv")
+def test_end_to_end_dev_mode_is_not_broken():
+    """回归（2026-10-03）：``GAMERSI_DEV=1`` 下任何命令都曾因 bootstrap 早发
+    ``infra.run_start``（缺 config_hash 必填字段）而退出 1。"""
+    env = {"MPLCONFIGDIR": "/tmp", "PYTHONHASHSEED": "0", "PATH": "/usr/bin:/bin",
+           "GAMERSI_DEV": "1"}
+    proc = subprocess.run(
+        [str(REPO / ".venv" / "bin" / "python"), "-m", "gamer_rsi",
+         "guards", "check", "--root", "gamer_rsi"],
+        cwd=str(REPO), capture_output=True, text=True, env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert "E_IO_EVENT_UNKNOWN" not in proc.stdout + proc.stderr

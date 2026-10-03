@@ -323,9 +323,10 @@ def test_latency_drain(tmp_path):
     latencies = w.drain_latency_ms()
     assert len(latencies) == 10
     assert all(l >= 0 for l in latencies)
-    # p99 < 1ms 的性能预算（不含 fsync）
+    # NFR-09-2：单次 write() p99 < 1 ms（本地 SSD，不含 fsync）；实测约 0.01 ms
     latencies.sort()
-    assert latencies[-1] < 100.0 # 宽松断言：CI 机器波动，硬阈值在 bench 里
+    p99 = latencies[min(len(latencies) - 1, int(0.99 * len(latencies)))]
+    assert p99 < 1.0, f"write() p99={p99:.4f} ms 超出 NFR-09-2 预算"
 
 
 def test_schema_validation_via_writer(tmp_path):
@@ -426,3 +427,50 @@ def test_rotation_missing_file_safe(tmp_path):
     path.unlink()
     w._maybe_rotate() # 不抛
     w.close()
+
+
+# ---- 回归（2026-10-03 审计 P1-1）：FR-09-9 三出口接线 --------------------------------
+
+def test_make_redacted_writer_emits_event_and_alert(tmp_path):
+    """命中 > 0 → 写 infra.redaction_hit 事件 + 触发 MOD-02 告警回调（FR-09-9）。"""
+    from gamer_rsi.infra import events
+
+    events.unbind()
+    events.set_dev_mode(True)
+    alerts: list[int] = []
+    events.register_redaction_alert(lambda hits, _obj: alerts.append(hits))
+    try:
+        events.bind(tmp_path / "events.jsonl", "r-red")
+        red = Redactor()
+        red.register(2042, "seed")
+        with events.make_redacted_writer(tmp_path / "prompts" / "p1.jsonl", red,
+                                         surface="prompts") as w:
+            w.write({"prompt": "heldout seed 2042 leaked"})
+        events.unbind()
+        rows, _ = read_jsonl(tmp_path / "events.jsonl")
+    finally:
+        events.register_redaction_alert(None)
+        events.unbind()
+        events.set_dev_mode(False)
+    assert [r["event"] for r in rows] == ["infra.redaction_hit"]
+    assert rows[0]["hits"] == 1
+    assert rows[0]["code"] == E.E_IO_REDACTION_HIT
+    assert alerts == [1]
+    text = (tmp_path / "prompts" / "p1.jsonl").read_text(encoding="utf-8")
+    assert "<REDACTED:seed>" in text and "2042" not in text
+
+
+@pytest.mark.parametrize("surface", ["episodes", "generations", "events", "train"])
+def test_make_redacted_writer_rejects_non_redacted_surfaces(tmp_path, surface):
+    """B-19：轨迹/事件/generations 属审计侧，作用域在 API 层强制。"""
+    from gamer_rsi.infra import events
+
+    with pytest.raises(InfraError) as exc:
+        events.make_redacted_writer(tmp_path / f"{surface}.jsonl", Redactor(),
+                                    surface=surface)
+    assert exc.value.code == E.E_IO_CONFIG_INVALID
+
+
+def test_redacted_surfaces_constant_matches_spec():
+    from gamer_rsi.infra.logging import REDACTED_SURFACES
+    assert REDACTED_SURFACES == ("prompts", "memory", "reflections")
