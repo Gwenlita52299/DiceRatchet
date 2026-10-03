@@ -88,16 +88,28 @@ def _attack_slot(state):
     return s["slotId"] if s else state["player"]["slots"][0]["slotId"]
 
 
-def test_check_play_face_unneeded_target(battle, tables):
-    die_id = battle["player"]["hand"][0]
-    face = current_face(battle, tables, die_id)
-    if face["kind"] in ("purge", "reroll", "modify", "duplicate_face"):
-        pytest.skip("该面需要目标")
-    slot = battle["player"]["slots"][0]
-    a = {"kind": "play_face", "dieId": die_id, "slotId": slot["slotId"], "targetId": "e-00"}
-    r = C.check_play_face(battle, tables, a)
-    if not r or r["code"] != "E_ACTION_CONSTRAINT_VIOLATION":
-        assert r and r["code"] == "E_ACTION_BAD_TARGET", r
+def test_check_play_face_unneeded_target(engine, tables, find_state):
+    """给「不需要目标」的骰面传 targetId → BAD_TARGET。
+
+    原实现固定取 ``hand[0]``，而 `started`（g1 首个 player_turn）的 hand[0] 是 purge
+    （需要目标）→ 恒跳过。这里改成**先找一个「合法且不需要目标」的 play_face**（g1 首个
+    player_turn 就有：ward→slot_3），再故意补一个 targetId。
+    """
+    def has_no_target_play(s):
+        if s["phase"] != "player_turn":
+            return False
+        return any(a["kind"] == "play_face"
+                   and C.face_needs_target(C.current_face(s, tables, a["dieId"])) is None
+                   for a in engine.legal_actions(s))
+
+    state = copy.deepcopy(find_state("g1_all_off_medium", has_no_target_play,
+                                     label="存在「合法且不需要目标」play_face 的 player_turn"))
+    cand = next(a for a in engine.legal_actions(state)
+                if a["kind"] == "play_face"
+                and C.face_needs_target(C.current_face(state, tables, a["dieId"])) is None)
+    a = {**cand, "targetId": state["enemies"][0]["enemyId"]}
+    r = C.check_play_face(state, tables, a)
+    assert r and r["code"] == "E_ACTION_BAD_TARGET", r
 
 
 def test_face_needs_target(table=None):
@@ -250,21 +262,49 @@ def test_slot_disabled_helper(battle, tables):
     assert C.slot_disabled(battle, slot) is False
 
 
-def test_blade_echo_relic(battle, tables):
-    if "relic_blade_echo" not in tables["relics"]:
-        pytest.skip("配表无 relic_blade_echo")
-    battle["player"]["relics"] = ["relic_blade_echo"]
-    echo = R.blade_echo_value(battle, tables)
-    if echo <= 0:
-        pytest.skip("blade_echo 值为 0")
-    blade = next((d for d in battle["player"]["hand"]
-                  if tables["allDice"][battle["player"]["dice"][d]["defId"]]["school"] == "blade"), None)
-    if blade is None:
-        # 强行造一颗 blade 手骰
-        blade = battle["player"]["hand"][0]
-        battle["player"]["dice"][blade]["defId"] = next(
-            did for did, dd in tables["allDice"].items() if dd["school"] == "blade")
-    before = battle["player"]["dice"][blade]["faceIndex"]
-    ctx = {"state": battle, "tables": tables, "events": []}
-    C.start_player_turn(ctx, True)
-    assert battle["player"]["dice"][blade]["faceIndex"] >= before
+def test_blade_echo_relic(engine, tables, find_state):
+    """锋刃回响（配表 `relic_blade_echo`，效果 `blade_echo`）：击杀敌人后首颗**锋刃学派**
+    手骰点数 +echo（上限 5），并报 `die_modified` 事件。
+
+    原用例有两个问题，合起来使它既恒跳过、又断言错了对象：
+    ① fixture `battle` 来自 ``started`` = **g1（all_off，relics=false）**，`has_relic()` 恒
+       False → `blade_echo_value` 恒 0 → 恒跳过；
+    ② 它断言的是 `start_player_turn` 会改点数，但实现里 echo 只在 `on_enemy_killed`
+       生效（`combat.py:264-273`），所以即便夹具修好，断言也是空的。
+    实测该分支此前**从未被执行**（combat.py:266-273 无覆盖）。这里改测真实行为。
+    """
+    state = copy.deepcopy(find_state(
+        "g5_hard_six_stage",
+        lambda s: (s["phase"] == "player_turn" and s["enemies"] and s["player"]["hand"]),
+        label="全开局的 player_turn"))
+    state["player"]["relics"] = ["relic_blade_echo"]
+    echo = R.blade_echo_value(state, tables)
+    assert echo > 0, "开关全开 + 持遗物时 blade_echo_value 必须 > 0"
+
+    # 指定一颗锋刃学派的骰子当「首颗锋刃手骰」，点数压到 0
+    blade_def = next(did for did, dd in tables["allDice"].items() if dd["school"] == "blade")
+    blade = state["player"]["hand"][0]
+    state["player"]["dice"][blade]["defId"] = blade_def
+    state["player"]["dice"][blade]["faceIndex"] = 0
+
+    ctx = {"state": state, "tables": tables, "events": []}
+    C.on_enemy_killed(ctx, state["enemies"][0])
+    assert state["player"]["dice"][blade]["faceIndex"] == min(5, echo), "击杀后应 +echo"
+    assert any(e["type"] == "die_modified" and e["source"] == "relic_blade_echo"
+               and e["dieId"] == blade for e in ctx["events"]), ctx["events"]
+    assert state["stats"]["kills"] == 1
+
+    # 上限：点数已在 5 时不再增长
+    state2 = copy.deepcopy(state)
+    state2["player"]["dice"][blade]["faceIndex"] = 5
+    C.on_enemy_killed({"state": state2, "tables": tables, "events": []}, state2["enemies"][0])
+    assert state2["player"]["dice"][blade]["faceIndex"] == 5
+
+    # 未持遗物时不得改动点数（反向用例：echo=0 分支）
+    state3 = copy.deepcopy(state)
+    state3["player"]["relics"] = []
+    state3["player"]["dice"][blade]["faceIndex"] = 0
+    ctx3 = {"state": state3, "tables": tables, "events": []}
+    C.on_enemy_killed(ctx3, state3["enemies"][0])
+    assert state3["player"]["dice"][blade]["faceIndex"] == 0
+    assert not any(e.get("source") == "relic_blade_echo" for e in ctx3["events"])

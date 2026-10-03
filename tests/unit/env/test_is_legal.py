@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import copy
 
-import pytest
-
 from gamer_rsi.env import GameEngine
 from gamer_rsi.env import map as M
 from gamer_rsi.env import shop as S
@@ -162,23 +160,29 @@ def _replay_to_settle(engine):
     return state
 
 
-def test_purify_exhausted_path(engine, tables, phases):
-    """purify 次数耗尽时 purify 被拒。"""
-    state = copy.deepcopy(phases("player_turn"))
-    corrupt = _first_corrupt(state)
-    if not corrupt:
-        pytest.skip("该快照无魔化骰")
+def test_purify_exhausted_path(engine, find_state):
+    """purify 次数耗尽时 purify 被拒。
+
+    前置：**手里有魔化骰**的 player_turn。原实现取 ``phases("player_turn")``（g4 的第一个
+    player_turn，step 2）——那一手没有魔化骰，于是恒跳过。g4 从 step 92 起有 22 个带魔化
+    手骰的 player_turn，扫到第一个即可（M0 验收：5 个恒跳过用例之一）。
+    """
+    state = copy.deepcopy(find_state(
+        "g4_hard_corrupt_path",
+        lambda s: s["phase"] == "player_turn" and _first_corrupt(s) is not None,
+        label="带魔化手骰的 player_turn"))
     state["player"]["purifyLeft"] = 0
-    r = engine.reduce(state, {"kind": "purify", "dieId": corrupt})
+    r = engine.reduce(state, {"kind": "purify", "dieId": _first_corrupt(state)})
     assert r["illegal"] is True
     assert r["code"] == "E_ACTION_NO_PURIFY"
 
 
-def test_end_turn_corrupt_blocked(engine, phases):
-    state = copy.deepcopy(phases("player_turn"))
-    corrupt = _first_corrupt(state)
-    if not corrupt:
-        pytest.skip("该快照无魔化骰")
+def test_end_turn_corrupt_blocked(engine, find_state):
+    """手里还有魔化骰时不能 end_turn（唯一判负前必须先处理魔化骰）。"""
+    state = copy.deepcopy(find_state(
+        "g4_hard_corrupt_path",
+        lambda s: s["phase"] == "player_turn" and _first_corrupt(s) is not None,
+        label="带魔化手骰的 player_turn"))
     r = engine.reduce(state, {"kind": "end_turn"})
     assert r["illegal"] is True
     assert r["code"] == "E_ACTION_CORRUPT_DIE_REMAINS"

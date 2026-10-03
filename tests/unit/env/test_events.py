@@ -274,15 +274,24 @@ def test_event_choose_resolves(ctx):
     assert any(e["type"] == "event_result" for e in ctx["events"])
 
 
-def test_event_choose_lose_ends_run(ctx):
+def test_event_choose_lose_ends_run(ctx, tables):
+    """事件里丢掉最后一颗心 → 立刻判负（`outcome="lose"`、`phase="settle"`）。
+
+    原实现在夹具事件（`ev_corrupt_spring`）的选项里找扣血 outcome —— 该事件只有
+    add_curse/gain_heart/lose_gold/remove_curses，所以恒跳过。这里显式挑一个
+    **单个 outcome 且含 lose_heart** 的选项：`event_choose` 只按 `state.node.event.eventId`
+    查配表（options 不缓存），而单 outcome 时不会走 weighted 抽签 → 结果确定。
+    """
     ctx["state"]["player"]["hearts"] = 1
-    ev_id = ctx["state"]["node"]["event"]["eventId"]
-    # 找一个扣血的 outcome 直接执行
-    for i, o in enumerate(ctx["tables"]["events"][ev_id]["options"]):
-        for out in o["outcomes"]:
-            if any(e["op"] == "lose_heart" and e.get("value", 0) >= 1 for e in out["effect"]):
-                EV.event_choose(ctx, f"opt_{i}")
-                assert ctx["state"]["outcome"] == "lose"
-                assert ctx["state"]["phase"] == "settle"
-                return
-    pytest.skip("该事件无扣血选项")
+    pick = next(((ev_id, i) for ev_id, ev in sorted(tables["events"].items())
+                 for i, o in enumerate(ev["options"])
+                 if len(o["outcomes"]) == 1
+                 and any(e["op"] == "lose_heart" and e.get("value", 0) >= 1
+                         for e in o["outcomes"][0]["effect"])), None)
+    assert pick is not None, "配表里没有「单 outcome 且含 lose_heart」的事件选项（契约变更？）"
+    ev_id, idx = pick
+    ctx["state"]["node"]["event"] = {"eventId": ev_id, "resolved": False,
+                                    "resultText": None, "chosen": None}
+    EV.event_choose(ctx, f"opt_{idx}")
+    assert ctx["state"]["outcome"] == "lose"
+    assert ctx["state"]["phase"] == "settle"
