@@ -12,15 +12,46 @@ import json
 import os
 import threading
 from pathlib import Path
-from typing import Any, Final, Iterator
+from typing import Any, Final, Iterator, Mapping
 
 from .errors import E, InfraError
 
 __all__ = [
     "write_json_atomic", "read_json", "read_jsonl", "write_bytes_atomic",
-    "sha256_file", "sha256_bytes", "schema_dir", "validate", "register_schema_dir",
-    "TruncatedLine",
+    "sha256_file", "sha256_bytes", "schema_dir", "validate", "schema_error_code",
+    "register_schema_dir", "TruncatedLine",
 ]
+
+#: schema 名（去 ``.schema.json`` 后缀）→ 校验失败时的错误码（FR-09-18 / Spec §4.5）。
+#:
+#: 归属原则：**schema 由哪个模块拥有，就用哪个模块的前缀**——轨迹行归 MOD-09（IO）、
+#: 观测与沙箱侧审计/门禁记录归 MOD-02（ENV）、测量报告归 MOD-08（EVAL）。旧实现用
+#: ``name.startswith("trajectory")`` 的二分法，把所有非轨迹 schema 都报成 MOD-08 的
+#: ``E_EVAL_SCHEMA``（2026-10-03 审计 P2-4）。
+#:
+#: 新增 ``schemas/*.schema.json`` 必须在此登记：
+#: ``tests/unit/infra/test_logging.py::test_every_schema_has_a_registered_error_code``
+#: 断言该表与实际 schema 文件**一一对应**，漏登记会红。
+_SCHEMA_ERROR_CODES: Final[Mapping[str, E]] = {
+    "trajectory_line": E.E_IO_TRAJECTORY_SCHEMA, # MOD-09：轨迹行
+    "observation": E.E_ENV_SCHEMA, # MOD-02：agent 侧观测
+    "audit_report": E.E_ENV_SCHEMA, # MOD-02：泄漏审计报告
+    "harness_gate": E.E_ENV_SCHEMA, # MOD-02：harness 工具门禁记录
+}
+
+#: 未登记 schema 的兜底码（MOD-08 测量报告等）；登记表是一一对应的，正常不该走到这里。
+_SCHEMA_ERROR_FALLBACK: Final[E] = E.E_EVAL_SCHEMA
+
+
+def schema_key(name: str) -> str:
+    """``"audit_report"`` / ``"audit_report.schema.json"`` / ``"schemas/x.schema.json"`` → 登记键。"""
+    base = Path(name).name
+    return base[: -len(".schema.json")] if base.endswith(".schema.json") else base
+
+
+def schema_error_code(name: str) -> E:
+    """schema 名 → 校验失败时的错误码（登记表见 ``_SCHEMA_ERROR_CODES``）。"""
+    return _SCHEMA_ERROR_CODES.get(schema_key(name), _SCHEMA_ERROR_FALLBACK)
 
 # schema 根目录默认为仓库根的 schemas/（Spec §5）
 _SCHEMA_ROOTS: list[Path] = [Path("schemas")]
@@ -79,8 +110,9 @@ def _get_jsonschema() -> Any:
 def validate(name: str, obj: Any) -> None:
     """按 ``schemas/<name>.schema.json`` 校验 ``obj``；失败抛携带 json_path 的错误。
 
-    ``name`` 可带 ``.schema.json`` 后缀。错误码按 schema 归属选择：
-    轨迹类 → ``E_IO_TRAJECTORY_SCHEMA``，其余 → ``E_EVAL_SCHEMA``（report.json 等）。
+    ``name`` 可带 ``.schema.json`` 后缀（也可带目录，取 basename）。失败时的错误码由
+    ``_SCHEMA_ERROR_CODES`` 按 **schema 归属模块** 选定，不再用名字前缀硬编码；
+    登记原则与兜底见该表。
     """
     schema = _load_schema(name)
     try:
@@ -88,8 +120,8 @@ def validate(name: str, obj: Any) -> None:
     except Exception as exc: # jsonschema.ValidationError / SchemaError
         path = getattr(exc, "json_path", "$")
         message = getattr(exc, "message", str(exc))
-        code = E.E_IO_TRAJECTORY_SCHEMA if name.startswith("trajectory") else E.E_EVAL_SCHEMA
-        raise InfraError(code, f"schema 校验失败 [{name}] at {path}: {message}") from exc
+        raise InfraError(schema_error_code(name),
+                         f"schema 校验失败 [{name}] at {path}: {message}") from exc
 
 
 # ---- 原子写 -------------------------------------------------------------------------

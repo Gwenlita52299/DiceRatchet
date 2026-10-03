@@ -13,7 +13,8 @@ import pytest
 
 from gamer_rsi.infra.errors import E, InfraError
 from gamer_rsi.infra.logging import (JsonlWriter, Redactor, validate_trajectory_line)
-from gamer_rsi.infra.io import read_jsonl, write_json_atomic
+from gamer_rsi.infra.io import (read_jsonl, schema_error_code, schema_key, validate,
+                                write_json_atomic)
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -474,3 +475,47 @@ def test_make_redacted_writer_rejects_non_redacted_surfaces(tmp_path, surface):
 def test_redacted_surfaces_constant_matches_spec():
     from gamer_rsi.infra.logging import REDACTED_SURFACES
     assert REDACTED_SURFACES == ("prompts", "memory", "reflections")
+
+
+# ---- io.validate 的 schema → 错误码登记表（2026-10-03 审计 P2-4）----------------------
+
+def test_every_schema_has_a_registered_error_code():
+    """``schemas/*.schema.json`` 与 ``_SCHEMA_ERROR_CODES`` 必须一一对应。
+
+    旧实现用 ``name.startswith("trajectory")`` 二分，新增 schema 会**静默**落到
+    ``E_EVAL_SCHEMA``（MOD-08 的码）。本用例把漏登记变成红灯：新增 schema 文件时
+    必须同时决定它归哪个模块（IO / ENV / EVAL）。
+    """
+    from gamer_rsi.infra.io import _SCHEMA_ERROR_CODES
+
+    on_disk = {schema_key(p.name) for p in sorted((REPO / "schemas").glob("*.schema.json"))}
+    assert on_disk, "schemas/ 下没有 schema 文件？"
+    assert on_disk == set(_SCHEMA_ERROR_CODES), (
+        f"未登记的 schema：{sorted(on_disk - set(_SCHEMA_ERROR_CODES))}；"
+        f"登记了但文件不存在：{sorted(set(_SCHEMA_ERROR_CODES) - on_disk)}")
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("trajectory_line", E.E_IO_TRAJECTORY_SCHEMA),        # MOD-09
+    ("trajectory_line.schema.json", E.E_IO_TRAJECTORY_SCHEMA),
+    ("schemas/trajectory_line.schema.json", E.E_IO_TRAJECTORY_SCHEMA),
+    ("observation", E.E_ENV_SCHEMA),                      # MOD-02
+    ("audit_report", E.E_ENV_SCHEMA),                     # MOD-02（旧实现误报 E_EVAL_SCHEMA）
+    ("harness_gate", E.E_ENV_SCHEMA),                     # MOD-02
+])
+def test_schema_error_code_is_by_owning_module(name, expected):
+    assert schema_error_code(name) == expected
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("trajectory_line", E.E_IO_TRAJECTORY_SCHEMA),
+    ("observation", E.E_ENV_SCHEMA),
+    ("audit_report", E.E_ENV_SCHEMA),
+    ("harness_gate", E.E_ENV_SCHEMA),
+])
+def test_validate_raises_the_registered_code(name, expected):
+    """空对象必然违反各 schema：错误码必须按归属模块抛出，而不是一律 ``E_EVAL_SCHEMA``。"""
+    with pytest.raises(InfraError) as exc:
+        validate(name, {})
+    assert exc.value.code == expected, f"{name} 抛了 {exc.value.code}"
+    assert name in str(exc.value), "错误信息必须含 schema 名，便于定位"
