@@ -378,3 +378,40 @@ def test_seeds_overlap_rejected(tmp_path):
 def test_seeds_missing_returns_defaults(tmp_path):
     proto = load_seeds(tmp_path)
     assert proto.splits == {}
+
+
+# ---- harness/ 目录（Spec §4.4）-------------------------------------------------------
+
+def test_repo_harness_dir_exists_and_is_hashable():
+    """仓库根的 ``harness/`` 必须存在且可被 ``artifact_hash`` 指纹化。
+
+    MOD-04（M1）从这里读 prompt / 采样参数覆盖，MOD-07（M2）在这里写 ``version.json``
+    与 ``versions/v{N}/``。此前该目录不存在（2026-10-03 审计「未覆盖」项），
+    2026-10-03 由 M0 验收后续创建，本用例把它钉住。
+    """
+    harness = REPO / "harness"
+    assert harness.is_dir(), "harness/ 缺失（Spec §4.4 的 harness 工件根）"
+    assert (harness / "config.json").is_file(), "harness/config.json 缺失（Spec §4.4）"
+    for sub in ("prompts", "tools", "versions"):
+        assert (harness / sub).is_dir(), f"harness/{sub}/ 缺失（Spec §4.4 / B-29）"
+    digest = artifact_hash(harness)
+    assert digest.startswith("sha256:") and digest != "sha256:" + "0" * 64, (
+        "artifact_hash 落到空目录兜底值 → harness/ 实际为空或不可读")
+
+
+def test_repo_harness_layer_only_whitelisted_and_isolated_from_config_hash(tmp_path):
+    """v1 的 harness 层：只含白名单键，且**不计入** ``config_hash``（B-19）。
+
+    ``harness/config.json`` 当前为 ``{}``（尚未演化）。用例不要求它永远为空，但要求
+    「harness 层存在与否不影响 config_hash」这条 B-19 结论成立，否则 ``--resume``
+    会在第一代被接受后必然冲突（P0-1 的回归面）。
+    """
+    with_h = load_config(harness_config=REPO / "harness" / "config.json")
+    without_h = load_config(harness_config=REPO / "harness" / "__absent__.json")
+    assert config_hash(with_h) == config_hash(without_h), "harness 层不得进入 config_hash（B-19）"
+    # 白名单校验：非白名单键必须报错而不是被静默接受（用 tmp 文件，不污染真实 harness/）
+    bad = tmp_path / "config.json"
+    bad.write_text(json.dumps({"episode.max_env_steps": 5}), encoding="utf-8")
+    with pytest.raises(InfraError) as exc:
+        load_config(harness_config=bad)
+    assert exc.value.code == E.E_IO_CONFIG_INVALID
