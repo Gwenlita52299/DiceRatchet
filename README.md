@@ -22,7 +22,8 @@ RSI（Recursive Self-Improvement，递归自我改进）的公开讨论大多停
 | G0 游戏本体 | 网页版骰子 roguelike「破咒骰」：纯函数规则内核 + Node 后端 + 原生前端（`src/game`） | ✅ 49 项测试通过，5 组 golden |
 | 规格层 | 模块拆分 Spec v1.4 + GAME-00～02 + MOD-01～09 技术 PRD；已完成一轮评审，36 项决策全部回填 | ✅ |
 | M0 环境 | MOD-09 骨架、MOD-01 Python 移植、MOD-02 沙箱 | ✅ 2026-10-03 验收通过（[报告](docs/reviews/2026-10-03-M0验收报告.md)）：5 组 golden 逐行对拍、200 局差分 0 分歧、heuristic 差 0.0pp、G1–G6 全过 |
-| M1 基线 | 本地推理 + 决策策略 + 三基线 | 计划 → 2027-01-14 |
+| M1 基线 | MOD-03 本地推理：后端契约 + 三级 JSON 修复 + 内存预算/并发限流 + 聚合指标 | ✅ 代码落地（`tests/unit/inference` / `tests/integration/test_inference_*` / `tests/golden/inference`）；真实 8B 200 条跑批待权重落盘（`inference robustness`） |
+| M1 基线 | 决策策略（MOD-04）+ 三基线 | 计划 → 2027-01-14 |
 | M2 闭环 | 反思记忆 + 闭环编排 + harness 自进化 | 计划 → 2027-03-26 |
 | M3 测量 | held-out 裁判、消融、多样性、test 终检 | 计划 → 2027-04-22 |
 
@@ -69,11 +70,14 @@ node scripts/golden-gen.js                               # 重新生成 golden �
 
 玩法、架构和内核 API 见 [src/game/README.md](src/game/README.md)。
 
-RSI 训练链路（Python，`gamer_rsi/`）尚未开工，命令面已在 [Spec §4.6](docs/模块拆分Spec-GameRSI.md) 冻结，例如：
+RSI 训练链路（Python，`gamer_rsi/`）已落地 MOD-01/02/03，命令面对齐 [Spec §4.6](docs/模块拆分Spec-GameRSI.md)：
 
 ```bash
 python -m gamer_rsi env selftest --seed 1
-python -m gamer_rsi loop run --generations 3 --k 30 --hitl --run-id <id>
+python -m gamer_rsi inference probe --model mock --mode eval --seed 7 --run-id <id>
+python -m gamer_rsi inference bench --model mock --mode eval --seed 7 --n 50 --run-id <id>
+python -m gamer_rsi inference robustness --model mock --mode eval --seed 7 --n 200 --run-id <id>
+python -m gamer_rsi loop run --generations 3 --k 30 --hitl --run-id <id>   # MOD-06 未落地 → 退出码 2
 python -m gamer_rsi eval report --run-id <id> --split heldout --baseline all
 ```
 
@@ -132,7 +136,7 @@ gh workflow run ci.yml -F slow=true    # 需要时手动补一次慢门（push �
 ├── harness/                      # harness 工件（Spec §4.4）：config.json（可演化层，v1 = {} 无覆盖）
 │                                 #   + prompts/（M1 由 MOD-04 读）+ tools/（M2 由 MOD-07 写）+ versions/v{N}/
 ├── tests/                        # unit / integration / golden（Python 训练链路）
-├── gamer_rsi/                    # RSI 训练链路：env / sandbox / infra
+├── gamer_rsi/                    # RSI 训练链路：env / sandbox / inference / infra
 ├── scripts/ci_gate.sh            # CI 门禁入口（本地与 CI 同一份）
 ├── .github/workflows/ci.yml      # CI：gate（快速）+ parity（golden / 差分对拍）
 ├── src/game/                     # G0 游戏本体：kernel / backend / frontend / content / tests

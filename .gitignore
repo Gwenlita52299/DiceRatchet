@@ -21,6 +21,9 @@ ref/
 src/game/runs/
 runs/
 
+# Model weights (offline download; MOD-03 registry only records weights_sha256 — PRD §7/§14)
+models/
+
 # Python test artifacts
 .coverage
 coverage.xml

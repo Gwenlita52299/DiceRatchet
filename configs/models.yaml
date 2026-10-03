@@ -1,38 +1,89 @@
-# configs/models.yaml —— 推理后端注册表（MOD-03 定义 schema；MOD-09 只负责加载）
-# model_id 为全系统引用键；sha256 缺失时跳过校验（CI 要求必须填写）
+# configs/models.yaml —— MOD-03 推理后端注册表（PRD §7；schema 见 schemas/models.schema.json）
+#
+# 静态注册表（NFR-03-04）：M1–M3 不参与 harness 演化，只允许人工变更并记 CHANGELOG。
+# model_id 为全系统引用键；weights_sha256 缺失（null）时跳过校验，CI 要求 M1 结束前填写（Q-6）。
+# 落盘用块式 YAML；PRD §7 的 flow-style 仅为文档紧凑。
+#
+# 内存预算公式（PRD §7）：
+#   required_gb = resident_gb_est + kv_gb_per_1k_tokens × (context_length/1000) × max_inflight + 1.0
+#   required_gb > ram_budget_gb → 在 acquire 前拒绝并抛 E_LLM_OOM（零提交，FR-03-08）。
 
 registry_version: 1
+ram_budget_gb: 20.0 # 24GB 硬上限留 4GB 给 Python/环境/OS（NFR-03-03）
+fallback_backend: mock # 加载失败换后端重试 1 次的目标（PRD §10）
 
 defaults:
-  ram_budget_gb: 20.0
-  context_length: 32768
-  kv_cache_bits: 4
-  max_inflight: 4
+  context_length: 8192
+  kv_cache_bits: 8
+  max_inflight: 1
+  quantization: 4bit
+  supports_grammar: false
+  supports_json_mode: true
+  kv_gb_per_1k_tokens: 0.15
+  perf_budget: { p50_latency_ms: 1500, p95_latency_ms: 3000, min_tok_per_s: 25 }
 
 models:
-  - id: qwen3-8b-q4
+  # 阶段一（M1）主力：MLX 进程内 + JSON mode（无 GBNF，见 PRD §6 差异表）
+  qwen3-8b-q4:
+    backend: mlx
+    weights_path: models/Qwen3-8B-4bit
+    tokenizer_path: models/Qwen3-8B-4bit
+    quantization: 4bit
+    context_length: 8192
+    kv_cache_bits: 8
+    resident_gb_est: 5.6 # 首次实测后回填（NFR-03-03）
+    kv_gb_per_1k_tokens: 0.15
+    max_inflight: 1
+    supports_grammar: false
+    supports_json_mode: true
+    fallback_backend: llama_cpp
+    weights_sha256: null # 落地后由 MOD-03 填写并锁定（Q-6）
+    default_sampling: { temperature: 0.7, top_p: 0.95, top_k: 0, repetition_penalty: 1.05 }
+    perf_budget: { p50_latency_ms: 1500, p95_latency_ms: 3000, min_tok_per_s: 25 }
     family: qwen3
-    path: ~/.cache/huggingface/hub/Qwen3-8B-4bit
-    quant: 4bit
     params_b: 8.0
-    context_length: 32768
-    sha256: null # 落地后由 MOD-03 填写并锁定（Q-6）
     notes: 阶段一主力后端（MLX）
-  - id: qwen3-30b-a3b-q4
-    family: qwen3-moe
-    path: ~/.cache/huggingface/hub/Qwen3-30B-A3B-4bit
-    quant: 4bit
-    params_b: 30.0
-    context_length: 32768
-    kv_cache_bits: 4 # MoE 预算救急（Q-4）
-    sha256: null
-    notes: 阶段二后端
-  - id: mock
-    family: mock
-    path: null
-    quant: none
-    params_b: 0.0
-    context_length: 4096
-    notes: 冒烟与单测用的确定性假后端
 
-fallback_backend: mock
+  # 阶段二：30B-A3B GGUF + llama-server（GBNF 稳定、可 --parallel）
+  # 已裁决（Spec v1.3 P-10 → §8.6）：默认 context_length=8192, max_inflight=1，
+  # 「评估并发」靠局级并发（loop.eval_concurrency=2，共享串行推理队列）而非模型级批处理。
+  # 预算（PRD §7 公式）：18.8 + 0.05×8.192×1 + 1.0 = 20.21 > 20.0 —— **临界超限**。
+  # 阶段二启用前必须三选一：①inference bench 实测回填 resident_gb_est（Q-2）；
+  # ②kv_cache_bits=4 后重跑 format_robustness 对比（Q-4）；③调高 ram_budget_gb（需实测）。
+  qwen3-30b-a3b-q4:
+    backend: llama_server
+    weights_path: models/Qwen3-30B-A3B-Q4_K_M.gguf
+    quantization: q4_k_m
+    context_length: 8192
+    kv_cache_bits: 8 # kv_cache_bits=4 可救预算（Q-4）
+    resident_gb_est: 18.8
+    kv_gb_per_1k_tokens: 0.05
+    max_inflight: 1
+    supports_grammar: true
+    supports_json_mode: true
+    weights_sha256: null
+    server_args: ["--parallel", "1", "--host", "127.0.0.1"] # port 由 manager 分配
+    default_sampling: { temperature: 0.7, top_p: 0.95, top_k: 0, repetition_penalty: 1.05 }
+    perf_budget: { p95_latency_ms: 8000, min_tok_per_s: 12 }
+    family: qwen3-moe
+    params_b: 30.0
+    notes: 阶段二后端
+
+  # 离线冒烟/单测用的确定性假后端（无权重、零依赖）
+  mock:
+    backend: mock
+    weights_path: null
+    quantization: none
+    context_length: 4096
+    kv_cache_bits: 8
+    resident_gb_est: 0.0
+    kv_gb_per_1k_tokens: 0.0
+    max_inflight: 1
+    supports_grammar: true
+    supports_json_mode: true
+    weights_sha256: null
+    default_sampling: { temperature: 0.0, top_p: 1.0, top_k: 0, repetition_penalty: 1.0 }
+    perf_budget: { p50_latency_ms: 50, p95_latency_ms: 200, min_tok_per_s: 1 }
+    family: mock
+    params_b: 0.0
+    notes: 冒烟与单测用的确定性假后端

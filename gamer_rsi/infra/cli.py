@@ -186,14 +186,20 @@ def _dry_run(parser: argparse.ArgumentParser, args: argparse.Namespace,
 def config_overrides(args: argparse.Namespace) -> dict[str, Any]:
     """从解析结果提取 CLI 显式覆盖（FR-09-1：CLI 优先级最高）。
 
-    覆盖 ``--k`` / ``--generations`` / ``--hitl`` / ``--log-level``；
-    其余命令参数由各自模块在实现里读取。
+    覆盖 ``--k`` / ``--generations`` / ``--hitl`` / ``--log-level`` 与 MOD-03 的
+    ``--model`` / ``--mode`` / ``--seed`` / ``--timeout-ms``；其余命令参数由各自模块读取。
     """
     out: dict[str, Any] = {}
     for key in ("k", "generations", "hitl"):
         if hasattr(args, key) and getattr(args, key) is not None:
             name = {"k": "loop.k", "generations": "loop.max_generations"}.get(key, f"loop.{key}")
             out[name] = getattr(args, key)
+    for key, path in (("model", "inference.model_id"), ("mode", "inference.mode"),
+                      ("seed", "inference.seed"),
+                      ("timeout_ms", "inference.total_timeout_ms")):
+        value = getattr(args, key, None)
+        if value is not None:
+            out[path] = value
     log_level = getattr(args, "log_level", None)
     if log_level:
         out["infra.log_level"] = log_level
@@ -398,7 +404,18 @@ def _add_inference(sub: Any) -> None:
     sp = p.add_subparsers(dest="subcommand", metavar="<subcommand>")
     for name in ("probe", "bench", "robustness"):
         sp_run = _sp(sp, name)
+        _common_run_id(sp_run)
         sp_run.add_argument("--model", default=None, help="模型 id（默认 inference.model_id）")
+        sp_run.add_argument("--mode", choices=["train", "eval"], default=None,
+                            help="train/eval；eval 强制 temperature=0 且必须 --seed（B-14）")
+        sp_run.add_argument("--seed", type=int, default=None, help="采样 seed（eval 必填）")
+        sp_run.add_argument("--n", type=int, default=None,
+                            help="bench 生成次数（默认 50）/ robustness prompt 条数（默认 200）")
+        sp_run.add_argument("--prompts", default=None,
+                            help="robustness 的固定 prompt JSONL（默认 tests/fixtures/...）")
+        sp_run.add_argument("--out", default=None, help="报告落盘路径（默认 runs/<id>/metrics/）")
+        sp_run.add_argument("--timeout-ms", dest="timeout_ms", type=int, default=None,
+                            help="覆盖 inference.total_timeout_ms")
         _set_func(sp_run, _deferred(["inference", name], "inference"), ["inference", name])
     p.set_defaults(func=None)
 

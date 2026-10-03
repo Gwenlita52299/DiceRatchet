@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reasoning", "plan"],
+  "properties": {
+    "reasoning": { "type": "string", "maxLength": 200 },
+    "plan": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 12,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind"],
+        "properties": {
+          "kind": {
+            "enum": [
+              "play_face", "discard_die", "purify", "use_ability", "end_turn", "map_choose",
+              "shop_buy", "shop_refresh", "shop_remove", "shop_leave", "event_choose",
+              "treasure_pick", "forge_pick", "shrine_choose", "rest_choose", "relic_swap"
+            ]
+          },
+          "dieId": { "type": "string", "maxLength": 16 },
+          "slotId": { "type": "string", "maxLength": 16 },
+          "faceIndex": { "type": "integer", "minimum": 0, "maximum": 11 },
+          "targetId": { "type": "string", "maxLength": 16 },
+          "abilityId": { "type": "string", "maxLength": 32 },
+          "value": { "type": "integer", "minimum": 0, "maximum": 99 },
+          "nodeId": { "type": "string", "maxLength": 16 },
+          "itemId": { "type": "string", "maxLength": 32 },
+          "optionId": { "type": "string", "maxLength": 32 },
+          "defId": { "type": "string", "maxLength": 48 },
+          "candidateId": { "type": "string", "maxLength": 32 },
+          "relicId": { "type": "string", "maxLength": 48 }
+        }
+      }
+    }
+  }
+}

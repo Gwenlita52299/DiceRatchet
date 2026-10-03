@@ -1,0 +1,221 @@
+"""模型注册表加载与类型化（MOD-03 定义 schema，PRD §7 / NFR-03-04）。
+
+``configs/models.yaml`` 是**静态注册表**：M1–M3 不参与 harness 演化，只允许人工变更并记
+CHANGELOG。加载后统一成 ``ModelSpec``（``backend.py`` 对外 re-export），供后端与
+``BackendManager`` 使用；schema 校验走 MOD-09 的 ``infra.io.validate("models", ...)``。
+
+内存预算（PRD §7）::
+
+    required_gb = resident_gb_est + kv_gb_per_1k_tokens × (context_length/1000) × max_inflight + 1.0
+    required_gb > ram_budget_gb → acquire 前拒绝并抛 E_LLM_OOM（零提交）
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Final, Literal, Mapping
+
+from ..infra.errors import E, InfraError
+from ..infra.io import validate as _validate_schema
+from .errors import InferenceError
+
+__all__ = ["BackendName", "ModelSpec", "ModelRegistry", "DEFAULT_REGISTRY_PATH",
+           "load_registry", "build_registry", "estimate_required_gb", "BUDGET_BUFFER_GB"]
+
+BackendName = Literal["mlx", "llama_cpp", "llama_server", "mock"]
+
+#: 注册表默认路径（PRD §9 ``inference.registry_path``）。
+DEFAULT_REGISTRY_PATH: Final[str] = "configs/models.yaml"
+
+#: 内存预算里的临时缓冲（PRD §7：1.0 GB）。
+BUDGET_BUFFER_GB: Final[float] = 1.0
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    """``configs/models.yaml`` 一行的类型化形态（PRD §6）。"""
+
+    model_id: str
+    backend: BackendName
+    weights_path: str
+    weights_sha256: str
+    quantization: str
+    tokenizer_path: str | None
+    context_length: int
+    kv_cache_bits: int
+    resident_gb_est: float
+    kv_gb_per_1k_tokens: float
+    max_inflight: int
+    supports_grammar: bool
+    supports_json_mode: bool
+    default_sampling: dict[str, float | int] = field(default_factory=dict)
+    perf_budget: dict[str, float] = field(default_factory=dict)
+    fallback_backend: BackendName | None = None
+    server_args: list[str] = field(default_factory=list)
+    notes: str = ""
+
+    @property
+    def has_weights(self) -> bool:
+        """是否有需要落盘校验的权重（``mock`` 后端为 False）。"""
+        return bool(self.weights_path)
+
+    def required_gb(self, *, max_inflight: int | None = None,
+                    context_length: int | None = None,
+                    kv_cache_bits: int | None = None) -> float:
+        """本 spec 在给定并发/上下文下的内存预算（PRD §7 公式）。"""
+        return estimate_required_gb(
+            self,
+            max_inflight=self.max_inflight if max_inflight is None else max_inflight,
+            context_length=self.context_length if context_length is None else context_length,
+            kv_cache_bits=self.kv_cache_bits if kv_cache_bits is None else kv_cache_bits)
+
+
+def estimate_required_gb(spec: ModelSpec, *, max_inflight: int, context_length: int,
+                         kv_cache_bits: int | None = None) -> float:
+    """``required_gb = resident + kv/1k × (ctx/1000) × inflight + 1.0``（PRD §7）。
+
+    ``kv_cache_bits`` 只做登记（4bit 可救 30B 预算，Q-4）：预算公式仍用注册表里的
+    ``kv_gb_per_1k_tokens``，实测回填由 ``inference bench`` 完成（NFR-03-02/03）。
+    """
+    if max_inflight < 1:
+        raise InferenceError(E.E_LLM_BACKEND_ERROR,
+                             f"max_inflight={max_inflight} 必须 ≥ 1（参数类错误，不可重试）",
+                             retryable=False)
+    if context_length < 1:
+        raise InferenceError(E.E_LLM_BACKEND_ERROR,
+                             f"context_length={context_length} 必须 ≥ 1",
+                             retryable=False)
+    kv_gb = spec.kv_gb_per_1k_tokens * (context_length / 1000.0) * max_inflight
+    return spec.resident_gb_est + kv_gb + BUDGET_BUFFER_GB
+
+
+@dataclass(frozen=True)
+class ModelRegistry:
+    """``configs/models.yaml`` 的类型化视图。"""
+
+    registry_version: int
+    ram_budget_gb: float
+    fallback_backend: BackendName | None
+    default_model: str | None
+    defaults: dict[str, Any]
+    models: dict[str, ModelSpec]
+    raw: dict[str, Any]
+
+    def ids(self) -> tuple[str, ...]:
+        return tuple(self.models)
+
+    def spec(self, model_id: str) -> ModelSpec:
+        """按 id 取 spec；未知 id 抛 ``E_LLM_UNAVAILABLE``（FR-03-01）。"""
+        try:
+            return self.models[model_id]
+        except KeyError:
+            raise InferenceError(
+                E.E_LLM_UNAVAILABLE,
+                f"未知 model_id={model_id!r}（注册表共 {len(self.models)} 个模型）",
+                hint=f"合法 id：{', '.join(self.ids())}") from None
+
+
+# =====================================================================
+# 加载
+# =====================================================================
+
+def _read_yaml(path: Path) -> dict[str, Any]:
+    import yaml
+
+    if not path.is_file():
+        raise InferenceError(E.E_LLM_UNAVAILABLE, f"模型注册表不存在：{path}",
+                             hint=f"检查 inference.registry_path（默认 {DEFAULT_REGISTRY_PATH}）")
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise InferenceError(E.E_LLM_UNAVAILABLE, f"模型注册表 YAML 解析失败：{path}\n{exc}",
+                             hint="落盘必须是等价块式 YAML（PRD §7）") from exc
+    if not isinstance(data, dict):
+        raise InferenceError(E.E_LLM_UNAVAILABLE,
+                             f"模型注册表顶层必须是对象：{path}",
+                             hint="schema 见 schemas/models.schema.json")
+    return data
+
+
+def load_registry(path: str | Path = DEFAULT_REGISTRY_PATH, *,
+                  schema_validate: bool = True) -> ModelRegistry:
+    """读取 + schema 校验 + 归一为 ``ModelRegistry``。"""
+    return build_registry(_read_yaml(Path(path)), source=str(path),
+                          schema_validate=schema_validate)
+
+
+def build_registry(data: Mapping[str, Any], *, source: str = "<memory>",
+                   schema_validate: bool = True,
+                   default_model: str | None = None) -> ModelRegistry:
+    """把已解析的注册表 dict 归一为 ``ModelRegistry``。"""
+    if schema_validate:
+        try:
+            _validate_schema("models", dict(data))
+        except InfraError as exc:
+            raise InferenceError(E.E_LLM_UNAVAILABLE,
+                                 f"模型注册表 schema 校验失败（{source}）：{exc.message}",
+                                 hint="schema 见 schemas/models.schema.json（PRD §7）") from exc
+    defaults = dict(data.get("defaults") or {})
+    raw_models = data.get("models")
+    if not isinstance(raw_models, Mapping) or not raw_models:
+        raise InferenceError(E.E_LLM_UNAVAILABLE, f"模型注册表缺少非空 models（{source}）")
+    registry_fallback = data.get("fallback_backend")
+    models: dict[str, ModelSpec] = {}
+    for model_id, entry in raw_models.items():
+        if not isinstance(entry, Mapping):
+            raise InferenceError(E.E_LLM_UNAVAILABLE,
+                                 f"模型 {model_id!r} 的定义必须是对象（{source}）")
+        models[str(model_id)] = _build_spec(str(model_id), entry, defaults,
+                                            registry_fallback=registry_fallback)
+    registry = ModelRegistry(
+        registry_version=int(data.get("registry_version", 1)),
+        ram_budget_gb=float(data.get("ram_budget_gb", 20.0)),
+        fallback_backend=registry_fallback,
+        default_model=default_model,
+        defaults=defaults, models=models, raw=dict(data))
+    return registry
+
+
+def _pick(entry: Mapping[str, Any], defaults: Mapping[str, Any], key: str,
+          fallback: Any = None) -> Any:
+    if key in entry and entry[key] is not None:
+        return entry[key]
+    if key in defaults and defaults[key] is not None:
+        return defaults[key]
+    return fallback
+
+
+def _build_spec(model_id: str, entry: Mapping[str, Any], defaults: Mapping[str, Any], *,
+                registry_fallback: Any) -> ModelSpec:
+    weights_sha256 = entry.get("weights_sha256") or ""
+    fallback_backend = entry.get("fallback_backend", registry_fallback)
+    server_args = entry.get("server_args") or []
+    if not isinstance(server_args, (list, tuple)):
+        raise InferenceError(E.E_LLM_UNAVAILABLE, f"模型 {model_id} 的 server_args 必须是数组")
+    return ModelSpec(
+        model_id=model_id,
+        backend=str(entry.get("backend")), # type: ignore[arg-type]
+        weights_path=str(entry.get("weights_path") or ""),
+        weights_sha256=str(weights_sha256),
+        quantization=str(_pick(entry, defaults, "quantization", "unknown")),
+        tokenizer_path=(str(entry["tokenizer_path"]) if entry.get("tokenizer_path") else None),
+        context_length=int(_pick(entry, defaults, "context_length", 8192)),
+        kv_cache_bits=int(_pick(entry, defaults, "kv_cache_bits", 8)),
+        resident_gb_est=float(entry.get("resident_gb_est", 0.0)),
+        kv_gb_per_1k_tokens=float(_pick(entry, defaults, "kv_gb_per_1k_tokens", 0.0)),
+        max_inflight=int(_pick(entry, defaults, "max_inflight", 1)),
+        supports_grammar=bool(_pick(entry, defaults, "supports_grammar", False)),
+        supports_json_mode=bool(_pick(entry, defaults, "supports_json_mode", True)),
+        default_sampling=dict(entry.get("default_sampling") or {}),
+        perf_budget={k: float(v) for k, v in (entry.get("perf_budget") or {}).items()},
+        fallback_backend=(str(fallback_backend) if fallback_backend else None), # type: ignore[arg-type]
+        server_args=[str(a) for a in server_args],
+        notes=str(entry.get("notes") or ""),
+    )
+
+
+def registry_to_json(registry: ModelRegistry) -> str:
+    """注册表的规范 JSON（``config_hash`` 之外的静态工件，供报告与 golden）。"""
+    return json.dumps(registry.raw, ensure_ascii=False, indent=2, sort_keys=True)

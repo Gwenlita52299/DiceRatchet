@@ -32,6 +32,11 @@ def wire() -> None:
         return
     cli.register(["env", "selftest"], _env_selftest)
     cli.register(["audit", "leak"], _audit_leak)
+    # MOD-03 推理后端子命令（G6：probe / bench / robustness）
+    from .inference.cli import HANDLERS as _INFERENCE_HANDLERS
+
+    for path, handler in _INFERENCE_HANDLERS.items():
+        cli.register(path, handler)
     # Spec §7：config.json 需要 MOD-01 的配表摘要 content_hash；
     # infra 不能反向 import env（NFR-09-5），因此由组合根注入提供者。
     cli.register_content_hash_provider(_content_hash)

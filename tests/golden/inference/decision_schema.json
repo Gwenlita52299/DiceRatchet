@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "plan": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "abilityId": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "candidateId": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "defId": {
+            "maxLength": 48,
+            "type": "string"
+          },
+          "dieId": {
+            "maxLength": 16,
+            "type": "string"
+          },
+          "faceIndex": {
+            "maximum": 11,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "itemId": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "play_face",
+              "discard_die",
+              "purify",
+              "use_ability",
+              "end_turn",
+              "map_choose",
+              "shop_buy",
+              "shop_refresh",
+              "shop_remove",
+              "shop_leave",
+              "event_choose",
+              "treasure_pick",
+              "forge_pick",
+              "shrine_choose",
+              "rest_choose",
+              "relic_swap"
+            ]
+          },
+          "nodeId": {
+            "maxLength": 16,
+            "type": "string"
+          },
+          "optionId": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "relicId": {
+            "maxLength": 48,
+            "type": "string"
+          },
+          "slotId": {
+            "maxLength": 16,
+            "type": "string"
+          },
+          "targetId": {
+            "maxLength": 16,
+            "type": "string"
+          },
+          "value": {
+            "maximum": 99,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "maxItems": 12,
+      "minItems": 1,
+      "type": "array"
+    },
+    "reasoning": {
+      "maxLength": 200,
+      "type": "string"
+    }
+  },
+  "required": [
+    "reasoning",
+    "plan"
+  ],
+  "type": "object"
+}

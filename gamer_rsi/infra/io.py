@@ -37,6 +37,9 @@ _SCHEMA_ERROR_CODES: Final[Mapping[str, E]] = {
     "observation": E.E_ENV_SCHEMA, # MOD-02：agent 侧观测
     "audit_report": E.E_ENV_SCHEMA, # MOD-02：泄漏审计报告
     "harness_gate": E.E_ENV_SCHEMA, # MOD-02：harness 工具门禁记录
+    "decision": E.E_LLM_SCHEMA_INVALID, # MOD-03：唯一决策 schema（Spec §4.3）
+    "models": E.E_LLM_UNAVAILABLE, # MOD-03：模型注册表
+    "inference_call": E.E_LLM_BACKEND_ERROR, # MOD-03：推理埋点记录
 }
 
 #: 未登记 schema 的兜底码（MOD-08 测量报告等）；登记表是一一对应的，正常不该走到这里。

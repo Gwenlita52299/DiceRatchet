@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamersi.local/schemas/models.schema.json",
+  "title": "ModelRegistry",
+  "description": "MOD-03 `configs/models.yaml` 模型注册表（PRD §7）。静态注册表：M1–M3 不参与 harness 演化，只允许人工变更并记 CHANGELOG（NFR-03-04）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["registry_version", "models"],
+  "properties": {
+    "registry_version": { "const": 1 },
+    "ram_budget_gb": { "type": "number", "exclusiveMinimum": 0 },
+    "fallback_backend": {
+      "enum": ["mlx", "llama_cpp", "llama_server", "mock"],
+      "description": "加载失败换后端重试 1 次的目标（PRD §10）"
+    },
+    "defaults": { "$ref": "#/$defs/defaults" },
+    "models": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "type": "string", "minLength": 1 },
+      "additionalProperties": { "$ref": "#/$defs/model" }
+    }
+  },
+  "$defs": {
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "context_length": { "type": "integer", "minimum": 128 },
+        "kv_cache_bits": { "enum": [4, 8, 16] },
+        "max_inflight": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "quantization": { "type": "string" },
+        "supports_grammar": { "type": "boolean" },
+        "supports_json_mode": { "type": "boolean" },
+        "kv_gb_per_1k_tokens": { "type": "number", "minimum": 0 },
+        "perf_budget": { "$ref": "#/$defs/perf_budget" }
+      }
+    },
+    "perf_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "p50_latency_ms": { "type": "integer", "minimum": 1 },
+        "p95_latency_ms": { "type": "integer", "minimum": 1 },
+        "min_tok_per_s": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "context_length"],
+      "properties": {
+        "backend": { "enum": ["mlx", "llama_cpp", "llama_server", "mock"] },
+        "weights_path": { "type": ["string", "null"] },
+        "weights_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "缺失（null）时跳过校验；CI 要求填写（Q-6）"
+        },
+        "tokenizer_path": { "type": ["string", "null"] },
+        "quantization": { "type": "string" },
+        "context_length": { "type": "integer", "minimum": 128 },
+        "kv_cache_bits": { "enum": [4, 8, 16] },
+        "resident_gb_est": { "type": "number", "minimum": 0 },
+        "kv_gb_per_1k_tokens": { "type": "number", "minimum": 0 },
+        "max_inflight": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "supports_grammar": { "type": "boolean" },
+        "supports_json_mode": { "type": "boolean" },
+        "fallback_backend": { "enum": ["mlx", "llama_cpp", "llama_server", "mock", null] },
+        "server_args": { "type": "array", "items": { "type": "string" } },
+        "default_sampling": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "temperature": { "type": "number", "minimum": 0, "maximum": 1.5 },
+            "top_p": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+            "top_k": { "type": "integer", "minimum": 0, "maximum": 200 },
+            "repetition_penalty": { "type": "number", "minimum": 1.0, "maximum": 1.5 }
+          }
+        },
+        "perf_budget": { "$ref": "#/$defs/perf_budget" },
+        "family": { "type": "string" },
+        "params_b": { "type": "number", "minimum": 0 },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}

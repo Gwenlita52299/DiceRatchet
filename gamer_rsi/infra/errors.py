@@ -77,6 +77,7 @@ class E(StrEnum):
     E_LLM_SCHEMA_INVALID = "E_LLM_SCHEMA_INVALID"
     E_LLM_CONTEXT_OVERFLOW = "E_LLM_CONTEXT_OVERFLOW"
     E_LLM_BACKEND_ERROR = "E_LLM_BACKEND_ERROR"
+    E_LLM_UNSUPPORTED = "E_LLM_UNSUPPORTED" # B-01：可选辅助接口（count_tokens/embed）未实现
     E_LLM_EXTRACT_FAILED = "E_LLM_EXTRACT_FAILED"
 
     # ---- E_EVOLVE_*（MOD-07，harness 自进化）----------------------------------------
@@ -168,6 +169,7 @@ EXIT_CODE: Final[Mapping[E, int]] = {
     E.E_LLM_UNAVAILABLE: EXIT_MODEL,
     E.E_LLM_LOAD_FAILED: EXIT_MODEL,
     E.E_LLM_OOM: EXIT_MODEL,
+    E.E_LLM_UNSUPPORTED: EXIT_MODEL,
     E.E_IO_MODULE_PENDING: EXIT_CONFIG,
     # 可观测性缺失 → 降级 + 告警，不得非零退出
     E.E_IO_CONFIG_UNKNOWN: EXIT_OK,
@@ -200,6 +202,16 @@ ERROR_MESSAGE: Final[Mapping[E, str]] = {
     E.E_IO_PLOT_UNAVAILABLE: "matplotlib 不可用，绘图已降级",
     E.E_IO_MODULE_PENDING: "命令面已冻结，但所属模块尚未落地",
     E.E_IO_SCHEMA_MISSING: "schema 文件缺失",
+    # MOD-03 推理后端（Spec §8.3 以 MOD-03 为准）
+    E.E_LLM_UNAVAILABLE: "模型不可用：未知 model_id / 权重缺失 / sha256 不匹配",
+    E.E_LLM_LOAD_FAILED: "模型加载失败（可退避后换 fallback_backend 重试 1 次）",
+    E.E_LLM_OOM: "内存不足：Metal/系统 OOM，或预算前置拒绝（未提交推理）",
+    E.E_LLM_TIMEOUT: "推理超时（total_timeout_ms / generate_timeout_ms）",
+    E.E_LLM_SCHEMA_INVALID: "三级修复耗尽仍不满足 JSON Schema",
+    E.E_LLM_CONTEXT_OVERFLOW: "prompt_tokens + max_tokens 超出 context_length",
+    E.E_LLM_BACKEND_ERROR: "后端错误：采样参数越界 / server 5xx / grammar 不可用且无 JSON mode",
+    E.E_LLM_UNSUPPORTED: "可选辅助接口未实现（B-01）",
+    E.E_LLM_EXTRACT_FAILED: "LLM 抽取失败（MOD-05 降级为规则抽取）",
 }
 
 

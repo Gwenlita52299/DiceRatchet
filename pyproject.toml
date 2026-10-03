@@ -16,6 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 plot = ["matplotlib>=3.8"] # 绘图为可选依赖，缺失时降级（FR-09-13）
+mlx = ["mlx-lm>=0.20"] # MOD-03 阶段一后端（Apple Silicon；PRD §14）
+llama = ["llama-cpp-python>=0.2"] # MOD-03 阶段二后端（GBNF / server）
 dev = ["pytest>=8.0", "pytest-cov>=5.0"]
 
 [tool.hatch.build.targets.wheel]
