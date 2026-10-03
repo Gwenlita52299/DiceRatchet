@@ -24,6 +24,9 @@ runs/
 # Model weights (offline download; MOD-03 registry only records weights_sha256 — PRD §7/§14)
 models/
 
+# 本地生成的动画讲解 HTML（大文件，不入库）
+*-动画讲解.html
+
 # Python test artifacts
 .coverage
 coverage.xml
