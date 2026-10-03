@@ -29,7 +29,7 @@ __all__ = ["main", "build_parser", "parse_seeds_spec", "PENDING_MODULES"]
 
 # 各命令的归属模块（尚未落地的模块在 M0 过渡期返回 E_IO_MODULE_PENDING）
 PENDING_MODULES: Final[dict[str, str]] = {
-    "env": "MOD-01 env-rules", "play": "MOD-04 policy", "baseline": "MOD-08 evals",
+    "play": "MOD-04 policy", "baseline": "MOD-08 evals",
     "loop": "MOD-06 loop", "evolve": "MOD-07 evolve", "eval": "MOD-08 evals",
     "audit": "MOD-02 env-sandbox", "inference": "MOD-03 inference",
     "memory": "MOD-05 memory",
@@ -180,8 +180,14 @@ def _add_env(sub: Any) -> None:
     sp = p.add_subparsers(dest="subcommand", metavar="<subcommand>")
     st = _sp(sp, "selftest", help="规则/确定性自检 + GAME golden 对拍")
     st.add_argument("--seed", type=int, default=1, help="自检 seed")
-    _set_func(st, _pending("env"), ["env", "selftest"])
+    _set_func(st, _env_selftest, ["env", "selftest"])
     p.set_defaults(func=None)
+
+
+def _env_selftest(args: argparse.Namespace) -> int:
+    from ..env.selftest import run_selftest
+
+    return run_selftest(getattr(args, "seed", 1))
 
 
 def _add_play(sub: Any) -> None:

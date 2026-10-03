@@ -62,8 +62,8 @@ def _required_args(path: tuple[str, ...]) -> list[str]:
 
 
 def test_pending_module_returns_exit_2():
-    # 尚未落地的模块命令 → E_IO_MODULE_PENDING，退出码 2
-    code, out, err = _run(["env", "selftest", "--seed", "1"])
+    # 尚未落地的模块命令 → E_IO_MODULE_PENDING，退出码 2（env 已由 MOD-01 落地，改用 play）
+    code, out, err = _run(["play", "--seeds", "train:1000-1000"])
     assert code == 2
     assert E.E_IO_MODULE_PENDING in err
 
