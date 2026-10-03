@@ -393,7 +393,7 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 
 | 里程碑 | 覆盖模块 | 交付物 | 验收（源自计划 §7） |
 |---|---|---|---|
-| M0 | MOD-01、MOD-02、MOD-09（骨架） | Python 移植 + 观测投影 + 审计器 + 单测 | `src/game/tests/golden` 4 组逐行对拍全过；同一 seed 两次运行 `state_hash` 序列完全一致；Python 版 heuristic 在默认局（§8.6）上的通关率与 JS `greedy_counter` 相差 ≤ 3pp（n=200） |
+| M0 | MOD-01、MOD-02、MOD-09（骨架） | Python 移植 + 观测投影 + 审计器 + 单测 | `src/game/tests/golden` 5 组逐行对拍全过（g1–g5，见 [M0 验收报告](reviews/2026-10-03-M0验收报告.md)）；同一 seed 两次运行 `state_hash` 序列完全一致；Python 版 heuristic 在默认局（§8.6）上的通关率与 JS `greedy_counter` 相差 ≤ 3pp（n=200） |
 | M1 | MOD-03、MOD-04、MOD-08（基线部分） | 8B agent + random/heuristic/fixed-prompt 三基线；推理后端只交付 `MLXBackend` + `MockBackend`，`LlamaCppBackend` 与阶段二 30B 同期上线，但 `Backend` 契约与一致性套件在 M1 定型（B-31） | 三个基线的 held-out 分数入档；JSON 格式鲁棒性报告 |
 | M2 | MOD-05、MOD-06、MOD-07（初版） | 反思 + 记忆 + K 局自动演化 + HITL 门 | 闭环跑通 ≥1 轮演化，产出 diff 与决策记录 |
 | M3 | MOD-08（完整）、MOD-07（回滚/消融） | 评估报告 + 曲线图 + 消融结论 | 计划 §6 三项验收全部通过 |
@@ -445,27 +445,39 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 
 ### 8.6 「一局」的定义与成本模型（B-12/B-13）
 
-**默认局**：`EpisodeConfig(difficulty="hard", stage_count=6, toggles=全开, character="warrior")`，即第 1–2 章，以第 6 关 Boss 收尾。选择依据是 GAME 侧的实测（启发式 bot，n=200）：
+**默认局**：`EpisodeConfig(difficulty="hard", stage_count=6, toggles=全开, character="warrior")`，即第 1–2 章，以第 6 关 Boss 收尾。
+
+**复现命令（唯一登记处，M0 验收 F5）**：下表每一行都由同一条命令产出，**seed 区间是数字身份的一部分**：
+
+```bash
+node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=200，seed 1–200
+```
+
+口径：通关率 = `outcome=="win"` 占比；env 步 = 每成功 `reduce` 计 1 步；决策点 = `decisionIndex` 终值（Spec §4.3 / B-12 规则，与 MOD-02 `SandboxEnv` 同口径，由 `tests/golden/test_bot_match.py::test_js_decisions_match_sandboxenv_decision_index` 守卫）。实测（2026-10-03，`greedy_counter`，n=200，seed 1–200）：
 
 | 局型 | greedy_counter 通关率 | env 步 p50/p90 | 决策点 p50/p90 |
 |---|---|---|---|
-| hard × 6 关（**默认**） | 45.0% | 227 / 270 | 94 / 108 |
-| medium × 10 关（完整局） | 39.5% | 435 / 538 | 159 / 187 |
-| 任意难度 × 3 关 | 99–100%（天花板，不用） | 86–106 | — |
+| hard × 6 关（**默认**） | 45.5% | 232 / 284 | 96 / 116 |
+| medium × 10 关（完整局） | 24.0% | 397 / 535 | 146 / 187 |
+| easy × 3 关 | 100.0%（天花板，不用） | 105 / 124 | 38 / 43 |
+| medium × 3 关 | 100.0%（天花板，不用） | 102 / 121 | 37 / 41 |
+| hard × 3 关 | 97.0%（天花板，不用） | 91 / 114 | 38 / 44 |
 
-默认局的启发式通关率在中段，上升和下降都有空间可测，决策点数量也只有完整局的 60%。完整局（medium × 10）只作为 test 的次级「迁移」指标报告。
+> 换 seed 集数字会变（n=200 的 95% CI 约 ±6pp）：medium × 10 关在 seed 10000–10199 上是 35.5%（`src/game/docs/BALANCE.md` 的口径，`node scripts/balance.js --n 200 --strategy all --duel`，与 10 关默认局不同源）。引用本表时必须带上 seed 区间。
+
+默认局的启发式通关率不在天花板（3 关局 97–100%），上升和下降都有空间可测，决策点数量约为完整局的三分之二。完整局（medium × 10）只作为 test 的次级「迁移」指标报告。
 
 **上限**（唯一配置键，各模块只读）：
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `episode.max_env_steps` | 1000 | env 步硬上限（6 关实测最大约 350，10 关最大约 650） |
-| `episode.max_decisions` | 300 | 决策点上限 |
+| `episode.max_env_steps` | 1000 | env 步硬上限（n=200、seed 1–200 实测最大：6 关 360，10 关 808） |
+| `episode.max_decisions` | 300 | 决策点上限（同口径实测最大：6 关 149，10 关 250） |
 | GAME `maxTurnsPerBattle` | 60 | **单场战斗**回合上限（内核自带，不是整局上限） |
 
 超出上限 → `truncated=true`，计为 lose。
 
-**成本模型**：设 `t_d` 为单个决策的推理耗时（MOD-03 实测 p50，8B 在默认局上的预估约 3 s，包括约 1.5k token 的预填和约 150 token 的输出），`D` 为每局决策数（约 94）。
+**成本模型**：设 `t_d` 为单个决策的推理耗时（MOD-03 实测 p50，8B 在默认局上的预估约 3 s，包括约 1.5k token 的预填和约 150 token 的输出），`D` 为每局决策数（默认局实测 p50 = 96）。
 
 - 单局耗时 `t_ep ≈ D·t_d + t_reflect` ≈ **5 分钟**。
 - 每代局数 `E_gen = K + (H + S) + C·(S + H)`：训练 K=30；parent 的 heldout H=40 与冒烟 S=5（与候选使用同一个冻结的记忆快照，所以每代都要重跑）；候选数 C=**2**（上限 3），每个候选也跑冒烟 S 与 heldout H。默认值下 E_gen = 30 + 45 + 2×45 = **165 局，约 14 小时/代**。

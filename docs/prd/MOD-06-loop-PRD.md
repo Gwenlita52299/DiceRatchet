@@ -284,7 +284,7 @@ def run(self, seeds=None, *, resume=False):
 |---|---|---|---|
 | `loop.k` | int | 30 | 每 K 局训练触发一次演化周期（计划 §5：K=30） |
 | `loop.max_generations` | int | 3 | run 内最大演化代数（M3 验收 ≥3 轮） |
-| `episode.max_env_steps` / `episode.max_decisions` | int | 1000 / 300 | 只读（Spec §8.6 唯一键，由 MOD-02 执行）；v1.0 的 `loop.max_steps_per_episode=120` 小于默认局 p50 的 227 步，已删除 |
+| `episode.max_env_steps` / `episode.max_decisions` | int | 1000 / 300 | 只读（Spec §8.6 唯一键，由 MOD-02 执行）；v1.0 的 `loop.max_steps_per_episode=120` 小于默认局 p50 的 232 步，已删除 |
 | `episode.difficulty` / `episode.stage_count` | str / int | `hard` / `6` | 默认局（Spec §8.6） |
 | `loop.action_retry_r` | int | 2 | 非法动作同一步重试次数（MOD-04 执行，本模块传入） |
 | `loop.hitl` | bool | false | 开启后每代产出挂起等人工 `evolve approve\|rollback` |

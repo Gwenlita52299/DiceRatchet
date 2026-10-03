@@ -248,7 +248,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 
 ## 11. 测试计划（单测/集成，用「给定-当-则」写验收用例）
 
-单测（「给定-当-则」，路径 `tests/unit/test_sandbox_{projection,api,guard,audit,honeypot}.py`）：
+单测（「给定-当-则」，路径 `tests/unit/sandbox/test_sandbox_{projection,api,guard,audit,honeypot}.py`）：
 - 给定 同一 `FullState`，当 `project_state` 调两次，则两次 canonical JSON 与 `obs_digest` 完全相同（FR-02-1）。
 - 给定 源含未登记字段 `hidden_shop_preview`，当 `mode="strict"`，则输出无该字段、`dropped_hidden==1`、日志文本不含该字段名（FR-02-2）。
 - 给定 seed/后续房间/商店条目/RNG 状态/未来骰面各替换为唯一哨兵值，当 投影后逐字段比对，则任一哨兵出现在 obs 即失败（FR-02-3）。
@@ -261,7 +261,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 - 给定 `legal_actions()`，则不含 `abandon_run`，其余元素与顺序同 MOD-01（FR-02-8c）。
 - 给定 每个 canary/假字段各注入 prompt、memory、log 三类文本，当 `honeypot.self_test()`，则 12/12 命中、`missed==[]`（FR-02-23，G4）；给定 无 canary 的正常 prompt，当 `honeypot.scan`，则 0 命中（无假阳性）；给定 含 train seed 值且该 seed 未出现在 obs 的 synthetic prompt，当 `run_audit`，则 `verdict="critical"`、`leak_class="seed_leak"`、`surface="prompt"`（FR-02-17/19）。
 
-Golden `tests/golden/`：给定 `src/game/tests/golden/g5_hard_six_stage.jsonl` 的动作脚本，当 经 SandboxEnv 重放，则 agent 侧 `obs_digest` 序列与 `golden/sandbox/g5_obs_agent.txt` 逐字节相同、`render_compact` 输出与 `golden/sandbox/g5_render.txt` 相同（G2/G3）；给定 clean run，当 审计，则报告除 `generated_at` 外与 `golden/leak-report-clean.json` 相同（NFR-02-3）。
+Golden `tests/golden/sandbox/`：给定 `src/game/tests/golden/g5_hard_six_stage.jsonl` 的动作脚本，当 经 SandboxEnv 重放，则 agent 侧 `obs_digest` 序列与 `tests/golden/sandbox/g5_obs_agent.txt` 逐字节相同、`render_compact` 输出与 `tests/golden/sandbox/g5_render.txt` 相同（G2/G3）；给定 clean run，当 审计，则报告除 `generated_at` 外与 `tests/golden/sandbox/leak-report-clean.json` 相同（NFR-02-3）。
 
 集成 `tests/integration/`：给定 含 canary 的 fake run，当 `python -m gamer_rsi audit leak --run-id <id>`，则退出码 2、`verdict="critical"`、`leak_counts.canary_leak>=1`；给定 干净自测 run，当 审计，则退出码 0、`findings==[]`、`honeypot.caught_rate==1.0`（G4）；给定 JSONL 损坏一行，当 审计，则 `E_ENV_AUDIT_IO` 且判 `critical`；给定 `FullState` 字段清单快照变更，当 `test_env_sandbox_contract.py`，则注册表漂移被捕获。
 
@@ -276,8 +276,8 @@ Golden `tests/golden/`：给定 `src/game/tests/golden/g5_hard_six_stage.jsonl` 
 | G3 确定性 | 同 seed 双跑 `obs_digest`/`state_hash` 序列逐字节相同（CI diff） |
 | G4 泄漏审计 | 自测 run `audit leak` 0 告警；12/12 蜜罐用例被抓到；故意注入 canary 100% 触发 P0 |
 | G5 Schema | `Observation`、`report.schema.json`、`harness-gate.json` 有 schema + round-trip 测试 |
-| G6 命令 | 可直接复制：`python -m gamer_rsi env selftest --seed 1`、`python -m gamer_rsi audit leak --run-id <run_id>`、`pytest tests/unit/test_sandbox_projection.py -q` |
-| M0 交付 | `SandboxEnv` 可用且不暴露 `FullState`；L1 import env 的 CI 门禁上线；`OBSERVATION_CHANGELOG.md` 写入 1.0.0 |
+| G6 命令 | 可直接复制：`python -m gamer_rsi env selftest --seed 1`、`python -m gamer_rsi audit leak --run-id <run_id>`、`pytest tests/unit/sandbox/test_sandbox_projection.py -q`、`./scripts/ci_gate.sh`（门禁总入口） |
+| M0 交付 | `SandboxEnv` 可用且不暴露 `FullState`；L1 import env 的 CI 门禁上线（`./scripts/ci_gate.sh` + `.github/workflows/ci.yml`，见 [2026-10-03 M0 验收报告](../reviews/2026-10-03-M0验收报告.md) F2）；`OBSERVATION_CHANGELOG.md` 写入 1.0.0 |
 
 **与不变量逐条对应**：
 
@@ -323,6 +323,11 @@ Golden `tests/golden/`：给定 `src/game/tests/golden/g5_hard_six_stage.jsonl` 
 | M1 追加（可选） | 子进程边界强化 + 审计规则集 v1.1（未来房间/商店内容解析） | 3.0 |
 
 关键路径：MOD-01 → MOD-02 → MOD-03/04；M0.1–M0.5 是解锁 MOD-04 的前置。
+
+**实际交付（M0）**：M0.1–M0.6 于 **2026-10-03** 由单个提交 `e35279e` 交付（投影/隔离/审计/蜜罐 + golden + 单测）。
+本项目**未单独记工**，「实际人日」无法从仓库证据还原；按提交时间窗折算 ≤ 1 人日，与估算 18.0 人日的偏差 ≥ 90%，已在 [排期 §8](../项目排期-GameRSI.md) 记录。
+M0.6 的「CI 门禁接线」在 2026-10-03 验收时缺失（验收报告 F2），同日补齐为 `scripts/ci_gate.sh`（平台中立，本地与 CI 同一份）+ `.github/workflows/ci.yml`（gate / parity 两个作业）。
+证据见 [M0 验收报告](../reviews/2026-10-03-M0验收报告.md)；M1 起按排期 §7 逐任务记录实际人日。
 ## 16. 开放问题
 
 1. **已裁决（Spec v1.4 B-24）**：全状态只由 `SandboxEnv._engine` 私有持有，`gamer_rsi.env` 列入 `BLOCKED_MODULES`，对 L1+ 不可导入。由于 MOD-01 v1.0 改为移植 GAME 内核，原 `build_full_state()` 方案已不再适用，改用这种等价封装；适配层归 MOD-02（`sandbox/api.py`）。`OBSERVATION_SCHEMA` 与 `FullState` 字段清单的契约测试落在 `tests/integration/test_env_sandbox_contract.py`，双方 PRD 各引用一次。

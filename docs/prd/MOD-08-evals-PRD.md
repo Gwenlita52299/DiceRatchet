@@ -51,7 +51,7 @@ MOD-08 是 L3 测量层，**只读轨迹与报告，不参与决策**（Spec §1
 - **FR-08-05 / 06** `guard_prompt_context()` 在 prompt/memory/reflection 三 destination 上断言文本不含 heldout/test seed 数值 token；`split != "train"` 的局任何 memory 写入与 reflection 落库被拦截；两者命中均抛 `E_EVAL_INV5_LEAK`。
 - **FR-08-07 / 08 / 09 / 10** `run_eval()` 支持 `n_workers≥1`，结果按 `seed` 升序归一化聚合且与串行逐字节一致；评估 `temperature=0.0`（训练沿用计划 §3 的 ≥0.7）；每 seed 默认 1 局（后端非确定时 `n_rep=3` 多数票）；超时或崩溃的局记为 `dropped`，**计入 n 并按 lose 计**（Spec v1.3 §8.5，防止幸存者偏差），另外单列 `n_dropped`；`dropped/n > 0.10` 时抛 `E_EVAL_INSUFFICIENT_N` 并标 `low_confidence=true`。`degraded` 局（模型不可用、由启发式代打）则从 n 中剔除，并单列 `degraded_n`。
 - **FR-08-11 / 12** 三基线可用同一 `EvalSpec` 跑通并归档；归档不可覆盖：同名时写 `<kind>-<split>-<ts>.json` 并向 `registry.csv` 追加一行。
-- **FR-08-13 / 14** `heuristic` 复用 MOD-04 `agent.heuristic.heuristic_policy()`（Spec §4.7，禁止复制第二份启发式逻辑；它移植自 GAME `greedy_counter`，默认局上的参考通关率为 45.0%）；`fixed_prompt` 固定 `harness_version=0`、`memory_enabled=false`、`reflection_enabled=false`。
+- **FR-08-13 / 14** `heuristic` 复用 MOD-04 `agent.heuristic.heuristic_policy()`（Spec §4.7，禁止复制第二份启发式逻辑；它移植自 GAME `greedy_counter`，默认局上的参考通关率为 45.5%（n=200，seed 1–200，复现命令见 Spec §8.6））；`fixed_prompt` 固定 `harness_version=0`、`memory_enabled=false`、`reflection_enabled=false`。
 - **FR-08-15 / 16** 计算 `win_rate`/`wilson_ci()`/`mean_stages_cleared`/`mean_hearts_left`/`mean_battles_won`/`mean_decisions`/`illegal_rate`/`fallback_rate`/`truncation_rate`，全部由整数累加器聚合后单次相除。`action_entropy_curve` 以**决策点序号**为横轴，长度 `T_max`（默认 120），样本数 < `min_support` 的位置写 `null`。截断局的 outcome 一律记为 lose。
 - **FR-08-17** 生成 `report.json` 并通过 `additionalProperties=false` schema 校验；扩展指标写入 `metrics/gen-XXX.ext.json`。
 - **FR-08-18** 计算 `win_rate_gap = train.win_rate - heldout.win_rate`，按 §8.2 有序规则产出 `verdict`。

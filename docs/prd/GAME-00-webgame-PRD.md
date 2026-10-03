@@ -940,7 +940,7 @@ status → target.status[kind] += value          # 中毒/灼烧在 upkeep 结�
 | D-31 | 动作全集新增 `purify` / `rest_choose` / `relic_swap` | GAME-01 §4 |
 | D-32 | 新增编队 `g_12`（空壳，第 3–6 关） | GAME-02 §5.4 |
 | D-33 | 启动方式为 `node server.js`（ADR-2 要求服务端持有会话，与纯静态服务器冲突） | GAME-00 §0 / G-1 |
-| D-34 | （v1.2）开局配置新增可选 `stageCount ∈ {3,6,10}`（只能在章末 Boss 关截断），击败第 `stageCount` 关 Boss 即 `outcome="win"`；缺省 10，原 golden 不变。用途：RSI 训练/评估用短局（Spec §8.6），hard×6 关启发式通关率 45%，每局约 227 步 / 94 个决策点 | GAME-00 §8.2 / GAME-01 §1.2 |
+| D-34 | （v1.2）开局配置新增可选 `stageCount ∈ {3,6,10}`（只能在章末 Boss 关截断），击败第 `stageCount` 关 Boss 即 `outcome="win"`；缺省 10，原 golden 不变。用途：RSI 训练/评估用短局（Spec §8.6），hard×6 关启发式通关率 45.5%、每局 p50 232 env 步 / 96 个决策点（n=200，seed 1–200，口径与复现命令见 Spec §8.6） | GAME-00 §8.2 / GAME-01 §1.2 |
 | D-35 | （v1.2）修复：Boss 在玩家出骰时被击杀而直接结束 Run 的路径漏记 `stats.stagesCleared`，现与节点结算路径一致（胜局恒有 `stagesCleared == stageCount`）；`stagesCleared` 是 Spec INV-7 的主指标之一 | GAME-01 §5 |
 
 > 建议新增 Spec 模块 **MOD-11 `game-web`**（L0 之外的独立层：游戏本体），其 PRD 即本文档。若采纳，Spec §2 模块清单、§6 依赖矩阵、§10 PRD 索引需同步更新。

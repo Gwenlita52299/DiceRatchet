@@ -425,6 +425,10 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
 | M3 | plotting + 报告汇总脚本（`generations.csv` 列定义归 MOD-08） | 1.0 |
 | 合计 | | **7.0 人日** |
 
+**实际交付（M0）**：M0a+M0b（config/事件/JSONL/守卫/git/CLI）于 **2026-10-01 → 2026-10-03** 分 4 个提交交付（`5d3574c`、`bbdc02e`、`aa62ab8`、`e621112`），并**额外提前交付了 M1 的 CLI 子命令树与退出码**。
+本项目**未单独记工**；按提交时间窗折算 ≤ 3 人日（计划 M0a+M0b = 3.5 人日），偏差详见 [排期 §8](../项目排期-GameRSI.md)。
+T-09-1～T-09-16 全部落地（`bbdc02e` 起）；证据见 [M0 验收报告](../reviews/2026-10-03-M0验收报告.md)（G1–G6 与 INV-1/INV-6 全通过，CI 门禁接线已补齐为 `scripts/ci_gate.sh` + `.github/workflows/ci.yml`）。
+
 ## 16. 开放问题
 
 1. `AppConfig` 用 frozen dataclass 还是引入 pydantic？阶段一选前者（少依赖），若配置项超过 ~60 个则重新评估。

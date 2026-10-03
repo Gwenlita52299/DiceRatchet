@@ -190,7 +190,7 @@ pytest tests/golden/test_diff.py --dir /tmp/diff
 | T-06 | `stageCount=4` | `create` | `E_ENV_CONFIG_INVALID`；`stageCount=6` 时击败第 6 关 Boss 得到 `outcome="win"`、`stagesCleared=6` |
 | T-07 | 任意 `player_turn` 状态 | reduce 一个非法动作 | 返回原 state 对象（`is`），`illegal=True`，`code` 同 JS |
 | T-08 | 子进程 `PYTHONHASHSEED=0/12345`、`TZ=UTC/Asia/Tokyo` | 跑 T-04 | 四种组合全部通过 |
-| T-09 | 默认局 n=200 | Python `greedy_counter` | 通关率与 JS（45.0%）相差 ≤ 3pp |
+| T-09 | 默认局 n=200（seed 1–200） | Python `greedy_counter` | 通关率与 JS 逐局一致（实测两侧均 45.5%，差 0.0pp ≤ 3pp；复现命令见 Spec §8.6） |
 | T-10 | 同一 state | 连续调用 `reduce` 两次 | 入参 state 的 `digest` 不变（写时构造） |
 
 ## 12. 验收标准（DoD，对齐 Spec §9）
@@ -234,6 +234,10 @@ JS 内核约 2,780 行，逐位移植并对拍：
 | 4 | `map/shop/forge/event` + `engine` 门面 | 1.5 |
 | 5 | golden 对拍、差分对拍脚本、性能调优 | 1.5 |
 | | **合计** | **7.0** |
+
+**实际交付（M0）**：2026-10-03 提交 `98ded4a`（`gamer_rsi/env/` 全量移植 + golden 对拍）。
+本项目**未单独记工**，「实际人日」无法从仓库证据还原；按提交时间窗折算 ≤ 1 人日，与估算 7.0 人日的偏差 ≥ 85%（排期 §7 的 20% 阈值被触发，已在 [排期 §8](../项目排期-GameRSI.md) 记录）。
+T-01～T-10 全部通过（T-08 于 2026-10-03 由验收补齐为 pytest 用例），证据见 [M0 验收报告](../reviews/2026-10-03-M0验收报告.md)。M1 起按排期 §7 逐任务记录实际人日。
 
 ## 16. 开放问题
 

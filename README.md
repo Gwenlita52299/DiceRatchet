@@ -2,7 +2,7 @@
 
 > 让一个跑在 Mac 上的 8B 级本地模型，在自己搭建的防作弊沙箱里反复玩一款骰子 roguelike。每一局它都经历"玩 → 验证 → 反思 → 改进自己"（策略记忆、prompt、harness 代码），并用**不可作弊的 held-out 测量**回答一个问题：它真的在变强吗？
 >
-> 定位：学习 + 作品集 · 状态：**G0 游戏本体已完成，规格层已评审（Spec v1.4），下一步 M0**（排期见 [项目排期](docs/项目排期-GameRSI.md)）
+> 定位：学习 + 作品集 · 状态：**G0 游戏本体已完成；M0 环境已完成并通过验收（2026-10-03），下一步 M1 基线**（排期见 [项目排期](docs/项目排期-GameRSI.md)，验收见 [M0 验收报告](docs/reviews/2026-10-03-M0验收报告.md)）
 
 ## 为什么做这个
 
@@ -21,7 +21,7 @@ RSI（Recursive Self-Improvement，递归自我改进）的公开讨论大多停
 | 调研与计划 | 调研纪要、文献综述、项目计划、指导建议 | ✅ |
 | G0 游戏本体 | 网页版骰子 roguelike「破咒骰」：纯函数规则内核 + Node 后端 + 原生前端（`src/game`） | ✅ 49 项测试通过，5 组 golden |
 | 规格层 | 模块拆分 Spec v1.4 + GAME-00～02 + MOD-01～09 技术 PRD；已完成一轮评审，36 项决策全部回填 | ✅ |
-| M0 环境 | MOD-09 骨架、MOD-01 Python 移植、MOD-02 沙箱 | ⏳ 计划 2026-10-08 → 11-20 |
+| M0 环境 | MOD-09 骨架、MOD-01 Python 移植、MOD-02 沙箱 | ✅ 2026-10-03 验收通过（[报告](docs/reviews/2026-10-03-M0验收报告.md)）：5 组 golden 逐行对拍、200 局差分 0 分歧、heuristic 差 0.0pp、G1–G6 全过 |
 | M1 基线 | 本地推理 + 决策策略 + 三基线 | 计划 → 2027-01-14 |
 | M2 闭环 | 反思记忆 + 闭环编排 + harness 自进化 | 计划 → 2027-03-26 |
 | M3 测量 | held-out 裁判、消融、多样性、test 终检 | 计划 → 2027-04-22 |
@@ -39,7 +39,7 @@ RSI（Recursive Self-Improvement，递归自我改进）的公开讨论大多停
 | L2 进化 | MOD-06 loop · MOD-07 evolve | 闭环编排、断点续跑与成本闸门；harness 候选生成、held-out 裁判、版本化与回滚 |
 | L3 测量与工程 | MOD-08 evals · MOD-09 infra | 基线、指标、坍缩监控与消融；配置、事件、CLI、守卫、git |
 
-一局游戏的默认设定是 hard 难度 × 6 关：启发式 bot 的通关率约 45%，中位数约 227 步、94 个决策点。每代共 165 局（训练 30 局 + parent 与 2 个候选的冒烟和 held-out），约 14 小时。详见 [Spec §8.6](docs/模块拆分Spec-GameRSI.md)。
+一局游戏的默认设定是 hard 难度 × 6 关：启发式 bot 的通关率 45.5%，中位数 232 env 步 / 96 个决策点（n=200，seed 1–200；复现命令见 Spec §8.6）。每代共 165 局（训练 30 局 + parent 与 2 个候选的冒烟和 held-out），约 14 小时。详见 [Spec §8.6](docs/模块拆分Spec-GameRSI.md)。
 
 ### 七条不变量
 
@@ -77,6 +77,18 @@ python -m gamer_rsi loop run --generations 3 --k 30 --hitl --run-id <id>
 python -m gamer_rsi eval report --run-id <id> --split heldout --baseline all
 ```
 
+## CI 门禁
+
+门禁是**一条脚本**，本地与 CI 跑的是同一份（Spec §9 G1–G6 与 INV-1/INV-6 的可执行化）：
+
+```bash
+./scripts/ci_gate.sh                  # 快速门（约 1 分钟）：guards + selftest + pytest -m "not slow" + 跨 PYTHONHASHSEED
+./scripts/ci_gate.sh --with-slow      # 深门（约 10 分钟）：全量 pytest（5 组 golden / 200 局差分 / 200 局 bot 对拍）+ node 测试 + golden 基准独立性
+./scripts/ci_gate.sh --coverage       # 附带覆盖率报告（G1 判据）
+```
+
+`guards check` 反例自检也内含其中：门禁必须能拦下 `tests/fixtures/guards/`（退出码 4），否则视为门禁失效。CI 侧见 [.github/workflows/ci.yml](.github/workflows/ci.yml)，两个作业分别调用上述两种模式（Node 22 / Python 3.12）。
+
 ## 技术栈
 
 | 组件 | 选型 |
@@ -103,6 +115,13 @@ python -m gamer_rsi eval report --run-id <id> --split heldout --baseline all
 │   ├── reviews/                  # 评审记录
 │   ├── assets/                   # 生成的 SVG（模块依赖图、甘特图）
 │   └── tools/gen_diagrams.py     # 图表生成脚本（零依赖）
+├── schemas/                      # 跨模块 JSON schema（Spec §4.5，MOD-09 登记）
+├── harness/                      # harness 工件（Spec §4.4）：config.json（可演化层，v1 = {} 无覆盖）
+│                                 #   + prompts/（M1 由 MOD-04 读）+ tools/（M2 由 MOD-07 写）+ versions/v{N}/
+├── tests/                        # unit / integration / golden（Python 训练链路）
+├── gamer_rsi/                    # RSI 训练链路：env / sandbox / infra
+├── scripts/ci_gate.sh            # CI 门禁入口（本地与 CI 同一份）
+├── .github/workflows/ci.yml      # CI：gate（快速）+ parity（golden / 差分对拍）
 ├── src/game/                     # G0 游戏本体：kernel / backend / frontend / content / tests
 └── papers/                       # 参考论文 PDF（未纳入 git）
 ```

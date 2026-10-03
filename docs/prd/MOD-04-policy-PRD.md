@@ -66,7 +66,7 @@ M1 交付「8B agent + 三基线」，而计划 §8 已点名最大风险：**LL
   - 触发条件：`E_LLM_UNAVAILABLE` / `E_LLM_TIMEOUT` / 尝试耗尽 / 泄漏阻断。
   - 实现：`agent/heuristic.py::heuristic_policy(obs, legal, hints) -> Action`，**逐行移植 GAME `src/game/scripts/bots.js` 的 `greedy_counter`**。战斗内按 `scorePlay` 打分：击杀奖励、克制箭头、需要的光盾与净化、状态权重、自魔化惩罚；没有正分动作时，先处理魔化骰（净化 → 重掷 → 弃骰），最后 `end_turn`。地图、商店、宝箱、事件、锻造按 `nodeScore`/`pickDieDef` 等规则处理。
   - 只使用 obs-agent 字段与 `env.hints()`（公开信息）。
-  - 这份实现同时是 MOD-08 的 heuristic 基线（Spec §4.7），参考通关率：默认局 45.0%（JS，n=200），Python 版须在 ±3pp 以内。
+  - 这份实现同时是 MOD-08 的 heuristic 基线（Spec §4.7），参考通关率：默认局 45.5%（JS，n=200，seed 1–200；复现命令见 Spec §8.6），Python 版须在 ±3pp 以内。
   - 返回可读的 `reasoning`，如 `"heuristic:counter play_face d-0007→slot_1 e-00"`。
 - **FR-04-15 模式与采样覆盖**：`play` 用可演化采样参数且 `temperature = clamp(policy.temperature, 0.7, 1.2)`；`eval` 固定 `temperature=0.0` 加显式 seed（Spec v1.3 §8.1 B-14，不可被 `harness/config.json` 覆盖；MOD-03 在 `mode="eval"` 下强制）；`baseline_fixed_prompt` 用冻结模板与固定采样；`baseline_heuristic` 不调 LLM。采样 `seed = derive_seed("policy", salt, episode_seed, decision_index, attempt, harness_version)`（INV-6），禁 `random`/时间随机。
 - **FR-04-16 轨迹字段产出**：每步上报 `prompt_hash`、`memory_ids`、`tool_hash`、`source`、`mode`、`attempts`、`error_codes`，字段名与 §7 一致，交 MOD-09 落盘。
