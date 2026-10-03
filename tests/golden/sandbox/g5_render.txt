@@ -1,0 +1,22 @@
+phase=player_turn stage=1/6 ch=1 turn=1 diff=hard decision=1
+player: hearts=2/2 virtue=24/24 ward=0 shards=0 school=neutral purify=0 abilities=warrior_rerollx1,warrior_focusx1,warrior_purifyx0
+hand(3):
+  - die=d-0002 def=die_strike school=neutral risk=safe face=5 kind=purge value=7 label=蓄力斩 7 corrupt=no
+  - die=d-0007 def=die_strike school=neutral risk=safe face=5 kind=purge value=7 label=蓄力斩 7 corrupt=no
+  - die=d-0005 def=die_mend school=neutral risk=safe face=2 kind=mend value=3 label=修复 3 corrupt=no
+slots(5):
+  - slot=slot_1 kind=attack constraint=any effect=purge bonus=0 disabled=no
+  - slot=slot_2 kind=attack constraint=ge:3 effect=purge bonus=1 disabled=no
+  - slot=slot_3 kind=defense constraint=any effect=ward bonus=0 disabled=no
+  - slot=slot_4 kind=heal constraint=even effect=mend bonus=1 disabled=no
+  - slot=slot_5 kind=utility constraint=any effect=any bonus=0 disabled=no
+enemies(1):
+  - enemy=e-00 def=mon_verdant_slime school=verdant hp=7/7 ward=0 phase=1 taunt=自然 · 黏滑的腐殖体 status=- intent=kind=purge value=1 school=verdant arrow=eq slot=e_slot_0;kind=ward value=3 school=verdant arrow=eq slot=e_slot_1
+legal: discard_die,end_turn,play_face,use_ability
+map:
+  stage=1 row=0 node=n-01-0-0 path=[n-01-0-0]
+  node=n-01-0-0 kind=battle visited=yes reachable=no edges=[n-01-1-0] preview=enemies=[腐生史莱姆] schools=[verdant] arrow=eq
+  node=n-01-0-1 kind=battle visited=no reachable=no edges=[n-01-1-0,n-01-1-1] preview=enemies=[腐生史莱姆] schools=[verdant] arrow=eq
+  node=n-01-0-2 kind=battle visited=no reachable=no edges=[n-01-1-1] preview=enemies=[腐生史莱姆] schools=[verdant] arrow=eq
+  node=n-01-1-0 kind=battle visited=no reachable=no edges=[] preview=enemies=[腐生史莱姆] schools=[verdant] arrow=eq
+  node=n-01-1-1 kind=battle visited=no reachable=no edges=[] preview=enemies=[腐生史莱姆,游荡咒火] schools=[verdant,arcana] arrow=eq

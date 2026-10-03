@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamersi.local/schemas/harness_gate.schema.json",
+  "title": "HarnessGateReport",
+  "description": "MOD-02 `gate()` 的门禁记录（runs/<run_id>/audit/harness-gate.json，0600）。FR-02-13。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "ok", "n_imports", "scanned_files", "findings",
+    "harness_version", "artifact_dir", "max_tools", "created_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "harness-gate-1.0.0" },
+    "ok": {
+      "type": "boolean",
+      "description": "false 表示整批拒绝（fail-closed），旧 harness 保持可用"
+    },
+    "n_imports": { "type": "integer", "minimum": 0 },
+    "scanned_files": { "type": "array", "items": { "type": "string" } },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "lineno", "col", "detail", "file"],
+        "properties": {
+          "code": {
+            "enum": ["E_ENV_AST_DENIED", "E_ENV_CODE_SYNTAX", "E_ENV_IMPORT_DENIED"]
+          },
+          "lineno": { "type": "integer", "minimum": 0 },
+          "col": { "type": "integer", "minimum": 0 },
+          "detail": { "type": "string" },
+          "file": { "type": "string" }
+        }
+      }
+    },
+    "harness_version": { "type": "integer", "minimum": 0 },
+    "artifact_dir": { "type": "string" },
+    "max_tools": { "type": "integer", "minimum": 0 },
+    "created_at": { "type": "string", "pattern": "Z$" }
+  }
+}

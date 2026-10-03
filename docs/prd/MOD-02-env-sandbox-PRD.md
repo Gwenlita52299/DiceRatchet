@@ -1,6 +1,6 @@
 # MOD-02 env-sandbox 技术 PRD
 
-> 版本：v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：草案（待复核）· 所属里程碑：M0（`SandboxEnv` + 投影 + 审计器 + 蜜罐自测全部交付）
+> 版本：v1.2.1（2026-10-03 追加 §18 实现落地记录）· 状态：草案（待复核）· 所属里程碑：M0（`SandboxEnv` + 投影 + 审计器 + 蜜罐自测全部交付）
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源，冲突以 Spec 为准）· 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md) §3/§8
 > 作者：GameRSI 技术文档（MOD-02 负责模块）
 
@@ -341,3 +341,100 @@ Golden `tests/golden/`：给定 `src/game/tests/golden/g5_hard_six_stage.jsonl` 
 | v1.0 | 2026-09-30 | 首版 |
 | v1.1 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：投影源改为 GAME `observe`，产出 `obs-agent-1.0.0`，新增紧凑渲染（P0-1）；新增 `reject(final)` 与唯一判负 `policy_failure`（P0-5）；工具执行改为常驻子进程 worker，主进程不设 rlimit（P0-6）；AST 改为节点黑名单 + 调用白名单，放行运算符（P0-6）；import hook 按调用方判定（P0-6）；蜜罐注入点改为 GAME 的隐藏位置；canonical JSON 统一为 `ensure_ascii=True`（P1-18）；CHANGELOG 校验移到 CI；函数名对齐 Spec §4.7（P1-16）；`min:N` 改为 GAME DSL |
 | v1.2 | 2026-09-30 17:49 | P-06/P-07 裁决回填为 Spec B-24/B-25（全状态封装按 MOD-01 v1.0 改为等价形式）；开放问题 4 按 B-10 结案 |
+| v1.2.1 | 2026-10-03 | 追加 §18 实现落地记录（代码对照 + 8 处实现裁决）；不改任何 FR 语义 |
+
+---
+
+## 18. 实现落地记录（2026-10-03，代码对照）
+
+M0 的五个交付文件已全部落地并有单测/集成/golden 覆盖；节号与 §2.1 一一对应。
+
+| 文件 | 落地内容 | 对应 FR |
+|---|---|---|
+| `gamer_rsi/sandbox/projection.py` | `OBSERVATION_SCHEMA`（34 字段，含 4 个 agent 专属键）、`project_state`、`canonical_json`/`obs_digest`、`validate_observation`、`render_compact`、`changelog_version`/`check_changelog` | FR-02-1..6、3a、3b、24 |
+| `gamer_rsi/sandbox/api.py` | `SandboxEnv`（私有 `_engine`/`_state`、`__getattr__` 拒绝越权属性）、`EpisodeConfig`/`StepResult`、`reject(final)` 与 `policy_failure` 唯一判负、`max_env_steps`/`max_decisions` | FR-02-7、8、8a、8b、8c |
+| `gamer_rsi/sandbox/guard.py`（+ 私有 `_worker.py`） | `check_imports`、`analyze_code`（节点黑名单 + 调用白名单）、`gate`（fail-closed + `harness-gate.json`）、`install_agent_import_hook`、`guarded_globals`、`run_agent_tick`、`ToolWorker`/`load_harness_tools` | FR-02-9..15 |
+| `gamer_rsi/sandbox/audit.py` | `rebuild_visible_set`、6 类 `LeakClass`、`scan_text`、轨迹重放补齐 future_room/shop 规则集、`run_audit`/`write_report`/`audit_to_console`、`register_sensitive` | FR-02-16..19 |
+| `gamer_rsi/sandbox/honeypot.py` | 4 个注入点（`injected_copy` 只复制被触碰容器）、`scan`（字节级 `find`）、`self_test`（12/12）、`reset_canary` + ledger（只存指纹） | FR-02-20..23 |
+| `schemas/{observation,audit_report,harness_gate}.schema.json`、`docs/prd/OBSERVATION_CHANGELOG.md`、`configs/honeypot.yaml` | G5 schema + FR-02-4/5 的版本账本 + 注入计划（与实现不一致即 `E_ENV_HONEYPOT`） | FR-02-4、5、21 |
+
+G6 可复制命令（均已实测）：
+
+```bash
+python -m gamer_rsi env selftest --seed 1
+python -m gamer_rsi audit leak --run-id <run_id>
+python -m gamer_rsi guards check --root gamer_rsi
+pytest tests/unit/sandbox/test_sandbox_projection.py -q
+pytest tests/unit/sandbox tests/golden/sandbox tests/integration -q
+```
+
+G1 覆盖率（`--cov=gamer_rsi.sandbox`）：`projection` 90% / `audit` 83% / `honeypot` 90% /
+`guard` 87% / `api` 92%（均 ≥80%）；`_worker.py` 是私有子进程入口，79%，其真实路径由
+`ToolWorker`/`run_agent_tick` 的子进程用例覆盖（子进程内不进覆盖率统计）。
+G2 golden：`tests/golden/sandbox/{g5_obs_agent.txt,g5_render.txt,leak-report-clean.json}`，
+由 `tests/golden/sandbox/regen_sandbox_golden.py` **显式**重生成（212 步摘要）。
+
+### 18.1 实现裁决（不改 FR 语义，逐条可复核）
+
+1. **`audit leak` 退出码为 0/1/2/4**：`0/1/2` 是泄漏结论轴（FR-02-19 与 §11 集成用例），
+   `4` 是"审计器自身守卫违例"轴（Spec §8.3，与 `infra.errors.EXIT_CODE` 登记一致）。
+   详见 §18.2；MOD-09 PRD §6.4 的 `0/4` 因此只覆盖了后一根轴，已加注。
+2. **`Observation` 是 JSON-native `dict`**：§6 的 `project_state(...) -> tuple[dict, ...]`
+   与 §6 的 obs JSON 示例都是普通映射；§7 的「不可变」由 `freeze_observation()`
+   （递归 `MappingProxyType`）与 `validate_observation()` 按需提供——递归冻结会破坏
+   `deepcopy`/序列化，故不设为默认返回类型。
+3. **轨迹行落地归 MOD-06**：`reject()` 不直接写 JSONL（写一行合法轨迹需要
+   `episode_key/generation/harness_version/arm/ts`，只有 MOD-06 持有），而是把
+   `illegal=True` + `reason` + `reject_stage` 放进 `StepResult.info` 供 MOD-06 单点写行。
+4. **`legalActionKinds` 的 `abandon_run` 改写**落在 `projection._REWRITES` 表（§6 的
+   `ObsFieldSpec` 没有 `transform` 字段，故不外扩数据类）。
+5. **注册表字段集 = §4.2「保留」表的严格实现**：额外排除 `chapterName`/`piles`/`deck`/
+   `battleHints`/`battleKind`/`outcome`（token 预算 + §4.2「删除」的语义；终局结果经
+   `StepResult.info.outcome` 提供，不进 prompt）。`piles` 被排除还使蜜罐向 `drawPile`
+   注入虚构骰时**不改变** `piles.draw` 计数。
+6. **schema 落 `schemas/` 而不是 §6 示例的 `gamer_rsi/sandbox/audit/report.schema.json`**：
+   `sandbox/audit.py` 已是模块，同名包目录会与模块解析冲突；`schemas/` 是 MOD-09
+   登记的跨模块 schema 根（`infra.io.validate` 默认搜索路径）。
+7. **seed 规则集默认只扫 heldout/test**：依 `configs/seeds.yaml::exposure_guard.numeric_scan`
+   （「4 位数字落 2000-2099 / 9000-9099 即告警」）与 INV-5 的 `expose_to`；需要更严时
+   `run_audit(seed_splits=("train","heldout","test"))`。数值 token 要求两侧非字母数字，
+   且轨迹扫描跳过 `obs_digest/prompt_hash/ts/seed/token 计数` 等机器元数据——否则
+   sha256 片段、年份、token 数会刷出假阳性（假阳性同样是 P0 失效）。
+8. **import hook 双层**：`MetaPathFinder`（加载期，§4.10 的字面要求）+ `builtins.__import__`
+   包装（缓存命中期）。因为 `SandboxEnv` 按 FR-02-10 预先 import 了环境层，agent 侧
+   `import gamer_rsi.env.rng` 会命中 `sys.modules`、绕过 finder；只装 finder 会让
+   FR-02-10 与 §11 的「import gamer_rsi.env.rng → 抛 E_ENV_IMPORT_DENIED」无法成立。
+9. **`GuardViolation` 继承 `InfraError`**（仍是 `Exception` 子类，符合 §6 签名），
+   从而 CLI 直接拿到 Spec §8.3 的退出码 4，无需第二套错误通道。
+10. **`_worker.py` 是第 6 个（私有）文件**：常驻工具子进程的入口必须能被
+    `[sys.executable, "-I", "-S", <file>]` 直接执行；5 个公开模块仍只用 stdlib +
+    `infra.errors`（`pyyaml` 只在读注入计划时惰性导入）。
+
+### 18.2 `audit leak` 的四码退出码：两根正交轴（2026-10-03 评审补充）
+
+一次 `audit leak` 必须同时回答两个**互不替代**的问题，因此退出码是两根轴而不是一根：
+
+| 轴 | 问题 | 取值 | 依据 |
+|---|---|---|---|
+| 泄漏结论 | **有没有泄漏？** | `0` 无 finding / `1` 仅 medium / `2` 含 critical | FR-02-19、§11 集成用例、§6 verdict 三级 |
+| 沙箱守卫 | **审计器自己还可信吗？** | `4`（`machinery_errors` 非空，如 `E_ENV_HONEYPOT`） | Spec §8.3「4 沙箱/守卫违例」；`infra.errors.EXIT_CODE[E_ENV_HONEYPOT/E_ENV_ESCAPE/E_ENV_IMPORT_DENIED/E_ENV_AST_DENIED] = 4` |
+
+**优先级 `4 > 2 > 1 > 0`**，理由：检测器失效时，报告写 `clean` 还是 `critical` 都不能按原义
+采信——把蜜罐自测失败报成 `2` 会让 CI 去追一个不存在的泄漏（假警报），而 `E_ENV_HONEYPOT`
+在错误码注册表里本来就是 4。报告**同时**保留 `verdict=critical`（FR-02-23：「低于 100%
+直接判 critical」）与 `machinery_errors`，信息不丢，只是分通道表达。
+
+归类（谁进哪根轴）：
+
+| 情形 | 轴 | 退出码 |
+|---|---|---|
+| 干净 run | 结论 | 0 |
+| 仅 `full_state_field_leak` / `hidden_field_name_leak`（medium） | 结论 | 1 |
+| `seed_leak` / `future_room_leak` / `shop_content_leak` | 结论 | 2 |
+| `canary_leak`（canary 真的进了 prompt/memory/log） | 结论 | 2（**是发现，不是守卫违例**） |
+| 蜜罐自测 <100%、注册表含哨兵（`E_ENV_HONEYPOT`） | 守卫 | 4 |
+| 审计路径上触发 import hook / AST 门禁 / 逃逸（`E_ENV_*`，当前审计本身不执行工具，理论路径） | 守卫 | 4（由 CLI 通用 `except InfraError` 给出，无需 `run_audit` 参与） |
+| `E_ENV_AUDIT_IO`（轨迹缺失 / JSONL 损坏 / 权限不足） | 结论 | 2（§10「判 critical」：缺证据 ≠ 无泄漏，处理方式与 critical 相同；码本身在 stdout/报告中显式打印，便于分类。**2026-10-03 评审确认：保留在结论轴，不抬到 4**） |
+
+`run_audit`/`write_report` 不抛异常表达上面任何一条（只读文件、结论入报告）；`AuditResult.exit_code`
+与 `AuditResult.exit_reason` 是 CLI 的唯一出口。

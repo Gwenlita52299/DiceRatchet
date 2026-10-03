@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamersi.local/schemas/audit_report.schema.json",
+  "title": "AuditLeakReport",
+  "description": "MOD-02 `audit leak` 报告（runs/<run_id>/audit/leak-<scope>.json，0600）。字段定义见 MOD-02 PRD §6（FR-02-19）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id", "generated_at", "ruleset_version", "scope", "verdict",
+    "scanned", "visible_set", "findings", "leak_counts", "honeypot",
+    "io_errors", "warnings", "machinery_errors"
+  ],
+  "properties": {
+    "run_id": { "type": "string", "minLength": 1 },
+    "generated_at": {
+      "type": "string",
+      "pattern": "Z$",
+      "description": "UTC ISO-8601；同 run 两次审计除本字段外逐字节相同（NFR-02-3）"
+    },
+    "ruleset_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "scope": { "const": "leak" },
+    "verdict": {
+      "enum": ["clean", "warn", "critical"],
+      "description": "critical 优先级：canary 泄漏或蜜罐失效 / 轨迹缺失损坏 > critical 类命中 > 仅 medium"
+    },
+    "scanned": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["episodes", "steps", "memory_entries"],
+      "properties": {
+        "episodes": { "type": "integer", "minimum": 0 },
+        "steps": { "type": "integer", "minimum": 0 },
+        "memory_entries": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "visible_set": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["obs_paths", "obs_digests", "harness_version"],
+      "properties": {
+        "obs_paths": { "type": "array", "items": { "type": "string" } },
+        "obs_digests": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+        },
+        "harness_version": { "type": "integer", "minimum": 0 },
+        "seeds_seen": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 },
+          "description": "只收 split==train（INV-5）"
+        },
+        "memory_entries": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["leak_class", "surface", "episode_id", "step", "token_class",
+                     "evidence", "line_ref"],
+        "properties": {
+          "leak_class": {
+            "enum": ["seed_leak", "future_room_leak", "shop_content_leak",
+                     "full_state_field_leak", "hidden_field_name_leak", "canary_leak"]
+          },
+          "surface": { "enum": ["prompt", "memory", "log"] },
+          "episode_id": { "type": "string" },
+          "step": { "type": "integer", "minimum": 0 },
+          "token_class": { "type": "string" },
+          "evidence": {
+            "type": "string",
+            "description": "命中 token 前后各 evidence_chars（默认 12）字符；报告自身不做泄漏载体"
+          },
+          "line_ref": { "type": "string" }
+        }
+      }
+    },
+    "leak_counts": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "honeypot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["injected", "triggered", "caught_rate"],
+      "properties": {
+        "injected": { "type": "integer", "minimum": 0 },
+        "triggered": { "type": "integer", "minimum": 0 },
+        "caught_rate": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "io_errors": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "E_ENV_AUDIT_IO 明细（轨迹缺失/JSONL 损坏）；非空即判 critical（缺证据 ≠ 无泄漏）"
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "规则集降级说明（如未枚举到 seeds.yaml、重放不可行）；非空时 verdict ≥ warn"
+    },
+    "machinery_errors": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^E_(ENV|IO|EVAL|ACTION|LLM|EVOLVE)_[A-Z0-9_]+$"
+      },
+      "description": "审计器自身的守卫违例码（如 E_ENV_HONEYPOT）→ 退出码 4（Spec §8.3 沙箱/守卫违例）；非空时 verdict 仍记 critical（FR-02-23）"
+    }
+  }
+}

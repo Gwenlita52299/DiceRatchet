@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamersi.local/schemas/observation.schema.json",
+  "title": "Observation",
+  "description": "MOD-02 agent 侧观测 obs-agent-1.0.0（Spec §4.2）。字段集合由 gamer_rsi/sandbox/projection.py::OBSERVATION_SCHEMA 唯一决定；本文件是它的机器可读形式，二者一致性由 tests/unit/sandbox/test_sandbox_projection.py 的契约测试守住（G5）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "episodeId", "decisionIndex", "phase", "stage", "stageCount",
+    "chapter", "turn", "difficulty", "player", "hand", "slots", "enemies",
+    "toggles", "relics", "legalActionKinds", "lastResult"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "obs-agent-1.0.0" },
+    "episodeId": { "type": "string" },
+    "decisionIndex": { "type": "integer", "minimum": 0 },
+    "phase": {
+      "enum": ["map", "player_turn", "enemy_turn", "shop", "event", "treasure",
+               "forge", "shrine", "rest", "relic_swap", "settle"]
+    },
+    "stage": { "type": "integer", "minimum": 1 },
+    "stageCount": { "type": "integer", "minimum": 1 },
+    "chapter": { "type": "integer", "minimum": 1 },
+    "turn": { "type": "integer", "minimum": 0 },
+    "difficulty": { "enum": ["easy", "medium", "hard"] },
+    "player": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hearts", "heartsMax", "virtue", "virtueMax", "ward", "starShards",
+        "statuses", "deckSchool", "purifyLeft", "abilities"
+      ],
+      "properties": {
+        "hearts": { "type": "integer" },
+        "heartsMax": { "type": "integer" },
+        "virtue": { "type": "integer" },
+        "virtueMax": { "type": "integer" },
+        "ward": { "type": "integer" },
+        "starShards": { "type": "integer" },
+        "statuses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind", "stacks"],
+            "properties": {
+              "kind": { "enum": ["poison", "burn", "weak", "strength", "regen"] },
+              "stacks": { "type": "integer" }
+            }
+          }
+        },
+        "deckSchool": { "enum": ["blade", "arcana", "verdant", "neutral"] },
+        "purifyLeft": { "type": "integer", "minimum": 0 },
+        "abilities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "usesLeft"],
+            "properties": {
+              "id": { "type": "string" },
+              "usesLeft": { "type": "integer", "minimum": 0 }
+            }
+          }
+        }
+      }
+    },
+    "hand": {
+      "type": "array",
+      "description": "手骰；元素形状同 GAME-00 §9.4（obs-1.0.0）",
+      "items": { "type": "object" }
+    },
+    "slots": {
+      "type": "array",
+      "description": "骰槽；constraint 文法同 GAME-00 §4.3",
+      "items": { "type": "object" }
+    },
+    "enemies": {
+      "type": "array",
+      "description": "敌人公开状态 + 玩家回合开始时提交的 intent",
+      "items": { "type": "object" }
+    },
+    "map": {
+      "type": ["object", "null"],
+      "description": "只含已揭示的行；未揭示行折叠为 {count, reachable:false}"
+    },
+    "shop": { "type": ["object", "null"] },
+    "event": { "type": ["object", "null"] },
+    "treasure": { "type": ["object", "null"] },
+    "forge": { "type": ["object", "null"] },
+    "shrine": { "type": ["object", "null"] },
+    "rest": { "type": ["object", "null"] },
+    "pendingRelic": { "type": ["object", "null"] },
+    "toggles": {
+      "type": "object",
+      "additionalProperties": { "type": "boolean" }
+    },
+    "relics": { "type": "array", "items": { "type": "object" } },
+    "legalActionKinds": {
+      "type": "array",
+      "items": {
+        "enum": ["map_choose", "play_face", "discard_die", "purify", "use_ability",
+                 "end_turn", "shop_buy", "shop_refresh", "shop_remove", "shop_leave",
+                 "event_choose", "treasure_pick", "forge_pick", "shrine_choose",
+                 "rest_choose", "relic_swap"]
+      },
+      "description": "GAME legalActions 的种类去重（abandon_run 对 agent 不开放，Spec §4.2 改写）"
+    },
+    "lastResult": {
+      "type": ["object", "null"],
+      "description": "上一次被拒绝的原因（B-15 重试反馈）",
+      "properties": {
+        "illegal": { "type": "boolean" },
+        "reason": { "type": ["string", "null"] },
+        "stage": { "type": ["string", "null"] },
+        "code": { "type": ["string", "null"] },
+        "raw": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
