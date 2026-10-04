@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MOD-02 env-sandbox · GameRSI 模块讲解</title>
+<style>
+:root{--accent:#0891b2;--accent-2:#06b6d4;--accent-soft:rgba(8,145,178,.09);--bg:#f5f6fa;--card:#fff;--ink:#1c2333;--muted:#64708a;--line:#e5e8f0;--code-bg:#101725;--code-ink:#e8ecf5;--ok:#0f9d58;--bad:#dc2626}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;font-size:15px;line-height:1.75}
+aside{position:fixed;inset:0 auto 0 0;width:262px;background:#0e1422;color:#c6cddd;padding:22px 18px;overflow-y:auto}
+aside h1{font-size:15px;color:#fff;margin:0 0 4px;letter-spacing:.5px}
+aside .sub{font-size:12px;color:#7d89a3;margin-bottom:18px}
+aside a{display:block;color:#aab6cc;text-decoration:none;font-size:13.5px;padding:7px 10px;border-radius:8px;margin:1px 0}
+aside a:hover{background:rgba(255,255,255,.07);color:#fff}
+aside a.cur{background:var(--accent);color:#fff;font-weight:600}
+aside .sep{height:1px;background:rgba(255,255,255,.09);margin:14px 0}
+aside .toc a{font-size:12.5px;color:#8b97ae;padding:4px 10px}
+main{margin-left:262px;padding:34px 40px 80px}
+.wrap{max-width:900px;margin:0 auto}
+header.hero{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;border-radius:16px;padding:30px 32px;margin-bottom:26px}
+header.hero .kid{font-size:13px;letter-spacing:2px;opacity:.85}
+header.hero h2{margin:6px 0 8px;font-size:27px;line-height:1.3}
+header.hero p{margin:0;opacity:.92;max-width:64ch}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.badge{font-size:12px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:3px 11px}
+section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 26px;margin:0 0 18px;scroll-margin-top:20px}
+section h3{font-size:18px;margin:0 0 12px;display:flex;align-items:center;gap:9px}
+section h3 .n{width:24px;height:24px;border-radius:7px;background:var(--accent-soft);color:var(--accent);font-size:12.5px;display:grid;place-items:center;font-weight:700}
+h4{font-size:15px;margin:18px 0 6px;color:var(--accent)}
+p{margin:0 0 10px}ul,ol{padding-left:20px;margin:0 0 10px}li{margin:4px 0}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:10px 0}
+th{background:var(--accent-soft);color:var(--accent);text-align:left;padding:8px 10px;border:1px solid var(--line);font-weight:600}
+td{padding:8px 10px;border:1px solid var(--line);vertical-align:top}
+tr:nth-child(even) td{background:#fafbfe}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:var(--accent-soft);color:var(--accent);padding:1.5px 6px;border-radius:5px}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;font-size:12.5px;line-height:1.6}
+pre code{background:none;color:inherit;padding:0}
+blockquote{margin:12px 0;padding:10px 14px;border-left:4px solid var(--accent);background:var(--accent-soft);color:#3a4257;border-radius:0 8px 8px 0;font-size:13.5px}
+.tag{display:inline-block;font-size:11.5px;font-weight:700;border-radius:6px;padding:2px 8px;margin:2px 3px 2px 0;background:var(--accent);color:#fff}
+.tag.nfr{background:#0e7490}.tag.err{background:#b91c1c}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:12px 0}
+.card{background:#fafbff;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card b{color:var(--accent)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.do{border-top:3px solid var(--ok)}.dont{border-top:3px solid var(--bad)}
+.check{padding-left:0}.check li{list-style:none;margin:6px 0;padding-left:26px;position:relative}
+.check li::before{content:"✓";position:absolute;left:2px;color:var(--ok);font-weight:700}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0}
+.step{background:var(--accent-soft);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:8px 12px;font-size:13px;min-width:120px}
+.arrow{color:var(--accent);font-weight:700}
+footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px}
+@media(max-width:960px){aside{position:static;width:auto;height:auto;padding:14px}main{margin-left:0;padding:20px 16px 60px}.cols{grid-template-columns:1fr}}
+@media print{aside{display:none}main{margin:0}.wrap{max-width:none}section{break-inside:avoid}}
+</style>
+</head>
+<body>
+<aside>
+  <h1>GameRSI</h1><div class="sub">模块讲解 · MOD 系列</div>
+  <a href="MOD-01-env-rules.html">MOD-01 env-rules</a>
+  <a class="cur" href="MOD-02-env-sandbox.html">MOD-02 env-sandbox</a>
+  <a href="MOD-03-inference.html">MOD-03 inference</a>
+  <a href="MOD-04-policy.html">MOD-04 policy</a>
+  <a href="MOD-05-memory.html">MOD-05 memory</a>
+  <a href="MOD-06-loop.html">MOD-06 loop</a>
+  <a href="MOD-07-evolve.html">MOD-07 evolve</a>
+  <a href="MOD-08-evals.html">MOD-08 evals</a>
+  <a href="MOD-09-infra.html">MOD-09 infra</a>
+  <div class="sep"></div>
+  <div class="sub">本页导航</div>
+  <div class="toc">
+    <a href="#sec-1">1 背景与目标</a>
+    <a href="#sec-2">2 范围</a>
+    <a href="#sec-3">3 使用方与场景</a>
+    <a href="#sec-4">4 功能需求</a>
+    <a href="#sec-5">5 非功能需求</a>
+    <a href="#sec-6">6 接口契约</a>
+    <a href="#sec-7">7 数据模型与存储</a>
+    <a href="#sec-8">8 关键流程</a>
+    <a href="#sec-9">9 配置项</a>
+    <a href="#sec-10">10 错误处理与降级</a>
+    <a href="#sec-11">11 测试计划</a>
+    <a href="#sec-12">12 验收标准</a>
+    <a href="#sec-13">13 指标与埋点</a>
+    <a href="#sec-14">14 依赖与风险</a>
+    <a href="#sec-15">15 里程碑与工作量</a>
+    <a href="#sec-16">16 开放问题</a>
+    <a href="#sec-17">17 变更记录与实现落地</a>
+  </div>
+</aside>
+<main>
+<div class="wrap">
+
+<header class="hero">
+  <div class="kid">MOD-02 · env-sandbox</div>
+  <h2>环境沙箱：投影 · 隔离 · 审计 · 蜜罐</h2>
+  <p>它是 L0 游戏引擎与 L1+ agent 之间<b>唯一合法的数据通道</b>——把「agent 只能看到它该看到的」这条项目最硬的纪律落到代码层，用三条独立防线守住：投影裁剪防泄漏、代码/进程隔离防越权、审计与蜜罐防「泄漏没被发现」。</p>
+  <div class="badges">
+    <span class="badge">版本 v1.2.1</span>
+    <span class="badge">状态：草案（待复核）</span>
+    <span class="badge">里程碑：M0（SandboxEnv + 投影 + 审计器 + 蜜罐自测全部交付）</span>
+    <span class="badge">2026-10-03 追加 §18 实现落地记录</span>
+  </div>
+</header>
+
+<div class="grid">
+  <div class="card">
+    <b>背景与目标</b>
+    <p>计划 §3 与「米哈游小丑牌透视预读」教训定下纪律：agent 只能看到它该看的。MOD-02 是这条纪律在代码层的<b>唯一执行者</b>，提供三条独立防线：投影裁剪（防泄漏）、代码/进程隔离（防越权）、审计与蜜罐（防未被发现的泄漏）。</p>
+  </div>
+  <div class="card">
+    <b>核心职责</b>
+    <p>五个 stdlib 文件撑起整条防线：<code>projection.py</code>（字段级白名单投影）、<code>api.py</code>（<code>SandboxEnv</code> 唯一入口）、<code>guard.py</code>（import 门禁 + 受限执行）、<code>audit.py</code>（泄漏审计）、<code>honeypot.py</code>（蜜罐探针）。</p>
+  </div>
+  <div class="card">
+    <b>服务对象</b>
+    <p>MOD-04 policy 取 obs 组装 prompt；MOD-06 loop 驱动单局；MOD-07 evolve 让候选工具先过门禁再入库；MOD-08 evals 把审计结果纳入评估；MOD-09 infra 暴露 CLI 与 CI 门禁；评测复核者事后回答「它有没有看到不该看的」。</p>
+  </div>
+  <div class="card">
+    <b>关键成功度量</b>
+    <p>G1 五模块单测覆盖 ≥80%；G3 同 seed 双跑 <code>obs_digest</code> 逐字节相同；G4 蜜罐 12/12 用例被抓到、注入 canary 100% 触发 P0；运行期硬约束：<code>honeypot_caught_rate</code> 恒为 <code>1.0</code>、<code>canary_leak==0</code>。</p>
+  </div>
+</div>
+
+<section id="sec-1">
+  <h3><span class="n">1</span>背景与目标</h3>
+  <p>MOD-02 是 L0 与 L1 之间唯一合法数据通道。M0 给出五条可检验的目标：</p>
+  <ol>
+    <li>交给 L1+ 的环境数据<b>只可能</b>来自 <code>gamer_rsi/sandbox/projection.py::project_state()</code>——未在 <code>OBSERVATION_SCHEMA</code> 登记的字段无法出现在 <code>Observation</code>（INV-2）。</li>
+    <li>agent 侧 <code>import gamer_rsi.env.*</code> 在 <b>CI 与运行期两级</b>被拒（INV-1）。</li>
+    <li>自编辑 harness 代码只能在受限执行器内运行：<b>无网络、无文件写、无 subprocess、无 env 访问</b>（INV-4）。</li>
+    <li><code>audit leak</code> 能从轨迹与 prompt 重建「agent 可见信息集合」，并对 <b>6 类泄漏</b>做结构化判定（INV-2/3/5）。</li>
+    <li>蜜罐 canary 与假字段一旦泄漏，<b>100% 被抓到</b>（G4）。</li>
+  </ol>
+</section>
+
+<section id="sec-2">
+  <h3><span class="n">2</span>范围</h3>
+  <div class="cols">
+    <div class="card do">
+      <b>✓ 负责的范围内</b>
+      <ul>
+        <li><code>gamer_rsi/sandbox/projection.py</code>：<code>OBSERVATION_SCHEMA</code> 注册表、字段级白名单投影、<code>obs_digest</code>、投影协议版本与 CHANGELOG 一致性校验。</li>
+        <li><code>gamer_rsi/sandbox/api.py</code>：<code>SandboxEnv</code> 门面（agent 侧唯一入口），私有持有 MOD-01 引擎，不暴露 <code>FullState</code>。</li>
+        <li><code>gamer_rsi/sandbox/guard.py</code>：import 门禁（静态 AST + 运行期 import hook + 子进程边界）、harness 代码受限执行、资源与超时限制。</li>
+        <li><code>gamer_rsi/sandbox/audit.py</code>：可见性重建器、规则扫描器、<code>leak-report</code> 输出 schema（CLI 由 MOD-09 暴露）。</li>
+        <li><code>gamer_rsi/sandbox/honeypot.py</code>：canary/假字段注入、触发监控、P0 告警、自测用例生成。</li>
+        <li>落地文件：<code>runs/&lt;run_id&gt;/audit/leak-&lt;scope&gt;.json</code>、<code>harness-gate.json</code>、<code>honeypot.jsonl</code>。</li>
+      </ul>
+    </div>
+    <div class="card dont">
+      <b>✗ 不负责（范围外）</b>
+      <ul>
+        <li>规则本身（MOD-01）。</li>
+        <li>奖励函数（MOD-01）。</li>
+        <li>模型侧重试（MOD-03）。</li>
+      </ul>
+      <blockquote>补充（不扩大范围）：非法动作的<b>语义判定</b>属 MOD-01/MOD-04，MOD-02 只保证 <code>info["illegal"]</code> 被如实投影；<code>full_state_hash()</code> 由 MOD-01 实现，MOD-02 只保证不复用为 <code>obs_digest</code> 且不入 Observation。</blockquote>
+    </div>
+  </div>
+</section>
+
+<section id="sec-3">
+  <h3><span class="n">3</span>使用方与场景</h3>
+  <table>
+    <thead><tr><th>使用方</th><th>场景</th><th>依赖接口</th></tr></thead>
+    <tbody>
+      <tr><td>MOD-04 policy</td><td>取 <code>obs</code> dict 组装 prompt；取注册表工具函数</td><td><code>observe/step/legal_actions</code>、<code>load_harness_tools</code></td></tr>
+      <tr><td>MOD-06 loop</td><td>驱动单局、落地轨迹</td><td><code>reset/step/close</code>、<code>obs_digest</code></td></tr>
+      <tr><td>MOD-07 evolve</td><td>候选工具先过静态门禁与受限执行再入库</td><td><code>gate</code>、<code>load_harness_tools</code>（Spec §4.7，返回子进程 <code>ToolWorker</code>）</td></tr>
+      <tr><td>MOD-08 evals</td><td>泄漏审计与蜜罐告警纳入评估报告</td><td><code>run_audit</code>、honeypot 事件</td></tr>
+      <tr><td>MOD-09 infra</td><td>CLI <code>audit leak</code>、CI import 门禁、<code>E_ENV_*</code> 登记</td><td><code>run_audit</code>、<code>audit_to_console</code></td></tr>
+      <tr><td>评测复核者</td><td>事后回答「它有没有看到不该看的」</td><td><code>leak-report.schema.json</code> 全字段</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="sec-4">
+  <h3><span class="n">4</span>功能需求</h3>
+  <p>共 24 条 FR（FR-02-1 ~ FR-02-24），每条都可独立测试。按四条防线分组讲解：</p>
+
+  <h4>投影防线：唯一权威登记表</h4>
+  <ul>
+    <li><span class="tag">FR-02-1</span><code>project_state()</code> 是<b>纯函数</b>：不读全局、不调用 <code>random</code>/<code>time</code>/<code>os.environ</code>；同输入两次调用 canonical JSON 逐字节相同。</li>
+    <li><span class="tag">FR-02-2</span>只输出 <code>OBSERVATION_SCHEMA</code> 中 <code>enabled=True</code> 的字段；源 state 存在但未登记的字段一律丢弃，<b>只记计数、不记名称</b>。</li>
+    <li><span class="tag">FR-02-3</span>输出不得包含 Spec v1.3 §4.2「严禁出现」的任何值：seed、RNG 流状态、未来骰面（抽骰堆顺序）、未揭示的地图行、商店未展示商品、敌人未公开状态、<code>GameState</code> 全量；以逐字段哨兵替换测试验证不可反向推回。</li>
+    <li><span class="tag">FR-02-3a</span><b>投影源是 MOD-01 <code>observe(state, "full")</code></b>（GAME <code>obs-1.0.0</code>，已经是游戏侧白名单），本模块在其上再做键子集 + 3 个 agent 专属键（<code>episodeId/decisionIndex/lastResult</code>）+ <code>stageCount</code>，字段名保留 camelCase。不直接读 <code>GameState</code>，因此隐藏信息有<b>两道防线</b>。</li>
+    <li><span class="tag">FR-02-3b</span><code>render_compact(obs) -&gt; str</code>：确定性的紧凑文本渲染，供 MOD-04 填入 <code>{{observation}}</code>。地图只展开下一行的可达节点，手骰、槽、敌人各占一行。p95 ≤ 1,500 token（8B 分词器）。</li>
+    <li><span class="tag">FR-02-4</span><code>OBSERVATION_SCHEMA</code> 不可变；字段增删/类型变更必须 <code>OBSERVATION_SCHEMA_VERSION</code> 主版本 +1，并在 <code>docs/prd/OBSERVATION_CHANGELOG.md</code> 追加「版本/日期/字段/digest 影响/PR 号」。</li>
+    <li><span class="tag">FR-02-5</span><b>CI</b> 校验 CHANGELOG 末行版本 == <code>OBSERVATION_SCHEMA_VERSION</code>，不一致则 <code>E_ENV_PROJECTION_VERSION</code>。运行时不读文档目录（v1.0 在 import 时读 <code>docs/</code>，打包后会失效）。</li>
+    <li><span class="tag">FR-02-6</span><code>schema_version</code> 由投影层<b>强制注入</b>，同名源字段被覆盖（防伪造）。</li>
+    <li><span class="tag">FR-02-24</span><code>mode="strict"</code> 记 <code>dropped_hidden</code> 计数并告警；<code>mode="assert"</code> 命中隐藏字段即抛 <code>E_ENV_SCHEMA</code>（供 golden/CI）。</li>
+  </ul>
+
+  <h4>门面防线：唯一入口，FullState 绝不外泄</h4>
+  <ul>
+    <li><span class="tag">FR-02-7</span><code>SandboxEnv</code> 私有持有 <code>self._engine</code>，<b>无任何返回 <code>FullState</code> 的公开成员</b>；<code>step()</code> 内先算 <code>state_hash</code>/<code>obs_digest</code> 再丢弃 full_state 引用。</li>
+    <li><span class="tag">FR-02-8</span>非法动作由 MOD-01 判定；<code>step()</code> 返回 <code>reward=-0.05, info={"illegal":True,...}</code> 且不抛异常、观测不变（<code>lastResult</code> 更新）。</li>
+    <li><span class="tag">FR-02-8a</span><code>reject(*, stage, reason, raw, final)</code>（Spec §4.1/§4.3，P-02 结案）：L1/L2 校验失败时由 MOD-04 调用，不改状态，<code>illegal_count += 1</code>，shaped <code>-0.05</code>，写一行 <code>illegal=true</code> 的轨迹。</li>
+    <li><span class="tag">FR-02-8b</span><b>唯一判负方</b>（B-15）：连续 3 次 <code>reject(final=True)</code>（中间没有成功的决策）→ <code>truncated=True, info.truncation_reason="policy_failure"</code>，主指标计为 lose。另外 <code>episode.max_env_steps</code>/<code>max_decisions</code> 超限 → <code>truncation_reason="step_limit"/"decision_limit"</code>。MOD-04/06 不另行判负。</li>
+    <li><span class="tag">FR-02-8c</span><code>legal_actions()</code> = MOD-01 <code>legal_actions</code> 去掉 <code>abandon_run</code>，顺序保持不变；<code>hints()</code> 转发 <code>play_hints</code> 供启发式使用（只含公开信息）。</li>
+  </ul>
+
+  <h4>隔离防线：import 门禁 + 受限执行</h4>
+  <ul>
+    <li><span class="tag">FR-02-9</span><code>check_imports()</code> 扫描 L1–L3（<code>agent/memory/loop/evolve/evals/inference</code>）中任何 <code>import gamer_rsi.env...</code> / <code>from gamer_rsi.env import ...</code>，命中即 <code>E_ENV_IMPORT_DENIED</code>。</li>
+    <li><span class="tag">FR-02-10</span><code>install_agent_import_hook()</code> 安装<b>不可卸载</b>的 <code>MetaPathFinder</code>，按<b>调用方模块路径</b>判定：调用栈中发起 import 的帧属于 <code>gamer_rsi.{agent,memory,loop,evolve,evals,inference}</code> 时拒绝 <code>gamer_rsi.env.*</code> 并抛 <code>E_ENV_IMPORT_DENIED</code>；<code>gamer_rsi.sandbox</code> 自身的导入放行。另外，<code>SandboxEnv</code> 模块在安装 hook 之前预先 import env。</li>
+    <li><span class="tag">FR-02-11</span>子进程边界 <code>run_agent_tick()</code>：<code>[sys.executable, "-I", "-S", "-c", shim]</code>，清空 <code>PYTHONPATH</code>、cwd 只读、stdin/stdout 仅 JSON 协议、超时即 kill；供不配合 hook 的第三方代码。</li>
+    <li><span class="tag">FR-02-12</span><code>analyze_code()</code> 采用<b>节点黑名单 + 调用白名单</b>：禁止 <code>BLOCKED_NODES</code>（<code>Import/ImportFrom</code> 仅放行 <code>tool_import_allowlist</code> 内模块）、<code>BLOCKED_CALLS</code>、<code>BLOCKED_MODULES</code>、<code>ATTR_DENY</code>（任何 <code>__*__</code> 属性）；<b>运算符、比较、布尔、切片、推导式等表达式节点一律允许</b>（v1.0 的节点白名单漏掉了 <code>Add/Eq/And/USub…</code>，任何写了 <code>a + b</code> 的合法工具都会被拒）。返回全部违规的行号与错误码。</li>
+    <li><span class="tag">FR-02-13</span><code>gate(artifact_dir)</code> 对 <code>harness/tools/*.py</code> 逐个 <code>analyze_code</code>，任一失败整批拒绝（fail-closed），写 <code>runs/&lt;run_id&gt;/audit/harness-gate.json</code>，旧 harness 保持可用。</li>
+    <li><span class="tag">FR-02-14</span><b>常驻子进程 worker</b>（Spec B-20）：<code>load_harness_tools(harness_dir) -&gt; ToolWorker</code> 启动 <code>[sys.executable, "-I", "-S", worker.py]</code>。<code>RLIMIT_AS/RLIMIT_CPU/RLIMIT_NOFILE</code> 只设在<b>子进程</b>；工具代码 exec 进 <code>guarded_globals()</code>；父子按行传 JSON，请求为 <code>{tool, obs, candidates, memory}</code>；每次调用有墙钟 <code>timeout_s</code>，超时就 <code>SIGKILL</code> 并重启 worker，抛 <code>E_ENV_TIMEOUT</code>。主进程持有模型，<b>绝不</b>设置 rlimit（v1.0 在进程内设 <code>RLIMIT_AS=256MB</code>，会直接杀掉持有 5～19 GB 权重的主进程）。</li>
+    <li><span class="tag">FR-02-15</span>受限执行期监测逃逸：代码触碰 <code>_HONEYPOT_*</code> 命名或 honeypot ledger 即产生 <code>E_ENV_ESCAPE</code> P0 事件（sentinel 属性触发）。</li>
+  </ul>
+
+  <h4>审计与蜜罐防线：让泄漏无处遁形</h4>
+  <ul>
+    <li><span class="tag">FR-02-16</span><code>rebuild_visible_set()</code> 从 episodes JSONL + prompt/memory 文本重建 <code>VisibleSet</code>：<code>obs_paths</code>、<code>obs_digests</code>、<code>memory_texts</code>、<code>harness_version</code>、<code>seeds_seen</code>。</li>
+    <li><span class="tag">FR-02-17</span>扫描 6 类：<code>seed_leak</code>、<code>future_room_leak</code>、<code>shop_content_leak</code>、<code>full_state_field_leak</code>、<code>hidden_field_name_leak</code>、<code>canary_leak</code>，每类输出 finding 明细。</li>
+    <li><span class="tag">FR-02-18</span>扫描面覆盖 <code>prompt</code>（LLM 真实入参）、<code>memory</code>（记忆写入）、<code>log</code>（JSONL 全字段）；任一出口命中即 P0。</li>
+    <li><span class="tag">FR-02-19</span><code>run_audit()</code> 输出严格符合 <code>audit/report.schema.json</code>；退出码 <code>0</code> 无 finding / <code>1</code> 仅 medium / <code>2</code> 含 critical；<code>evidence</code> 仅保留命中 token 前后各 <code>evidence_chars</code>（默认 12）字符，报告权限 <code>0600</code>，避免报告自身成为泄漏载体。</li>
+    <li><span class="tag">FR-02-20</span><code>honeypot.inject()</code> 的注入点改为 GAME 状态中真实存在的隐藏位置：未揭示地图行节点 <code>preview.enemyNames</code> 中嵌入 <code>HONEYPOT_CANARY</code>；<code>state.node.shop</code> 未展示库存加 <code>_np_secret_price</code>；抽骰堆 <code>player.drawPile</code> 末尾的虚构骰 <code>_np_future_die</code>；<code>enemies[]._np_hidden_status</code>。注入只作用于投影前 state 的<b>副本</b>，不影响 <code>stateDigest</code> 对拍。</li>
+    <li><span class="tag">FR-02-21</span>canary 与 3 个假字段名不得出现在 <code>OBSERVATION_SCHEMA</code> 任何 <code>source_path</code> 中；注册表导入时断言，违反抛 <code>E_ENV_HONEYPOT</code>。</li>
+    <li><span class="tag">FR-02-22</span><code>honeypot.scan(text)</code> 用字节级 <code>.find()</code>（非正则）匹配每个 canary/假字段，命中产 <code>HoneypotHit</code> + <code>audit_honeypot_triggered</code> 事件。</li>
+    <li><span class="tag">FR-02-23</span><code>honeypot.self_test()</code> 生成 12 条用例（prompt/memory/log × canary/假字段），命中率必须 100%；<code>audit leak</code> 前强制执行，低于 100% 直接判 <code>critical</code>。</li>
+  </ul>
+</section>
+
+<section id="sec-5">
+  <h3><span class="n">5</span>非功能需求</h3>
+  <ul>
+    <li><span class="tag nfr">NFR-02-1 确定性</span><code>project_state</code>/<code>obs_digest</code> 无随机、无时间依赖；canonical JSON 统一用 MOD-01 <code>stable_stringify</code>（<code>sort_keys=True, ensure_ascii=True, separators=(",",":")</code>，与 JS 一致，Spec P-21 结案）；<code>PYTHONHASHSEED=0</code> 下同 seed 重跑 <code>obs_digest</code>/<code>state_hash</code> 序列逐字节相同（G3）。</li>
+    <li><span class="tag nfr">NFR-02-2 性能</span>投影 + 紧凑渲染 p95 ≤ 2 ms/步（GAME 观测约 12k 字符，v1.0 的 200 µs 是按旧观测估的）；审计 ≤2 s/1000 步；工具 worker 单次调用往返 ≤ 20 ms（常驻进程，不含首次启动）；worker 冷启动 ≤ 150 ms。</li>
+    <li><span class="tag nfr">NFR-02-3 可复现</span>报告含 <code>ruleset_version</code>/<code>run_id</code>/<code>config_hash</code>；同 run 两次审计除 <code>generated_at</code> 外逐字节相同。</li>
+    <li><span class="tag nfr">NFR-02-4 可观测+fail-closed</span>拒绝/超时/触发全部产结构化事件，不自建日志格式；<code>E_ENV_*</code> 在 <code>infra/logging.py</code> 集中登记；隔离与门禁的内部错误默认拒绝（拒绝执行/判 critical），绝不静默放行。</li>
+    <li><span class="tag nfr">NFR-02-5 可测性</span>5 个文件仅用 stdlib；<code>projection</code>/<code>audit</code>/<code>honeypot</code> 为纯函数模块，单测覆盖率 ≥80%（G1）。</li>
+  </ul>
+</section>
+
+<section id="sec-6">
+  <h3><span class="n">6</span>接口契约</h3>
+  <p>以下是 PRD 中真实的 Python 签名与黑/白名单常量，五个文件的公开契约全在这里。</p>
+
+  <h4>projection.py —— INV-2 唯一权威登记表</h4>
+<pre><code># gamer_rsi/sandbox/projection.py —— INV-2 唯一权威登记表
+OBSERVATION_SCHEMA_VERSION: str = "obs-agent-1.0.0"
+@dataclass(frozen=True)  # 全部数据类 frozen + 显式类型，禁可变默认值
+class ObsFieldSpec:                  # name/source_path/type/doc/since/optional=False/enabled=True
+    name: str; source_path: str; type: str; doc: str; since: str
+    optional: bool = False; enabled: bool = True
+@dataclass(frozen=True)
+class ProjectionStat: kept: tuple[str, ...]; dropped_hidden: int; missing_optional: tuple[str, ...]
+
+OBSERVATION_SCHEMA: tuple[ObsFieldSpec, ...]      # 字段集合见下方 Observation JSON
+def obs_field_paths() -> tuple[str, ...]:      # 所有 enabled 字段 name；审计器据此重建可见集合
+def project_state(game_obs: Mapping[str, Any], *, ctx: ProjectionCtx, mode: str = "strict") -> tuple[dict, ProjectionStat]:
+    """GAME observe(state,"full") → obs-agent-1.0.0（纯函数，FR-02-3a）。mode ∈ {"strict","assert"}；非 optional 字段缺失 → E_ENV_PROJECTION_MISSING。"""
+def canonical_json(obj: Any) -> bytes: ...
+def obs_digest(obs: Mapping[str, Any]) -> str:          # 含 schema_version 的 canonical JSON → "sha256:<hex>"
+def validate_observation(obs: Mapping[str, Any]) -> list[str]:   # 违规字段路径（空=合法），供 G5 round-trip
+def render_compact(obs: Mapping[str, Any]) -> str: ...            # FR-02-3b，供 prompt</code></pre>
+
+  <h4>api.py —— 唯一 agent 侧入口</h4>
+<pre><code># gamer_rsi/sandbox/api.py —— 唯一 agent 侧入口；内部 engine 为 MOD-01 实例，不对外暴露
+class SandboxEnv:
+    def __init__(self, *, engine: Any, episode_config: EpisodeConfig, projection_mode: str = "strict") -> None: ...
+    def reset(self, seed: int, *, episode_config: EpisodeConfig | None = None) -> Observation: ...
+    def step(self, action: Action) -> StepResult: ...      # StepResult/动作契约见 Spec §4.1/§4.3
+    def reject(self, *, stage: str, reason: str, raw: str | None, final: bool) -> StepResult: ...   # FR-02-8a/8b
+    def observe(self) -> Observation: ...
+    def legal_actions(self) -> list[Action]: ...           # MOD-01 legal_actions 去掉 abandon_run（FR-02-8c）
+    def hints(self) -> dict: ...                           # play_hints 转发（公开信息）
+    def close(self) -> None: ...
+    def last_obs_digest(self) -> str: ...                  # 审计用旁路，不进入 Observation
+    def __enter__(self) -> "SandboxEnv": ...;  def __exit__(self, *exc: object) -> None: ...
+    # 严禁：任何返回 FullState、engine、rng_state 的公开方法/属性</code></pre>
+
+  <h4>guard.py —— 门禁与受限执行</h4>
+<pre><code># gamer_rsi/sandbox/guard.py
+class GuardViolation(Exception):
+    def __init__(self, code: str, message: str, *, lineno: int | None = None, col: int | None = None) -> None: ...
+
+# 黑/白名单（集合按字母序维护；命中 → E_ENV_CODE_* / E_ENV_AST_DENIED）
+BLOCKED_CALLS = frozenset({"eval","exec","compile","__import__","open","input","globals","locals","vars","dir","getattr","setattr","delattr","breakpoint","memoryview"})
+BLOCKED_MODULES = frozenset({"os","sys","io","socket","subprocess","shutil","pathlib","importlib","pickle","marshal","ctypes","multiprocessing","threading","requests","urllib","http","gamer_rsi.env","gamer_rsi.sandbox"})
+BLOCKED_NODES = frozenset({"Import","ImportFrom","While","Try","With","AsyncFunctionDef","AsyncFor","AsyncWith","ClassDef","Lambda","Yield","YieldFrom","Await","Global","Nonlocal","Delete","Raise"})
+# v1.1：只用 BLOCKED_NODES 黑名单 + BLOCKED_CALLS/ATTR_DENY；节点白名单 ALLOWED_NODES 已废弃（漏了 Add/Eq/And/USub 等运算符节点），原列表仅供对照
+ATTR_DENY = ("__",)      # 任何以 __ 开头的属性名（dunder 逃逸）
+GUARDED_BUILTINS: frozenset[str] = frozenset({"len","range","sorted","min","max","sum","abs","round","int","float","str","bool","list","dict","tuple","set","enumerate","zip","reversed","any","all","isinstance","print","ValueError","TypeError","KeyError","IndexError","ZeroDivisionError"})
+
+@dataclass(frozen=True)
+class GuardFinding: code: str; lineno: int; col: int; detail: str
+@dataclass(frozen=True)
+class GuardReport: ok: bool; findings: tuple[GuardFinding, ...]; n_imports: int; scanned_files: tuple[str, ...]
+
+def check_imports(paths: Iterable[Path], *, roots: tuple[str, ...] = ("gamer_rsi.env",)) -> GuardReport: ...
+def analyze_code(source: str, *, filename: str = "&lt;harness&gt;") -> GuardReport: ...
+def gate(artifact_dir: Path) -> GuardReport: ...
+def install_agent_import_hook() -> None: ...
+def guarded_globals() -> dict[str, Any]: ...
+class ToolWorker:                                      # FR-02-14 常驻子进程
+    def call(self, tool: str, *, obs: dict, candidates: list[dict], memory: list[dict], timeout_s: float) -> list[dict]: ...
+    def restart(self) -> None: ...;  def close(self) -> None: ...
+# v1.0 的 run_harness_callable（进程内设 rlimit）已删除，由 ToolWorker 取代
+def run_agent_tick(payload: dict, *, timeout_s: float = 10.0) -> dict: ...
+def load_harness_tools(harness_dir: Path) -> ToolWorker: ...   # Spec §4.7</code></pre>
+
+  <h4>audit.py —— 可见性重建与 6 类泄漏扫描</h4>
+<pre><code># gamer_rsi/sandbox/audit.py
+RULESET_VERSION: str = "1.0.0"
+class LeakClass(str, Enum):   # 6 类泄漏 = FR-02-17
+    SEED_LEAK="seed_leak"; FUTURE_ROOM_LEAK="future_room_leak"; SHOP_CONTENT_LEAK="shop_content_leak"; FULL_STATE_FIELD_LEAK="full_state_field_leak"; HIDDEN_FIELD_NAME_LEAK="hidden_field_name_leak"; CANARY_LEAK="canary_leak"
+@dataclass(frozen=True)
+class VisibleSet: obs_paths: tuple[str,...]; obs_digests: tuple[str,...]; memory_texts: tuple[str,...]; harness_version: int; seeds_seen: tuple[int,...]   # seeds_seen 仅 split=="train"
+@dataclass(frozen=True)
+class LeakFinding: leak_class: LeakClass; surface: str; episode_id: str; step: int; token_class: str; evidence: str; line_ref: str   # surface∈{"prompt","memory","log"}
+@dataclass(frozen=True)
+class AuditResult: run_id: str; ruleset_version: str; scope: str = "leak"; scanned: dict[str,int]; findings: tuple[LeakFinding,...]; leak_counts: dict[str,int]; honeypot: dict[str,int]; verdict: str
+
+def rebuild_visible_set(run_dir: Path, *, split: str) -> VisibleSet: ...
+def scan_text(text: str, *, forbidden: Mapping[str, str], surface: str, episode_id: str, step: int) -> list[LeakFinding]: ...
+def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION) -> AuditResult: ...
+def write_report(result: AuditResult, out: Path) -> Path: ...     # 0600
+def audit_to_console(result: AuditResult) -> int: ...             # 0/1/2</code></pre>
+
+  <h4>honeypot.py —— 蜜罐探针</h4>
+<pre><code># gamer_rsi/sandbox/honeypot.py
+HONEYPOT_CANARY: str = "HP-CANARY-7f3a9c1e-4d2b-4a8f-9c11-0b5e8d6a2f47"
+FAKE_FIELD_NAMES: tuple[str, ...] = ("_np_secret_price", "_np_future_die", "_np_hidden_status")
+@dataclass(frozen=True)
+class HoneypotHit: canary: str; surface: str; episode_id: str; step: int; offset: int
+def inject(full_state: MutableMapping[str, Any], *, plan_path: Path | None = None) -> MutableMapping[str, Any]: ...
+def scan(text: str, *, surface: str, episode_id: str, step: int) -> list[HoneypotHit]: ...
+def self_test() -> HoneypotSelfTestResult:   # {"cases":12,"caught":12,"missed":[]}；missed 非空 → E_ENV_HONEYPOT
+def reset_canary(*, salt: str) -> str:       # 按 run_id 派生 canary，写 honeypot ledger</code></pre>
+
+  <h4>Observation JSON（agent 真正看到的东西）</h4>
+  <p><code>Observation</code> 是 Spec v1.3 §4.2 的机器可读形式，字段集合由 <code>OBSERVATION_SCHEMA</code> 唯一决定；以下为 <code>player_turn</code> 的节选，其余键同 GAME-00 §9.4：</p>
+<pre><code>{"schemaVersion":"obs-agent-1.0.0","episodeId":"e-001042-g003-train","decisionIndex":17,"phase":"player_turn","stage":4,"stageCount":6,"chapter":2,"turn":3,"difficulty":"hard","player":{"hearts":2,"heartsMax":2,"virtue":8,"virtueMax":24,"ward":4,"starShards":120,"statuses":[],"deckSchool":"blade","purifyLeft":0,"abilities":[{"id":"warrior_reroll","usesLeft":1}]},"hand":[{"dieId":"d-0007","defId":"skill_blade_execute","school":"blade","riskTier":"balanced","faceIndex":2,"label":"处决斩 4","kind":"purge","value":4,"statusKind":null,"isCorrupt":false,"corruptionValue":0}],"slots":[{"slotId":"slot_1","slotKind":"attack","constraint":"ge:3","filledBy":null,"effectKind":"purge","bonus":0,"disabled":false}],"enemies":[{"enemyId":"e-00","defId":"mon_verdant_slime","school":"verdant","hp":14,"hpMax":20,"ward":0,"statuses":[],"intent":[{"kind":"purge","value":5,"school":"verdant","arrow":"up","slotId":"e_slot_0"}],"phase":1}],"legalActionKinds":["discard_die","end_turn","play_face","use_ability"],"lastResult":null,"toggles":{"mapBranching":true,"relics":true,"events":true,"shops":true,"schoolCounter":true},"relics":[]}</code></pre>
+
+  <h4>leak-report 顶层字段与示例</h4>
+  <p><code>runs/&lt;run_id&gt;/audit/leak-&lt;scope&gt;.json</code> 的顶层字段：<code>run_id</code> / <code>generated_at</code>(iso) / <code>ruleset_version</code> / <code>scope="leak"</code> / <code>verdict∈{clean,warn,critical}</code>（critical 优先级：canary 泄漏或蜜罐失效 &gt; 其余）/ <code>scanned{episodes,steps,memory_entries}</code> / <code>visible_set{obs_paths[],obs_digests[],harness_version}</code> / <code>findings[]{leak_class,surface,episode_id,step,token_class,evidence,line_ref}</code> / <code>leak_counts{}</code> / <code>honeypot{injected,triggered,caught_rate}</code>。示例：</p>
+<pre><code>{"run_id":"4f2a1c9e-9d1c4e77","generated_at":"2026-09-30T12:00:00Z","ruleset_version":"1.0.0","scope":"leak","verdict":"critical","scanned":{"episodes":60,"steps":1840,"memory_entries":42},"visible_set":{"obs_paths":["schema_version","turn","phase"],"obs_digests":["sha256:..."],"harness_version":7},"findings":[{"leak_class":"seed_leak","surface":"prompt","episode_id":"e-000123","step":14,"token_class":"seed","evidence":"...2013...","line_ref":"prompts/e-001042-g003-train.txt:37"}],"leak_counts":{"seed_leak":1},"honeypot":{"injected":4,"triggered":0,"caught_rate":1.0}}</code></pre>
+</section>
+
+<section id="sec-7">
+  <h3><span class="n">7</span>数据模型与存储</h3>
+  <ul>
+    <li><code>Observation</code>：不可变 <code>Mapping</code>（<code>types.MappingProxyType</code> 递归冻结），键与类型见 GAME-00 §9.4 + Spec §4.2；<code>slots[].constraint</code> 的文法同 GAME-00 §4.3（<code>any|odd|even|(ge|gt|le|lt|eq):int|in:...</code>），v1.0 的 <code>min:N</code> 已删除；<code>enemies[].intent</code> 在玩家回合开始时提交，保证真实。round-trip 无损（G5）。</li>
+    <li><code>ProjectionStat</code> 只记计数不记名称——防止经日志反向泄漏隐藏字段名。</li>
+    <li>落地：<code>runs/&lt;run_id&gt;/audit/leak-&lt;scope&gt;.json</code>、<code>harness-gate.json</code>、<code>honeypot.jsonl</code>（每行 <code>HoneypotHit</code>+<code>run_id</code>/<code>generation</code>），权限 <code>0600</code>，不写到 <code>runs/</code> 之外；<b>不引入数据库</b>，审计只按文件重放。</li>
+  </ul>
+</section>
+
+<section id="sec-8">
+  <h3><span class="n">8</span>关键流程</h3>
+
+  <h4>投影：从 full_state 到可入 prompt 的 obs</h4>
+  <div class="flow">
+    <div class="step">full_state</div><span class="arrow">→</span>
+    <div class="step">project_state(mode)<br>校验 schema_version ↔ CHANGELOG</div><span class="arrow">→</span>
+    <div class="step">按 OBSERVATION_SCHEMA.enabled<br>逐字段取 source_path</div><span class="arrow">→</span>
+    <div class="step">类型强校验<br>丢弃未登记字段</div><span class="arrow">→</span>
+    <div class="step">覆盖式注入 schema_version</div><span class="arrow">→</span>
+    <div class="step">obs_digest = sha256(canonical_json(obs))<br>单向摘要，可入轨迹</div>
+  </div>
+
+  <h4>import 门禁：CI / 运行期 / 不配合，三层递进</h4>
+  <div class="flow">
+    <div class="step">CI 静态<br>check_imports([agent,memory,loop,evolve,evals,inference])<br>命中即红</div><span class="arrow">→</span>
+    <div class="step">运行期 hook<br>sandbox 预导入 env → install_agent_import_hook()<br>L1+ 帧发起 find_spec → E_ENV_IMPORT_DENIED</div><span class="arrow">→</span>
+    <div class="step">不配合时<br>run_agent_tick() → [python -I -S -c shim]<br>←JSON→ 超时 kill</div>
+  </div>
+
+  <h4>harness 准入与受限执行</h4>
+  <div class="flow">
+    <div class="step">gate(harness/tools)<br>逐文件 analyze_code</div><span class="arrow">→</span>
+    <div class="step">全通过？<br>否 → 整批拒绝(E_ENV_AST_DENIED)<br>保留旧版本</div><span class="arrow">→</span>
+    <div class="step">是 → load_harness_tools()<br>启动子进程 worker<br>exec 进 guarded_globals()，子进程 rlimit</div><span class="arrow">→</span>
+    <div class="step">worker.call()<br>超时即 kill + 重启</div><span class="arrow">→</span>
+    <div class="step">E_ENV_TIMEOUT | E_ENV_RESOURCE<br>→ MOD-04 规则 fallback<br>该局标注降级，不计入评估样本</div>
+  </div>
+
+  <h4>审计 + 蜜罐：每代结束自动跑</h4>
+  <div class="flow">
+    <div class="step">rebuild_visible_set(run_dir)<br>→ VisibleSet</div><span class="arrow">→</span>
+    <div class="step">对每个 prompt/log/memory<br>scan_text(forbidden = seeds ∪ future_room_ids<br>∪ shop_items ∪ hidden_field_names ∪ canary)</div><span class="arrow">→</span>
+    <div class="step">honeypot.scan(text)<br>字节级匹配，无正则</div><span class="arrow">→</span>
+    <div class="step">findings → verdict<br>canary 漏判或蜜罐自测失败 ⇒ "critical"</div>
+  </div>
+</section>
+
+<section id="sec-9">
+  <h3><span class="n">9</span>配置项</h3>
+  <p>环境变量前缀 <code>GAMERSI_SANDBOX_*</code>；优先级 CLI &gt; 环境变量 &gt; <code>configs/default.yaml</code>（Spec §5）。</p>
+  <table>
+    <thead><tr><th>键名</th><th>类型</th><th>默认值</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td><code>sandbox.projection.mode</code></td><td>enum</td><td><code>strict</code></td><td><code>strict</code> 记裁剪计数；<code>assert</code> 命中隐藏字段抛 <code>E_ENV_SCHEMA</code>（golden 用）</td></tr>
+      <tr><td><code>sandbox.projection.schema_version</code></td><td>str</td><td><code>obs-agent-1.0.0</code></td><td>期望投影协议版本（CHANGELOG 一致性由 CI 校验，FR-02-5）</td></tr>
+      <tr><td><code>sandbox.render.max_tokens_p95</code></td><td>int</td><td><code>1500</code></td><td>紧凑渲染预算（FR-02-3b）</td></tr>
+      <tr><td><code>sandbox.guard.enforce</code> / <code>scan_roots</code></td><td>enum / list[str]</td><td><code>enforce</code> / <code>gamer_rsi/{agent,memory,loop,evolve,evals,inference}</code></td><td>阻断或仅告警（CI 强制 enforce）；import 门禁扫描范围</td></tr>
+      <tr><td><code>sandbox.guard.process_boundary</code></td><td>bool</td><td><code>false</code></td><td>是否对不可信 agent 代码启用子进程边界</td></tr>
+      <tr><td><code>sandbox.exec.timeout_s</code> / <code>mem_limit_mb</code> / <code>cpu_limit_s</code> / <code>max_tools</code></td><td>float/int/int/int</td><td><code>2.0</code> / <code>256</code> / <code>2</code> / <code>32</code></td><td>工具调用墙钟上限；<b>worker 子进程</b>的 <code>RLIMIT_AS</code>；<code>RLIMIT_CPU</code>；单 harness 工具数上限</td></tr>
+      <tr><td><code>sandbox.policy_failure_streak</code></td><td>int</td><td><code>3</code></td><td>连续 <code>reject(final=True)</code> 的次数，达到即判 <code>policy_failure</code>（FR-02-8b）</td></tr>
+      <tr><td><code>sandbox.audit.enabled</code> / <code>surfaces</code></td><td>bool / list[str]</td><td><code>true</code> / <code>prompt,memory,log</code></td><td>每代结束自动审计；扫描出口</td></tr>
+      <tr><td><code>sandbox.audit.ruleset</code> / <code>fail_on</code> / <code>evidence_chars</code></td><td>str/enum/int</td><td><code>1.0.0</code> / <code>critical</code> / <code>12</code></td><td>规则集版本（入报告）；非零退出门槛；证据前后保留字符数</td></tr>
+      <tr><td><code>sandbox.honeypot.enabled</code> / <code>plan_path</code> / <code>self_test</code></td><td>bool / str / bool</td><td><code>true</code> / <code>configs/honeypot.yaml</code> / <code>true</code></td><td>是否注入；注入计划（canary 生成方式、注入点）；审计前是否强制跑 <code>self_test()</code></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="sec-10">
+  <h3><span class="n">10</span>错误处理与降级</h3>
+  <p>总原则：<b>隔离类错误 fail-closed</b>（拒绝执行）；<b>能力类错误 fail-soft</b>（退回 fallback，该局标注降级且不计入评估样本，遵循 Spec §8.5）。</p>
+  <table>
+    <thead><tr><th>错误码</th><th>触发</th><th>处理/降级</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag err">E_ENV_PROJECTION_MISSING</span></td><td>非 optional 字段源缺失</td><td>终止该局，不返回部分观测</td></tr>
+      <tr><td><span class="tag err">E_ENV_PROJECTION_VERSION</span></td><td>CHANGELOG 末行 ≠ 注册表版本</td><td>CI 失败（运行时不读文档）</td></tr>
+      <tr><td><span class="tag err">E_ENV_SCHEMA</span></td><td><code>mode="assert"</code> 命中隐藏字段、类型不符、观测校验失败</td><td>抛错；golden/CI 直接红</td></tr>
+      <tr><td><span class="tag err">E_ENV_IMPORT_DENIED</span></td><td>agent 侧 import <code>gamer_rsi.env.*</code></td><td>静态：CI 失败；运行期：终止该 tick + P0 事件</td></tr>
+      <tr><td><span class="tag err">E_ENV_AST_DENIED</span> / <span class="tag err">E_ENV_CODE_SYNTAX</span></td><td>黑名单节点/调用/属性；AST 解析失败</td><td>拒绝该文件；<code>gate()</code> 整批拒绝并保留旧 harness</td></tr>
+      <tr><td><span class="tag err">E_ENV_TIMEOUT</span></td><td>工具调用超墙钟</td><td>该次调用失败 → MOD-04 fallback，不判该局失败</td></tr>
+      <tr><td><span class="tag err">E_ENV_RESOURCE</span></td><td>内存/CPU 超限</td><td>同上；连续 3 次则该 harness 版本标 <code>degraded</code></td></tr>
+      <tr><td><span class="tag err">E_ENV_ESCAPE</span></td><td>受限执行触及蜜罐 sentinel</td><td>P0 事件 + 立即卸载该 harness 版本，人工确认</td></tr>
+      <tr><td><span class="tag err">E_ENV_AUDIT_IO</span></td><td>轨迹缺失/JSONL 损坏/权限不足</td><td>判 <code>critical</code>（缺证据 ≠ 无泄漏），输出可读原因</td></tr>
+      <tr><td><span class="tag err">E_ENV_HONEYPOT</span></td><td>自测命中率 &lt;100%，或注册表含蜜罐字段</td><td>CI 红；<code>audit leak</code> 恒判 <code>critical</code></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="sec-11">
+  <h3><span class="n">11</span>测试计划</h3>
+  <p>单测路径 <code>tests/unit/sandbox/test_sandbox_{projection,api,guard,audit,honeypot}.py</code>，一律按「给定-当-则」编写：</p>
+  <ul>
+    <li>给定 同一 <code>FullState</code>，当 <code>project_state</code> 调两次，则两次 canonical JSON 与 <code>obs_digest</code> 完全相同（FR-02-1）。</li>
+    <li>给定 源含未登记字段 <code>hidden_shop_preview</code>，当 <code>mode="strict"</code>，则输出无该字段、<code>dropped_hidden==1</code>、日志文本不含该字段名（FR-02-2）。</li>
+    <li>给定 seed/后续房间/商店条目/RNG 状态/未来骰面各替换为唯一哨兵值，当 投影后逐字段比对，则任一哨兵出现在 obs 即失败（FR-02-3）。</li>
+    <li>给定 注册表加字段却不改版本，且源 <code>schema_version="9.9.9"</code>，当 import projection / 执行投影，则分别抛 <code>E_ENV_PROJECTION_VERSION</code>、obs 取注册表版本（FR-02-5/6）。</li>
+    <li>给定 含 <code>from gamer_rsi.env.engine import Engine</code> 的假 L1 文件 + 已装 import hook，当 <code>check_imports</code> / <code>import gamer_rsi.env.rng</code>，则 <code>ok=False</code>（带行号）、抛 <code>E_ENV_IMPORT_DENIED</code>（FR-02-9/10）。</li>
+    <li>给定 8 个恶意片段（<code>open("/etc/passwd")</code>、<code>import socket</code>、<code>__import__("os")</code>、<code>eval</code>、<code>exec</code>、<code>getattr(x,"_np_secret_price")</code>、<code>while True</code>、<code>class X</code>），当 <code>analyze_code</code>，则全部被拒且码/行号正确（FR-02-12）。</li>
+    <li>给定 合法 <code>rank_actions</code>（纯函数，使用 <code>+ - * //</code>、比较、<code>and/or/not</code>、推导式、<code>sorted/len/range/max/min</code>），当 <code>gate</code> + <code>worker.call</code>，则通过并返回正确重排（FR-02-12/14，<b>正例必测</b>）。</li>
+    <li>给定 <code>time.sleep(5)</code> 与申请 1 GB 的两个工具，当 <code>worker.call(timeout_s=0.2)</code>，则分别抛 <code>E_ENV_TIMEOUT</code>（worker 被 kill 并自动重启，下一次调用正常）与 <code>E_ENV_RESOURCE</code>；主进程 RSS 与 rlimit 不变（FR-02-14）。</li>
+    <li>给定 连续 3 个 <code>reject(final=True)</code>，当 第 3 次调用，则 <code>truncated=True</code>、<code>truncation_reason="policy_failure"</code>；中间插入一次成功决策则计数清零（FR-02-8b）。</li>
+    <li>给定 <code>legal_actions()</code>，则不含 <code>abandon_run</code>，其余元素与顺序同 MOD-01（FR-02-8c）。</li>
+    <li>给定 每个 canary/假字段各注入 prompt、memory、log 三类文本，当 <code>honeypot.self_test()</code>，则 12/12 命中、<code>missed==[]</code>（FR-02-23，G4）；给定 无 canary 的正常 prompt，当 <code>honeypot.scan</code>，则 0 命中（无假阳性）；给定 含 train seed 值且该 seed 未出现在 obs 的 synthetic prompt，当 <code>run_audit</code>，则 <code>verdict="critical"</code>、<code>leak_class="seed_leak"</code>、<code>surface="prompt"</code>（FR-02-17/19）。</li>
+  </ul>
+  <h4>Golden 与集成</h4>
+  <ul>
+    <li>Golden <code>tests/golden/sandbox/</code>：给定 <code>src/game/tests/golden/g5_hard_six_stage.jsonl</code> 的动作脚本，当 经 SandboxEnv 重放，则 agent 侧 <code>obs_digest</code> 序列与 <code>tests/golden/sandbox/g5_obs_agent.txt</code> 逐字节相同、<code>render_compact</code> 输出与 <code>tests/golden/sandbox/g5_render.txt</code> 相同（G2/G3）；给定 clean run，当 审计，则报告除 <code>generated_at</code> 外与 <code>tests/golden/sandbox/leak-report-clean.json</code> 相同（NFR-02-3）。</li>
+    <li>集成 <code>tests/integration/</code>：给定 含 canary 的 fake run，当 <code>python -m gamer_rsi audit leak --run-id &lt;id&gt;</code>，则退出码 2、<code>verdict="critical"</code>、<code>leak_counts.canary_leak&gt;=1</code>；给定 干净自测 run，当 审计，则退出码 0、<code>findings==[]</code>、<code>honeypot.caught_rate==1.0</code>（G4）；给定 JSONL 损坏一行，当 审计，则 <code>E_ENV_AUDIT_IO</code> 且判 <code>critical</code>；给定 <code>FullState</code> 字段清单快照变更，当 <code>test_env_sandbox_contract.py</code>，则注册表漂移被捕获。</li>
+  </ul>
+</section>
+
+<section id="sec-12">
+  <h3><span class="n">12</span>验收标准（DoD）</h3>
+  <p>对齐 Spec §9 质量门 G1–G6 与 §7（M0：同一 seed 两次 <code>state_hash</code> 序列一致；交付可复现模拟器 + 观测投影 + 审计器 + 单测）。</p>
+  <table>
+    <thead><tr><th>门</th><th>MOD-02 判据</th></tr></thead>
+    <tbody>
+      <tr><td>G1 单测</td><td>5 个模块行覆盖 ≥80%；§11 单测全绿</td></tr>
+      <tr><td>G2 Golden</td><td>固化基于 g5 默认局的 agent 观测摘要、紧凑渲染与 clean 审计报告；改动需 PR 说明 + 显式更新</td></tr>
+      <tr><td>G3 确定性</td><td>同 seed 双跑 <code>obs_digest</code>/<code>state_hash</code> 序列逐字节相同（CI diff）</td></tr>
+      <tr><td>G4 泄漏审计</td><td>自测 run <code>audit leak</code> 0 告警；12/12 蜜罐用例被抓到；故意注入 canary 100% 触发 P0</td></tr>
+      <tr><td>G5 Schema</td><td><code>Observation</code>、<code>report.schema.json</code>、<code>harness-gate.json</code> 有 schema + round-trip 测试</td></tr>
+      <tr><td>G6 命令</td><td>可直接复制：<code>python -m gamer_rsi env selftest --seed 1</code>、<code>python -m gamer_rsi audit leak --run-id &lt;run_id&gt;</code>、<code>pytest tests/unit/sandbox/test_sandbox_projection.py -q</code>、<code>./scripts/ci_gate.sh</code>（门禁总入口）</td></tr>
+      <tr><td>M0 交付</td><td><code>SandboxEnv</code> 可用且不暴露 <code>FullState</code>；L1 import env 的 CI 门禁上线（<code>./scripts/ci_gate.sh</code> + <code>.github/workflows/ci.yml</code>，见 2026-10-03 M0 验收报告 F2）；<code>OBSERVATION_CHANGELOG.md</code> 写入 1.0.0</td></tr>
+    </tbody>
+  </table>
+  <h4>与不变量逐条对应</h4>
+  <table>
+    <thead><tr><th>不变量</th><th>MOD-02 的落实点</th><th>验证方式</th></tr></thead>
+    <tbody>
+      <tr><td>INV-1 agent 只能经 <code>SandboxEnv.observe/step</code> 触达环境；L1+ 禁 import <code>gamer_rsi.env.*</code></td><td>FR-02-7（门面唯一入口、无 FullState 出口）、FR-02-9/10/11（静态 + import hook + 子进程）；<code>gamer_rsi.env</code> 在 <code>BLOCKED_MODULES</code></td><td>假 L1 文件门禁单测、import hook 单测、<code>sandbox_import_denied</code> 事件</td></tr>
+      <tr><td>INV-2 <code>Observation</code> 是白名单投影，新字段必须登记</td><td>FR-02-2/4/5/6、§6 <code>OBSERVATION_SCHEMA</code> 与 JSON、FR-02-24</td><td>哨兵替换测试、未登记字段丢弃测试、CHANGELOG 版本校验测试</td></tr>
+      <tr><td>INV-3 进入 prompt 的上下文仅限当前 Observation + memory + harness + 任务说明</td><td>审计器对 <code>prompt</code> 面重建可见集合（FR-02-16/17/18），检测 prompt 中出现非 obs 的 seed/隐藏字段；<code>obs_paths</code> 来自 <code>OBSERVATION_SCHEMA</code> 与轨迹求交</td><td>集成：synthetic seed 泄漏 → 退出码 2；<code>audit_leak</code> 事件</td></tr>
+      <tr><td>INV-4 harness 自编辑代码受限执行：无网络/无文件写/无 subprocess/无 env 访问</td><td>FR-02-12（AST 黑/白名单）、FR-02-13（gate fail-closed）、FR-02-14（超时/内存/CPU）、FR-02-15（逃逸监测）；MOD-07 侧写入动作配合</td><td>8 个恶意片段拒收单测、超时/资源单测、<code>E_ENV_ESCAPE</code> P0 测试、<code>sandbox_harness_gate</code> 事件</td></tr>
+      <tr><td>INV-5 train/heldout/test seed 隔离，heldout/test seed 值不得进入 prompt 或记忆</td><td><code>VisibleSet.seeds_seen</code> 只收 <code>split=="train"</code>（FR-02-16）；<code>seed_leak</code> 扫描面含 <code>prompt</code>/<code>memory</code>/<code>log</code>（FR-02-17/18），heldout/test seed 值入 forbidden 集合</td><td>集成：heldout seed 出现在记忆文本 → <code>verdict="critical"</code>、<code>leak_counts.seed_leak&gt;=1</code></td></tr>
+      <tr><td>INV-6/INV-7（确定性；主指标用环境原生结果）</td><td>不在 MOD-02 责任范围（MOD-01/09、MOD-08 保证）；MOD-02 只保证 <code>obs_digest</code> 确定性（NFR-02-1）为其提供可复现证据</td><td>同 seed 双跑 digest 一致（G3）</td></tr>
+    </tbody>
+  </table>
+  <h4>一句话清单</h4>
+  <ul class="check">
+    <li><code>SandboxEnv</code> 可用，且没有任何返回 <code>FullState</code> 的公开成员。</li>
+    <li>未在 <code>OBSERVATION_SCHEMA</code> 登记的字段，无法出现在 <code>Observation</code>。</li>
+    <li>agent 侧 import <code>gamer_rsi.env.*</code> 在 CI 与运行期两级被拒。</li>
+    <li>harness 工具在无网络/无文件写/无 subprocess/无 env 的沙箱里执行，超时即被 kill 并自动重启。</li>
+    <li><code>audit leak</code> 能重建可见集合并对 6 类泄漏出结论，退出码可被 CLI 直接透传。</li>
+    <li>蜜罐 12/12 自测用例通过，注入的 canary 一旦泄漏 100% 触发 P0。</li>
+  </ul>
+</section>
+
+<section id="sec-13">
+  <h3><span class="n">13</span>指标与埋点</h3>
+  <p>结构化事件（Spec §8.2 命名，<code>infra/logging.py</code> 落地）：</p>
+  <ul>
+    <li><code>sandbox_projection</code>（fields/dropped_hidden/duration_us）</li>
+    <li><code>sandbox_import_denied</code>（module/path/lineno）</li>
+    <li><code>sandbox_harness_gate</code>（files/ok/findings）</li>
+    <li><code>sandbox_exec</code>（tool/duration_ms/outcome∈{ok,timeout,resource,error}）</li>
+    <li><code>audit_leak</code>（verdict/leak_counts/ruleset_version）</li>
+    <li><code>audit_honeypot_triggered</code>（surface/episode_id/step/canary_hash）</li>
+    <li><code>audit_honeypot_selftest</code>（cases/caught）</li>
+  </ul>
+  <p>入档指标（<code>runs/&lt;run_id&gt;/metrics/</code>）：<code>sandbox_dropped_hidden_total</code>、<code>sandbox_projection_us_p95</code>、<code>sandbox_exec_timeout_rate</code>、<code>sandbox_gate_reject_rate</code>、<code>leak_count_by_class</code>、<code>honeypot_caught_rate</code>。</p>
+  <blockquote><b>硬约束</b>：<code>honeypot_caught_rate</code> 恒为 <code>1.0</code>、<code>canary_leak==0</code>；任一违反即 <code>verdict="critical"</code> 并阻断该代际接受（MOD-07）。</blockquote>
+</section>
+
+<section id="sec-14">
+  <h3><span class="n">14</span>依赖与风险</h3>
+  <p><b>依赖</b>：MOD-01 的 <code>FullState</code> 字段契约与 <code>state_hash()</code>；MOD-09 的 <code>infra/logging.py</code>、CLI、<code>guards.py</code> CI 作业、<code>GAMERSI_*</code> 配置加载；MOD-04/07 消费工具注册表与门禁结果。</p>
+  <table>
+    <thead><tr><th>风险</th><th>影响</th><th>对策</th></tr></thead>
+    <tbody>
+      <tr><td><code>getattr</code> 黑名单使合法工具无法表达，或动态逃逸绕过静态扫描</td><td>误杀/漏杀</td><td>静态门禁 + 运行期受限 builtins + 蜜罐 sentinel 三重；放宽白名单必须附测试与 PR 说明</td></tr>
+      <tr><td>macOS 上 <code>RLIMIT_AS</code> 不完全生效</td><td>资源限制虚设</td><td>以墙钟/子进程超时为第一道；内存限制为尽力而为，测试用 CPU 密集与墙钟超时用例兜底</td></tr>
+      <tr><td>子进程边界启动开销与协议复杂度</td><td>性能与实现成本</td><td>默认 <code>process_boundary=false</code>，仅对不配合 hook 的代码启用</td></tr>
+      <tr><td>canary 自身经日志/异常栈泄漏进 prompt</td><td>假告警或真泄漏</td><td>canary 只存 honeypot ledger；<code>evidence</code> 脱敏；异常栈过滤 sentinel</td></tr>
+      <tr><td><code>dropped_hidden</code> 或日志反向泄漏隐藏字段名</td><td>违反 INV-2</td><td>只记计数；<code>ProjectionStat</code> 无名称字段；单测断言日志文本</td></tr>
+      <tr><td>审计规则集过窄（假阴性），或 <code>FullState</code> 字段改名未同步注册表</td><td>0 告警的假象 / <code>E_ENV_PROJECTION_MISSING</code></td><td>每类泄漏必须有正向用例，canary 作为规则集有效性的活体探针，<code>ruleset_version</code> 入报告；字段清单契约快照测试与 MOD-01 PRD 联动</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="sec-15">
+  <h3><span class="n">15</span>里程碑与工作量</h3>
+  <table>
+    <thead><tr><th>阶段</th><th>内容</th><th>人日</th></tr></thead>
+    <tbody>
+      <tr><td>M0.1</td><td><code>projection.py</code>（注册表/纯函数投影/digest/版本校验）+ 单测 + golden 骨架</td><td>3.5</td></tr>
+      <tr><td>M0.2</td><td><code>api.py</code>（<code>SandboxEnv</code> 门面、不暴露 FullState、<code>StepResult</code> 组装）</td><td>2.0</td></tr>
+      <tr><td>M0.3</td><td><code>guard.py</code>（AST 门禁 + import hook + 受限执行 + 资源限制）</td><td>4.5</td></tr>
+      <tr><td>M0.4</td><td><code>audit.py</code>（可见集合重建 + 6 类规则 + 报告 schema）</td><td>4.0</td></tr>
+      <tr><td>M0.5</td><td><code>honeypot.py</code>（注入/扫描/12 用例自测/P0 事件）</td><td>2.0</td></tr>
+      <tr><td>M0.6</td><td>集成、golden 固化、CHANGELOG 首版、CI 门禁接线（与 MOD-09）</td><td>2.0</td></tr>
+      <tr><td><b>合计</b></td><td>M0 内</td><td><b>18.0</b></td></tr>
+      <tr><td>M1 追加（可选）</td><td>子进程边界强化 + 审计规则集 v1.1（未来房间/商店内容解析）</td><td>3.0</td></tr>
+    </tbody>
+  </table>
+  <p>关键路径：MOD-01 → MOD-02 → MOD-03/04；M0.1–M0.5 是解锁 MOD-04 的前置。</p>
+  <blockquote><b>实际交付（M0）</b>：M0.1–M0.6 于 <b>2026-10-03</b> 由单个提交 <code>e35279e</code> 交付（投影/隔离/审计/蜜罐 + golden + 单测）。本项目<b>未单独记工</b>，「实际人日」无法从仓库证据还原；按提交时间窗折算 ≤ 1 人日，与估算 18.0 人日的偏差 ≥ 90%，已在排期 §8 记录。M0.6 的「CI 门禁接线」在 2026-10-03 验收时缺失（验收报告 F2），同日补齐为 <code>scripts/ci_gate.sh</code>（平台中立，本地与 CI 同一份）+ <code>.github/workflows/ci.yml</code>（gate / parity 两个作业）。M1 起按排期 §7 逐任务记录实际人日。</blockquote>
+</section>
+
+<section id="sec-16">
+  <h3><span class="n">16</span>开放问题</h3>
+  <ol>
+    <li><b>已裁决（Spec v1.4 B-24）</b>：全状态只由 <code>SandboxEnv._engine</code> 私有持有，<code>gamer_rsi.env</code> 列入 <code>BLOCKED_MODULES</code>，对 L1+ 不可导入。由于 MOD-01 v1.0 改为移植 GAME 内核，原 <code>build_full_state()</code> 方案已不再适用，改用这种等价封装；适配层归 MOD-02（<code>sandbox/api.py</code>）。<code>OBSERVATION_SCHEMA</code> 与 <code>FullState</code> 字段清单的契约测试落在 <code>tests/integration/test_env_sandbox_contract.py</code>，双方 PRD 各引用一次。</li>
+    <li><b>已裁决（Spec v1.4 B-25）</b>：审计器只做黑名单扫描 + canary 探针，不做「prompt 中每个数值都必须归因到 <code>VisibleSet</code>」的正向校验（噪声大）；若 M1 后仍出现未知泄漏再升级。</li>
+    <li><b>待定</b>：canary 是否按 <code>run_id</code> 派生（<code>reset_canary(salt=run_id)</code>）？跨 run 复用便于测试，但可能被 harness 长期记住；倾向按 run 派生。<code>sandbox.audit.fail_on</code> 是否允许 <code>warn</code>（本地调试）需 MOD-09 确认，CI 建议恒为 <code>critical</code>。</li>
+    <li><b>已结案（Spec v1.3 P-08 → B-10）</b>：<code>phase="shop"</code> 时，陈列随 <code>obs-agent-1.0.0</code> 的 <code>shop</code> 字段给出，<code>legal_actions()</code> 直接带 <code>itemId</code>，不再需要单独的 <code>shop_items</code> 扩展。</li>
+  </ol>
+</section>
+
+<section id="sec-17">
+  <h3><span class="n">17</span>变更记录与实现落地</h3>
+
+  <h4>变更记录</h4>
+  <table>
+    <thead><tr><th>版本</th><th>时间</th><th>变更</th></tr></thead>
+    <tbody>
+      <tr><td>v1.0</td><td>2026-09-30</td><td>首版</td></tr>
+      <tr><td>v1.1</td><td>2026-09-30 17:21</td><td>按 Spec v1.3 与 MOD PRD 评审修订：投影源改为 GAME <code>observe</code>，产出 <code>obs-agent-1.0.0</code>，新增紧凑渲染（P0-1）；新增 <code>reject(final)</code> 与唯一判负 <code>policy_failure</code>（P0-5）；工具执行改为常驻子进程 worker，主进程不设 rlimit（P0-6）；AST 改为节点黑名单 + 调用白名单，放行运算符（P0-6）；import hook 按调用方判定（P0-6）；蜜罐注入点改为 GAME 的隐藏位置；canonical JSON 统一为 <code>ensure_ascii=True</code>（P1-18）；CHANGELOG 校验移到 CI；函数名对齐 Spec §4.7（P1-16）；<code>min:N</code> 改为 GAME DSL</td></tr>
+      <tr><td>v1.2</td><td>2026-09-30 17:49</td><td>P-06/P-07 裁决回填为 Spec B-24/B-25（全状态封装按 MOD-01 v1.0 改为等价形式）；开放问题 4 按 B-10 结案</td></tr>
+      <tr><td>v1.2.1</td><td>2026-10-03</td><td>追加 §18 实现落地记录（代码对照 + 8 处实现裁决）；不改任何 FR 语义</td></tr>
+    </tbody>
+  </table>
+
+  <h4>实现落地记录（2026-10-03，代码对照）</h4>
+  <p>M0 的五个交付文件已全部落地并有单测/集成/golden 覆盖；节号与 §2.1 一一对应。</p>
+  <table>
+    <thead><tr><th>文件</th><th>落地内容</th><th>对应 FR</th></tr></thead>
+    <tbody>
+      <tr><td><code>gamer_rsi/sandbox/projection.py</code></td><td><code>OBSERVATION_SCHEMA</code>（34 字段，含 4 个 agent 专属键）、<code>project_state</code>、<code>canonical_json</code>/<code>obs_digest</code>、<code>validate_observation</code>、<code>render_compact</code>、<code>changelog_version</code>/<code>check_changelog</code></td><td>FR-02-1..6、3a、3b、24</td></tr>
+      <tr><td><code>gamer_rsi/sandbox/api.py</code></td><td><code>SandboxEnv</code>（私有 <code>_engine</code>/<code>_state</code>、<code>__getattr__</code> 拒绝越权属性）、<code>EpisodeConfig</code>/<code>StepResult</code>、<code>reject(final)</code> 与 <code>policy_failure</code> 唯一判负、<code>max_env_steps</code>/<code>max_decisions</code></td><td>FR-02-7、8、8a、8b、8c</td></tr>
+      <tr><td><code>gamer_rsi/sandbox/guard.py</code>（+ 私有 <code>_worker.py</code>）</td><td><code>check_imports</code>、<code>analyze_code</code>（节点黑名单 + 调用白名单）、<code>gate</code>（fail-closed + <code>harness-gate.json</code>）、<code>install_agent_import_hook</code>、<code>guarded_globals</code>、<code>run_agent_tick</code>、<code>ToolWorker</code>/<code>load_harness_tools</code></td><td>FR-02-9..15</td></tr>
+      <tr><td><code>gamer_rsi/sandbox/audit.py</code></td><td><code>rebuild_visible_set</code>、6 类 <code>LeakClass</code>、<code>scan_text</code>、轨迹重放补齐 future_room/shop 规则集、<code>run_audit</code>/<code>write_report</code>/<code>audit_to_console</code>、<code>register_sensitive</code></td><td>FR-02-16..19</td></tr>
+      <tr><td><code>gamer_rsi/sandbox/honeypot.py</code></td><td>4 个注入点（<code>injected_copy</code> 只复制被触碰容器）、<code>scan</code>（字节级 <code>find</code>）、<code>self_test</code>（12/12）、<code>reset_canary</code> + ledger（只存指纹）</td><td>FR-02-20..23</td></tr>
+      <tr><td><code>schemas/{observation,audit_report,harness_gate}.schema.json</code>、<code>docs/prd/OBSERVATION_CHANGELOG.md</code>、<code>configs/honeypot.yaml</code></td><td>G5 schema + FR-02-4/5 的版本账本 + 注入计划（与实现不一致即 <code>E_ENV_HONEYPOT</code>）</td><td>FR-02-4、5、21</td></tr>
+    </tbody>
+  </table>
+
+  <p>G6 可复制命令（均已实测）：</p>
+<pre><code>python -m gamer_rsi env selftest --seed 1
+python -m gamer_rsi audit leak --run-id &lt;run_id&gt;
+python -m gamer_rsi guards check --root gamer_rsi
+pytest tests/unit/sandbox/test_sandbox_projection.py -q
+pytest tests/unit/sandbox tests/golden/sandbox tests/integration -q</code></pre>
+
+  <p>G1 覆盖率（<code>--cov=gamer_rsi.sandbox</code>）：<code>projection</code> 90% / <code>audit</code> 83% / <code>honeypot</code> 90% / <code>guard</code> 87% / <code>api</code> 92%（均 ≥80%）；<code>_worker.py</code> 是私有子进程入口，79%，其真实路径由 <code>ToolWorker</code>/<code>run_agent_tick</code> 的子进程用例覆盖（子进程内不进覆盖率统计）。</p>
+  <p>G2 golden：<code>tests/golden/sandbox/{g5_obs_agent.txt,g5_render.txt,leak-report-clean.json}</code>，由 <code>tests/golden/sandbox/regen_sandbox_golden.py</code> <b>显式</b>重生成（212 步摘要）。</p>
+
+  <h4>实现裁决（不改 FR 语义，逐条可复核）</h4>
+  <ol>
+    <li><b><code>audit leak</code> 退出码为 0/1/2/4</b>：<code>0/1/2</code> 是泄漏结论轴（FR-02-19 与 §11 集成用例），<code>4</code> 是「审计器自身守卫违例」轴（Spec §8.3，与 <code>infra.errors.EXIT_CODE</code> 登记一致）。详见下文两轴表；MOD-09 PRD §6.4 的 <code>0/4</code> 因此只覆盖了后一根轴，已加注。</li>
+    <li><b><code>Observation</code> 是 JSON-native <code>dict</code></b>：§6 的 <code>project_state(...) -&gt; tuple[dict, ...]</code> 与 obs JSON 示例都是普通映射；§7 的「不可变」由 <code>freeze_observation()</code>（递归 <code>MappingProxyType</code>）与 <code>validate_observation()</code> 按需提供——递归冻结会破坏 <code>deepcopy</code>/序列化，故不设为默认返回类型。</li>
+    <li><b>轨迹行落地归 MOD-06</b>：<code>reject()</code> 不直接写 JSONL（写一行合法轨迹需要 <code>episode_key/generation/harness_version/arm/ts</code>，只有 MOD-06 持有），而是把 <code>illegal=True</code> + <code>reason</code> + <code>reject_stage</code> 放进 <code>StepResult.info</code> 供 MOD-06 单点写行。</li>
+    <li><b><code>legalActionKinds</code> 的 <code>abandon_run</code> 改写</b>落在 <code>projection._REWRITES</code> 表（§6 的 <code>ObsFieldSpec</code> 没有 <code>transform</code> 字段，故不外扩数据类）。</li>
+    <li><b>注册表字段集 = §4.2「保留」表的严格实现</b>：额外排除 <code>chapterName</code>/<code>piles</code>/<code>deck</code>/<code>battleHints</code>/<code>battleKind</code>/<code>outcome</code>（token 预算 + §4.2「删除」的语义；终局结果经 <code>StepResult.info.outcome</code> 提供，不进 prompt）。<code>piles</code> 被排除还使蜜罐向 <code>drawPile</code> 注入虚构骰时<b>不改变</b> <code>piles.draw</code> 计数。</li>
+    <li><b>schema 落 <code>schemas/</code> 而不是 §6 示例的 <code>gamer_rsi/sandbox/audit/report.schema.json</code></b>：<code>sandbox/audit.py</code> 已是模块，同名包目录会与模块解析冲突；<code>schemas/</code> 是 MOD-09 登记的跨模块 schema 根（<code>infra.io.validate</code> 默认搜索路径）。</li>
+    <li><b>seed 规则集默认只扫 heldout/test</b>：依 <code>configs/seeds.yaml::exposure_guard.numeric_scan</code>（「4 位数字落 2000-2099 / 9000-9099 即告警」）与 INV-5 的 <code>expose_to</code>；需要更严时 <code>run_audit(seed_splits=("train","heldout","test"))</code>。数值 token 要求两侧非字母数字，且轨迹扫描跳过 <code>obs_digest/prompt_hash/ts/seed/token 计数</code> 等机器元数据——否则 sha256 片段、年份、token 数会刷出假阳性（假阳性同样是 P0 失效）。</li>
+    <li><b>import hook 双层</b>：<code>MetaPathFinder</code>（加载期，§4.10 的字面要求）+ <code>builtins.__import__</code> 包装（缓存命中期）。因为 <code>SandboxEnv</code> 按 FR-02-10 预先 import 了环境层，agent 侧 <code>import gamer_rsi.env.rng</code> 会命中 <code>sys.modules</code>、绕过 finder；只装 finder 会让 FR-02-10 与 §11 的「import gamer_rsi.env.rng → 抛 E_ENV_IMPORT_DENIED」无法成立。</li>
+    <li><b><code>GuardViolation</code> 继承 <code>InfraError</code></b>（仍是 <code>Exception</code> 子类，符合 §6 签名），从而 CLI 直接拿到 Spec §8.3 的退出码 4，无需第二套错误通道。</li>
+    <li><b><code>_worker.py</code> 是第 6 个（私有）文件</b>：常驻工具子进程的入口必须能被 <code>[sys.executable, "-I", "-S", &lt;file&gt;]</code> 直接执行；5 个公开模块仍只用 stdlib + <code>infra.errors</code>（<code>pyyaml</code> 只在读注入计划时惰性导入）。</li>
+  </ol>
+
+  <h4><code>audit leak</code> 的四码退出码：两根正交轴（2026-10-03 评审补充）</h4>
+  <p>一次 <code>audit leak</code> 必须同时回答两个<b>互不替代</b>的问题，因此退出码是两根轴而不是一根：</p>
+  <table>
+    <thead><tr><th>轴</th><th>问题</th><th>取值</th><th>依据</th></tr></thead>
+    <tbody>
+      <tr><td>泄漏结论</td><td><b>有没有泄漏？</b></td><td><code>0</code> 无 finding / <code>1</code> 仅 medium / <code>2</code> 含 critical</td><td>FR-02-19、§11 集成用例、§6 verdict 三级</td></tr>
+      <tr><td>沙箱守卫</td><td><b>审计器自己还可信吗？</b></td><td><code>4</code>（<code>machinery_errors</code> 非空，如 <code>E_ENV_HONEYPOT</code>）</td><td>Spec §8.3「4 沙箱/守卫违例」；<code>infra.errors.EXIT_CODE[E_ENV_HONEYPOT/E_ENV_ESCAPE/E_ENV_IMPORT_DENIED/E_ENV_AST_DENIED] = 4</code></td></tr>
+    </tbody>
+  </table>
+  <p><b>优先级 <code>4 &gt; 2 &gt; 1 &gt; 0</code></b>，理由：检测器失效时，报告写 <code>clean</code> 还是 <code>critical</code> 都不能按原义采信——把蜜罐自测失败报成 <code>2</code> 会让 CI 去追一个不存在的泄漏（假警报），而 <code>E_ENV_HONEYPOT</code> 在错误码注册表里本来就是 4。报告<b>同时</b>保留 <code>verdict=critical</code>（FR-02-23：「低于 100% 直接判 critical」）与 <code>machinery_errors</code>，信息不丢，只是分通道表达。</p>
+  <table>
+    <thead><tr><th>情形</th><th>轴</th><th>退出码</th></tr></thead>
+    <tbody>
+      <tr><td>干净 run</td><td>结论</td><td>0</td></tr>
+      <tr><td>仅 <code>full_state_field_leak</code> / <code>hidden_field_name_leak</code>（medium）</td><td>结论</td><td>1</td></tr>
+      <tr><td><code>seed_leak</code> / <code>future_room_leak</code> / <code>shop_content_leak</code></td><td>结论</td><td>2</td></tr>
+      <tr><td><code>canary_leak</code>（canary 真的进了 prompt/memory/log）</td><td>结论</td><td>2（<b>是发现，不是守卫违例</b>）</td></tr>
+      <tr><td>蜜罐自测 &lt;100%、注册表含哨兵（<code>E_ENV_HONEYPOT</code>）</td><td>守卫</td><td>4</td></tr>
+      <tr><td>审计路径上触发 import hook / AST 门禁 / 逃逸（<code>E_ENV_*</code>，当前审计本身不执行工具，理论路径）</td><td>守卫</td><td>4（由 CLI 通用 <code>except InfraError</code> 给出，无需 <code>run_audit</code> 参与）</td></tr>
+      <tr><td><code>E_ENV_AUDIT_IO</code>（轨迹缺失 / JSONL 损坏 / 权限不足）</td><td>结论</td><td>2（§10「判 critical」：缺证据 ≠ 无泄漏；码本身在 stdout/报告中显式打印。2026-10-03 评审确认：保留在结论轴，不抬到 4）</td></tr>
+    </tbody>
+  </table>
+  <p><code>run_audit</code>/<code>write_report</code> 不抛异常表达上面任何一条（只读文件、结论入报告）；<code>AuditResult.exit_code</code> 与 <code>AuditResult.exit_reason</code> 是 CLI 的唯一出口。</p>
+</section>
+
+</div>
+<footer>来源：docs/prd/MOD-02-env-sandbox-PRD.md · GameRSI 模块讲解系列 · 2026-10-04</footer>
+</main>
+</body>
+</html>

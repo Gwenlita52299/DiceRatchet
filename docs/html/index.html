@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GameRSI 模块讲解 · 系列索引</title>
+<style>
+:root{--bg:#f5f6fa;--card:#fff;--ink:#1c2333;--muted:#64708a;--line:#e5e8f0;--code-bg:#101725}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;font-size:15px;line-height:1.75}
+main{padding:40px 24px 80px}
+.wrap{max-width:1040px;margin:0 auto}
+header.hero{background:linear-gradient(135deg,#0f172a,#312e81 55%,#4f46e5);color:#fff;border-radius:18px;padding:38px 40px;margin-bottom:30px}
+header.hero .kid{font-size:13px;letter-spacing:3px;opacity:.8}
+header.hero h1{margin:8px 0 10px;font-size:32px;line-height:1.25}
+header.hero p{margin:0;opacity:.92;max-width:70ch}
+.hero-stats{display:flex;flex-wrap:wrap;gap:10px;margin-top:20px}
+.hero-stats span{font-size:12.5px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:4px 13px}
+.layer{margin:0 0 22px}
+.layer h2{font-size:15px;letter-spacing:1px;color:var(--muted);margin:0 0 12px;display:flex;align-items:center;gap:10px}
+.layer h2::after{content:"";flex:1;height:1px;background:var(--line)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+a.mod{display:block;text-decoration:none;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;position:relative;transition:transform .15s,box-shadow .15s,border-color .15s}
+a.mod:hover{transform:translateY(-3px);box-shadow:0 10px 24px rgba(15,23,42,.09);border-color:#c7cdd9}
+a.mod::before{content:"";position:absolute;left:0;top:16px;bottom:16px;width:4px;border-radius:0 4px 4px 0;background:var(--c,#4f46e5)}
+.mod .mid{font-size:12px;font-weight:700;letter-spacing:1.5px;color:var(--c,#4f46e5)}
+.mod h3{margin:5px 0 4px;font-size:17px}
+.mod .en{font-size:12px;color:var(--muted);font-family:ui-monospace,Menlo,Consolas,monospace}
+.mod p{margin:9px 0 0;font-size:13.5px;color:#3d4658}
+.mod .meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.mod .meta span{font-size:11.5px;background:#f1f3f9;border:1px solid var(--line);border-radius:999px;padding:2px 9px;color:#4a5468}
+.note{background:var(--card);border:1px solid var(--line);border-left:4px solid #4f46e5;border-radius:0 12px 12px 0;padding:16px 20px;margin:0 0 22px;font-size:13.5px;color:#3a4257}
+footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px}
+@media print{.layer{break-inside:avoid}}
+</style>
+</head>
+<body>
+<main><div class="wrap">
+
+<header class="hero">
+  <div class="kid">GAME RSI · MODULE WALKTHROUGH</div>
+  <h1>GameRSI 模块讲解系列</h1>
+  <p>GameRSI 是一个「自我改进（RSI）游戏智能体」研究项目：agent 在一局卡牌游戏里做决策，每隔 K 局改写自己的 harness，再由环境 ground-truth 决定改动去留。整套系统被拆成 9 个有明确上下游纪律的模块（MOD-01 ～ MOD-09），每个模块一份技术 PRD，本系列把它们讲成新人能读的讲解页。</p>
+  <div class="hero-stats">
+    <span>9 个模块</span><span>4 个层级 L0–L3</span><span>每页 17 节：背景 / 范围 / FR / NFR / 接口契约 / 流程 / 配置 / 错误码 / 测试 / DoD</span>
+  </div>
+</header>
+
+<div class="note">
+  <b>怎么读：</b>从 <b>MOD-01 / MOD-02</b>（环境层）入手理解「游戏事实从哪来、agent 只能看到什么」，再看 <b>MOD-03/04/05</b>（智能体层）理解决策如何产生，然后 <b>MOD-06/07</b>（进化层）看闭环如何自跑，最后 <b>MOD-08/09</b>（测量与工程层）看改进如何被证伪、全链路如何可复现。所有页共享同一套侧栏导航，可互相跳转。
+</div>
+
+<div class="layer">
+  <h2>L0 · 环境层 —— 游戏事实的唯一来源</h2>
+  <div class="grid">
+    <a class="mod" style="--c:#4f46e5" href="MOD-01-env-rules.html">
+      <div class="mid">MOD-01 · M0</div>
+      <h3>环境规则内核</h3>
+      <div class="en">env-rules · gamer_rsi/env/</div>
+      <p>GAME 内核的纯 Python 等价移植。不定义任何游戏规则——规则、数值、配表全部引用 GAME；唯一目标是给定同一配表、同一 config、同一动作序列，与 JS 内核逐字节相等。</p>
+      <div class="meta"><span>逐位等价</span><span>golden 对拍</span><span>确定性</span></div>
+    </a>
+    <a class="mod" style="--c:#0891b2" href="MOD-02-env-sandbox.html">
+      <div class="mid">MOD-02 · M0</div>
+      <h3>环境沙箱</h3>
+      <div class="en">env-sandbox · gamer_rsi/sandbox/</div>
+      <p>L0 与 L1 之间唯一合法数据通道。三条独立防线：投影裁剪防泄漏、代码/进程隔离防越权、审计与蜜罐防未被发现的泄漏——「agent 只能看到它该看到的」。</p>
+      <div class="meta"><span>投影 schema 登记</span><span>受限执行器</span><span>蜜罐 canary</span></div>
+    </a>
+  </div>
+</div>
+
+<div class="layer">
+  <h2>L1 · 智能体层 —— 每回合决策</h2>
+  <div class="grid">
+    <a class="mod" style="--c:#7c3aed" href="MOD-03-inference.html">
+      <div class="mid">MOD-03 · M1</div>
+      <h3>推理层</h3>
+      <div class="en">inference · gamer_rsi/inference/</div>
+      <p>L1 层唯一的「模型出口」：把 Mac M5 24GB 全程离线的本地推理收敛为可测、可复现、可降级的接口，屏蔽 MLX / llama.cpp 差异，收口 JSON 语法错误与 OOM。</p>
+      <div class="meta"><span>generate_json 三级降级</span><span>同 seed 逐字节一致</span><span>E_LLM_OOM 可捕获</span></div>
+    </a>
+    <a class="mod" style="--c:#2563eb" href="MOD-04-policy.html">
+      <div class="mid">MOD-04 · M1</div>
+      <h3>策略层</h3>
+      <div class="en">policy · gamer_rsi/agent/</div>
+      <p>把 Observation 变成 prompt、把 LLM 原始文本变成 Action。模型再离谱也不污染环境与指标：三级校验、每步重试、连续非法判负，故障一律退化为可解释的启发式动作。</p>
+      <div class="meta"><span>prompt_hash 可复现</span><span>illegal_rate ≤ 0.02</span><span>启发式 fallback</span></div>
+    </a>
+    <a class="mod" style="--c:#d97706" href="MOD-05-memory.html">
+      <div class="mid">MOD-05 · M2</div>
+      <h3>记忆层</h3>
+      <div class="en">memory · gamer_rsi/memory/</div>
+      <p>L1 层的策略记忆与反思库：把局末反思转成可检索、可度量、可淘汰、可回滚的结构化记忆，供组装 prompt 时按当前 Observation 取用；heldout seed 永不进入记忆。</p>
+      <div class="meta"><span>BM25 + 效用打分</span><span>memory_v{N} 快照回滚</span><span>INV-5 四拦截点</span></div>
+    </a>
+  </div>
+</div>
+
+<div class="layer">
+  <h2>L2 · 进化层 —— 让闭环自跑</h2>
+  <div class="grid">
+    <a class="mod" style="--c:#059669" href="MOD-06-loop.html">
+      <div class="mid">MOD-06 · M2</div>
+      <h3>训练循环</h3>
+      <div class="en">loop · gamer_rsi/loop/</div>
+      <p>L2 的编排器：自己不产生策略、不训练模型，只让 play → evaluate → reflect → evolve 这条闭环在一局、K 局、一代三个时间尺度上正确、可复现、可中断、可恢复地跑起来。</p>
+      <div class="meta"><span>局/周期双层调度</span><span>run 级续跑</span><span>反思降级不阻塞</span></div>
+    </a>
+    <a class="mod" style="--c:#e11d48" href="MOD-07-evolve.html">
+      <div class="mid">MOD-07 · M2→M3</div>
+      <h3>演化层</h3>
+      <div class="en">evolve · gamer_rsi/evolve/</div>
+      <p>RSI 闭环中最危险的一段：让 agent 改写自己的 harness，并由环境 ground-truth 决定改动去留。设计重心不是「更聪明的改动」，而是在结构上掐死自我确认环路。</p>
+      <div class="meta"><span>生成者/裁判上下文不重叠</span><span>verdict 防过拟合</span><span>版本门禁 + 回滚</span></div>
+    </a>
+  </div>
+</div>
+
+<div class="layer">
+  <h2>L3 · 测量与工程层 —— 可证伪与可复现</h2>
+  <div class="grid">
+    <a class="mod" style="--c:#ea580c" href="MOD-08-evals.html">
+      <div class="mid">MOD-08 · M1→M3</div>
+      <h3>评估层</h3>
+      <div class="en">evals · gamer_rsi/evals/</div>
+      <p>L3 测量层，只读轨迹与报告、不参与决策。唯一理由是让「自我改进是否真的发生」成为可复现、可审计、可证伪的数字：主指标只用环境原生胜负，heldout 严格隔离，熵曲线盯防坍缩。</p>
+      <div class="meta"><span>win_rate 主指标</span><span>real_gain vs overfit_suspect</span><span>collapse_flag</span></div>
+    </a>
+    <a class="mod" style="--c:#0d9488" href="MOD-09-infra.html">
+      <div class="mid">MOD-09 · M0–M3</div>
+      <h3>基础设施</h3>
+      <div class="en">infra · gamer_rsi/infra/</div>
+      <p>依赖矩阵里唯一不被任何人阻塞、却阻塞所有人的模块。M0 第一天就要有配置、日志、CLI 与确定性守卫——否则可复现性与 INV-6 从第一天就失效。</p>
+      <div class="meta"><span>统一配置/日志</span><span>seed 派生守卫</span><span>Git 自动提交</span></div>
+    </a>
+  </div>
+</div>
+
+<footer>来源：docs/prd/MOD-01…09 技术 PRD · 上游事实来源：docs/模块拆分Spec-GameRSI.md · GameRSI 模块讲解系列 · 2026-10-04</footer>
+
+</div></main>
+</body>
+</html>

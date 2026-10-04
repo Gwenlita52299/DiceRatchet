@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MOD-09 infra · GameRSI 模块讲解</title>
+<style>
+:root{--accent:#0d9488;--accent-2:#14b8a6;--accent-soft:rgba(13,148,136,.09);--bg:#f5f6fa;--card:#fff;--ink:#1c2333;--muted:#64708a;--line:#e5e8f0;--code-bg:#101725;--code-ink:#e8ecf5;--ok:#0f9d58;--bad:#dc2626}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;font-size:15px;line-height:1.75}
+aside{position:fixed;inset:0 auto 0 0;width:262px;background:#0e1422;color:#c6cddd;padding:22px 18px;overflow-y:auto}
+aside h1{font-size:15px;color:#fff;margin:0 0 4px;letter-spacing:.5px}
+aside .sub{font-size:12px;color:#7d89a3;margin-bottom:18px}
+aside a{display:block;color:#aab6cc;text-decoration:none;font-size:13.5px;padding:7px 10px;border-radius:8px;margin:1px 0}
+aside a:hover{background:rgba(255,255,255,.07);color:#fff}
+aside a.cur{background:var(--accent);color:#fff;font-weight:600}
+aside .sep{height:1px;background:rgba(255,255,255,.09);margin:14px 0}
+aside .toc a{font-size:12.5px;color:#8b97ae;padding:4px 10px}
+main{margin-left:262px;padding:34px 40px 80px}
+.wrap{max-width:900px;margin:0 auto}
+header.hero{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;border-radius:16px;padding:30px 32px;margin-bottom:26px}
+header.hero .kid{font-size:13px;letter-spacing:2px;opacity:.85}
+header.hero h2{margin:6px 0 8px;font-size:27px;line-height:1.3}
+header.hero p{margin:0;opacity:.92;max-width:64ch}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.badge{font-size:12px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:3px 11px}
+section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 26px;margin:0 0 18px;scroll-margin-top:20px}
+section h3{font-size:18px;margin:0 0 12px;display:flex;align-items:center;gap:9px}
+section h3 .n{width:24px;height:24px;border-radius:7px;background:var(--accent-soft);color:var(--accent);font-size:12.5px;display:grid;place-items:center;font-weight:700}
+h4{font-size:15px;margin:18px 0 6px;color:var(--accent)}
+p{margin:0 0 10px}ul,ol{padding-left:20px;margin:0 0 10px}li{margin:4px 0}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:10px 0}
+th{background:var(--accent-soft);color:var(--accent);text-align:left;padding:8px 10px;border:1px solid var(--line);font-weight:600}
+td{padding:8px 10px;border:1px solid var(--line);vertical-align:top}
+tr:nth-child(even) td{background:#fafbfe}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:var(--accent-soft);color:var(--accent);padding:1.5px 6px;border-radius:5px}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;font-size:12.5px;line-height:1.6}
+pre code{background:none;color:inherit;padding:0}
+blockquote{margin:12px 0;padding:10px 14px;border-left:4px solid var(--accent);background:var(--accent-soft);color:#3a4257;border-radius:0 8px 8px 0;font-size:13.5px}
+.tag{display:inline-block;font-size:11.5px;font-weight:700;border-radius:6px;padding:2px 8px;margin:2px 3px 2px 0;background:var(--accent);color:#fff}
+.tag.nfr{background:#0e7490}.tag.err{background:#b91c1c}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:12px 0}
+.card{background:#fafbff;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card b{color:var(--accent)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.do{border-top:3px solid var(--ok)}.dont{border-top:3px solid var(--bad)}
+.check{padding-left:0}.check li{list-style:none;margin:6px 0;padding-left:26px;position:relative}
+.check li::before{content:"✓";position:absolute;left:2px;color:var(--ok);font-weight:700}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0}
+.step{background:var(--accent-soft);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:8px 12px;font-size:13px;min-width:120px}
+.arrow{color:var(--accent);font-weight:700}
+footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px}
+@media(max-width:960px){aside{position:static;width:auto;height:auto;padding:14px}main{margin-left:0;padding:20px 16px 60px}.cols{grid-template-columns:1fr}}
+@media print{aside{display:none}main{margin:0}.wrap{max-width:none}section{break-inside:avoid}}
+</style>
+</head>
+<body>
+<aside>
+  <h1>GameRSI</h1><div class="sub">模块讲解 · MOD 系列</div>
+  <a href="MOD-01-env-rules.html">MOD-01 env-rules</a>
+  <a href="MOD-02-env-sandbox.html">MOD-02 env-sandbox</a>
+  <a href="MOD-03-inference.html">MOD-03 inference</a>
+  <a href="MOD-04-policy.html">MOD-04 policy</a>
+  <a href="MOD-05-memory.html">MOD-05 memory</a>
+  <a href="MOD-06-loop.html">MOD-06 loop</a>
+  <a href="MOD-07-evolve.html">MOD-07 evolve</a>
+  <a href="MOD-08-evals.html">MOD-08 evals</a>
+  <a class="cur" href="MOD-09-infra.html">MOD-09 infra</a>
+  <div class="sep"></div>
+  <div class="sub">本页导航</div>
+  <div class="toc">
+    <a href="#sec-1">1 背景与目标</a>
+    <a href="#sec-2">2 范围</a>
+    <a href="#sec-3">3 使用方与场景</a>
+    <a href="#sec-4">4 功能需求</a>
+    <a href="#sec-5">5 非功能需求</a>
+    <a href="#sec-6">6 接口契约</a>
+    <a href="#sec-7">7 数据模型与存储</a>
+    <a href="#sec-8">8 关键流程</a>
+    <a href="#sec-9">9 配置项</a>
+    <a href="#sec-10">10 错误处理与降级</a>
+    <a href="#sec-11">11 测试计划</a>
+    <a href="#sec-12">12 验收标准</a>
+    <a href="#sec-13">13 指标与埋点</a>
+    <a href="#sec-14">14 依赖与风险</a>
+    <a href="#sec-15">15 里程碑与工作量</a>
+    <a href="#sec-16">16 开放问题</a>
+    <a href="#sec-17">17 变更记录</a>
+  </div>
+</aside>
+<main><div class="wrap">
+
+<header class="hero">
+  <div class="kid">MOD-09 · infra</div>
+  <h2>基础设施（工程横切层）</h2>
+  <p>把配置、日志、CLI 与确定性守卫从领域逻辑里彻底剥离——它是依赖矩阵里唯一不被任何人阻塞、却阻塞所有人的模块：M0 第一天就要到位，否则可复现性与不变量全盘失效。</p>
+  <div class="badges">
+    <span class="badge">版本 v0.3（2026-09-30 回填裁决）</span>
+    <span class="badge">状态：待评审</span>
+    <span class="badge">里程碑 M0–M3 · L3 工程层，横切全模块</span>
+    <span class="badge">作者：主代理（MOD-09 owner）</span>
+  </div>
+</header>
+
+<div class="grid">
+  <div class="card"><b>背景与目标</b><br>M0 第一天若无配置/日志/CLI/确定性守卫，各模块就会各自发明日志格式、各自调全局随机、各自写 <code>runs/</code>——Spec §8 可复现性与 INV-6 同时失效，M3 的「增益真实性」验收不可信。</div>
+  <div class="card"><b>核心职责</b><br>配置加载与 <code>config_hash</code>、<code>run_id</code> 与 run 目录树、<code>JsonlWriter</code> 轨迹落盘、CLI 子命令树与退出码、git 操作封装、<code>guards.py</code> AST 守卫、错误码注册表。</div>
+  <div class="card"><b>服务对象</b><br>全体模块（配置只读、随机数走 <code>derive_seed</code>、事件走注册表）；MOD-06 目录与状态原语、MOD-07 git 门禁、MOD-08 绘图入口、MOD-02 redaction 出口；研究者经 CLI 使用。</div>
+  <div class="card"><b>关键成功度量</b><br>① 同一 <code>AppConfig</code> 两次 <code>config_hash()</code> 完全一致；② 轨迹行 schema 校验通过率 100%；③ guards 在埋雷 fixture 上 100% 报出违例；④ <code>SIGKILL</code> 后已落盘行 JSON 完整性 100%（最多丢最后一行）。</div>
+</div>
+
+<section id="sec-1">
+  <h3><span class="n">1</span>背景与目标</h3>
+  <p>MOD-09 是 Spec §6 依赖矩阵中<strong>唯一不被任何人阻塞、却阻塞所有人</strong>的模块。它要对抗的是三种最容易在早期发生的腐化：各模块自建日志格式、各自调用全局随机、各自写 <code>runs/</code> 目录——这三件事一旦发生，可复现性与 INV-6 同时失效。</p>
+  <p>本模块的存在理由是把<strong>工程横切关注点</strong>从领域逻辑里彻底剥离，体现为四件事：</p>
+  <ol>
+    <li><strong>可复现</strong>——<code>run_id</code> + <code>config_hash</code> + 环境固定，任意一次 run 可用一条命令重放；对抗「结果无法归因到配置」。</li>
+    <li><strong>可观测</strong>——唯一 JSONL 落地实现，轨迹行 schema 严格对齐 Spec §4.5；对抗「各模块自建日志、指标无法聚合」。</li>
+    <li><strong>可审计</strong>——集中 redaction + 错误码注册表 + 泄漏审计的落盘出口；对抗 INV-5 被日志侧绕过。</li>
+    <li><strong>可拦截</strong>——<code>guards.py</code> 用 AST 静态扫描把 INV-1/INV-6 变成可执行门禁，而不是口头纪律。</li>
+  </ol>
+  <blockquote>成功度量：① 同一 <code>AppConfig</code> 两次 <code>config_hash()</code> 完全一致；② 轨迹行 schema 校验通过率 100%；③ <code>guards</code> 在故意埋雷的 fixture 上 100% 报出违例；④ 进程被 <code>SIGKILL</code> 后，已落盘轨迹行的 JSON 完整性 100%（最多丢最后一行）。</blockquote>
+</section>
+
+<section id="sec-2">
+  <h3><span class="n">2</span>范围</h3>
+  <div class="cols">
+    <div class="card do">
+      <b>✓ 负责范围内</b>
+      <ul>
+        <li><code>configs/*.yaml</code> 加载、优先级合并、schema 校验、<code>config_hash</code> 计算、配置快照落盘。</li>
+        <li><code>run_id</code> 生成规则与 <code>runs/&lt;run_id&gt;/</code> 目录树初始化（对齐 Spec §5）。</li>
+        <li><code>JsonlWriter</code>：追加写、逐行 flush、崩溃安全、轮转；事件类型枚举与事件 schema。</li>
+        <li>单步轨迹行落盘与 schema 校验（对齐 Spec §4.5），含 heldout/test seed 自动 redaction。</li>
+        <li>CLI 子命令树（Spec §4.6）、参数解析、退出码约定、<code>--dry-run</code> / <code>--resume</code> 透传。</li>
+        <li>绘图：代际指标曲线与熵曲线输出到 <code>runs/&lt;run_id&gt;/plots/</code>。</li>
+        <li>git 操作封装：<code>worktree_clean_check</code> / <code>commit_harness</code> / <code>tag_version</code> / <code>rollback_to</code>。</li>
+        <li><code>guards.py</code>：确定性扫描（INV-6）与分层 import 门禁（INV-1），可独立运行并接入 CI。</li>
+        <li>错误码注册表：<code>E_ENV_*</code> / <code>E_ACTION_*</code> / <code>E_LLM_*</code> / <code>E_EVOLVE_*</code> / <code>E_EVAL_*</code> / <code>E_IO_*</code> 集中定义与含义表。</li>
+        <li>进程级确定性环境固化（<code>PYTHONHASHSEED=0</code>、时区、locale、线程数）。</li>
+      </ul>
+    </div>
+    <div class="card dont">
+      <b>✗ 不负责（范围外）</b>
+      <ul>
+        <li><strong>任何领域逻辑</strong>（不得在 infra 里写游戏或评估规则）——逐字复用 Spec §3 MOD-09 的「不负责」清单。</li>
+        <li>不定义指标口径与统计方法（MOD-08）。</li>
+        <li>不生成演化候选、不做接受判定（MOD-07）。</li>
+        <li>不组装 prompt（MOD-04）。</li>
+        <li>不做观测投影与泄漏判定的<strong>判定逻辑</strong>（MOD-02，本模块只提供落盘出口与 redaction 的兜底）。</li>
+        <li>不选择与加载模型（MOD-03）。</li>
+        <li>不实现游戏规则（MOD-01）。</li>
+        <li>不实现闭环状态机与断点语义（MOD-06，本模块只提供 <code>state.json</code> 的<strong>读写原语</strong>）。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="sec-3">
+  <h3><span class="n">3</span>使用方与场景</h3>
+  <table>
+    <tr><th>使用方</th><th>调用点</th><th>契约</th></tr>
+    <tr><td>全体模块</td><td><code>load_config()</code> / <code>derive_seed()</code></td><td>只读配置；随机数一律经 <code>derive_seed</code>，禁自建</td></tr>
+    <tr><td>全体模块</td><td><code>JsonlWriter.write(event)</code></td><td>事件必须命中 <code>EVENT_TYPES</code> 且过 schema 校验</td></tr>
+    <tr><td>MOD-06 loop</td><td><code>init_run_dir()</code> / <code>read_state()</code> / <code>write_state()</code></td><td>目录结构由本模块定义，状态语义由 MOD-06 定义</td></tr>
+    <tr><td>MOD-07 evolve</td><td><code>commit_harness()</code> / <code>tag_version()</code> / <code>rollback_to()</code> / <code>worktree_clean_check()</code></td><td>演化前必须 <code>worktree_clean_check()</code> 通过</td></tr>
+    <tr><td>MOD-08 evals</td><td><code>plot_generations()</code> 读取 <code>metrics/generations.csv</code></td><td><strong>列定义归 MOD-08</strong>（属指标口径），本模块只冻结文件路径与绘图接口</td></tr>
+    <tr><td>MOD-02 sandbox</td><td><code>Redactor</code> 注册表</td><td>审计器把发现的敏感值注册进 redactor，落盘前统一擦除</td></tr>
+    <tr><td>研究者（人）</td><td>CLI（Spec §4.6）</td><td>退出码见 §6.4；所有命令支持 <code>--dry-run</code></td></tr>
+  </table>
+  <h4>典型场景</h4>
+  <ol>
+    <li>冷启动 <code>loop run --generations 3 --k 30</code>（初始化 run 目录 → 每步写轨迹 → 每代写报告）。</li>
+    <li>事故复现（拿 <code>run_id</code> 重放）。</li>
+    <li>CI 跑 <code>guards</code> 拦下越权 import。</li>
+    <li>演化前 git 门禁。</li>
+    <li>崩溃后 <code>--resume</code>。</li>
+  </ol>
+</section>
+
+<section id="sec-4">
+  <h3><span class="n">4</span>功能需求</h3>
+  <p>每条 FR 编号可测试，事实与 PRD 逐条对齐。</p>
+
+  <p><span class="tag">FR-09-1</span><strong>配置优先级</strong>（Spec v1.4 B-26）：合并顺序为 <code>CLI 显式参数 &gt; GAMERSI_* 环境变量 &gt; harness/config.json（可演化层）&gt; configs/default.yaml &gt; 代码内 dataclass 默认值</code>。harness 层只接受白名单键（<code>policy.*</code> 训练期采样参数、<code>memory.retrieve.*</code>、<code>agent.tools.*</code>），出现其他键或试图设置评估温度 → <code>E_IO_CONFIG_INVALID</code>（退出码 2）；这一层计入 <code>artifact_hash</code>，不计入 <code>config_hash</code>。环境变量命名规则 <code>GAMERSI_&lt;SECTION&gt;__&lt;KEY&gt;</code>（双下划线分层），未知键 → 记 <code>E_IO_CONFIG_UNKNOWN</code> 并<strong>忽略</strong>（不中断），未知键清单写入 run 启动日志。</p>
+
+  <p><span class="tag">FR-09-2</span><strong>schema 校验</strong>：<code>AppConfig</code> 为 frozen dataclass + 显式 <code>validate()</code>（避免引入 pydantic 作为阶段一硬依赖）；类型不符或越界 → <code>E_IO_CONFIG_INVALID</code> 并以退出码 2 终止，错误信息必须指出键路径与期望类型。</p>
+
+  <p><span class="tag">FR-09-3</span><strong>config_hash</strong>：<code>config_hash = sha256(json.dumps(_canonical(cfg), sort_keys=True, separators=(",",":"), ensure_ascii=False))[:16]</code>。<code>_canonical</code> <strong>排除</strong>易变字段（<code>run_id</code>、<code>created_at</code>、<code>log_level</code>、<code>paths.runs_root</code>）与所有绝对路径，<strong>不包含</strong> <code>harness_version</code>（Spec v1.3 B-19：否则第一代被接受后 <code>--resume</code> 必然冲突）。harness 的变化由 <code>artifact_hash(harness_dir)</code> 表达：对 <code>(相对路径, 文件 sha256)</code> 按路径排序后整体 sha256，逐代写入 <code>version.json</code> 与 report。</p>
+
+  <p><span class="tag">FR-09-4</span><strong>run_id</strong>：<code>run_id = f"{git_short_sha}-{config_hash[:8]}-{utc_ts}"</code>，<code>utc_ts = YYYYMMDDTHHMMSSZ</code>；<code>git_short_sha</code> 取自 <code>git rev-parse --short HEAD</code>，仓库不可用（无 git / dirty 之外的情况）→ 用 <code>nogit</code> 占位并记 <code>E_IO_GIT_UNAVAILABLE</code>。<strong>已回填</strong>（Spec v1.3 §4.6）：<code>--run-id</code> 显式指定时以显式值为准，用于复现与测试。</p>
+
+  <p><span class="tag">FR-09-5</span><strong>目录初始化</strong>：<code>init_run_dir(run_id, cfg) -&gt; RunPaths</code> 幂等创建 Spec §5 的目录树（<code>config.json</code>、<code>events.jsonl</code>、<code>episodes/&lt;split&gt;/</code>、<code>reflections/</code>、<code>generations/</code>、<code>metrics/</code>、<code>plots/</code>、<code>audit/</code>）。目录已存在且 <code>config.json</code> 的 <code>config_hash</code> 不一致 → <code>E_IO_RUN_CONFLICT</code> 并退出码 2（禁止两套配置写同一 run）。</p>
+
+  <p><span class="tag">FR-09-6</span><strong>JsonlWriter 写入语义</strong>：每行 <code>json.dumps(..., ensure_ascii=False)</code> + <code>\n</code>；每次 <code>write()</code> 后 <code>flush()</code>；<code>infra.fsync_every</code>（默认 0 = 不 fsync，&gt;0 表示每 N 行 <code>os.fsync</code>）。<strong>崩溃安全</strong>：读取端必须容忍末行截断（<code>json.JSONDecodeError</code> 时丢弃最后一行并记 <code>E_IO_TRAILING_TRUNCATED</code>）；写入端保证「一行要么完整要么不存在」——先构造整行字符串再单次 <code>write</code>。</p>
+
+  <p><span class="tag">FR-09-7</span><strong>事件注册表</strong>（Spec v1.3 §8.2）：事件名为 <code>&lt;module&gt;.&lt;event&gt;</code>，全部登记在 <code>infra/events.py::EVENT_REGISTRY</code>（§6.5），统一落到 <code>runs/&lt;run_id&gt;/events.jsonl</code>；通过 <code>emit(event, **fields)</code> 写入，自动附加 <code>ts/run_id/module</code>。未登记的事件：开发模式抛 <code>E_IO_EVENT_UNKNOWN</code>；生产模式改写为 <code>infra.unknown_event</code> 并保留原名。轨迹行不是事件，走 <code>JsonlWriter</code> 写入 <code>episodes/</code>。</p>
+
+  <p><span class="tag">FR-09-8</span><strong>轨迹行 schema</strong>：字段严格对齐 Spec v1.3 §4.5，schema 文件为 <code>schemas/trajectory_line.schema.json</code>（§6.2）。已登记字段之外只允许 <code>x_</code> 前缀字段（<code>additionalProperties:false</code> + <code>patternProperties</code>）；缺必填字段 → <code>E_IO_TRAJECTORY_SCHEMA</code>；局末的 <code>episode_end</code> 行用独立的 schema 分支校验；<code>ts</code> 统一为 UTC ISO-8601，带 <code>Z</code>。</p>
+
+  <p><span class="tag">FR-09-9</span><strong>redaction（作用域收窄，Spec v1.3 B-19）</strong>：<code>Redactor</code> 持有由 MOD-02 审计器注册的敏感值集合（heldout/test seed、canary 串、<code>GameState</code> 专有键名）。<strong>只作用于 agent 可见的三个出口</strong>：<code>prompts/</code> 快照、<code>memory/</code> 与 <code>reflections/</code>，落盘前做值级替换（如 <code>&lt;REDACTED:seed&gt;</code>）并计数。命中数 &gt; 0 → 写 <code>infra.redaction_hit</code> 事件并触发 MOD-02 告警回调（这类命中本身说明发生了 INV-5 泄漏）。<strong>轨迹（<code>episodes/</code>）、<code>events.jsonl</code>、<code>generations/</code> 不做 redaction</strong>——它们属于审计侧，MOD-08 的配对检验需要原始 seed。只擦除不阻断，阻断属于 MOD-04/MOD-02 的职责。</p>
+
+  <p><span class="tag">FR-09-10</span><strong>CLI 一致性</strong>：子命令树与 Spec v1.3 §4.6 逐字一致，包括 <code>inference *</code>、<code>loop status|smoke</code>、<code>eval ablation|test</code>、<code>memory *</code>、<code>guards check</code>。run 一律用 <code>--run-id ID</code> 指定，续跑用 <code>--resume</code> 开关。本模块只负责解析与转发到各模块的 <code>register(subparser)</code>；<strong>新增命令必须同步更新 Spec §4.6</strong>。</p>
+
+  <p><span class="tag">FR-09-11</span><strong>退出码</strong>：<code>0</code> 成功（含 HITL 挂起）；<code>1</code> 领域失败（如验收不达标）；<code>2</code> 配置/环境错误；<code>3</code> 模型不可用；<code>4</code> 沙箱/守卫违例；<code>5</code> IO 落盘失败；<code>130</code> 用户 Ctrl-C（与 Spec v1.3 §8.3 一致）。约定写入 <code>gamer_rsi/infra/exit_codes.py</code> 并被所有命令复用。</p>
+
+  <p><span class="tag">FR-09-12</span><strong>dry-run 与 resume</strong>：<code>--dry-run</code> 对所有命令生效——不调用模型、不写 <code>runs/</code>、只打印将执行的动作与配置摘要（stdout 为可解析 JSON）；<code>--run-id ID --resume</code> 由 MOD-06 实现语义，本模块负责定位目录、校验 <code>config_hash</code> 一致（<code>config_hash</code> 不含 harness，所以演化过的 run 也能续跑），并在 <code>state.json</code> 缺失时报 <code>E_IO_STATE_MISSING</code>。</p>
+
+  <p><span class="tag">FR-09-13</span><strong>绘图</strong>：<code>plot_generations(csv_path, out_dir)</code> 输出 <code>win_rate.png</code>、<code>stages_cleared.png</code>、<code>hearts_left.png</code>、<code>entropy.png</code>、<code>train_heldout_gap.png</code>（INV-7 口径，Spec v1.3），每图含 <code>n</code>、<code>ci95</code> 误差棒与数据点标注；无 matplotlib 时降级为 <code>E_IO_PLOT_UNAVAILABLE</code> 警告而不失败。</p>
+
+  <p><span class="tag">FR-09-14</span><strong>git 封装</strong>：<code>worktree_clean_check()</code> 在有未提交改动时抛 <code>E_IO_GIT_DIRTY</code>（演化前门禁）；<code>commit_harness(version, message)</code> 提交 <code>harness/</code> 并返回 commit sha，提交信息格式 <code>harness(v{N}): {message}</code>；<code>tag_version(N)</code> 打 <code>harness-v{N}</code> 轻量 tag（已存在则跳过；不建同名分支，避免 <code>refname is ambiguous</code>）；<code>rollback_to(N)</code> 以 <code>git checkout harness-v{N} -- harness/</code> 恢复工件目录并返回新 commit sha。</p>
+
+  <p><span class="tag">FR-09-15</span><strong>确定性守卫（AST，非正则）</strong>：<code>scan_determinism()</code> 报出 <code>E_IO_GUARD_RANDOM</code>（<code>import random</code> / <code>numpy.random.*</code> 未显式 seed / <code>time.time()</code> 参与采样 / <code>uuid4()</code> 用于标识 id）；<code>scan_layer_imports()</code> 报出 <code>E_IO_GUARD_LAYER</code>（<code>gamer_rsi/agent|memory|loop|evolve|evals/*</code> 中出现 <code>import gamer_rsi.env</code>，违反 INV-1）。白名单注释 <code># guard: allow &lt;CODE&gt; reason=...</code> 可豁免，但会记 <code>guard_finding</code> 事件留痕。</p>
+
+  <p><span class="tag">FR-09-16</span><strong>错误码注册表</strong>：<code>gamer_rsi/infra/errors.py</code> 集中定义全部 <code>E_*</code> 枚举 + 含义表 + 默认退出码映射；禁止其他模块自定义字符串错误码。</p>
+
+  <p><span class="tag">FR-09-18</span><strong>schema 与原子写</strong>：<code>schemas/*.schema.json</code> 由本模块登记并提供 <code>validate(name, obj)</code>；<code>write_json_atomic(path, obj)</code>（tmp + <code>os.replace</code>）是 <code>report.json</code>、<code>state.json</code>、<code>version.json</code> 唯一的写入口。</p>
+
+  <p><span class="tag">FR-09-19</span><strong>git 忽略检查</strong>：<code>init_run_dir</code> 检查 <code>runs_root</code> 已被 <code>.gitignore</code> 覆盖（<code>git check-ignore</code>），否则记 <code>E_IO_RUNS_NOT_IGNORED</code> 并退出码 2，防止 <code>worktree_clean_check()</code> 永远判定为 dirty。</p>
+
+  <p><span class="tag">FR-09-17</span><strong>进程确定性环境</strong>：<code>bootstrap_process()</code> 设置 <code>PYTHONHASHSEED=0</code>（若未设置则 re-exec 一次）、<code>TZ=UTC</code>、<code>LC_ALL=C.UTF-8</code>，并把 <code>infra.threads=1</code> 传给后端；设置内容经 <code>process_snapshot()</code> / <code>process_fingerprint()</code> 由<strong>真正的</strong> <code>infra.run_start</code> 事件记录（<code>cli.cli_init_run()</code>，此时配置与 sink 都已就绪）。<code>bootstrap_process()</code> <strong>自身不发事件</strong>：它在 <code>main()</code> 最开头执行，既没有 <code>config_hash</code> 也没有 events sink，早发只会产生一条缺必填字段、且必然被丢弃的 <code>run_start</code>（v0.3.1 修复）。</p>
+</section>
+
+<section id="sec-5">
+  <h3><span class="n">5</span>非功能需求</h3>
+  <p><span class="tag nfr">NFR-09-1</span><strong>崩溃安全</strong>：<code>SIGKILL</code> 后已落盘行 100% 可解析；末行截断可检测（<code>E_IO_TRAILING_TRUNCATED</code>）。</p>
+  <p><span class="tag nfr">NFR-09-2</span><strong>性能</strong>：单次 <code>write()</code> p99 &lt; 1 ms（本地 SSD，不含 fsync）；<code>load_config()</code> &lt; 50 ms；不得成为单步决策的瓶颈（单步预算见 MOD-04）。</p>
+  <p><span class="tag nfr">NFR-09-3</span><strong>确定性</strong>：<code>config_hash</code>、<code>run_id</code> 中除时间戳外全部稳定；<code>derive_seed</code> 对同一输入返回同一 64-bit 整数，且与进程、平台、<code>PYTHONHASHSEED</code> 无关（内部用 <code>hashlib.blake2b</code> 而非 <code>hash()</code>）。<strong>作用域</strong>：只用于 agent 侧随机（采样 seed、bootstrap、候选 id）；环境侧的流派生由 MOD-01 按 GAME-01 §3 的 xmur3 + SplitMix64 实现，两者互不替代。</p>
+  <p><span class="tag nfr">NFR-09-4</span><strong>可观测</strong>：任何失败必须带错误码 + 人类可读信息 + 复现命令三要素。</p>
+  <p><span class="tag nfr">NFR-09-5</span><strong>依赖方向单向</strong>：<code>infra</code> 不 import 任何其他 <code>gamer_rsi</code> 子包（除 <code>errors</code> 自身）；<code>guards</code> 对此做静态检查。</p>
+</section>
+
+<section id="sec-6">
+  <h3><span class="n">6</span>接口契约</h3>
+  <p>以下为 PRD 中的真实 Python 签名与 JSON Schema，直接对应源码文件。</p>
+
+  <h4>6.1 配置与随机 · <code>gamer_rsi/infra/config.py</code> / <code>run.py</code></h4>
+<pre><code># gamer_rsi/infra/config.py
+@dataclass(frozen=True)
+class AppConfig:
+    env: EnvConfig; agent: AgentConfig; inference: InferenceConfig
+    memory: MemoryConfig; loop: LoopConfig; evolve: EvolveConfig
+    evals: EvalConfig; infra: InfraConfig
+
+def load_config(cli_overrides: Mapping[str, Any] | None = None,
+                env: Mapping[str, str] | None = None,
+                config_dir: Path = Path("configs")) -> AppConfig: ...
+
+def config_hash(cfg: AppConfig) -> str: ...                  # -> "a1b2c3d4e5f60718"
+def canonical_json(cfg: AppConfig) -> str: ...
+def derive_seed(*parts: object) -> int: ...                  # blake2b -> int(64)
+
+# gamer_rsi/infra/run.py
+@dataclass(frozen=True)
+class RunPaths:
+    root: Path; config: Path; episodes: Path; reflections: Path
+    generations: Path; metrics: Path; plots: Path; audit: Path; state: Path
+
+def make_run_id(cfg: AppConfig, *, now: datetime | None = None,
+                explicit: str | None = None) -> str: ...
+def init_run_dir(run_id: str, cfg: AppConfig, runs_root: Path = Path("runs")) -> RunPaths: ...
+def write_state(paths: RunPaths, state: dict) -> None: ...    # 原子写: tmp + os.replace
+def read_state(paths: RunPaths) -> dict: ...</code></pre>
+
+  <h4>6.2 事件与轨迹 · <code>gamer_rsi/infra/logging.py</code></h4>
+<pre><code>EVENT_TYPES: Final[frozenset[str]]
+
+class Redactor:
+    def register(self, value: str | int, label: str) -> None: ...
+    def redact(self, obj: Any) -> tuple[Any, int]: ...       # (擦除后对象, 命中数)
+
+class JsonlWriter:
+    def __init__(self, path: Path, *, fsync_every: int = 0,
+                 redactor: Redactor | None = None,
+                 schema: type[TrajectoryLine] | None = None) -> None: ...
+    def write(self, event: Mapping[str, Any]) -> None: ...
+    def close(self) -> None: ...
+    def __enter__(self) -> "JsonlWriter": ...
+    def __exit__(self, *exc: object) -> None: ...
+
+def validate_trajectory_line(line: Mapping[str, Any]) -> None: ...  # 失败抛 E_IO_TRAJECTORY_SCHEMA</code></pre>
+  <p>轨迹行 JSON Schema（<code>schemas/trajectory_line.schema.json</code>，严格对齐 Spec v1.3 §4.5）：</p>
+<pre><code>{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"TrajectoryLine",
+ "type":"object","additionalProperties":false,
+ "required":["episode_key","generation","harness_version","arm","seed","split","step",
+             "decision_index","plan_index","attempt","source","obs_digest","action",
+             "reward","cum_reward","illegal","mode","ts"],
+ "properties":{
+   "episode_key":{"type":"string","pattern":"^e-[0-9]{6}-g[0-9]{3}-(train|parent|cand-[a-z0-9]+|baseline-[a-z_]+|ablation-[a-z_]+)$"},
+   "generation":{"type":"integer","minimum":0},
+   "harness_version":{"type":"integer","minimum":0},
+   "arm":{"type":"string"},
+   "seed":{"type":"integer","minimum":0},
+   "split":{"enum":["train","heldout","test","demo"]},
+   "step":{"type":"integer","minimum":0},
+   "decision_index":{"type":"integer","minimum":0},
+   "plan_index":{"type":"integer","minimum":0},
+   "attempt":{"type":"integer","minimum":1,"maximum":3},
+   "source":{"enum":["llm","fallback","heuristic","random","scripted"]},
+   "obs_digest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$"},
+   "action":{"type":["object","null"]},
+   "reward":{"type":"number"}, "cum_reward":{"type":"number"},
+   "illegal":{"type":"boolean"}, "illegal_reason":{"type":["string","null"]},
+   "llm_raw":{"type":["string","null"]},
+   "llm_latency_ms":{"type":["integer","null"],"minimum":0},
+   "prompt_tokens":{"type":["integer","null"],"minimum":0},
+   "completion_tokens":{"type":["integer","null"],"minimum":0},
+   "prompt_hash":{"type":["string","null"]}, "memory_ids":{"type":["array","null"],"items":{"type":"string"}},
+   "tool_hash":{"type":["string","null"]}, "mode":{"enum":["train","eval"]},
+   "ts":{"type":"string","format":"date-time"}},
+ "patternProperties":{"^x_":{}}}</code></pre>
+  <p>局末行 <code>{"type":"episode_end", ...}</code> 的字段见 Spec §4.5，由同一文件中的 <code>$defs/EpisodeEnd</code> 校验。</p>
+
+  <h4>6.3 git / 绘图 / 守卫</h4>
+<pre><code># gamer_rsi/infra/git_ops.py
+def worktree_clean_check(repo: Path = Path(".")) -> None: ...
+def commit_harness(repo: Path, version: int, message: str) -> str: ...
+def tag_version(repo: Path, version: int) -> str: ...
+def rollback_to(repo: Path, version: int) -> str: ...
+
+# gamer_rsi/infra/plotting.py
+def plot_generations(csv_path: Path, out_dir: Path) -> list[Path]: ...
+
+# gamer_rsi/infra/guards.py
+@dataclass(frozen=True)
+class GuardFinding:
+    path: str; line: int; col: int; code: str; message: str; exempted: bool
+
+def scan_determinism(root: Path) -> list[GuardFinding]: ...
+def scan_layer_imports(root: Path) -> list[GuardFinding]: ...
+def scan_all(root: Path) -> list[GuardFinding]: ...          # 供 CI 与 CLI 复用</code></pre>
+
+  <h4>6.4 CLI 签名与退出码</h4>
+  <table>
+    <tr><th>命令</th><th>关键参数</th><th>退出码</th></tr>
+    <tr><td><code>env selftest</code></td><td><code>--seed INT</code></td><td>0/4</td></tr>
+    <tr><td><code>play</code></td><td><code>--agent {llm,heuristic,fixed}</code> <code>--seeds SPEC</code> <code>--episodes N</code> <code>--dry-run</code></td><td>0/1/2/3</td></tr>
+    <tr><td><code>baseline</code></td><td><code>--kind {random,heuristic,fixed_prompt}</code> <code>--seeds SPEC</code></td><td>0/1/2</td></tr>
+    <tr><td><code>loop run</code></td><td><code>--generations N</code> <code>--k N</code> <code>--hitl/--no-hitl</code> <code>--run-id ID</code> <code>--resume</code></td><td>0/1/2/3/4/5</td></tr>
+    <tr><td><code>loop status\|smoke</code></td><td><code>--run-id ID</code></td><td>0/1/2</td></tr>
+    <tr><td><code>evolve approve\|rollback</code></td><td><code>--run-id ID</code> <code>--generation N</code> <code>--reason STR</code></td><td>0/2/4</td></tr>
+    <tr><td><code>eval report</code></td><td><code>--run-id ID</code> <code>--split {train,heldout,test}</code> <code>--baseline {none,all,...}</code></td><td>0/1/2</td></tr>
+    <tr><td><code>eval ablation\|test</code></td><td><code>--run-id ID</code> <code>--basket {H1,H2,H3}</code></td><td>0/1/2/3</td></tr>
+    <tr><td><code>inference probe\|bench\|robustness</code></td><td><code>--model ID</code></td><td>0/1/3</td></tr>
+    <tr><td><code>memory stats\|snapshot\|rollback\|verify\|retrieve</code></td><td><code>--run-id ID</code></td><td>0/1/2</td></tr>
+    <tr><td><code>audit leak</code></td><td><code>--run-id ID</code> <code>--split {train,heldout,test,demo}</code> <code>--out PATH</code></td><td>0/1/2/4（注）</td></tr>
+    <tr><td><code>eval diversity</code></td><td><code>--run-id ID</code></td><td>0/1/4</td></tr>
+    <tr><td><code>guards check</code></td><td><code>--root PATH</code> <code>--fix-hints</code></td><td>0/4</td></tr>
+  </table>
+  <blockquote>注（2026-10-03，按评审修订）：<code>audit leak</code> 的退出码由<strong>归属模块</strong> MOD-02 决定，是<strong>两根正交轴</strong>——泄漏结论 <code>0</code> 无 finding / <code>1</code> 仅 medium / <code>2</code> 含 critical（FR-02-19、§11 集成用例），以及沙箱守卫违例 <code>4</code>（Spec §8.3；蜜罐自测失败等 <code>E_ENV_HONEYPOT</code>，与本模块 <code>EXIT_CODE[E_ENV_HONEYPOT] = 4</code> 的登记一致），优先级 <code>4 &gt; 2 &gt; 1 &gt; 0</code>。详见 MOD-02 PRD §18.2。本模块只负责命令面与报告落盘出口（<code>resolve_run_dir</code>/<code>RunPaths</code>/<code>infra.io.validate</code>）。</blockquote>
+  <p><code>--seeds SPEC</code> 语法：<code>train:1000-1004</code>、<code>heldout:2000-2099</code>、<code>9000,9001</code>、<code>file:seeds.txt</code>。<code>guards check</code> 已回填 Spec v1.3 §4.6（P-20）。</p>
+
+  <h4>6.5 事件与错误码注册表（Spec v1.3 §8.2/§8.3 的落地）</h4>
+<pre><code># gamer_rsi/infra/events.py
+EVENT_REGISTRY: Final[Mapping[str, EventSpec]]   # 键为 "&lt;module&gt;.&lt;event&gt;"
+def emit(event: str, **fields: Any) -> None: ...
+
+# gamer_rsi/infra/errors.py
+class E(StrEnum): ...                             # 全部错误码
+EXIT_CODE: Final[Mapping[E, int]]</code></pre>
+  <p>登记来源为各 PRD「指标与埋点」节。v0.2 的初始清单：</p>
+  <ul>
+    <li><code>infra.{run_start,run_end,guard_finding,redaction_hit,unknown_event}</code></li>
+    <li><code>env.*</code>（MOD-02 转发内核 events）</li>
+    <li><code>sandbox.{gate_pass,gate_reject,tool_timeout,honeypot_hit,audit_finding}</code></li>
+    <li><code>llm.{call,degrade,oom}</code></li>
+    <li><code>policy.{decision,fallback,reject}</code></li>
+    <li><code>memory.{add,dedup,evict,snapshot,rollback,retrieve}</code></li>
+    <li><code>loop.{episode_start,episode_end,cycle_start,budget_exhausted,interrupted,resume}</code></li>
+    <li><code>evolve.{propose,gate,judge,decision,hitl_pending,rollback}</code></li>
+    <li><code>eval.{start,seed_done,report,collapse}</code></li>
+  </ul>
+  <p>错误码以 Spec §8.3 的统一命名为准；每个 PRD 新增错误码时，必须在同一个 PR 里更新 <code>errors.py</code>。</p>
+</section>
+
+<section id="sec-7">
+  <h3><span class="n">7</span>数据模型与存储</h3>
+  <p>一次 run 的完整目录树（路径由本模块冻结，语义归属见注释）：</p>
+<pre><code>runs/&lt;run_id&gt;/
+  config.json                      # AppConfig 快照 + config_hash + content_hash + git sha + 环境变量白名单
+  state.json                       # MOD-06 语义；本模块提供原子写原语
+  events.jsonl                     # 全部结构化事件（§6.5）
+  episodes/&lt;split&gt;/&lt;episode_key&gt;.jsonl   # 轨迹（每步一行，schema 见 §6.2）
+  reflections/&lt;episode_id&gt;.json    # MOD-06 产出
+  generations/gen-{N}/             # report.json / diff.patch / harness snapshot
+  metrics/scoreboard.json          # MOD-06 计分台账（episode_key 幂等）
+  metrics/llm_calls.jsonl          # MOD-03 每次推理尝试一行
+  metrics/generations.csv          # MOD-08 定义列并写入（列清单见 MOD-08 PRD §7）；本模块只读取绘图
+  metrics/plots_data/*.json        # MOD-08 产出，本模块绘图输入
+  prompts/                         # MOD-04 决策 prompt 快照（供审计复现）
+  memory/memory_v{N}.jsonl         # MOD-05 记忆快照
+  plots/*.png                      # win_rate.png / stages_cleared.png / hearts_left.png / entropy.png / train_heldout_gap.png
+  audit/leak_report.json           # MOD-02 产出</code></pre>
+  <p><code>state.json</code> 原子写：先写 <code>state.json.tmp</code> + <code>os.replace()</code>，保证读者永不见半截文件。</p>
+</section>
+
+<section id="sec-8">
+  <h3><span class="n">8</span>关键流程</h3>
+
+  <h4>启动引导（任何 CLI 命令的第一步）</h4>
+  <div class="flow">
+    <div class="step">bootstrap_process()<br><small>固定 PYTHONHASHSEED / TZ / locale / threads</small></div>
+    <span class="arrow">→</span>
+    <div class="step">load_config()<br><small>CLI &gt; 环境变量 &gt; harness &gt; default.yaml &gt; 默认值</small></div>
+    <span class="arrow">→</span>
+    <div class="step">--dry-run？<br><small>是则只打印 JSON，不落盘</small></div>
+    <span class="arrow">→</span>
+    <div class="step">make_run_id()<br><small>git_sha-config_hash-ts</small></div>
+    <span class="arrow">→</span>
+    <div class="step">init_run_dir()<br><small>幂等建目录树 + 冲突检测</small></div>
+    <span class="arrow">→</span>
+    <div class="step">Redactor 注册<br><small>MOD-02 审计器注入敏感值</small></div>
+    <span class="arrow">→</span>
+    <div class="step">emit("infra.run_start")<br><small>附 config_hash / git_sha</small></div>
+  </div>
+<pre><code># 启动引导（任何 CLI 命令的第一步）
+def bootstrap(argv):
+    bootstrap_process()                       # FR-09-17: PYTHONHASHSEED/TZ/locale/threads
+    cfg = load_config(cli_overrides=parse_cli(argv))     # FR-09-1/2
+    if "--dry-run" in argv:
+        return print(json.dumps({"config": canonical_json(cfg),
+                                 "plan": plan_of(argv)}))   # 只打印，不落盘
+    run_id = make_run_id(cfg, explicit=arg("--run-id"))  # FR-09-4
+    paths = init_run_dir(run_id, cfg)                    # FR-09-5
+    redactor = Redactor(); mod02_audit.register_sensitive(redactor)   # FR-09-9
+    events.bind(paths.root / "events.jsonl", run_id)             # FR-09-7
+    events.emit("infra.run_start", config_hash=config_hash(cfg), git_sha=git_sha())
+    return paths, cfg, redactor                                  # redactor 只交给 prompt/memory/reflection 写入方</code></pre>
+
+  <h4>单步落盘</h4>
+  <div class="flow">
+    <div class="step">组装轨迹行<br><small>episode/step/seed/obs_digest/action/reward…</small></div>
+    <span class="arrow">→</span>
+    <div class="step">validate_trajectory_line()<br><small>不过抛 E_IO_TRAJECTORY_SCHEMA</small></div>
+    <span class="arrow">→</span>
+    <div class="step">writer.write(line)<br><small>整行单次 write + flush</small></div>
+    <span class="arrow">→</span>
+    <div class="step">（出口侧）redaction<br><small>仅 prompts/memory/reflections</small></div>
+  </div>
+<pre><code># 单步落盘
+def log_step(writer, step_result, policy_step, obs):
+    line = {"episode_id": ..., "generation": ..., "harness_version": ...,
+            "seed": ..., "split": ..., "step": ..., "obs_digest": obs.digest(),
+            "action": policy_step.action.to_dict(), "reward": step_result.reward,
+            "cum_reward": ..., "illegal": step_result.info["illegal"],
+            "illegal_reason": step_result.info.get("illegal_reason"),
+            "llm_raw": policy_step.raw, "llm_latency_ms": policy_step.latency_ms,
+            "prompt_tokens": ..., "completion_tokens": ..., "ts": utcnow_iso()}
+    validate_trajectory_line(line)        # FR-09-8
+    writer.write(line)                    # FR-09-6 + redaction(FR-09-9)</code></pre>
+
+  <h4>演化前门禁（MOD-07 调用）</h4>
+  <div class="flow">
+    <div class="step">worktree_clean_check()<br><small>脏 → E_IO_GIT_DIRTY，拒绝演化</small></div>
+    <span class="arrow">→</span>
+    <div class="step">候选 harness 落地<br><small>commit_harness / tag_version</small></div>
+    <span class="arrow">→</span>
+    <div class="step">scan_all("gamer_rsi")<br><small>评估前再跑一次守卫</small></div>
+    <span class="arrow">→</span>
+    <div class="step">含 E_IO_GUARD_LAYER？<br><small>是 → 抛 SandboxViolation，候选作废</small></div>
+  </div>
+<pre><code># 演化前门禁（MOD-07 调用）
+worktree_clean_check()                    # 脏 → E_IO_GIT_DIRTY，拒绝演化
+findings = scan_all(Path("gamer_rsi"))    # 候选 harness 落地后、评估前再跑一次
+if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(...)</code></pre>
+</section>
+
+<section id="sec-9">
+  <h3><span class="n">9</span>配置项</h3>
+  <table>
+    <tr><th>键</th><th>类型</th><th>默认</th><th>含义</th></tr>
+    <tr><td><code>infra.runs_root</code></td><td>str</td><td><code>runs</code></td><td>run 根目录（不参与 config_hash）</td></tr>
+    <tr><td><code>infra.log_level</code></td><td>str</td><td><code>INFO</code></td><td>日志级别（不参与 config_hash）</td></tr>
+    <tr><td><code>infra.fsync_every</code></td><td>int</td><td><code>0</code></td><td>每 N 行 fsync；0 = 不 fsync</td></tr>
+    <tr><td><code>infra.rotate_max_mb</code></td><td>int</td><td><code>512</code></td><td>单 JSONL 文件轮转阈值</td></tr>
+    <tr><td><code>infra.threads</code></td><td>int</td><td><code>1</code></td><td>传给推理后端与 numpy 的线程数（确定性）</td></tr>
+    <tr><td><code>infra.utc</code></td><td>bool</td><td><code>true</code></td><td>强制 UTC 时间戳</td></tr>
+    <tr><td><code>infra.redaction.enabled</code></td><td>bool</td><td><code>true</code></td><td>关闭需显式记 <code>guard_finding</code></td></tr>
+    <tr><td><code>infra.plot.enabled</code></td><td>bool</td><td><code>true</code></td><td>无 matplotlib 时自动降级</td></tr>
+    <tr><td><code>infra.git.enabled</code></td><td>bool</td><td><code>true</code></td><td>关闭后 <code>commit_harness</code> 为 no-op 并告警</td></tr>
+    <tr><td><code>infra.exit_on_guard</code></td><td>bool</td><td><code>true</code></td><td><code>guards</code> 违例是否直接非零退出</td></tr>
+  </table>
+</section>
+
+<section id="sec-10">
+  <h3><span class="n">10</span>错误处理与降级</h3>
+  <table>
+    <tr><th>错误码</th><th>触发</th><th>处理</th></tr>
+    <tr><td><span class="tag err">E_IO_CONFIG_INVALID</span></td><td>schema 校验失败</td><td>打印键路径 + 期望类型，退出码 2</td></tr>
+    <tr><td><span class="tag err">E_IO_CONFIG_UNKNOWN</span></td><td>未知配置键</td><td>忽略并告警，记入 run_start</td></tr>
+    <tr><td><span class="tag err">E_IO_RUN_CONFLICT</span></td><td>同 run_id 不同 config_hash</td><td>退出码 2，提示改用 <code>--run-id</code> 或新目录</td></tr>
+    <tr><td><span class="tag err">E_IO_STATE_MISSING</span></td><td><code>--resume</code> 但无 state.json</td><td>退出码 2</td></tr>
+    <tr><td><span class="tag err">E_IO_TRAJECTORY_SCHEMA</span></td><td>轨迹行缺字段/类型错</td><td>开发期抛异常；生产写 <code>illegal</code> 兜底行并计数</td></tr>
+    <tr><td><span class="tag err">E_IO_EVENT_UNKNOWN</span></td><td>事件名不在 <code>EVENT_TYPES</code></td><td>同上</td></tr>
+    <tr><td><span class="tag err">E_IO_TRAILING_TRUNCATED</span></td><td>读到最后一行 JSON 不完整</td><td>丢弃该行并告警（不中断）</td></tr>
+    <tr><td><span class="tag err">E_IO_REDACTION_HIT</span></td><td>落盘前擦除命中</td><td>写 <code>guard_finding</code> + 触发 MOD-02 告警</td></tr>
+    <tr><td><span class="tag err">E_IO_DISK_FULL</span></td><td>写入 <code>OSError</code></td><td>立即停止 run，保留已落盘数据，退出码 5</td></tr>
+    <tr><td><span class="tag err">E_IO_RUNS_NOT_IGNORED</span></td><td><code>runs/</code> 未被 <code>.gitignore</code> 覆盖</td><td>退出码 2</td></tr>
+    <tr><td><span class="tag err">E_IO_GIT_DIRTY</span> / <span class="tag err">E_IO_GIT_UNAVAILABLE</span></td><td>git 门禁失败 / 无 git</td><td>前者阻断演化；后者降级为 <code>nogit</code></td></tr>
+    <tr><td><span class="tag err">E_IO_GUARD_RANDOM</span> / <span class="tag err">E_IO_GUARD_LAYER</span></td><td>守卫检出违例</td><td>退出码 4；演化场景直接拒绝候选</td></tr>
+    <tr><td><span class="tag err">E_IO_PLOT_UNAVAILABLE</span></td><td>缺 matplotlib</td><td>降级为警告</td></tr>
+  </table>
+  <blockquote><strong>降级原则</strong>：可观测性缺失（绘图、git、fsync）→ 降级 + 告警；<strong>可复现性缺失</strong>（config 非法、run 冲突、守卫违例）→ 立即失败，绝不静默继续。</blockquote>
+</section>
+
+<section id="sec-11">
+  <h3><span class="n">11</span>测试计划</h3>
+  <p>以「给定-当-则」写的验收用例（T-09-1～T-09-16，<code>bbdc02e</code> 起全部落地）：</p>
+  <table>
+    <tr><th>#</th><th>给定</th><th>当</th><th>则</th></tr>
+    <tr><td>T-09-1</td><td><code>default.yaml</code> 中 <code>loop.k=30</code>，环境变量 <code>GAMERSI_LOOP__K=5</code></td><td><code>load_config()</code></td><td><code>cfg.loop.k == 5</code></td></tr>
+    <tr><td>T-09-2</td><td>同上且 CLI 传 <code>--k 7</code></td><td><code>load_config(cli_overrides={"loop.k":7})</code></td><td><code>cfg.loop.k == 7</code>（CLI 胜出）</td></tr>
+    <tr><td>T-09-3</td><td>同一 AppConfig，两次不同 <code>run_id</code>/时间</td><td><code>config_hash()</code></td><td>两次结果相同</td></tr>
+    <tr><td>T-09-4</td><td>仅 <code>harness_version</code> 或 harness 文件不同</td><td><code>config_hash()</code> / <code>artifact_hash()</code></td><td><code>config_hash</code> 相同；<code>artifact_hash</code> 不同（B-19）</td></tr>
+    <tr><td>T-09-5</td><td><code>derive_seed("a", 1, 2)</code> 在不同 <code>PYTHONHASHSEED</code> 子进程</td><td>调用</td><td>返回值完全相同</td></tr>
+    <tr><td>T-09-6</td><td>已写入 100 行后 <code>kill -9</code></td><td>重新读取文件</td><td>前 99 行全部可解析；末行截断被 <code>E_IO_TRAILING_TRUNCATED</code> 识别</td></tr>
+    <tr><td>T-09-7</td><td>redactor 注册了 heldout seed <code>2042</code></td><td>① 写 prompt 快照 <code>"…seed 2042…"</code>；② 写 heldout 轨迹行 <code>"seed": 2042</code></td><td>① 替换为 <code>&lt;REDACTED:seed&gt;</code> 并产生 1 条 <code>infra.redaction_hit</code>；② 原样落盘、schema 校验通过、不产生事件</td></tr>
+    <tr><td>T-09-16</td><td>已接受 1 代（harness v1）的 run</td><td><code>loop run --run-id X --resume</code></td><td>通过 <code>config_hash</code> 校验并继续</td></tr>
+    <tr><td>T-09-8</td><td>轨迹行缺 <code>obs_digest</code></td><td><code>validate_trajectory_line()</code></td><td>抛 <code>E_IO_TRAJECTORY_SCHEMA</code></td></tr>
+    <tr><td>T-09-9</td><td>fixture 中 <code>gamer_rsi/agent/policy.py</code> 写了 <code>import gamer_rsi.env.engine</code></td><td><code>scan_layer_imports()</code></td><td>返回 1 条 <code>E_IO_GUARD_LAYER</code>，定位到具体行号</td></tr>
+    <tr><td>T-09-10</td><td>fixture 中 <code>random.random()</code> 未豁免</td><td><code>scan_determinism()</code></td><td>返回 <code>E_IO_GUARD_RANDOM</code>；加 <code># guard: allow</code> 注释后 <code>exempted=True</code> 且仍可见</td></tr>
+    <tr><td>T-09-11</td><td>干净的 git 仓库</td><td><code>commit_harness(3, "add heuristic")</code></td><td>产生 commit，信息以 <code>harness(v3):</code> 开头，返回 40 位 sha</td></tr>
+    <tr><td>T-09-12</td><td>已存在同 run_id 且 config_hash 不同</td><td><code>init_run_dir()</code></td><td>抛 <code>E_IO_RUN_CONFLICT</code></td></tr>
+    <tr><td>T-09-13</td><td><code>--dry-run</code> 的 <code>loop run</code></td><td>执行</td><td>stdout 为可解析 JSON，<code>runs/</code> 无任何新文件</td></tr>
+    <tr><td>T-09-14</td><td>伪造 <code>generations.csv</code></td><td><code>plot_generations()</code></td><td>生成 5 张 png；缺 matplotlib 时返回 <code>[]</code> 且不抛异常</td></tr>
+    <tr><td>T-09-15</td><td>各 CLI 子命令传非法参数</td><td>执行</td><td>退出码 2，stderr 含错误码</td></tr>
+  </table>
+</section>
+
+<section id="sec-12">
+  <h3><span class="n">12</span>验收标准</h3>
+  <p>对齐 Spec §9 质量门 G1–G6：</p>
+  <ul class="check">
+    <li><strong>G1 单测</strong>：<code>gamer_rsi/infra/</code> 覆盖率 ≥ 80%（<code>config</code>、<code>logging</code>、<code>guards</code> 三个文件 ≥ 90%）。</li>
+    <li><strong>G2 Golden</strong>：§11 全部 15 条用例作为回归集，<code>guards</code> 的 fixture 目录纳入版本控制。</li>
+    <li><strong>G3 确定性</strong>：<code>config_hash</code> 与 <code>derive_seed</code> 的稳定性由 T-09-3/4/5 保证，并在 CI 中跨 <code>PYTHONHASHSEED</code> 跑一次。</li>
+    <li><strong>G4 泄漏审计</strong>：T-09-7 通过；<code>audit leak</code> 的输出文件由本模块写入 <code>audit/</code>。</li>
+    <li><strong>G5 Schema 校验</strong>：轨迹行 schema 有 round-trip 测试（<code>dict → validate → jsonl → parse → dict</code> 等价）。</li>
+    <li><strong>G6 可复现命令</strong>：<code>README</code>/PRD 中出现的命令可原样复制执行。</li>
+  </ul>
+  <blockquote><strong>M0 交付判定</strong>：<code>python -m gamer_rsi guards check</code> 与 <code>python -m gamer_rsi env selftest --seed 1</code> 均可运行；<code>init_run_dir</code> 能创建完整目录树；JSONL 轨迹可被 MOD-08 的汇总脚本直接消费。</blockquote>
+</section>
+
+<section id="sec-13">
+  <h3><span class="n">13</span>指标与埋点</h3>
+  <ul>
+    <li><code>run_start</code> / <code>run_end</code> 事件：<code>run_id</code>、<code>config_hash</code>、<code>git_sha</code>、<code>duration_s</code>、<code>exit_code</code>。</li>
+    <li><code>guard_finding</code> 事件：<code>code</code>、<code>path</code>、<code>line</code>、<code>exempted</code>。</li>
+    <li><code>E_IO_REDACTION_HIT</code> 计数（应为 0，非 0 即沙箱告警）。</li>
+    <li>单行写入耗时 p50/p99 记入 <code>metrics/io_latency.csv</code>。</li>
+  </ul>
+</section>
+
+<section id="sec-14">
+  <h3><span class="n">14</span>依赖与风险</h3>
+  <table>
+    <tr><th>依赖</th><th>说明</th></tr>
+    <tr><td>Python 3.11+ 标准库</td><td><code>dataclasses</code> / <code>json</code> / <code>hashlib</code> / <code>ast</code> / <code>subprocess</code>；绘图可选 matplotlib</td></tr>
+    <tr><td>git CLI</td><td><code>git_ops</code> 与 <code>run_id</code>；缺失时降级</td></tr>
+    <tr><td>MOD-02</td><td>提供敏感值集合给 <code>Redactor</code>；反向依赖必须通过回调注册，避免循环 import</td></tr>
+  </table>
+  <table>
+    <tr><th>风险</th><th>对策</th></tr>
+    <tr><td>infra 被塞进领域逻辑（最易发生的腐化）</td><td>NFR-09-5：<code>infra</code> 不得 import 其他子包，由 <code>guards</code> 强制</td></tr>
+    <tr><td>redaction 误伤（把正常数字当成 seed 擦掉）</td><td>只作用于 prompt/memory/reflection 出口，并且只匹配带词边界的精确值；T-09-7 ② 为反向用例</td></tr>
+    <tr><td>fsync 拖慢单步</td><td>默认 <code>fsync_every=0</code>，仅在长跑 run 建议设 200</td></tr>
+    <tr><td>时间戳/时区导致不可复现</td><td>强制 UTC + <code>ts</code> 不参与任何 hash</td></tr>
+    <tr><td>CLI 与 Spec 漂移</td><td>FR-09-10：新增命令必须同步更新 Spec §4.6，PR 检查项</td></tr>
+  </table>
+</section>
+
+<section id="sec-15">
+  <h3><span class="n">15</span>里程碑与工作量</h3>
+  <table>
+    <tr><th>阶段</th><th>内容</th><th>人日</th></tr>
+    <tr><td>M0a</td><td>config + run_id + 目录树 + JsonlWriter + 错误码注册表</td><td>2.0</td></tr>
+    <tr><td>M0b</td><td>guards（AST 扫描 + CI 钩子）+ 确定性环境引导</td><td>1.5</td></tr>
+    <tr><td>M1</td><td>CLI 子命令树 + <code>--dry-run</code> + 退出码 + 轨迹 schema 校验</td><td>1.5</td></tr>
+    <tr><td>M2</td><td>git_ops + redaction + state 原子写 + <code>--resume</code> 定位</td><td>1.0</td></tr>
+    <tr><td>M3</td><td>plotting + 报告汇总脚本（<code>generations.csv</code> 列定义归 MOD-08）</td><td>1.0</td></tr>
+    <tr><td>合计</td><td></td><td><strong>7.0 人日</strong></td></tr>
+  </table>
+  <blockquote><strong>实际交付（M0）</strong>：M0a+M0b（config/事件/JSONL/守卫/git/CLI）于 <strong>2026-10-01 → 2026-10-03</strong> 分 4 个提交交付（<code>5d3574c</code>、<code>bbdc02e</code>、<code>aa62ab8</code>、<code>e621112</code>），并<strong>额外提前交付了 M1 的 CLI 子命令树与退出码</strong>。本项目<strong>未单独记工</strong>；按提交时间窗折算 ≤ 3 人日（计划 M0a+M0b = 3.5 人日），偏差详见排期 §8。T-09-1～T-09-16 全部落地（<code>bbdc02e</code> 起）；证据见 M0 验收报告（G1–G6 与 INV-1/INV-6 全通过，CI 门禁接线已补齐为 <code>scripts/ci_gate.sh</code> + <code>.github/workflows/ci.yml</code>）。</blockquote>
+</section>
+
+<section id="sec-16">
+  <h3><span class="n">16</span>开放问题</h3>
+  <ol>
+    <li><code>AppConfig</code> 用 frozen dataclass 还是引入 pydantic？阶段一选前者（少依赖），若配置项超过 ~60 个则重新评估。</li>
+    <li><code>state.json</code> 的并发写：目前假设单 run 单写进程；若 MOD-06 引入进程池共享状态，需加文件锁（<code>fcntl.flock</code>）。</li>
+    <li>轨迹 CSV 与 JSONL 的职责边界——是否在 M3 增加 Parquet 导出以支撑更复杂分析？</li>
+    <li><code>--dry-run</code> 是否需要模拟「一次完整的代际演化」计划（含候选数、预计局数、预计耗时）？会显著提升可操作性但也增加耦合。</li>
+    <li><code>E_IO_*</code> 与其他模块 <code>E_*</code> 的归属：模型不可用引发的 IO 失败应报 <code>E_LLM_*</code> 还是 <code>E_IO_*</code>？建议以<strong>根因方</strong>为准并写入 Spec §8。</li>
+    <li>是否需要把 <code>guards</code> 做成 pre-commit hook（当前只做 CLI + CI）？</li>
+  </ol>
+</section>
+
+<section id="sec-17">
+  <h3><span class="n">17</span>变更记录</h3>
+  <table>
+    <tr><th>版本</th><th>时间</th><th>变更</th></tr>
+    <tr><td>v0.1</td><td>2026-09-30</td><td>首版</td></tr>
+    <tr><td>v0.2</td><td>2026-09-30 17:21</td><td>按 Spec v1.3 与 MOD PRD 评审修订：<code>config_hash</code> 不再包含 harness_version，新增 <code>artifact_hash</code>（P0-7）；redaction 只作用于 prompt/memory/reflection（P0-7）；事件改为 <code>&lt;module&gt;.&lt;event&gt;</code> 注册表并统一落到 <code>events.jsonl</code>（P1-11）；轨迹 schema 对齐 §4.5 新字段与 <code>episode_key</code> 路径（P1-10）；退出码新增 5（P1-13）；CLI 对齐 §4.6，统一使用 <code>--run-id</code>（P1-14）；git tag 改为 <code>harness-v{N}</code>（P1-15）；新增 FR-09-18 schema 与原子写、FR-09-19 <code>runs/</code> 忽略检查</td></tr>
+    <tr><td>v0.3</td><td>2026-09-30 17:49</td><td>FR-09-1 按 Spec B-26 插入 harness/config.json 层及白名单校验</td></tr>
+    <tr><td>v0.3.1</td><td>2026-10-03</td><td>修复 <code>bootstrap_process()</code> 早发 <code>infra.run_start</code>（缺必填 <code>config_hash</code>）：<code>GAMERSI_DEV=1</code> 下任何命令都会以退出码 1 失败（用 <code>guards check</code> 复现）。改为进程快照由 <code>cli_init_run()</code> 的 run_start 记录，并新增 <code>process_snapshot()</code>（FR-09-17）；<code>audit leak</code> 退出码注释同步为 <code>0/1/2/4</code></td></tr>
+  </table>
+</section>
+
+<footer>来源：docs/prd/MOD-09-infra-PRD.md · GameRSI 模块讲解系列 · 2026-10-04</footer>
+
+</div></main>
+</body>
+</html>

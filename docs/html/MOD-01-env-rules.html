@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MOD-01 env-rules · GameRSI 模块讲解</title>
+<style>
+:root{--accent:#4f46e5;--accent-2:#6366f1;--accent-soft:rgba(79,70,229,.09);--bg:#f5f6fa;--card:#fff;--ink:#1c2333;--muted:#64708a;--line:#e5e8f0;--code-bg:#101725;--code-ink:#e8ecf5;--ok:#0f9d58;--bad:#dc2626}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;font-size:15px;line-height:1.75}
+aside{position:fixed;inset:0 auto 0 0;width:262px;background:#0e1422;color:#c6cddd;padding:22px 18px;overflow-y:auto}
+aside h1{font-size:15px;color:#fff;margin:0 0 4px;letter-spacing:.5px}
+aside .sub{font-size:12px;color:#7d89a3;margin-bottom:18px}
+aside a{display:block;color:#aab6cc;text-decoration:none;font-size:13.5px;padding:7px 10px;border-radius:8px;margin:1px 0}
+aside a:hover{background:rgba(255,255,255,.07);color:#fff}
+aside a.cur{background:var(--accent);color:#fff;font-weight:600}
+aside .sep{height:1px;background:rgba(255,255,255,.09);margin:14px 0}
+aside .toc a{font-size:12.5px;color:#8b97ae;padding:4px 10px}
+main{margin-left:262px;padding:34px 40px 80px}
+.wrap{max-width:900px;margin:0 auto}
+header.hero{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;border-radius:16px;padding:30px 32px;margin-bottom:26px}
+header.hero .kid{font-size:13px;letter-spacing:2px;opacity:.85}
+header.hero h2{margin:6px 0 8px;font-size:27px;line-height:1.3}
+header.hero p{margin:0;opacity:.92;max-width:64ch}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.badge{font-size:12px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:3px 11px}
+section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 26px;margin:0 0 18px;scroll-margin-top:20px}
+section h3{font-size:18px;margin:0 0 12px;display:flex;align-items:center;gap:9px}
+section h3 .n{width:24px;height:24px;border-radius:7px;background:var(--accent-soft);color:var(--accent);font-size:12.5px;display:grid;place-items:center;font-weight:700}
+h4{font-size:15px;margin:18px 0 6px;color:var(--accent)}
+p{margin:0 0 10px}ul,ol{padding-left:20px;margin:0 0 10px}li{margin:4px 0}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:10px 0}
+th{background:var(--accent-soft);color:var(--accent);text-align:left;padding:8px 10px;border:1px solid var(--line);font-weight:600}
+td{padding:8px 10px;border:1px solid var(--line);vertical-align:top}
+tr:nth-child(even) td{background:#fafbfe}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:var(--accent-soft);color:var(--accent);padding:1.5px 6px;border-radius:5px}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;font-size:12.5px;line-height:1.6}
+pre code{background:none;color:inherit;padding:0}
+blockquote{margin:12px 0;padding:10px 14px;border-left:4px solid var(--accent);background:var(--accent-soft);color:#3a4257;border-radius:0 8px 8px 0;font-size:13.5px}
+.tag{display:inline-block;font-size:11.5px;font-weight:700;border-radius:6px;padding:2px 8px;margin:2px 3px 2px 0;background:var(--accent);color:#fff}
+.tag.nfr{background:#0e7490}.tag.err{background:#b91c1c}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:12px 0}
+.card{background:#fafbff;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card b{color:var(--accent)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.do{border-top:3px solid var(--ok)}.dont{border-top:3px solid var(--bad)}
+.check{padding-left:0}.check li{list-style:none;margin:6px 0;padding-left:26px;position:relative}
+.check li::before{content:"✓";position:absolute;left:2px;color:var(--ok);font-weight:700}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0}
+.step{background:var(--accent-soft);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:8px 12px;font-size:13px;min-width:120px}
+.arrow{color:var(--accent);font-weight:700}
+footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px}
+@media(max-width:960px){aside{position:static;width:auto;height:auto;padding:14px}main{margin-left:0;padding:20px 16px 60px}.cols{grid-template-columns:1fr}}
+@media print{aside{display:none}main{margin:0}.wrap{max-width:none}section{break-inside:avoid}}
+</style>
+</head>
+<body>
+<aside>
+  <h1>GameRSI</h1><div class="sub">模块讲解 · MOD 系列</div>
+  <a class="cur" href="MOD-01-env-rules.html">MOD-01 env-rules</a>
+  <a href="MOD-02-env-sandbox.html">MOD-02 env-sandbox</a>
+  <a href="MOD-03-inference.html">MOD-03 inference</a>
+  <a href="MOD-04-policy.html">MOD-04 policy</a>
+  <a href="MOD-05-memory.html">MOD-05 memory</a>
+  <a href="MOD-06-loop.html">MOD-06 loop</a>
+  <a href="MOD-07-evolve.html">MOD-07 evolve</a>
+  <a href="MOD-08-evals.html">MOD-08 evals</a>
+  <a href="MOD-09-infra.html">MOD-09 infra</a>
+  <div class="sep"></div>
+  <div class="sub">本页导航</div>
+  <div class="toc">
+    <a href="#sec-1">1 背景与目标</a>
+    <a href="#sec-2">2 范围</a>
+    <a href="#sec-3">3 使用方与场景</a>
+    <a href="#sec-4">4 功能需求</a>
+    <a href="#sec-5">5 非功能需求</a>
+    <a href="#sec-6">6 接口契约</a>
+    <a href="#sec-7">7 数据模型与存储</a>
+    <a href="#sec-8">8 关键流程</a>
+    <a href="#sec-9">9 配置项</a>
+    <a href="#sec-10">10 错误处理与降级</a>
+    <a href="#sec-11">11 测试计划</a>
+    <a href="#sec-12">12 验收标准</a>
+    <a href="#sec-13">13 指标与埋点</a>
+    <a href="#sec-14">14 依赖与风险</a>
+    <a href="#sec-15">15 里程碑与工作量</a>
+    <a href="#sec-16">16 开放问题</a>
+    <a href="#sec-17">17 变更记录</a>
+  </div>
+</aside>
+<main>
+<div class="wrap">
+
+<header class="hero">
+  <div class="kid">MOD-01 · env-rules</div>
+  <h2>环境规则内核 —— GAME 内核的纯 Python 等价移植</h2>
+  <p>把已验收的 JS 游戏内核逐位搬进 Python，让智能体侧在进程内直接调用游戏， eliminating 进程边界与网络延迟，并让确定性审计不再依赖网络栈。</p>
+  <div class="badges">
+    <span class="badge">版本 v1.0</span>
+    <span class="badge">状态：待评审</span>
+    <span class="badge">所属里程碑：M0</span>
+    <span class="badge">2026-09-30 17:21 按 Spec v1.3 重写</span>
+  </div>
+</header>
+
+<div class="grid">
+  <div class="card"><b>背景与目标</b><br>智能体侧（MOD-02～08）全是 Python，而游戏本体是 JS。训练若经 HTTP 调 JS 会引入进程边界、延迟，并让确定性审计依赖网络栈——所以需要一份进程内、逐位等价的 Python 内核。</div>
+  <div class="card"><b>核心职责</b><br>与 <code>src/game/kernel/*.js</code> 一一对应的 Python 模块，加对外门面 <code>GameEngine</code>。只移植规则，<b>不发明、不修改规则</b>。</div>
+  <div class="card"><b>服务对象</b><br>MOD-02 构造 <code>SandboxEnv</code>（agent 的唯一入口）、MOD-04 启发式 fallback、MOD-08 基线评估，以及开发者 / CI 的对拍自检。</div>
+  <div class="card"><b>关键成功度量</b><br>5 组 golden（约 1,470 步）逐行对拍 100% 通过；200 局随机差分对拍 0 分歧；<code>greedy_counter</code> 通关率与 JS 相差 ≤ 3pp；性能达 §5 要求。</div>
+</div>
+
+<section id="sec-1">
+  <h3><span class="n">1</span>背景与目标</h3>
+  <p>GameRSI 的智能体侧（MOD-02～08）全部用 Python，而游戏本体已经用 JS 实现并验收（<code>src/game</code>，零依赖）。训练若经 HTTP 调用 JS，会引入进程边界和延迟，也会让确定性审计依赖网络栈——因此需要一份供 <code>SandboxEnv</code> 在进程内调用的 Python 内核。</p>
+  <blockquote><b>唯一目标</b>：给定同一份配表、同一个 config 和同一个动作序列，Python 内核每一步的 <code>obsDigest</code>、<code>rngDigest</code>、<code>stateDigest</code> 都与 JS 内核<b>逐字节相等</b>。</blockquote>
+  <p>这句话是整个模块的北极星：所有 FR、NFR、测试、验收标准，全都在为「逐字节相等」服务。</p>
+  <h4>成功度量</h4>
+  <ul>
+    <li>① <code>src/game/tests/golden/*.jsonl</code> 5 组共约 1,470 步逐行对拍 100% 通过。</li>
+    <li>② 额外 200 局随机动作的差分对拍（JS 与 Python 各跑一遍）0 分歧。</li>
+    <li>③ Python 版 <code>greedy_counter</code> 在默认局（hard × 6 关，n=200）上的通关率与 JS 相差 ≤ 3pp。</li>
+    <li>④ 性能达到 §5 的要求。</li>
+  </ul>
+</section>
+
+<section id="sec-2">
+  <h3><span class="n">2</span>范围</h3>
+  <p>一句话记住边界：<b>本模块只搬运规则，不定义规则</b>。规则、数值、配表一律引用 GAME。</p>
+  <div class="cols">
+    <div class="card do">
+      <b style="color:var(--ok)">✓ 负责</b>
+      <ul>
+        <li>与 <code>src/game/kernel/*.js</code> <b>一一对应</b>的 Python 模块：<code>rng/digest/loader/state/slots/counter/risk/relic/combat/map/shop/forge/event/index</code>。</li>
+        <li>对外门面 <code>GameEngine</code>（Spec §4.7 第 1 行）。</li>
+        <li>配表加载：直接读取 <code>src/game/content/*.json</code>，校验规则同 GAME-01 §8。</li>
+        <li>错误码映射：<code>E_KERNEL_*/E_CONTENT_*</code> → <code>E_ENV_*</code>，<code>E_ACTION_*</code> 原样保留。</li>
+        <li>对拍工具：golden 重放 + JS/Python 差分对拍脚本。</li>
+        <li><code>heuristic</code> 所需的只读辅助：<code>legal_actions</code>、<code>play_hints</code>（供 MOD-04 移植 <code>greedy_counter</code>）。</li>
+      </ul>
+    </div>
+    <div class="card dont">
+      <b style="color:var(--bad)">✗ 不负责</b>
+      <ul>
+        <li>发明或修改规则——规则改动先改 GAME PRD 与 JS 内核，再同步移植。</li>
+        <li>观测裁剪（MOD-02）、prompt（MOD-04）、模型调用（MOD-03）、shaped reward 与评分统计（MOD-08）。</li>
+        <li>写文件、发日志（归 MOD-09）。</li>
+        <li>实现 <code>SandboxEnv</code>、<code>reject()</code>、<code>policy_failure</code> 判负（归 MOD-02）。</li>
+        <li>生成 golden——golden 只能由 JS <code>scripts/golden-gen.js</code> 生成，Python 侧只读。</li>
+        <li>Web 会话挂起逻辑（GAME <code>consecutiveIllegal</code> 字段照常移植以保持 <code>stateDigest</code> 一致，但 agent 路径不据此判定）。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="sec-3">
+  <h3><span class="n">3</span>使用方与场景</h3>
+  <p>典型用法是「<b>套一层 MOD-02</b>」：除开发者命令外，所有使用方都经 <code>SandboxEnv</code> 触达本模块，不直接实例化 <code>GameEngine</code>。</p>
+  <table>
+    <tr><th>使用方</th><th>调用</th><th>场景</th></tr>
+    <tr><td>MOD-02</td><td><code>GameEngine.create/reduce/legal_actions/observe/digest</code></td><td>构造 <code>SandboxEnv</code>；agent 只能经 MOD-02 触达</td></tr>
+    <tr><td>MOD-04</td><td><code>GameEngine.play_hints</code>（经 MOD-02 <code>SandboxEnv.hints()</code> 转发）</td><td>启发式 fallback</td></tr>
+    <tr><td>MOD-08</td><td>经 MOD-02 调用</td><td>基线、评估</td></tr>
+    <tr><td>开发者 / CI</td><td><code>python -m gamer_rsi env selftest</code>、<code>pytest tests/golden</code></td><td>对拍</td></tr>
+  </table>
+</section>
+
+<section id="sec-4">
+  <h3><span class="n">4</span>功能需求</h3>
+  <p>共 12 条 FR。核心线索：先保证「算法等价」（FR-01-2/3/4），再保证「结构等价」（FR-01-1/5/8/9），最后是「协作契约」（FR-01-6/7/10/11/12）。</p>
+  <ul>
+    <li><span class="tag">FR-01-1</span><b>模块一一对应</b>：每个 JS 文件对应一个同名 Python 文件（<code>index.js</code> → <code>engine.py</code>），函数名改 snake_case，但<b>参数与返回的 dict 键保持 camelCase 不变</b>——与 GAME 状态、观测、动作逐字相同，<code>stateDigest</code> 才能直接对拍。</li>
+    <li><span class="tag">FR-01-2</span><b>随机</b>：逐位移植 <code>rng.js</code>。<code>xmur3(streamName)</code> 与 rootSeed 混合 → SplitMix64，64 位运算用 <b>16 位分片</b>（GAME-01 §7 P-5）；<code>STREAM_NAMES</code> 与 JS 完全一致：<code>dice.enemy, dice.player, event, forge, levelup, loot, map, shop</code>；<code>randint</code> 用拒绝采样，<code>shuffle</code> 为 Fisher–Yates；<b>禁止</b> <code>random</code>、<code>hashlib</code> 参与派生（sha256 只用于 digest）。</li>
+    <li><span class="tag">FR-01-3</span><b>规范化与摘要</b>：<code>stable_stringify</code> 行为与 JS <code>stableStringify</code> 完全相同——递归排序键、<code>ensure_ascii=True</code>、<code>separators=(",",":")</code>、禁止 float；<code>digest(v) = "sha256:" + sha256(stable_stringify(v))</code>。</li>
+    <li><span class="tag">FR-01-4</span><b>整数算术</b>：全面遵守 GAME-01 §7 P-1～P-14。禁止 <code>/</code> 和 <code>int()</code> 截断，<code>Math.floor(x/y)</code> 一律写成 <code>x // y</code>（除数恒为正）；位运算后 <code>&amp; 0xFFFFFFFF</code>；千分倍率与 JS <code>applyMul</code> 同式。</li>
+    <li><span class="tag">FR-01-5</span><b>配置</b>：<code>apply_difficulty(base, difficulty, tables)</code> 与 JS 同名函数输出相同的 dict，包括 D-34 <code>stageCount ∈ allowed_stage_counts(tables)</code>；<code>validate_config</code> 返回相同的错误键列表。</li>
+    <li><span class="tag">FR-01-6</span><b>reduce</b>：<code>reduce(state, action, tables) -&gt; {"state", "events", "illegal", "code", "reason", "error"}</code>。语义同 GAME-01 §4：不合法时返回原 state 与 <code>illegal=True</code>，<b>不抛异常</b>；内核异常时 <code>error={"code","message"}</code>，state 不变；<code>end_turn</code> 在同一次 reduce 内按 §4.2 的 E0～E12 顺序跑完整个敌方回合。</li>
+    <li><span class="tag">FR-01-7</span><b>写时构造</b>：不原地修改入参 state（GAME-01 P-14）。先 <code>copy.deepcopy</code> 再修改；性能不足时改为结构共享，但对外语义不变。</li>
+    <li><span class="tag">FR-01-8</span><b>legal_actions</b>：与 JS <code>legalActions</code> 的<b>元素与顺序</b>完全一致（MOD-02 据此去掉 <code>abandon_run</code>）。</li>
+    <li><span class="tag">FR-01-9</span><b>observe</b>：实现 <code>view ∈ {"full","visual"}</code>，输出与 JS <code>observe</code> 相同，含 <code>stats</code>、<code>legalActionKinds</code>、<code>seed:null</code>。</li>
+    <li><span class="tag">FR-01-10</span><b>错误码映射</b>：见下表（映射表在 MOD-09 <code>errors.py</code> 登记）。</li>
+    <li><span class="tag">FR-01-11</span><b>原生结果</b>：<code>native_result(state) -&gt; {"outcome", "truncationReason", "stagesCleared", "heartsLeft", "battlesWon", "turns", "kills"}</code>，供 MOD-02 填写 <code>StepResult.info</code>（INV-7）。</li>
+    <li><span class="tag">FR-01-12</span><b>版本</b>：<code>KERNEL_VERSION = "kernel-1.0.0"</code>、<code>OBS_SCHEMA = "obs-1.0.0"</code>，与 JS 同值；JS 升版时 Python 必须同步升版，CI 比对两侧常量。</li>
+  </ul>
+  <h4>FR-01-10 错误码映射</h4>
+  <table>
+    <tr><th>JS 码</th><th>Python 码</th></tr>
+    <tr><td><code>E_KERNEL_BAD_CONFIG</code></td><td><code>E_ENV_CONFIG_INVALID</code></td></tr>
+    <tr><td><code>E_CONTENT_*</code></td><td><code>E_ENV_CONTENT_INVALID</code>（<code>detail</code> 字段保留原码）</td></tr>
+    <tr><td><code>E_KERNEL_INVARIANT</code> / <code>E_KERNEL_EXCEPTION</code> / <code>E_KERNEL_DISPATCH</code></td><td><code>E_ENV_INTERNAL</code></td></tr>
+    <tr><td><code>E_KERNEL_RNG_*</code></td><td><code>E_ENV_RNG</code></td></tr>
+    <tr><td><code>E_KERNEL_TURN_LIMIT</code></td><td>不是错误；表现为 <code>truncationReason="turn_limit"</code></td></tr>
+    <tr><td><code>E_ACTION_*</code></td><td>原样保留（与 GAME 一致，便于跨语言比对）</td></tr>
+  </table>
+</section>
+
+<section id="sec-5">
+  <h3><span class="n">5</span>非功能需求</h3>
+  <ul>
+    <li><span class="tag nfr">NFR-01-1</span><b>确定性</b>：结果与 <code>PYTHONHASHSEED</code>、TZ、locale、平台无关；CI 在 <code>PYTHONHASHSEED ∈ {0,12345}</code> × <code>TZ ∈ {UTC, Asia/Tokyo}</code> 下各跑一次 golden。</li>
+    <li><span class="tag nfr">NFR-01-2</span><b>性能</b>（Python 3.11，M 系列）：<code>reduce</code> p95 ≤ 2 ms（JS 实测 0.163 ms，按约 10× 的解释器差距估算）；默认局整局 bot 自玩 ≤ 1.5 s；<code>observe</code> p95 ≤ 1 ms——相对单个 LLM 决策（约 3 s）可以忽略不计。</li>
+    <li><span class="tag nfr">NFR-01-3</span><b>零依赖</b>：只用标准库。</li>
+    <li><span class="tag nfr">NFR-01-4</span><b>隔离</b>：不 import <code>gamer_rsi</code> 的其他子包（除 <code>infra.errors</code>），由 MOD-09 guards 强制。</li>
+  </ul>
+</section>
+
+<section id="sec-6">
+  <h3><span class="n">6</span>接口契约</h3>
+  <p>所有使用方都通过 <code>GameEngine</code> 这个门面与内核打交道。注意 dict 键保持 camelCase——这是跨语言对拍的硬约束。</p>
+  <pre><code># gamer_rsi/env/engine.py
+KERNEL_VERSION: Final = "kernel-1.0.0"
+OBS_SCHEMA: Final = "obs-1.0.0"
+ACTION_KINDS: Final[tuple[str, ...]]      # 同 JS ACTION_KINDS（17 个，含 abandon_run）
+TOGGLE_KEYS: Final[tuple[str, ...]]
+
+class GameEngine:
+    def __init__(self, tables: Tables) -> None: ...
+    def create(self, config_input: Mapping[str, Any]) -> GameState: ...          # = createGame
+    def reduce(self, state: GameState, action: Mapping[str, Any]) -> ReduceResult: ...
+    def legal_actions(self, state: GameState) -> list[dict]: ...
+    def is_legal(self, state: GameState, action: Mapping[str, Any]) -> LegalCheck: ...
+    def observe(self, state: GameState, view: Literal["full", "visual"] = "full") -> dict: ...
+    def play_hints(self, state: GameState) -> dict: ...
+    def native_result(self, state: GameState) -> NativeResult: ...
+    def replay(self, config: Mapping[str, Any], actions: Sequence[Mapping]) -> ReplayResult: ...
+
+def apply_difficulty(base: Mapping, difficulty: str, tables: Tables) -> dict: ...
+def allowed_stage_counts(tables: Tables) -> list[int]: ...                    # [3, 6, 10]
+def digest(value: Any) -> str: ...                                            # "sha256:&lt;64hex&gt;"
+def state_hash(state: GameState) -> str: ...                                  # = digest(state)
+
+# gamer_rsi/env/loader.py
+def load_tables(content_dir: Path = GAME_CONTENT_DIR) -> Tables: ...
+GAME_CONTENT_DIR: Final = Path("src/game/content")                            # 可由 GAMERSI_ENV__CONTENT_DIR 覆盖
+
+GameState = dict[str, Any]         # 结构同 GAME-01 §2 GameState（camelCase 键）
+Tables = Mapping[str, Any]         # 只读；load_tables 返回深度冻结视图</code></pre>
+  <p><code>ReduceResult</code>、<code>NativeResult</code> 为 <code>TypedDict</code>，键名同 JS。</p>
+</section>
+
+<section id="sec-7">
+  <h3><span class="n">7</span>数据模型与存储</h3>
+  <ul>
+    <li><b>不自建数据模型</b>：<code>GameState</code>、<code>Observation</code>、<code>Action</code> 的结构全部由 GAME-01 §2/§5 与 GAME-00 §9.4 定义。Python 侧用 <code>TypedDict</code> 做类型提示（<code>gamer_rsi/env/types.py</code>），由 GAME-01 生成。</li>
+    <li><b>配表</b>：只读 <code>src/game/content/*.json</code>，不复制、不转换。<code>content_hash = digest(tables)</code> 记入 <code>config.json</code>（MOD-09）。</li>
+    <li><b>持久化</b>：本模块不写盘；续跑所需的状态快照就是 <code>GameState</code> dict 本身（可 JSON 序列化），由 MOD-06 保存。</li>
+  </ul>
+</section>
+
+<section id="sec-8">
+  <h3><span class="n">8</span>关键流程</h3>
+  <h4>对拍流程（CI 必跑）</h4>
+  <div class="flow">
+    <div class="step">读取 golden jsonl<br><small>meta + steps</small></div><span class="arrow">→</span>
+    <div class="step">eng.create(meta.config)</div><span class="arrow">→</span>
+    <div class="step">比对首步 obsDigest / rngDigest</div><span class="arrow">→</span>
+    <div class="step">逐步 reduce<br><small>断言 illegal 一致</small></div><span class="arrow">→</span>
+    <div class="step">三元组逐字节断言<br><small>obs / rng / state digest</small></div><span class="arrow">→</span>
+    <div class="step">分歧定位<br><small>step + JSON Pointer + JS/Python 值</small></div>
+  </div>
+  <pre><code># 对拍（CI 必跑）
+for f in src/game/tests/golden/*.jsonl:
+    meta, *steps = read(f)
+    s = eng.create(meta.config)
+    assert digest(eng.observe(s)) == steps[0].obsDigest and digest(s["rng"]) == steps[0].rngDigest
+    for st in steps[1:]:
+        r = eng.reduce(s, st.action); assert r.illegal == st.illegal; s = r.state
+        assert (digest(eng.observe(s)), digest(s["rng"]), digest(s)) == (st.obsDigest, st.rngDigest, st.stateDigest)
+    # 首个分歧：打印 step、JSON Pointer 路径、JS 值 / Python 值（用 --dump-state 从 JS 侧导出同一步的全状态）
+
+# 差分对拍（nightly）
+node src/game/scripts/golden-gen.js --random-walk --n 200 --out /tmp/diff   # JS 侧随机合法动作
+pytest tests/golden/test_diff.py --dir /tmp/diff</code></pre>
+  <h4>移植顺序（分层推进，每层先过 GAME-01 §9 测试向量再下一层）</h4>
+  <div class="flow">
+    <div class="step">rng</div><span class="arrow">→</span>
+    <div class="step">digest</div><span class="arrow">→</span>
+    <div class="step">loader</div><span class="arrow">→</span>
+    <div class="step">state / slots / counter / risk</div><span class="arrow">→</span>
+    <div class="step">combat</div><span class="arrow">→</span>
+    <div class="step">map / shop / forge / event / relic</div><span class="arrow">→</span>
+    <div class="step">engine 门面</div>
+  </div>
+</section>
+
+<section id="sec-9">
+  <h3><span class="n">9</span>配置项</h3>
+  <table>
+    <tr><th>键</th><th>类型</th><th>默认</th><th>含义</th></tr>
+    <tr><td><code>env.content_dir</code></td><td>str</td><td><code>src/game/content</code></td><td>配表目录（与 JS 共用）</td></tr>
+    <tr><td><code>env.golden_dir</code></td><td>str</td><td><code>src/game/tests/golden</code></td><td>对拍基准目录</td></tr>
+    <tr><td><code>env.check_invariants</code></td><td>bool</td><td><code>true</code></td><td>每次 reduce 后执行 <code>assertInvariants</code>（同 JS；性能测试时可关闭）</td></tr>
+  </table>
+  <p>游戏参数（难度、开关、局长）不在本模块配置，由 <code>EpisodeConfig</code>（Spec §4.1）传入。</p>
+</section>
+
+<section id="sec-10">
+  <h3><span class="n">10</span>错误处理与降级</h3>
+  <table>
+    <tr><th>错误码</th><th>触发</th><th>处理</th></tr>
+    <tr><td><span class="tag err">E_ENV_CONTENT_INVALID</span></td><td>配表校验失败</td><td>启动即失败，退出码 2</td></tr>
+    <tr><td><span class="tag err">E_ENV_CONFIG_INVALID</span></td><td><code>apply_difficulty/validate_config</code> 失败</td><td>抛出，由调用方退出码 2</td></tr>
+    <tr><td><span class="tag err">E_ENV_INTERNAL</span></td><td>不变式违反或分派异常</td><td><code>reduce</code> 返回 <code>error</code>，state 不变；MOD-02 将该局标为 <code>degraded</code></td></tr>
+    <tr><td><span class="tag err">E_ENV_RNG</span></td><td>未注册流名或 randint 区间非法</td><td>同上</td></tr>
+    <tr><td><span class="tag err">E_ENV_PARITY_MISMATCH</span></td><td>对拍不一致（仅测试/自检）</td><td>CI 失败，退出码 1</td></tr>
+    <tr><td><span class="tag err">E_ACTION_*</span></td><td>非法动作</td><td>正常返回 <code>illegal=True</code>，不是错误</td></tr>
+  </table>
+  <blockquote><b>不降级</b>：内核错误说明 Python 与 JS 的等价性被破坏，<b>禁止</b>用「跳过该步」之类的方式掩盖。</blockquote>
+</section>
+
+<section id="sec-11">
+  <h3><span class="n">11</span>测试计划</h3>
+  <p>测试是本模块的「第二条命」：T-01～T-03 守护算法层等价，T-04/T-05/T-08 守护全流程等价，T-06/T-07/T-10 守护语义细节，T-09 是端到端结果校验。</p>
+  <table>
+    <tr><th>#</th><th>给定</th><th>当</th><th>则</th></tr>
+    <tr><td>T-01</td><td>GAME-01 §9 的 RNG 测试向量</td><td><code>derive_seed/next_u32/randint/shuffle</code></td><td>与 JS 输出逐值相等</td></tr>
+    <tr><td>T-02</td><td>含中文、嵌套、整数的任意对象</td><td><code>stable_stringify/digest</code></td><td>与 JS 逐字节相等；含 float 时抛异常</td></tr>
+    <tr><td>T-03</td><td><code>src/game/content</code></td><td><code>load_tables</code></td><td>校验通过；对篡改副本（悬空引用、坏 id、风险等级不符）分别报 <code>E_ENV_CONTENT_INVALID(detail=E_CONTENT_*)</code></td></tr>
+    <tr><td>T-04</td><td>5 组 golden</td><td>逐行重放</td><td><code>obsDigest/rngDigest/stateDigest/illegal</code> 全部相等</td></tr>
+    <tr><td>T-05</td><td>JS 随机游走 200 局</td><td>差分对拍</td><td>0 分歧</td></tr>
+    <tr><td>T-06</td><td><code>stageCount=4</code></td><td><code>create</code></td><td><code>E_ENV_CONFIG_INVALID</code>；<code>stageCount=6</code> 时击败第 6 关 Boss 得到 <code>outcome="win"</code>、<code>stagesCleared=6</code></td></tr>
+    <tr><td>T-07</td><td>任意 <code>player_turn</code> 状态</td><td>reduce 一个非法动作</td><td>返回原 state 对象（<code>is</code>），<code>illegal=True</code>，<code>code</code> 同 JS</td></tr>
+    <tr><td>T-08</td><td>子进程 <code>PYTHONHASHSEED=0/12345</code>、<code>TZ=UTC/Asia/Tokyo</code></td><td>跑 T-04</td><td>四种组合全部通过</td></tr>
+    <tr><td>T-09</td><td>默认局 n=200（seed 1–200）</td><td>Python <code>greedy_counter</code></td><td>通关率与 JS 逐局一致（实测两侧均 45.5%，差 0.0pp ≤ 3pp；复现命令见 Spec §8.6）</td></tr>
+    <tr><td>T-10</td><td>同一 state</td><td>连续调用 <code>reduce</code> 两次</td><td>入参 state 的 <code>digest</code> 不变（写时构造）</td></tr>
+  </table>
+</section>
+
+<section id="sec-12">
+  <h3><span class="n">12</span>验收标准</h3>
+  <p>对齐 Spec §9 的 DoD。M0 是本模块的交付门槛：对拍全过 + 与 MOD-02 联调跑通一局默认局。</p>
+  <ul class="check">
+    <li><b>G1</b>：<code>gamer_rsi/env/</code> 行覆盖 ≥ 90%（JS 侧为 95.8%）。</li>
+    <li><b>G2</b>：T-04 全部通过；golden 只读，禁止 Python 侧生成替代快照。</li>
+    <li><b>G3</b>：T-08 通过。</li>
+    <li><b>G4</b>：本模块不产出 agent 可见内容；MOD-02 投影测试覆盖 <code>seed/rng</code> 键。</li>
+    <li><b>G5</b>：<code>types.py</code> 与 GAME-01 §2 字段一致性由脚本检查。</li>
+    <li><b>G6</b>：<code>python -m gamer_rsi env selftest --seed 1</code> 与 <code>pytest tests/golden -q</code> 可直接复制执行。</li>
+    <li><b>M0</b>：T-04/T-05/T-09 通过，并与 MOD-02 <code>SandboxEnv</code> 联调完成一局默认局。</li>
+  </ul>
+</section>
+
+<section id="sec-13">
+  <h3><span class="n">13</span>指标与埋点</h3>
+  <p>本模块<b>只产出字段</b>（<code>native_result</code>、<code>reduce.events</code>），不落盘。事件名由 MOD-02 以 <code>env.*</code> 前缀转发给 MOD-09。</p>
+</section>
+
+<section id="sec-14">
+  <h3><span class="n">14</span>依赖与风险</h3>
+  <table>
+    <tr><th>依赖</th><th>说明</th></tr>
+    <tr><td><code>src/game/kernel</code> + <code>content</code> + <code>tests/golden</code></td><td>移植基准；JS 侧任何改动都必须同一 PR 同步 Python，并重新生成 golden</td></tr>
+    <tr><td>MOD-09 <code>errors.py</code></td><td>错误码登记</td></tr>
+  </table>
+  <table>
+    <tr><th>风险</th><th>对策</th></tr>
+    <tr><td>JS 与 Python 语义差异（整除、键序、字符串比较）</td><td>GAME-01 §7 的 14 条逐条单测；差分对拍 nightly</td></tr>
+    <tr><td>深拷贝导致性能不达标</td><td>先保证正确；若 <code>reduce</code> p95 &gt; 2 ms，只对 <code>state.player</code>/<code>enemies</code> 做结构共享</td></tr>
+    <tr><td>JS 改规则后 Python 漂移</td><td>CI 检查 <code>KERNEL_VERSION</code> 一致，并比对 JS golden 的 <code>kernelVersion</code></td></tr>
+  </table>
+</section>
+
+<section id="sec-15">
+  <h3><span class="n">15</span>里程碑与工作量</h3>
+  <p>JS 内核约 <b>2,780 行</b>，逐位移植并对拍。估算与实际交付对比如下——注意实际交付远快于估算，已在排期文档记录偏差。</p>
+  <table>
+    <tr><th>#</th><th>任务</th><th>人日</th></tr>
+    <tr><td>1</td><td><code>rng</code> + <code>digest</code> + <code>loader</code>（含测试向量）</td><td>1.0</td></tr>
+    <tr><td>2</td><td><code>state/slots/counter/risk/relic</code></td><td>1.0</td></tr>
+    <tr><td>3</td><td><code>combat</code>（end_turn E0–E12，最易分歧）</td><td>2.0</td></tr>
+    <tr><td>4</td><td><code>map/shop/forge/event</code> + <code>engine</code> 门面</td><td>1.5</td></tr>
+    <tr><td>5</td><td>golden 对拍、差分对拍脚本、性能调优</td><td>1.5</td></tr>
+    <tr><td></td><td><b>合计</b></td><td><b>7.0</b></td></tr>
+  </table>
+  <blockquote><b>实际交付（M0）</b>：2026-10-03 提交 <code>98ded4a</code>（<code>gamer_rsi/env/</code> 全量移植 + golden 对拍）。本项目<b>未单独记工</b>，「实际人日」无法从仓库证据还原；按提交时间窗折算 ≤ 1 人日，与估算 7.0 人日的偏差 ≥ 85%（排期 §7 的 20% 阈值被触发，已在排期 §8 记录）。T-01～T-10 全部通过（T-08 于 2026-10-03 由验收补齐为 pytest 用例），证据见 M0 验收报告。M1 起按排期 §7 逐任务记录实际人日。</blockquote>
+</section>
+
+<section id="sec-16">
+  <h3><span class="n">16</span>开放问题</h3>
+  <ol>
+    <li>GAME-01 P-5 要求 Python 也用 16 位分片做 64 位乘法。Python 原生大整数加掩码的结果与之相同且更快，是否放宽为「算法任选，测试向量必须通过」？（建议放宽，需修订 GAME-01。）</li>
+    <li>差分对拍需要 JS 侧新增 <code>--random-walk</code> 模式（<code>scripts/golden-gen.js</code>），以及 <code>--dump-state</code> 调试导出。归 GAME 侧，工作量约 0.3 人日。</li>
+    <li>如果将来需要多进程并行跑环境，<code>Tables</code> 的冻结视图是否要支持 pickle？</li>
+  </ol>
+</section>
+
+<section id="sec-17">
+  <h3><span class="n">17</span>变更记录</h3>
+  <table>
+    <tr><th>版本</th><th>时间</th><th>变更</th></tr>
+    <tr><td>v0.1</td><td>2026-09-30</td><td>首版（基于旧《Dicey Dungeons》规则模型）</td></tr>
+    <tr><td>v1.0</td><td>2026-09-30 17:21</td><td>按 Spec v1.3（B-09）与 MOD PRD 评审整体重写：定位改为 GAME 内核的逐位移植；废弃 v0.1 的 D-01～D-05（规则相关）；随机派生改为 xmur3 + SplitMix64（原 blake2b 违反 GAME-01 §3.2）；对拍基准改为 <code>src/game/tests/golden</code>（新增 <code>stateDigest</code> 与 g5 默认局）</td></tr>
+  </table>
+  <blockquote>v0.1 中基于旧《Dicey Dungeons》模型的内容（floors/HP/block/levelup/<code>configs/enemies.yaml</code>/shaped reward 表）已<b>全部废弃</b>——如果你翻到旧资料，请以 v1.0 为准。</blockquote>
+</section>
+
+</div>
+<footer>来源：docs/prd/MOD-01-env-rules-PRD.md · GameRSI 模块讲解系列 · 2026-10-04</footer>
+</main>
+</body>
+</html>

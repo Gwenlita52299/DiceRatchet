@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MOD-05 · memory 策略记忆与反思库 — GameRSI 模块讲解</title>
+<style>
+:root{--accent:#d97706;--accent-2:#f59e0b;--accent-soft:rgba(217,119,6,.10);--bg:#f5f6fa;--card:#fff;--ink:#1c2333;--muted:#64708a;--line:#e5e8f0;--code-bg:#101725;--code-ink:#e8ecf5;--ok:#0f9d58;--bad:#dc2626}
+*{box-sizing:border-box}html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"PingFang SC","Microsoft YaHei","Noto Sans SC",system-ui,-apple-system,"Segoe UI",sans-serif;font-size:15px;line-height:1.75}
+aside{position:fixed;inset:0 auto 0 0;width:262px;background:#0e1422;color:#c6cddd;padding:22px 18px;overflow-y:auto}
+aside h1{font-size:15px;color:#fff;margin:0 0 4px;letter-spacing:.5px}
+aside .sub{font-size:12px;color:#7d89a3;margin-bottom:18px}
+aside a{display:block;color:#aab6cc;text-decoration:none;font-size:13.5px;padding:7px 10px;border-radius:8px;margin:1px 0}
+aside a:hover{background:rgba(255,255,255,.07);color:#fff}
+aside a.cur{background:var(--accent);color:#fff;font-weight:600}
+aside .sep{height:1px;background:rgba(255,255,255,.09);margin:14px 0}
+aside .toc a{font-size:12.5px;color:#8b97ae;padding:4px 10px}
+main{margin-left:262px;padding:34px 40px 80px}
+.wrap{max-width:900px;margin:0 auto}
+header.hero{background:linear-gradient(135deg,var(--accent),var(--accent-2));color:#fff;border-radius:16px;padding:30px 32px;margin-bottom:26px}
+header.hero .kid{font-size:13px;letter-spacing:2px;opacity:.85}
+header.hero h2{margin:6px 0 8px;font-size:27px;line-height:1.3}
+header.hero p{margin:0;opacity:.92;max-width:64ch}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.badge{font-size:12px;background:rgba(255,255,255,.18);border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:3px 11px}
+section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 26px;margin:0 0 18px;scroll-margin-top:20px}
+section h3{font-size:18px;margin:0 0 12px;display:flex;align-items:center;gap:9px}
+section h3 .n{width:24px;height:24px;border-radius:7px;background:var(--accent-soft);color:var(--accent);font-size:12.5px;display:grid;place-items:center;font-weight:700}
+h4{font-size:15px;margin:18px 0 6px;color:var(--accent)}
+p{margin:0 0 10px}ul,ol{padding-left:20px;margin:0 0 10px}li{margin:4px 0}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:10px 0}
+th{background:var(--accent-soft);color:var(--accent);text-align:left;padding:8px 10px;border:1px solid var(--line);font-weight:600}
+td{padding:8px 10px;border:1px solid var(--line);vertical-align:top}
+tr:nth-child(even) td{background:#fafbfe}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;background:var(--accent-soft);color:var(--accent);padding:1.5px 6px;border-radius:5px}
+pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;font-size:12.5px;line-height:1.6}
+pre code{background:none;color:inherit;padding:0}
+blockquote{margin:12px 0;padding:10px 14px;border-left:4px solid var(--accent);background:var(--accent-soft);color:#3a4257;border-radius:0 8px 8px 0;font-size:13.5px}
+.tag{display:inline-block;font-size:11.5px;font-weight:700;border-radius:6px;padding:2px 8px;margin:2px 3px 2px 0;background:var(--accent);color:#fff}
+.tag.nfr{background:#0e7490}.tag.err{background:#b91c1c}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px;margin:12px 0}
+.card{background:#fafbff;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card b{color:var(--accent)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.do{border-top:3px solid var(--ok)}.dont{border-top:3px solid var(--bad)}
+.check{padding-left:0}.check li{list-style:none;margin:6px 0;padding-left:26px;position:relative}
+.check li::before{content:"✓";position:absolute;left:2px;color:var(--ok);font-weight:700}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0}
+.step{background:var(--accent-soft);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:8px 12px;font-size:13px;min-width:120px}
+.arrow{color:var(--accent);font-weight:700}
+footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px}
+@media(max-width:960px){aside{position:static;width:auto;height:auto;padding:14px}main{margin-left:0;padding:20px 16px 60px}.cols{grid-template-columns:1fr}}
+@media print{aside{display:none}main{margin:0}.wrap{max-width:none}section{break-inside:avoid}}
+</style>
+</head>
+<body>
+<aside>
+  <h1>GameRSI</h1><div class="sub">模块讲解 · MOD 系列</div>
+  <a href="MOD-01-env-rules.html">MOD-01 env-rules</a>
+  <a href="MOD-02-env-sandbox.html">MOD-02 env-sandbox</a>
+  <a href="MOD-03-inference.html">MOD-03 inference</a>
+  <a href="MOD-04-policy.html">MOD-04 policy</a>
+  <a class="cur" href="MOD-05-memory.html">MOD-05 memory</a>
+  <a href="MOD-06-loop.html">MOD-06 loop</a>
+  <a href="MOD-07-evolve.html">MOD-07 evolve</a>
+  <a href="MOD-08-evals.html">MOD-08 evals</a>
+  <a href="MOD-09-infra.html">MOD-09 infra</a>
+  <div class="sep"></div>
+  <div class="sub">本页导航</div>
+  <div class="toc">
+    <a href="#sec-1">1 背景与目标</a>
+    <a href="#sec-2">2 范围</a>
+    <a href="#sec-3">3 使用方与场景</a>
+    <a href="#sec-4">4 功能需求</a>
+    <a href="#sec-5">5 非功能需求</a>
+    <a href="#sec-6">6 接口契约</a>
+    <a href="#sec-7">7 数据模型与存储</a>
+    <a href="#sec-8">8 关键流程</a>
+    <a href="#sec-9">9 配置项</a>
+    <a href="#sec-10">10 错误处理与降级</a>
+    <a href="#sec-11">11 测试计划</a>
+    <a href="#sec-12">12 验收标准</a>
+    <a href="#sec-13">13 指标与埋点</a>
+    <a href="#sec-14">14 依赖与风险</a>
+    <a href="#sec-15">15 里程碑与工作量</a>
+    <a href="#sec-16">16 开放问题</a>
+    <a href="#sec-17">17 变更记录</a>
+  </div>
+</aside>
+<main>
+<div class="wrap">
+
+<header class="hero">
+  <div class="kid">MOD-05 · memory</div>
+  <h2>策略记忆与反思库</h2>
+  <p>把 MOD-06 局末产出的反思文本，转成<b>可检索、可度量、可淘汰、可回滚</b>的结构化记忆，让 MOD-04 组装决策 prompt 时，能按当前 Observation 取出最相关的那几条。</p>
+  <div class="badges">
+    <span class="badge">版本 v1.2</span>
+    <span class="badge">状态：草案（待复核）</span>
+    <span class="badge">里程碑 M2（MOD-05/06/07 初版）</span>
+    <span class="badge">上游 Spec v1.4（冲突以 Spec 为准）</span>
+  </div>
+</header>
+
+<div class="grid">
+  <div class="card"><b>背景与目标</b><br>它是「反思注入」演化对象的落地载体，也是 MOD-07 可回滚的演化对象之一。三条硬目标：写入→检索→淘汰→回滚全链路确定性可复现；效用证据只用环境原生胜负；heldout/test 的 seed 永不进入记忆。</div>
+  <div class="card"><b>核心职责</b><br>写入管线（去重 / 冲突裁决 / 原子落盘）、检索打分与预算裁剪、容量与 TTL 生命周期、快照血缘与回滚、INV-5 四拦截点隔离与可观测自检。</div>
+  <div class="card"><b>服务对象</b><br>MOD-04 policy（取记忆注入 prompt）、MOD-06 loop（写反思并回填效用）、MOD-07 evolve（快照 / 回滚）、MOD-08 evals（只读统计）、MOD-09 infra 与审计者（CLI 与泄漏事件定位）。</div>
+  <div class="card"><b>关键成功度量</b><br><code>retrieve()</code> P95 ≤ 50 ms、<code>add_reflection()</code> P95 ≤ 15 ms（active ≤ 2000）、启动加载 ≤ 2 s、常驻内存 ≤ 64 MB、单文件 ≤ 16 MB；蜜罐泄漏 0 告警、同 seed 逐字节可复现。</div>
+</div>
+
+<section id="sec-1">
+  <h3><span class="n">1</span>背景与目标</h3>
+  <p>MOD-05 处于 GameRSI 的 <b>L1 层</b>，扮演「策略记忆与反思库」的角色。训练时，MOD-06 在每局结束后产出一段反思文本；如果只是把文本原样存下来，既没法按当前局面检索，也没法度量哪条记忆真的有用，更没法在演化走偏时回滚。MOD-05 的工作就是把这段文本转成结构化的 <code>MemoryEntry</code>——带上情境键、标签、正反极性、行动提示——再让它走过一条完整生命周期：</p>
+  <div class="flow">
+    <span class="step">写入</span><span class="arrow">→</span>
+    <span class="step">去重 / 冲突裁决</span><span class="arrow">→</span>
+    <span class="step">原子落盘</span><span class="arrow">→</span>
+    <span class="step">检索取用</span><span class="arrow">→</span>
+    <span class="step">容量 / TTL 淘汰</span><span class="arrow">→</span>
+    <span class="step">快照 / 回滚</span>
+  </div>
+  <p>它同时是两件事的落地载体：项目计划 §5 的「反思注入」演化对象（改进对象 a/c），以及 MOD-07 可回滚的演化对象之一（Spec §3 MOD-05）。</p>
+  <h4>三条目标</h4>
+  <ol>
+    <li><b>全链路确定性可复现</b>：写入→去重→冲突裁决→检索→淘汰→快照/回滚，每一步都可复算。</li>
+    <li><b>效用证据只用环境原生胜负</b>（Spec INV-7）：避免自证式膨胀——记忆不能只因为「被自己引用过」就显得有价值（调研纪要 §4.1）。</li>
+    <li><b>硬性落实 INV-5</b>：heldout/test 的 seed 与相关信息<b>永不进入记忆</b>，四个拦截点全部可审计。</li>
+  </ol>
+  <blockquote>非目标见 §2.2：本模块只做存储、检索与生命周期，<b>不生成反思文本，也不判定记忆价值</b>。</blockquote>
+</section>
+
+<section id="sec-2">
+  <h3><span class="n">2</span>范围</h3>
+  <div class="cols">
+    <div class="card do">
+      <b>✓ 负责（范围内）</b>
+      <ul>
+        <li><code>MemoryEntry</code> / <code>ReflectionEntry</code> schema：JSON Schema 校验 + round-trip，对齐 G5。</li>
+        <li>写入管线：MOD-06 反思入站 → 结构化抽取 → 去重合并 → 冲突检测 → 原子落盘；以及检索、容量、淘汰与归档。</li>
+        <li>检索 <code>retrieve(obs, top_k, token_budget)</code>：标签 + BM25 + 可选向量 + 效用 + 时新度打分，预算裁剪与顺序确定性。</li>
+        <li>快照 <code>memory_v{N}.jsonl</code> 与 <code>harness_version</code> 血缘、回滚命令；INV-5 四拦截点与 <code>audit/</code> 泄漏事件；阶段一存储选型与换向量库触发阈值。</li>
+      </ul>
+    </div>
+    <div class="card dont">
+      <b>✗ 不负责（范围外）</b>
+      <ul>
+        <li>生成反思文本——<b>MOD-06</b> 的活。</li>
+        <li>评估记忆是否有用——<b>MOD-08</b> 提供指标，<b>MOD-07</b> 做取舍。</li>
+        <li>拼装 prompt——<b>MOD-04</b>。</li>
+        <li>embedding 服务实现——走 <b>MOD-03</b> <code>embed()</code>。</li>
+        <li>seed 注册表与 split 划分——<b>MOD-09</b> <code>seeds.yaml</code> + <b>MOD-08</b>。</li>
+        <li>实现泄漏扫描器——只调 <b>MOD-02</b> <code>sandbox.audit.scan_text(text, surface="memory")</code>（Spec §4.7）。</li>
+        <li>消融与记忆价值判定——<b>MOD-08</b>。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="sec-3">
+  <h3><span class="n">3</span>使用方与场景</h3>
+  <p>记忆库有五个调用方，期望各不相同。记住这条分工：<b>MOD-06 只写、MOD-04 只读、MOD-07 管版本、MOD-08 只看统计、MOD-09 与人管审计</b>。</p>
+  <table>
+    <tr><th>使用方</th><th>调用点</th><th>期望</th></tr>
+    <tr><td>MOD-04 policy</td><td>每次组装决策 prompt 前</td><td><code>retrieve()</code> → 有序、预算内、无泄漏的条目与渲染文本</td></tr>
+    <tr><td>MOD-06 loop</td><td>局末反思后 / 局内</td><td><code>add_reflection(refl, provenance)</code>；<code>record_usage()</code> 回填引用、采纳与胜负</td></tr>
+    <tr><td>MOD-07 evolve</td><td>每代演化前 / 回滚</td><td><code>stats()</code>、读快照、<code>snapshot(reason=...)</code>、<code>rollback(v)</code></td></tr>
+    <tr><td>MOD-08 evals</td><td>消融「去反思」</td><td>只读 <code>stats()</code> 与每代 <code>entry_count</code>，<b>不得写库</b></td></tr>
+    <tr><td>MOD-09 infra / 人（审计者）</td><td>横切 / <code>audit leak</code></td><td>配置与统一 JSONL 事件、CLI（§7.4）/ 任一泄漏事件可定位到 reflection_id、entry_id 与命中串</td></tr>
+  </table>
+  <h4>四个典型场景（流程细节见 §8）</h4>
+  <ul>
+    <li><b>S1</b>：净化值很低仍在全骰进攻的败局反思 → 抽出 1 条 <code>avoid</code> 记忆并去重合并。</li>
+    <li><b>S2</b>：第 3 回合敌方意图 <code>purge 9</code>、玩家 <code>virtue=4</code> → 检索命中「净化值低先放光盾」并置首。</li>
+    <li><b>S3</b>：同情境但结论相反 → 保守共存，挂上冲突组。</li>
+    <li><b>S4</b>：harness 回滚到 v6 时，<code>memory rollback --to-version 4</code> 恢复同代记忆。</li>
+  </ul>
+</section>
+
+<section id="sec-4">
+  <h3><span class="n">4</span>功能需求</h3>
+  <p>12 条 FR，按「写进来 → 找出来 → 管生命周期 → 保隔离」的脉络排布。</p>
+  <ul>
+    <li><span class="tag">FR-05-1</span><b>schema</b>：两个 entry 有 JSON Schema（draft 2020-12）；<code>to_json → from_json</code> round-trip 逐字段相等；<code>additionalProperties:false</code>，未知字段拒绝。</li>
+    <li><span class="tag">FR-05-2</span><b>反思入站与抽取</b>：<code>add_reflection()</code> 仅接受 <code>provenance.split == "train"</code>，否则抛 <code>MemoryIsolationError(E_EVAL_INV5_LEAK)</code>；<code>extract_candidates()</code> 用<b>确定性规则</b>从 <code>ReflectionEntry.text</code> 抽出 ≤ <code>max_candidates_per_reflection</code> 个候选（<code>situation/tags/lesson/polarity/action_hint</code>），无候选时仅存反思、不报错。</li>
+    <li><span class="tag">FR-05-3</span><b>去重与冲突检测</b>：<code>(situation_key, text_hash)</code> 相同 → 精确合并；<code>sim ≥ 0.85</code> 且 <code>situation_key</code> 相同 → 近似合并（合并不新增行，只累加 <code>outcome_stats</code> 与 <code>merged_from</code>）；同 <code>situation_key</code>、<code>polarity</code> 相反、<code>action_hint.kind</code> 相同（或均 <code>null</code>）→ 冲突，默认两条都 active + <code>conflict_group</code>，检索只返回组内高分者并标注。</li>
+    <li><span class="tag">FR-05-4</span><b>原子落盘</b>：追加 <code>memory_active.jsonl</code>，每 <code>compact_every</code> 次 tmp+<code>fsync</code>+<code>os.replace</code> 压实；崩溃不得留半行。</li>
+    <li><span class="tag">FR-05-5</span><b>检索</b>：<code>retrieve(obs, *, top_k, token_budget, tick)</code>（Spec §4.7）按 §6.3 打分，返回 <code>RetrieveResult</code>（entries/scores/tokens/dropped/conflict_groups/elapsed_ms）。</li>
+    <li><span class="tag">FR-05-6</span><b>顺序与裁剪确定性</b>：排序键 <code>(-round(S,6), entry_id)</code>；<code>S &lt; min_score(0.15)</code> 剔除；预算裁剪<b>跳过</b>超预算条目而不截断文本，<code>dropped[]</code> 记原因。</li>
+    <li><span class="tag">FR-05-7</span><b>容量、淘汰与 TTL（逻辑时钟，Spec v1.3 §8.1）</b>：<code>tick</code> = 本 run 已完成的<b>训练局序号</b>，由 MOD-06 传入，评估局不推进 tick。<code>active &gt; max_entries</code> 时按 <code>(utility, last_ref_tick, entry_id)</code> 升序淘汰到上限；免疫条件 <code>n_ref ≥ 3</code> 或 <code>age_ticks &lt; min_age_ticks</code>（默认 30，即 1 代）；<code>expires_tick = created_tick + ttl_ticks</code>（默认 300，约 10 代），过期淘汰（<code>evict_reason="ttl"</code>）。
+      <blockquote>v1.0 用墙钟（<code>min_age_days=7</code>、<code>ttl_days=90</code>），而一个 run 只持续几小时，于是<b>全部条目都免于淘汰、容量上限永远不生效</b>，重跑时 <code>created_at</code> 不同也破坏了 G3——这正是 v1.1 改用逻辑时钟的原因。</blockquote></li>
+    <li><span class="tag">FR-05-8</span><b>效用更新</b>：<code>record_usage(episode_key, memory_ids, outcome, *, adopted_ids)</code> 在<b>局末</b>由 MOD-06 调用一次，更新引用、采纳、胜负计数与 <code>last_ref_tick</code>，按 §6.4 重算 <code>utility</code>。<code>adopted_ids</code> 由 MOD-04 在 <code>DecisionResult</code> 中给出。</li>
+    <li><span class="tag">FR-05-9</span><b>快照、血缘与回滚</b>：每代（或显式）产出 <code>memory_v{N}.jsonl</code>，header 登记 <code>(memory_version, parent_memory_version, harness_version, generation, config_hash, content_sha256)</code>；<code>rollback(target)</code> 校验 sha256 → 原子替换 active 库 → 新版本号（<b>不回退编号</b>，Spec §8.4 不可重写历史）→ 事件 <code>memory_rollback</code>。</li>
+    <li><span class="tag">FR-05-10</span><b>INV-5 隔离</b>：§6.5 四个拦截点全部生效，命中即拒写/拒返回并落 <code>audit/leak_events.jsonl</code>。</li>
+    <li><span class="tag">FR-05-11</span><b>可观测与一致性自检</b>：<code>stats()</code> 返回条目数/版本/去重率/冲突数/淘汰数/命中率；<code>verify()</code> 查行完整性、<code>entry_id</code> 唯一、<code>content_sha256</code>、<code>situation_key</code> 可复算，坏行移入 <code>memory/quarantine.jsonl</code> 记 <code>E_IO_MEMORY_CORRUPT</code> 且<b>不中断 loop</b>。</li>
+    <li><span class="tag">FR-05-12</span><b>陈旧血缘过滤</b>：条目带写入时 <code>harness_version</code>；检索默认排除 <code>harness_version &gt; current_harness_version</code> 的条目。</li>
+  </ul>
+</section>
+
+<section id="sec-5">
+  <h3><span class="n">5</span>非功能需求</h3>
+  <ul>
+    <li><span class="tag nfr">NFR-05-1</span><b>确定性（G3）</b>：打分、排序、淘汰只用逻辑时钟 <code>tick</code>（调用方显式传入），<b>不读墙钟</b>；<code>created_at</code> 只作审计展示，不参与打分、也不计入 <code>content_sha256</code>；禁 <code>import random</code>（MOD-09 AST 守卫）；同 seed 同输入两次 <code>retrieve()</code> 逐字节相同。</li>
+    <li><span class="tag nfr">NFR-05-2</span><b>性能与内存</b>：<code>active ≤ 2000</code> 时 <code>retrieve()</code> P95 ≤ 50 ms、<code>add_reflection()</code> P95 ≤ 15 ms（不含扫描与 embedding）、启动全量加载 ≤ 2 s、常驻内存 ≤ 64 MB（M5/24GB，纯 Python）。</li>
+    <li><span class="tag nfr">NFR-05-3</span><b>可复现、稳健与可观测</b>：快照 <code>content_sha256</code> 可跨机复核，<code>config_hash</code> 覆盖全部 <code>memory.*</code> 键；记忆是<b>增强而非依赖</b>，任何写入/检索失败不得让本局失败（§10）；事件单行 JSONL（公共字段 <code>run_id/episode_id/harness_version/memory_version/event/ts</code>），不自建日志格式。</li>
+    <li><span class="tag nfr">NFR-05-4</span><b>容量</b>：单文件 ≤ 16 MB；单条渲染 ≤ 400 字符；<code>token_budget</code> 默认 900；<code>active</code> 默认上限 2000。</li>
+  </ul>
+</section>
+
+<section id="sec-6">
+  <h3><span class="n">6</span>接口契约</h3>
+  <p>三个文件、一组纯函数。记住两条边界：<b>本模块不接收 seed 与 FullState</b>（检索只吃 <code>ObservationDict</code>）；<b>时间只来自调用方传入的 tick</b>，不注入墙钟。</p>
+
+  <h4>6.1 模块布局（对齐 Spec §5；<code>snapshot.py</code> 为新增）</h4>
+<pre><code># gamer_rsi/memory/schemas.py 类型 + JSON Schema + round-trip；store.py MemoryStore：写入/去重/冲突/淘汰/快照/回滚
+# gamer_rsi/memory/retriever.py retrieve() 打分与预算裁剪；snapshot.py memory_v{N}.jsonl 读写、sha256、回滚  ← 已回填 Spec §5（B-35）</code></pre>
+
+  <h4>6.2 数据类与函数签名</h4>
+<pre><code># gamer_rsi/memory/schemas.py
+MEMORY_SCHEMA_VERSION = "1.0"
+@dataclass(frozen=True)
+class SituationKey:                       # 受控取值，用于硬过滤与情境加成
+    phase: Literal["map","player_turn","shop","event","treasure","shrine","forge","rest","relic_swap"]   # GAME phase（obs-agent）
+    stage_bucket: Literal["1-2","3-4","5-6","7+"]; node_kind: str | None               # battle/elite/boss/…（战斗内取当前节点）
+    virtue_bucket: Literal["critical","low","mid","high"]; hearts_left: int            # virtue/virtueMax 分档 &lt;=25%/&lt;=50%/&lt;=75%/其余
+    enemy_school: str | None; intent_kind: str | None; counter_arrow: Literal["up","down","eq"] | None   # enemies[0] 的学派/首个意图/对我方学派的克制箭头
+    hand_count: int; corrupt_count: int; slot_kinds: tuple[str, ...]                   # 手骰数、魔化骰数、槽类型排序去重
+@dataclass(frozen=True)
+class MemoryEntry:
+    entry_id: str; schema_version: str; created_at: str; created_tick: int; run_id: str; generation: int; harness_version: int; text_hash: str; content_sha256: str
+    source_episode_id: str; source_reflection_id: str; situation: SituationKey; situation_key: str; tags: tuple[str, ...]; lesson: str; action_hint: dict | None
+    polarity: Literal["do","avoid"]; confidence: float; last_ref_tick: int | None; n_ref: int; n_adopted: int; n_win_adopted: int; n_not_adopted: int; n_win_not_adopted: int
+    utility: float; ttl_ticks: int; expires_tick: int; status: Literal["active","evicted","superseded","quarantined"]; supersedes: str | None; superseded_by: str | None
+    conflict_group: str | None; merged_from: tuple[str, ...]; embedding: tuple[float, ...] | None
+    def to_json(self) -> str: ...
+    def from_json(cls, line: str) -> "MemoryEntry": ...        # @classmethod，round-trip 入口
+@dataclass(frozen=True)
+class ReflectionEntry:                    # 文本由 MOD-06 产出，本模块不生成
+    reflection_id: str; schema_version: str; created_at: str; run_id: str; episode_id: str; seed: int; split: Literal["train"]
+    generation: int; harness_version: int; tick: int; text: str; outcome: Literal["win","lose"]; truncation_reason: str | None
+    stages_cleared: int; hearts_left: int; battles_won: int; decisions: int; illegal_attempts: int; fallback_decisions: int   # INV-7 口径（Spec v1.3）
+    failure_cause: Literal["none","illegal_action","low_damage","wrong_target","virtue_management","corruption_misuse","counter_ignored","route_choice","economy","policy_failure","unknown"]
+    tags: tuple[str, ...]; extracted_memory_ids: tuple[str, ...]; scan: dict   # {"status":"pass"|"quarantined","hits":[{"pattern":str,"span":[int,int]}]}
+    llm_latency_ms: int | None; prompt_tokens: int | None; completion_tokens: int | None
+@dataclass(frozen=True)
+class Provenance:                         # 写入准入凭证：唯一的 seed 入口，且只允许 train
+    run_id: str; episode_id: str; split: Literal["train"]; seed: int; generation: int; harness_version: int
+# gamer_rsi/memory/store.py
+class MemoryStore:
+    def __init__(self, run_dir: Path, cfg: MemoryConfig) -> None: ...        # 不注入墙钟；时间只来自调用方传入的 tick
+    def add_reflection(self, reflection: ReflectionEntry, *, provenance: Provenance) -> AddResult: ...
+    def add_memory(self, candidate: MemoryCandidate, *, provenance: Provenance) -> AddResult: ...
+    def record_usage(self, episode_key: str, memory_ids: Sequence[str], outcome: Literal["win","lose"], *, adopted_ids: Sequence[str], tick: int) -> None: ...
+    def frozen(self, memory_version: int) -> "MemoryView": ...   # 评估局只读视图（Spec §4.7）
+    def retrieve(self, obs: ObservationDict, *, top_k: int, token_budget: int, tick: int,
+                 tags_hint: Sequence[str] = (), exclude_stale_harness: bool = True) -> RetrieveResult: ...
+    def snapshot(self, *, reason: str, memory_version: int | None = None) -> Path: ...
+    def rollback(self, target_version: int, *, dry_run: bool = False) -> RollbackReport: ...
+    def stats(self) -> StoreStats: ...
+    def verify(self, *, full: bool = False) -> VerifyReport: ...
+# gamer_rsi/memory/retriever.py（纯函数；本模块不接收 seed 与 FullState）
+def situation_key(obs: ObservationDict) -> tuple[str, SituationKey, tuple[str, ...]]: ...
+def extract_candidates(reflection: ReflectionEntry, cfg: MemoryConfig) -> list[MemoryCandidate]: ...
+def similarity(a: MemoryCandidate, b: MemoryCandidate) -> float: ...
+def utility_score(entry: MemoryEntry, *, tick: int) -> float: ...
+def bm25_score(query_tokens: Sequence[str], doc_tokens: Sequence[str], df: Mapping[str, int], n_docs: int,
+               avgdl: float, k1: float = 1.2, b: float = 0.75) -> float: ...
+def tokenize(text: str) -&gt; list[str]: ...        # 英文 [a-z0-9_]+ 小写 + 中文单字 + 相邻中文二元组
+def render_entries(entries: Sequence[MemoryEntry], *, max_chars: int = 1200) -&gt; str: ...</code></pre>
+
+  <h4>6.3 打分公式（五项权重全部可配置，键见 §9）</h4>
+<pre><code>IDF(t)    = ln(1 + (N - df(t) + 0.5) / (df(t) + 0.5))
+BM25(q,d) = Σ_{t∈q} IDF(t) * f(t,d)(k1+1) / (f(t,d) + k1(1 - b + b|d|/avgdl));   BM25Norm = BM25/(BM25+1) ∈[0,1)
+TagSim    = Σ_{t ∈ tags(obs) ∩ e.tags} w(t) / Σ_{t ∈ tags(obs)} w(t)   # w: phase/intent_kind/counter_arrow=2.0，virtue_bucket/enemy_school/slot_kind=1.0，stage_bucket/node_kind/corrupt_count=0.5
+VecSim(e) = (1 + cos(q_vec, e.embedding)) / 2;   Recency = exp(-λ * (tick - e.created_tick))   # 阶段一 w_vec=0 不计算 embedding；λ=0.01/训练局
+S(e) = w_tag*TagSim + w_bm25*BM25Norm + w_vec*VecSim + w_util*U(e) + w_rec*Recency + (0.25 if e.situation_key == key(obs))
+硬过滤: status != "active" | expires_tick &lt;= tick | (exclude_stale_harness 且 e.harness_version &gt; current)
+返回: 剔除 S &lt; min_score(0.15) → 按 (-round(S,6), entry_id) 升序 → 贪心填 token_budget（跳过装不下的、不截断）→ 截到 top_k</code></pre>
+  <p>冲突组内只保留 S 最高者，被压制者记 <code>dropped[].reason="conflict_suppressed"</code>。</p>
+
+  <h4>6.4 效用分（证据只用环境原生胜负，INV-7）</h4>
+<pre><code>p_used = (n_win_adopted+1)/(n_adopted+2);  p_base = (n_win_not_adopted+1)/(n_not_adopted+2)   # Laplace α=1
+utility = clip(0.5*(p_used - p_base) + 0.3*log1p(n_ref)/log1p(200) + 0.2*exp(-age_ticks/ttl_ticks), -1.0, 1.0)
+# adopted 由 MOD-04 判定并经 DecisionResult.adopted_memory_ids 传给 MOD-06：本局某个决策的计划中存在一个动作，与条目 action_hint 的
+# (kind, slotKind, 骰子 school) 三元组一致。v1.0 只比较 kind，而 GAME 中大部分动作都是 play_face，这样判定几乎恒为真。MOD-05 不做语义判断。</code></pre>
+
+  <h4>6.5 INV-5 拦截点（四个，缺一不可）</h4>
+  <table>
+    <tr><th>#</th><th>位置</th><th>机制</th><th>失败行为</th></tr>
+    <tr><td><b>I1 源头</b></td><td><code>add_reflection</code>/<code>add_memory</code> 入口</td><td><code>provenance.split == "train"</code> 且 <code>seed ∈ MOD-09 seeds.yaml.train</code></td><td>抛 <code>MemoryIsolationError(E_EVAL_INV5_LEAK)</code>，不落盘</td></tr>
+    <tr><td><b>I2 文本</b></td><td>落盘前逐字段扫 <code>text/lesson/tags/action_hint</code></td><td>调 <code>sandbox.audit.scan_text(text, surface="memory")</code>：正则 <code>\bseed\b\s*[:=#]?\s*\d{1,7}</code> + 命中 heldout/test seed 集合的裸整数</td><td><code>scan.status="quarantined"</code> → 条目入 <code>memory/quarantine.jsonl</code>，事件入 <code>audit/leak_events.jsonl</code></td></tr>
+    <tr><td><b>I3 兜底</b></td><td><code>snapshot()</code> 与 <code>verify(full=True)</code></td><td><code>infra.guards.seed_token_guard()</code> 复扫全库</td><td>拒绝出快照（<code>E_EVAL_INV5_LEAK</code>），active 条目标 <code>quarantined</code></td></tr>
+    <tr><td><b>I4 出口</b></td><td><code>retrieve()</code> 返回前</td><td>对入选条目做廉价字面量复检（覆盖旧快照载入的条目）</td><td>命中条目丢弃并记事件，不计入返回</td></tr>
+  </table>
+  <blockquote>反思文本里出现 seed 数字<b>必须</b>由 MOD-02 扫描（I2）拦下；I3/I4 是本模块兜底，不替代 MOD-02。</blockquote>
+
+  <h4>6.6 JSON Schema（<code>MemoryEntry</code>；<code>ReflectionEntry</code> 同风格另存 <code>schemas.REFLECTION_SCHEMA</code>）</h4>
+<pre><code>{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"MemoryEntry","type":"object","additionalProperties":false,
+ "required":["entry_id","schema_version","created_at","created_tick","expires_tick","ttl_ticks","run_id","generation","harness_version","source_episode_id","source_reflection_id","situation","situation_key","tags","lesson","polarity","confidence","n_ref","n_adopted","n_win_adopted","n_not_adopted","n_win_not_adopted","utility","status","text_hash","content_sha256"],
+ "properties":{"entry_id":{"type":"string","pattern":"^mem-[0-9a-f]{12}$"},"schema_version":{"const":"1.1"},"created_at":{"type":"string","format":"date-time"},"created_tick":{"type":"integer","minimum":0},"expires_tick":{"type":"integer","minimum":0},"ttl_ticks":{"type":"integer","minimum":1},"generation":{"type":"integer","minimum":0},"harness_version":{"type":"integer","minimum":0},"situation_key":{"type":"string","pattern":"^sk-[0-9a-f]{8}$"},
+  "situation":{"type":"object","additionalProperties":false,"required":["phase","stage_bucket","virtue_bucket","hearts_left","hand_count"],"properties":{"phase":{"enum":["map","player_turn","shop","event","treasure","shrine","forge","rest","relic_swap"]},"stage_bucket":{"enum":["1-2","3-4","5-6","7+"]},"node_kind":{"type":["string","null"]},"virtue_bucket":{"enum":["critical","low","mid","high"]},"hearts_left":{"type":"integer","minimum":0},"enemy_school":{"type":["string","null"]},"intent_kind":{"type":["string","null"]},"counter_arrow":{"enum":["up","down","eq",null]},"hand_count":{"type":"integer","minimum":0,"maximum":8},"corrupt_count":{"type":"integer","minimum":0},"slot_kinds":{"type":"array","items":{"type":"string"},"maxItems":8}}},
+  "tags":{"type":"array","maxItems":8,"items":{"enum":["combat","low_virtue","defense","corruption","school_counter","target_choice","map_route","shop","event","forge","relic","elite","boss","status_effect","end_turn","ability"]}},
+  "lesson":{"type":"string","minLength":1,"maxLength":240},"action_hint":{"type":["object","null"]},"polarity":{"enum":["do","avoid"]},"confidence":{"type":"number","minimum":0,"maximum":1},"last_ref_tick":{"type":["integer","null"]},"n_ref":{"type":"integer","minimum":0},"utility":{"type":"number","minimum":-1,"maximum":1},"status":{"enum":["active","evicted","superseded","quarantined"]},
+  "supersedes":{"type":["string","null"]},"superseded_by":{"type":["string","null"]},"conflict_group":{"type":["string","null"]},"merged_from":{"type":"array","items":{"type":"string"}},"embedding":{"type":["array","null"],"items":{"type":"number"}},"text_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"content_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}}</code></pre>
+  <p>示例（<code>memory_active.jsonl</code> 的一行；<code>text_hash</code> / <code>content_sha256</code> 实际为 64 位 hex，此处缩写）：</p>
+<pre><code>{"entry_id":"mem-3f1c9ab24d07","schema_version":"1.1","created_at":"2026-10-02T09:14:11Z","created_tick":37,"run_id":"a1b2c3d4-5e6f7a8b-20261002T090000Z","generation":2,"harness_version":1,"source_episode_id":"e-001037-g002-train","source_reflection_id":"refl-88ac1d0b2fe4","situation":{"phase":"player_turn","stage_bucket":"3-4","node_kind":"elite","virtue_bucket":"critical","hearts_left":1,"enemy_school":"blade","intent_kind":"purge","counter_arrow":"down","hand_count":4,"corrupt_count":1,"slot_kinds":["attack","defense","heal","utility"]},"situation_key":"sk-71a0c4d2","tags":["combat","low_virtue","defense","school_counter"],"lesson":"净化值低于 25% 且敌方意图伤害 ≥ 当前净化值时，先把光盾骰放进防御槽，再考虑输出。","action_hint":{"kind":"play_face","slotKind":"defense","school":"neutral"},"polarity":"do","confidence":0.7,"n_ref":4,"n_adopted":3,"n_win_adopted":2,"n_not_adopted":1,"n_win_not_adopted":0,"last_ref_tick":52,"utility":0.42,"ttl_ticks":300,"expires_tick":337,"status":"active","supersedes":null,"superseded_by":null,"conflict_group":null,"merged_from":[],"embedding":null,"text_hash":"9c1f…","content_sha256":"4d2a…"}</code></pre>
+</section>
+
+<section id="sec-7">
+  <h3><span class="n">7</span>数据模型与存储</h3>
+  <h4>7.1 文件布局与引擎</h4>
+<pre><code>runs/&lt;run_id&gt;/reflections/{reflections.jsonl,leak_quarantine.jsonl}   # ReflectionEntry 一局一行（仅 train）；扫描不通过者保留文本供审计
+runs/&lt;run_id&gt;/memory/{memory_active.jsonl,memory_evicted.jsonl,memory_v{N}.jsonl,quarantine.jsonl,index.json,memory.lock}
+runs/&lt;run_id&gt;/audit/leak_events.jsonl                                 # INV-5 命中事件（MOD-02 审计器读）
+runs/&lt;run_id&gt;/metrics/memory.jsonl                                    # §13 埋点</code></pre>
+  <p><b>阶段一选型：单文件 JSONL + 全量内存索引</b>（<code>dict[entry_id]</code>、倒排 <code>tag→ids</code>、BM25 倒排 <code>token→ids</code> 与 <code>df</code>）：2000 条量级加载 &lt;2 s、零外部依赖、可肉眼 diff、快照天然是文件。</p>
+  <p><b>换库触发阈值</b>（任一满足）→ 第一跳 SQLite FTS5（+<code>sqlite-vec</code>），第二跳 FAISS/LanceDB：① <code>active &gt; 20,000</code>；② <code>retrieve()</code> P95 &gt; 200 ms；③ 启用 embedding 且条目 &gt; 50,000；④ 需要多进程并发写。换库时 <code>MemoryStore</code> 对外签名不变（决策）。</p>
+  <p><b>压实与容错</b>：每 <code>compact_every=200</code> 次追加或每次 <code>snapshot()</code> 做 tmp 写 + <code>fsync</code> + <code>os.replace</code>；追加行 ≤4 KB 且自带 <code>\n</code>；读侧遇半行按 <code>E_IO_MEMORY_CORRUPT</code> 截断到最后完整 <code>\n</code>。</p>
+  <p><b>快照 header</b>（首行）：</p>
+<pre><code>{"_type":"memory_snapshot_header","memory_version":5,"parent_memory_version":4,"harness_version":7,"generation":3,"run_id":"...","created_at":"...","config_hash":"...","store_schema_version":"1.0","entry_count":812,"active_count":640,"reason":"generation_3","content_sha256":"..."}</code></pre>
+  <p><code>content_sha256</code> = 其后所有 <code>_type:"memory_entry"</code> 行按序拼接的 sha256。</p>
+
+  <h4>7.2 版本与血缘（与 harness_version 的关系）</h4>
+  <p><code>memory_version</code> 单调递增、<b>永不重写历史</b>；<code>parent_memory_version</code> 指向派生来源（正常代际 = 上一版；回滚 = 目标版本）。每条记忆携带写入时 <code>harness_version</code>，即<b>只属于产生它的 harness 代际</b>：MOD-07 回滚 harness 到 <code>h'</code> 后，<code>harness_version &gt; h'</code> 的条目默认不参与检索（FR-05-12），直到再次被引用确认。血缘三元组 <code>(generation, harness_version, memory_version)</code> 写入 <code>index.json</code>，MOD-08 报告按此对齐「去反思」消融。</p>
+
+  <h4>7.3 检索输出（给 MOD-04）</h4>
+  <p><code>render_entries()</code> 每条一行：<code>"[combat|low_virtue|defense] 净化值低于 25%…（hint=play_face→defense, conf=0.70, util=0.42）"</code>，按分数顺序 <code>\n</code> 连接；<code>RetrieveResult.text</code> 即 <code>{{memory}}</code> 的填充值。</p>
+
+  <h4>7.4 CLI（走 MOD-09 CLI 注册；已回填 Spec §4.6，B-08）</h4>
+<pre><code>python -m gamer_rsi memory stats|snapshot|rollback|verify|retrieve --run-id &lt;run_id&gt; [--reason gen-003] [--to-version 4] [--dry-run] [--full] [--obs &lt;obs.json&gt;] [--top-k 8] [--token-budget 900]
+# 例：python -m gamer_rsi memory snapshot --run-id &lt;run_id&gt; --reason gen-003
+# 例：python -m gamer_rsi memory rollback --run-id &lt;run_id&gt; --to-version 4 --dry-run</code></pre>
+  <p><code>rollback</code> 打印 <code>memory_version: 5 -&gt; 6 (restored from v4, harness_version=6)</code>；目标缺失退出码 2（<code>E_IO_SNAPSHOT_MISSING</code>）。</p>
+</section>
+
+<section id="sec-8">
+  <h3><span class="n">8</span>关键流程</h3>
+  <h4>8.1 写入管线</h4>
+  <p>一条反思进来，先过两道隔离闸，再决定是「合并进既有条目」还是「新写一行」：</p>
+  <div class="flow">
+    <span class="step">add_reflection(refl, provenance)</span><span class="arrow">→</span>
+    <span class="step">I1 准入：split==train 且 seed∈train</span><span class="arrow">→</span>
+    <span class="step">I2 逐字段文本扫描</span><span class="arrow">→</span>
+    <span class="step">落 reflections.jsonl</span><span class="arrow">→</span>
+    <span class="step">extract_candidates 抽取候选</span>
+  </div>
+  <div class="flow">
+    <span class="step">精确去重(text_hash)</span><span class="arrow">→</span>
+    <span class="step">近似去重(sim≥0.85)</span><span class="arrow">→</span>
+    <span class="step">冲突检测(相反极性)</span><span class="arrow">→</span>
+    <span class="step">追加 memory_active.jsonl + 更新索引</span><span class="arrow">→</span>
+    <span class="step">超容量淘汰 / 定期压实</span>
+  </div>
+<pre><code>add_reflection(refl, provenance):
+  I1: if provenance.split != "train" or provenance.seed not in seeds.train: raise E_EVAL_INV5_LEAK
+  I2: scan = audit.scan_text(all_text_fields(refl), surface="memory")    # MOD-02
+      if scan.status != "pass": append leak_quarantine + audit/leak_events; return QUARANTINED
+  append reflections.jsonl
+  for c in extract_candidates(refl, cfg)[: max_candidates_per_reflection]:
+      key = situation_key_of(c); hits = index.same_situation(key)
+      if any(h.text_hash == c.text_hash for h in hits): merge(survivor(h), c); continue        # 精确重复
+      near = [h for h in hits if similarity(h, c) &gt;= cfg.dedup.sim_threshold]                  # 近似重复（默认 0.85）
+      if near: merge(survivor(near), c); continue
+      conf = [h for h in hits if h.polarity != c.polarity and same_hint_kind(h, c)]             # 冲突：同情境相反结论
+      if conf: c.conflict_group = sha1(key + "|" + kind(c))[:12]; 给 conf 同组标记
+               if cfg.conflict.auto_supersede and evidence_ok(c, conf):
+                   old.status = "superseded"; old.superseded_by = c.entry_id; c.supersedes = old.entry_id
+      append memory_active.jsonl; update index
+  if active_count &gt; max_entries: evict()
+  if appends % compact_every == 0: compact()
+  return AddResult(added, merged, conflicted, quarantined, memory_version)</code></pre>
+  <p>去重度量为 <code>similarity(a,b) = 0.5*Jaccard(tokenize(a.lesson), tokenize(b.lesson)) + 0.5*cos(char3gram_tfidf(a.lesson), char3gram_tfidf(b.lesson))</code>，阈值 <code>sim_threshold=0.85</code> 且要求 <code>situation_key</code> 相同（跨情境的不同结论不算重复）。<code>merge</code>：survivor = <code>utility</code> 高者（并列取 <code>created_tick</code> 小者，再并列取 <code>entry_id</code> 小者），<code>outcome_stats</code> 逐项相加，<code>confidence = max</code>，<code>merged_from += other.entry_id</code>，重算 <code>text_hash/content_sha256</code>，<b>不新增行</b>。</p>
+
+  <h4>8.2 淘汰与 TTL</h4>
+<pre><code>evict(tick):  pool = [e for e in active if not (e.n_ref &gt;= 3 or tick - e.created_tick &lt; min_age_ticks)]; for e in sorted(pool, key=(utility, last_ref_tick or -1, entry_id))[: active_count - max_entries]: e.status="evicted"; archive("capacity")
+sweep_ttl(tick): for e in active: if e.expires_tick &lt;= tick: e.status="evicted"; archive("ttl")      # 写入与 verify() 顺带触发</code></pre>
+
+  <h4>8.3 快照 / 回滚</h4>
+  <div class="flow">
+    <span class="step">snapshot(reason)</span><span class="arrow">→</span>
+    <span class="step">I3 全库 seed 复扫</span><span class="arrow">→</span>
+    <span class="step">版本号 N+1</span><span class="arrow">→</span>
+    <span class="step">写 memory_v{N}.jsonl（header+entries+sha256）</span><span class="arrow">→</span>
+    <span class="step">更新 index.json 血缘</span>
+  </div>
+  <div class="flow">
+    <span class="step">rollback(target, dry_run)</span><span class="arrow">→</span>
+    <span class="step">快照缺失？E_IO_SNAPSHOT_MISSING（退出码 2）</span><span class="arrow">→</span>
+    <span class="step">sha256 不符？E_IO_MEMORY_CORRUPT</span><span class="arrow">→</span>
+    <span class="step">dry_run 出差异报告</span><span class="arrow">→</span>
+    <span class="step">原子替换 active + 新版本号 + 发事件</span>
+  </div>
+<pre><code>snapshot(reason):  I3: seed_token_guard(所有 active 条目)，命中即 E_EVAL_INV5_LEAK 并中止
+                   N = index.memory_version + 1；write memory_v{N}.jsonl（header + entries，含 content_sha256）
+                   index.json = {memory_version:N, parent:current, harness_version:current, entry_count, active_count}
+rollback(target, dry_run): 文件不存在 → E_IO_SNAPSHOT_MISSING（退出码 2）；sha256 不符 → E_IO_MEMORY_CORRUPT
+                   dry_run → 返回 report(entries_delta, active_delta, lost_entry_ids)
+                   否则原子替换 memory_active.jsonl；写新 header(memory_version=current+1, parent_memory_version=target, reason="rollback_to_v{target}")；发 memory_rollback 事件</code></pre>
+  <p><b>S4 时序</b>：MOD-07 判负 → 恢复 <code>harness/version.json</code> 到 v6 → <code>memory.rollback(同代快照)</code> → MOD-07 重跑 heldout 确认 → 报告记录 <code>(generation, harness_version=6, memory_version=6)</code>。</p>
+</section>
+
+<section id="sec-9">
+  <h3><span class="n">9</span>配置项</h3>
+  <p>统一在 <code>configs/default.yaml</code> 的 <code>memory:</code> 段。优先级（Spec §5）：<b>CLI &gt; 环境变量 &gt; 默认值</b>，嵌套键用 <code>__</code>（如 <code>GAMERSI_MEMORY_RETRIEVE__TOP_K</code>）。<code>memory.retrieve.*</code> 属于 <code>harness/config.json</code> 的白名单键，<b>可被演化</b>（B-26）。</p>
+  <table>
+    <tr><th>键</th><th>类型 / 默认</th><th>含义</th></tr>
+    <tr><td><code>memory.enabled</code> / <code>memory.store_format</code></td><td>bool <code>true</code> / str <code>"jsonl"</code></td><td>关闭时 <code>retrieve()</code> 返回空、写入 no-op（「去反思」消融用）/ 阶段一唯一取值，<code>"sqlite"</code> 留给升级路径</td></tr>
+    <tr><td><code>memory.max_entries</code> / <code>.ttl_ticks</code> / <code>.min_age_ticks</code> / <code>.compact_every</code></td><td>int <code>2000</code> / <code>300</code> / <code>30</code> / <code>200</code></td><td>active 容量上限 / 默认存活训练局数（约 10 代）/ 淘汰免疫保护期（1 代）/ 追加多少次后压实</td></tr>
+    <tr><td><code>memory.extract.max_candidates_per_reflection</code> / <code>.use_llm</code></td><td>int <code>3</code> / bool <code>false</code></td><td>单条反思最多抽多少候选；true 时经 MOD-03 <code>generate_json(temperature=0, seed=0)</code> 抽取，失败降级为规则抽取并记 <code>E_LLM_*</code></td></tr>
+    <tr><td><code>memory.dedup.sim_threshold</code> / <code>.jaccard_weight</code> / <code>.char3_weight</code></td><td>float <code>0.85</code> / <code>0.5</code> / <code>0.5</code></td><td>近似重复阈值与 <code>similarity</code> 两项权重</td></tr>
+    <tr><td><code>memory.conflict.auto_supersede</code> / <code>.min_refs</code> / <code>.winrate_delta</code></td><td>bool <code>false</code> / int <code>5</code> / float <code>0.15</code></td><td>是否允许证据充分时自动替代旧结论，及门槛（Wilson 95% CI 不重叠）</td></tr>
+    <tr><td><code>memory.retrieve.top_k</code> / <code>.token_budget</code> / <code>.min_score</code> / <code>.same_situation_bonus</code></td><td>int <code>8</code> / int <code>900</code> / float <code>0.15</code> / float <code>0.25</code></td><td>返回条数 / 渲染 token 上限 / 分数下限 / 情境完全相同的加成</td></tr>
+    <tr><td><code>memory.retrieve.weights.tag</code> / <code>.bm25</code> / <code>.vector</code> / <code>.utility</code> / <code>.recency</code></td><td>float <code>1.0</code> / <code>0.6</code> / <code>0.0</code> / <code>0.3</code> / <code>0.1</code></td><td>五项权重（<code>.vector=0</code> 即关闭向量检索）</td></tr>
+    <tr><td><code>memory.retrieve.bm25.k1</code> / <code>.b</code> / <code>memory.retrieve.recency_lambda</code></td><td>float <code>1.2</code> / <code>0.75</code> / <code>0.01</code></td><td>BM25 词频饱和 / 长度归一 / 时新度衰减（每训练局）</td></tr>
+    <tr><td><code>memory.embedding.enabled</code> / <code>.model</code> / <code>.dim</code></td><td>bool <code>false</code> / str <code>"bge-small-zh-v1.5"</code> / int <code>512</code></td><td>向量检索开关、模型、维度校验（走 MOD-03 <code>embed()</code>）</td></tr>
+    <tr><td><code>memory.snapshot.every_generation</code> / <code>memory.scan.on_write</code></td><td>bool <code>true</code> / bool <code>true</code></td><td>每代自动快照 / 写入时调用 MOD-02 扫描（仅测试可关）</td></tr>
+  </table>
+</section>
+
+<section id="sec-10">
+  <h3><span class="n">10</span>错误处理与降级</h3>
+  <p>错误码前缀沿用 Spec §8.3（<code>E_IO_*</code> / <code>E_EVAL_*</code>），由 MOD-09 集中登记；标注「新增」者为本 PRD 提出的码。</p>
+  <table>
+    <tr><th>码</th><th>触发</th><th>处置 / 降级</th></tr>
+    <tr><td><span class="tag err">E_EVAL_INV5_LEAK</span>（v1.0 为 <code>E_EVAL_SEED_LEAK</code>，按 Spec §8.3 统一）</td><td>I1–I4 任一命中</td><td><b>P0</b>：拒写/拒返回；事件入 <code>audit/leak_events.jsonl</code>；loop 不中断，该反思标记为不可用于演化</td></tr>
+    <tr><td><span class="tag err">E_IO_MEMORY_CORRUPT</span></td><td>行解析失败 / <code>content_sha256</code> 不符 / <code>entry_id</code> 重复</td><td>坏行移入 <code>memory/quarantine.jsonl</code>，其余正常加载，检索继续</td></tr>
+    <tr><td><span class="tag err">E_IO_MEMORY_LOCKED</span>（新增）</td><td>压实期 <code>.lock</code> 被占用 &gt;5 s</td><td>跳过本次压实改下次（写入仍走追加）</td></tr>
+    <tr><td><span class="tag err">E_IO_MEMORY_QUOTA</span>（新增）</td><td>单文件 &gt;16 MB 或 <code>active &gt; 2*max_entries</code></td><td>强制淘汰+压实，仍超则停写并告警（读不受影响）</td></tr>
+    <tr><td><span class="tag err">E_IO_SNAPSHOT_MISSING</span>（新增）</td><td><code>rollback</code> 目标快照缺失</td><td>回滚失败，保持当前版本，CLI 退出码 2</td></tr>
+    <tr><td><span class="tag err">E_EVAL_CONFLICT_UNRESOLVED</span>（新增）</td><td><code>auto_supersede=false</code> 下冲突无法裁决</td><td>保守：两条共存，检索压制其一（FR-05-3），发 <code>memory_conflict</code> 事件</td></tr>
+    <tr><td><span class="tag err">E_IO_MEMORY_WRITE_FAILED</span>（新增）</td><td>磁盘错误 / 权限</td><td>本局继续（记忆是增强）；同 run 第 3 次失败后本 run 停写并显眼标注（该 run 不参与消融对比）</td></tr>
+    <tr><td><span class="tag err">E_LLM_EXTRACT_FAILED</span></td><td><code>extract.use_llm=true</code> 且 MOD-03 失败</td><td>降级为规则抽取；反思仍入库</td></tr>
+  </table>
+  <blockquote>检索侧任何异常一律降级为<b>空记忆</b>（MOD-04 走无记忆 prompt，符合 INV-3 中「检索到的 memory」可为空），并发 <code>memory_retrieve_failed</code> 事件。</blockquote>
+</section>
+
+<section id="sec-11">
+  <h3><span class="n">11</span>测试计划（给定-当-则）</h3>
+  <p>单测 <code>tests/unit/memory/{test_schemas,test_store,test_retriever,test_dedup,test_conflict,test_eviction,test_snapshot,test_isolation}.py</code>；集成 <code>tests/integration/test_loop_memory.py</code>；golden <code>tests/golden/memory/{retrieve_seed1042_g0.json,memory_v0_sha256.txt}</code>。</p>
+  <ul>
+    <li><b>GWT-05-01/02 schema 与抽取（G5）</b>：给定一条合法 <code>MemoryEntry</code> JSON，当 <code>from_json</code> 后 <code>to_json</code>，则字节相同；给定多一个字段 <code>"foo":1</code>，则校验失败；给定反思文本「净化值只剩 3 时我还在打输出」，当 <code>extract_candidates</code> 连续调用 10 次，则返回 1 条 <code>polarity="avoid"</code>、<code>tags ∋ {low_virtue, combat}</code>，且 10 次结果全等。</li>
+    <li><b>GWT-05-03 去重（精确 + 近似）</b>：给定同 <code>situation_key</code> 且 <code>sim=0.87 ≥ 0.85</code> 的既有条目，当写入近义 lesson，则 <code>memory_active.jsonl</code> 行数不变、<code>merged_from</code> 长度 +1、胜负计数累加；给定同 lesson 但 <code>phase</code>/<code>virtue_bucket</code> 不同，当写入，则新增一行。</li>
+    <li><b>GWT-05-04 冲突保守</b>：给定同 <code>situation_key</code>、hint kind 相同、polarity 相反的两条，当写入第二条，则两条均 <code>status="active"</code> 且共享 <code>conflict_group</code>；当 <code>retrieve</code>，则只返回组内高分者 + <code>dropped.reason="conflict_suppressed"</code>。</li>
+    <li><b>GWT-05-05 顺序、预算与 golden（G3）</b>：给定 12 条候选、<code>token_budget</code> 只够 3 条，当 <code>retrieve(obs, top_k=8, token_budget=900)</code>，则返回 3 条、顺序为 <code>(-round(S,6), entry_id)</code> 升序、<code>dropped</code> 含 9 条（原因 <code>below_min_score</code> / <code>token_budget_exceeded</code>）；给定第 4 条超预算但第 5–6 条很短，则第 4 条被跳过、第 5–6 条仍入选；给定固定 <code>tick</code> 与 golden <code>retrieve_seed1042_g0.json</code>，则输出与 golden 逐字节相同。</li>
+    <li><b>GWT-05-06 淘汰保护与 TTL</b>：给定 <code>max_entries=3</code>、<code>min_age_ticks=30</code>，其中一条 <code>n_ref=5</code>、一条 <code>age_ticks=1</code>，当 <code>tick=100</code> 时写入第 4 条，则被淘汰的是 <code>(utility,last_ref_tick,entry_id)</code> 最低且不免疫者，受保护条目仍在 active；给定 <code>ttl_ticks=1</code> 与 <code>tick = created_tick + 2</code>，当 <code>verify(tick)</code>，则条目 <code>status="evicted"</code> 并归档 <code>memory_evicted.jsonl</code>。</li>
+    <li><b>GWT-05-07 效用分</b>：给定 <code>n_adopted=3,n_win_adopted=2,n_not_adopted=1,n_win_not_adopted=0</code>，当 <code>record_usage</code>，则 Laplace 率 <code>=3/5=0.6</code>、<code>p_base=1/3≈0.333</code>、<code>utility</code> 严格增大且 ∈[-1,1]。</li>
+    <li><b>GWT-05-08 快照 + 回滚</b>：给定已生成 <code>memory_v3.jsonl</code> 后又写入 5 条，当 <code>rollback(3)</code>，则 <code>memory_active.jsonl</code> 与 v3 逐字节相同、新 <code>memory_version=current+1</code>、<code>parent_memory_version=3</code>、<code>memory_rollback</code> 事件一条。</li>
+    <li><b>GWT-05-09 损坏行隔离</b>：给定 active 文件中间被截断一行，当 <code>MemoryStore.__init__</code>，则加载成功、坏行进 <code>quarantine.jsonl</code>、事件码 <code>E_IO_MEMORY_CORRUPT</code>、<code>stats().entry_count</code> = 合法行数。</li>
+    <li><b>GWT-05-10 INV-5 / I1 + I2</b>：给定 <code>provenance.split="heldout"</code>，当 <code>add_reflection</code>，则抛 <code>MemoryIsolationError(E_EVAL_INV5_LEAK)</code>、两份 JSONL 行数不变；给定 train 反思含「如果 seed 是 2001 我会先放盾」（2001 ∈ heldout 集合），当 <code>add_reflection</code>，则条目不落 active 库、<code>reflections/leak_quarantine.jsonl</code> +1、<code>audit/leak_events.jsonl</code> +1 且 <code>hits[0].pattern</code> 记录命中串。</li>
+    <li><b>GWT-05-11 INV-5 / 蜜罐（G4）与 I3 + I4</b>：给定 <code>sandbox.honeypot</code> 注入含 test seed 的伪反思，当走完整写入管线，则 <code>audit leak --run-id &lt;run_id&gt;</code> ≥1 告警且 <code>stats().seed_leak_blocks ≥ 1</code>；给定手工构造含裸 seed 数字的旧快照，当 <code>verify(full=True)</code> 与 <code>retrieve()</code>，则前者拒绝出快照并抛 <code>E_EVAL_INV5_LEAK</code>，后者丢弃该条目且不计入返回。</li>
+    <li><b>GWT-05-12 端到端（M2 集成）</b>：给定 train 循环 5 局 + 1 轮演化，当 <code>loop run --generations 1 --k 5</code>，则 <code>generations/gen-001/report.json</code> 可读到 <code>memory_version</code>，且每个 <code>memory_v{N}.jsonl</code> 的 <code>content_sha256</code> 校验通过。</li>
+  </ul>
+</section>
+
+<section id="sec-12">
+  <h3><span class="n">12</span>验收标准（DoD）</h3>
+  <p>对齐 Spec §9 质量门与里程碑 M2。简单说：<b>单测要绿、golden 要锁、重跑要一致、泄漏要零告警、五个 CLI 要能直接跑、演化闭环要通</b>。</p>
+  <ul class="check">
+    <li><b>G1 单测</b>：<code>tests/unit/memory/</code> 全绿；<code>schemas/retriever/dedup/utility</code> 等纯函数<b>行覆盖 ≥80%</b>，<code>store.py</code> 分支覆盖 ≥70%。</li>
+    <li><b>G2 Golden</b>：<code>retrieve_seed1042_g0.json</code> 与 <code>memory_v0_sha256.txt</code> 入库；任何改变检索输出的改动必须显式更新 golden 并在 PR 说明。</li>
+    <li><b>G3 确定性</b>：同 run/同 seed/同 <code>tick</code> 两次 <code>retrieve()</code> 逐字节相同，两次重跑得到的记忆库 <code>content_sha256</code> 相同；<code>gamer_rsi/memory/</code> 中无 <code>random</code>/墙钟随机（MOD-09 AST 守卫通过）。</li>
+    <li><b>G4 泄漏审计</b>：自测 run 上 <code>python -m gamer_rsi audit leak --run-id &lt;run_id&gt;</code> <b>0 告警</b>；蜜罐注入<b>必须</b>产生 ≥1 告警（GWT-05-11）。</li>
+    <li><b>G5/G6 Schema 与命令</b>：两个 entry 有 JSON Schema + round-trip 测试，跨模块 <code>RetrieveResult</code>/<code>AddResult</code> 有 schema；§7.4 五条 CLI 在空 run 上可直接复制执行成功。</li>
+    <li><b>M2 交付</b>：闭环 ≥1 轮演化中「反思入库 → 记忆检索注入 → 快照 → 回滚演练」全链路跑通；<code>report.json</code> 引用 <code>(memory_version, harness_version)</code> 血缘；<code>memory rollback</code> 演练 ≥1 次并留事件。</li>
+  </ul>
+  <blockquote><b>明确不验收</b>：反思文本质量（MOD-08 指标 + MOD-07 取舍）、记忆是否提升胜率（MOD-08 消融）。</blockquote>
+</section>
+
+<section id="sec-13">
+  <h3><span class="n">13</span>指标与埋点</h3>
+  <p>事件单行 JSONL → <code>runs/&lt;run_id&gt;/metrics/memory.jsonl</code>，公共字段 <code>ts/run_id/episode_id/generation/harness_version/memory_version/event</code>。</p>
+  <table>
+    <tr><th>event</th><th>额外字段</th></tr>
+    <tr><td><code>memory.add</code></td><td><code>entry_id, source_reflection_id, tags, polarity, result(added|merged|conflicted|quarantined)</code></td></tr>
+    <tr><td><code>memory_merge</code> / <code>memory_conflict</code></td><td><code>survivor_id, merged_id, sim, reason(exact|near)</code> / <code>conflict_group, entry_ids, winner_id, rule(auto|suppress)</code></td></tr>
+    <tr><td><code>memory_quarantine</code> / <code>memory_seed_leak_blocked</code> / <code>memory.evict</code></td><td><code>entry_id|reflection_id, reason(corrupt|conflict|scan)</code> / <code>interception_point(I1..I4), field, matched_pattern</code> / <code>entry_id, evict_reason(capacity|ttl), utility, n_ref</code></td></tr>
+    <tr><td><code>memory_retrieve</code></td><td><code>obs_digest, n_candidates, returned_ids, dropped_reasons{}, tokens, elapsed_ms</code></td></tr>
+    <tr><td><code>memory_snapshot</code> / <code>memory_rollback</code></td><td><code>from_version, to_version, entry_count, content_sha256</code></td></tr>
+    <tr><td><code>memory_write_failed</code> / <code>memory_retrieve_failed</code></td><td><code>code(E_IO_*), message</code></td></tr>
+  </table>
+  <p><b>派生指标</b>（<code>memory stats</code> 与代际报告引用）：<code>dedup_rate = merged/added_candidates</code>、<code>conflict_rate</code>、<code>retrieve_hit_rate = 被引用条目中 adopted 占比</code>、<code>retrieve_p95_ms</code>、<code>budget_utilization = tokens/token_budget</code>、<code>memory_growth_per_generation = Δactive/Δgen</code>（膨胀告警阈值 &gt;200/代）、<code>seed_leak_blocks</code>（期望恒 0；蜜罐测试时 ≥1）。</p>
+  <blockquote>埋点不得含 heldout/test 相关字段——I4 同样约束事件，<code>obs_digest</code> 为单向摘要且不含 seed。</blockquote>
+</section>
+
+<section id="sec-14">
+  <h3><span class="n">14</span>依赖与风险</h3>
+  <p><b>依赖</b>：MOD-02（<code>guard.scan_text</code>、<code>Observation</code>）、MOD-04（schema 协作方与 <code>action_hint</code> 消费方，Spec §6 记 MOD-05 依赖 MOD-04 schema）、MOD-06（反思文本与 <code>provenance</code>）、MOD-09（配置/日志/<code>run_id</code>/CLI/<code>infra.guards.seed_token_guard</code>/<code>seeds.yaml</code>）、MOD-03（可选 <code>count_tokens</code>、<code>embed()</code>）。</p>
+  <table>
+    <tr><th>风险</th><th>影响</th><th>对策</th></tr>
+    <tr><td>规则式抽取召回低（反思表述自由）</td><td>记忆增长慢、注入退化</td><td>用受控反思模板（MOD-07 演化对象 c）约束句式；<code>extract.use_llm=true</code> 为可选增强（temperature=0 + 固定 seed，保持确定性）</td></tr>
+    <tr><td>自我确认（只引用自己的结论）</td><td>虚假增益（调研纪要 §4.1）</td><td>效用只用环境原生胜负；时新度衰减 + 冲突压制；MOD-08「去反思」消融对照</td></tr>
+    <tr><td>记忆膨胀 / 噪声堆积</td><td>检索变慢、prompt 被稀释</td><td>容量 + TTL + 效用淘汰三重闸；<code>memory_growth_per_generation</code> 告警</td></tr>
+    <tr><td>INV-5 旁路（反思里带 seed）</td><td>P0 沙箱泄漏（米哈游教训）</td><td>四拦截点 + MOD-02 扫描 + 蜜罐测试纳入 G4 门</td></tr>
+    <tr><td>快照与 harness 版本错配 / 冲突裁决误杀 / JSONL 重写成本上升</td><td>演化对照失效 / 行为退步 / P95 延迟破线</td><td>血缘三元组写入 <code>index.json</code>，陈旧 <code>harness_version</code> 条目默认不检索（FR-05-12）；默认 <code>auto_supersede=false</code> 保守共存，仅证据阈值（n_ref≥5、胜率差≥0.15、CI 不重叠）下自动替代；§7.1 触发阈值换库且签名不变</td></tr>
+  </table>
+</section>
+
+<section id="sec-15">
+  <h3><span class="n">15</span>里程碑与工作量估算（人日）</h3>
+  <p>合计 <b>12.0 人日</b>（含缓冲；纯实现约 9.5）。与 MOD-08 同期启动（Spec §6 标注可并行）；<b>前三项 ≈4.5 人日</b>完成即可先跑通「反思入库 + 检索注入」最小闭环供 MOD-06 集成。</p>
+  <table>
+    <tr><th>工作项</th><th>人日</th><th>依赖</th></tr>
+    <tr><td>schema + JSON Schema + round-trip + 类型（FR-05-1）</td><td>1.0</td><td>MOD-04 schema 冻结</td></tr>
+    <tr><td><code>MemoryStore</code> 骨架：JSONL 读写、原子追加/压实、索引、<code>verify()</code>、效用/容量/TTL/淘汰（FR-05-4/7/8/11）</td><td>3.5</td><td>—</td></tr>
+    <tr><td>抽取 + 去重 + 冲突（FR-05-2/3）</td><td>1.5</td><td>上项</td></tr>
+    <tr><td><code>retriever</code>：BM25/标签/效用/预算裁剪 + golden（FR-05-5/6）</td><td>2.0</td><td>MOD-03 <code>count_tokens</code>（或本地估算）</td></tr>
+    <tr><td>快照 / 血缘 / 回滚 + CLI（FR-05-9、§7.4）</td><td>1.5</td><td>MOD-09 CLI</td></tr>
+    <tr><td>INV-5 四拦截点 + 蜜罐与隔离测试（FR-05-10）</td><td>1.5</td><td>MOD-02 扫描、MOD-09 seed 注册表</td></tr>
+    <tr><td>埋点 + docs + 集成测试（FR-05-11/12、§13、GWT-05-12）</td><td>1.0</td><td>全部</td></tr>
+    <tr><td><b>合计</b></td><td><b>12.0 人日</b>（含缓冲；纯实现约 9.5）</td><td>—</td></tr>
+  </table>
+</section>
+
+<section id="sec-16">
+  <h3><span class="n">16</span>开放问题</h3>
+  <ol>
+    <li><b>换向量库阈值</b>：本 PRD 提出 §7.1 的四个触发条件，第一跳 SQLite FTS5（+<code>sqlite-vec</code>）、第二跳 FAISS/LanceDB；是否需用真实规模实验校准 <code>active &gt; 20,000</code> 与 <code>&gt; 50,000</code>？</li>
+    <li><b><code>adopted</code> 判定归属</b>：本 PRD 定为 MOD-04/06 计算并传入（MOD-05 不做语义判断）；若 MOD-04 认为属记忆侧职责，需在 Spec 层重新划界。</li>
+    <li><b>冲突自动替代证据标准与版本号统一</b>：<code>n_ref ≥ 5</code>、胜率差 <code>≥ 0.15</code> 为拍定值，需 M2 数据回填（也可能永久保持 <code>auto_supersede=false</code>）；<code>memory_version</code> 与 <code>harness_version</code> 是否统一为 <code>artifact_version</code>（待 MOD-07/MOD-09 决策）。</li>
+    <li><b>Spec 回填</b>：<code>memory/</code> 目录、<code>memory</code> 子命令、<code>snapshot.py</code> 均未在 Spec §5/§4.6 登记；不回填即违反「下游 PRD 必须与 Spec 一致」。</li>
+    <li><b>跨 run 记忆复用与中文分词</b>：阶段一每 run 独库、分词用字符 unigram/bigram（零依赖）；跨 run 迁移的 INV-5 复查成本、是否引入 <code>jieba</code>（增加依赖需确定性校验）均待定。</li>
+  </ol>
+</section>
+
+<section id="sec-17">
+  <h3><span class="n">17</span>变更记录</h3>
+  <table>
+    <tr><th>版本</th><th>时间</th><th>变更</th></tr>
+    <tr><td>v1.0</td><td>2026-09-30</td><td>首版</td></tr>
+    <tr><td>v1.1</td><td>2026-09-30 17:21</td><td>按 Spec v1.3 与 MOD PRD 评审修订：时间改为逻辑时钟 <code>tick</code>（训练局序号），<code>ttl_ticks=300</code>、<code>min_age_ticks=30</code>，修复淘汰永不生效和 G3 不成立的问题；<code>SituationKey</code>、tags、<code>ReflectionEntry</code> 改为 GAME/INV-7 口径（P0-1）；<code>adopted</code> 改为 <code>(kind, slotKind, school)</code> 三元组判定，由 MOD-04 给出、MOD-06 在局末调用 <code>record_usage</code>（P1-2）；新增 <code>frozen()</code> 只读视图；<code>scan_text</code> 改为 <code>sandbox.audit</code>（P1-16）；<code>E_EVAL_SEED_LEAK</code> 统一为 <code>E_EVAL_INV5_LEAK</code>（P1-12）；schema_version 升为 1.1</td></tr>
+    <tr><td>v1.2</td><td>2026-09-30 17:49</td><td>P-18 裁决回填为 Spec B-30；snapshot.py 回填为 B-35；CLI 标注改为 B-08</td></tr>
+  </table>
+  <blockquote>当前版本 v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见本节）。上游 Spec <code>../模块拆分Spec-GameRSI.md</code> 是唯一事实来源，冲突以 Spec 为准。</blockquote>
+</section>
+
+<footer>来源：docs/prd/MOD-05-memory-PRD.md · GameRSI 模块讲解系列 · 2026-10-04</footer>
+
+</div>
+</main>
+</body>
+</html>
