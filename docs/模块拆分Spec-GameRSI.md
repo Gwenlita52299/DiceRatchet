@@ -294,8 +294,10 @@ arm ∈ train | parent | cand-{id} | baseline-{random|heuristic|fixed_prompt} | 
 
 ```bash
 python -m gamer_rsi env selftest --seed 1              # M0：规则/确定性自检 + GAME golden 对拍
-python -m gamer_rsi play --agent llm|heuristic|random|fixed_prompt --seeds train:1000-1004
-python -m gamer_rsi baseline --kind random|heuristic|fixed_prompt --basket H1
+python -m gamer_rsi play --agent llm|heuristic|random|fixed_prompt --seeds train:1000-1004 [--model ID]
+python -m gamer_rsi baseline --kind random|heuristic|fixed_prompt --basket H1 [--model ID]
+                       # --basket 与 --seeds 互斥；--basket 省略时按 --split 推导（train_window/test_full/H1）
+                       # --model 仅 fixed_prompt 需要（冻结提示词 + 真实 LLM；拿不到即退出码 3）
 python -m gamer_rsi loop run --generations 3 --k 30 [--hitl] [--run-id ID] [--resume]
 python -m gamer_rsi loop status|smoke --run-id ID
 python -m gamer_rsi evolve approve|rollback --run-id ID --generation 3 [--reason STR]

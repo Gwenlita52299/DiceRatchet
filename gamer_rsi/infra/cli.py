@@ -310,12 +310,13 @@ def _add_env(sub: Any) -> None:
 
 def _add_play(sub: Any) -> None:
     p = _sp(sub, "play", help="用指定 agent 玩若干局（MOD-04）")
-    p.add_argument("--agent", choices=["llm", "heuristic", "fixed", "fixed_prompt"],
-                   default="llm")
+    p.add_argument("--agent", choices=["llm", "heuristic", "random", "fixed_prompt"],
+                   default="llm", help="Spec §4.6 命令面：llm|heuristic|random|fixed_prompt")
     p.add_argument("--seeds", default="train:1000-1004",
                    help="seed 规格：train:1000-1004 / heldout:2000-2099 / 9000,9001 / file:seeds.txt")
     p.add_argument("--episodes", type=int, default=1)
     p.add_argument("--mode", choices=["train", "eval"], default="train")
+    p.add_argument("--model", default=None, help="MOD-03 模型 id（覆盖 inference.model_id）")
     _common_run_id(p)
     _set_func(p, _deferred(["play"], "play"), ["play"])
 
@@ -324,8 +325,15 @@ def _add_baseline(sub: Any) -> None:
     p = _sp(sub, "baseline", help="跑基线（MOD-08）")
     p.add_argument("--kind", choices=["random", "heuristic", "fixed_prompt"],
                    default="heuristic")
-    p.add_argument("--seeds", default="heldout:2000-2039")
-    p.add_argument("--basket", default="H1", help="seed 篮子（MOD-08 seeds.yaml）")
+    p.add_argument("--split", choices=["train", "heldout", "test"], default="heldout",
+                   help="基线评估的 split（FR-08-11）")
+    seeds = p.add_mutually_exclusive_group()
+    seeds.add_argument("--seeds", default=None,
+                       help="显式 seed 规格（与 --basket 互斥）：train:1000-1004 / 2000,2001")
+    seeds.add_argument("--basket", default=None, help="seed 篮子（MOD-08 seeds.yaml，默认按 split 推导）")
+    p.add_argument("--model", default=None,
+                   help="MOD-03 模型 id（fixed_prompt 需要，覆盖 inference.model_id；"
+                        "离线冒烟用 mock）")
     _common_run_id(p)
     _set_func(p, _deferred(["baseline"], "baseline"), ["baseline"])
 
@@ -370,16 +378,32 @@ def _add_eval(sub: Any) -> None:
     _common_run_id(rep)
     rep.add_argument("--split", choices=["train", "heldout", "test"], default="heldout")
     rep.add_argument("--baseline", default="none", help="none|all|<kind>")
+    rep.add_argument("--basket", default="H1", help="seed 篮子（heldout）")
+    rep.add_argument("--generation", type=int, default=None, help="代数（默认取最大已存在代）")
     _set_func(rep, _deferred(["eval", "report"], "eval"), ["eval", "report"])
 
-    for name in ("ablation", "test"):
-        sp_run = _sp(sp, name)
-        _common_run_id(sp_run)
-        sp_run.add_argument("--basket", choices=["H1", "H2", "H3"], default="H2")
-        _set_func(sp_run, _deferred(["eval", name], "eval"), ["eval", name])
+    abl = _sp(sp, "ablation", help="消融三臂（FR-08-21）")
+    _common_run_id(abl)
+    abl.add_argument("--basket", choices=["H1", "H2", "H3"], default="H2")
+    abl.add_argument("--generation", type=int, default=None)
+    abl.add_argument("--arms", default="no_reflection,no_self_edit",
+                     help="逗号分隔的消融臂（full 自动补上）")
+    _set_func(abl, _deferred(["eval", "ablation"], "eval"), ["eval", "ablation"])
+
+    tst = _sp(sp, "test", help="test 终检（默认锁定）")
+    _common_run_id(tst)
+    tst.add_argument("--basket", choices=["test_full"], default="test_full")
+    tst.add_argument("--generation", type=int, default=None)
+    tst.add_argument("--unlock-once", dest="unlock_once", action="store_true",
+                     help="每里程碑单次解锁 test 池并写 test_attestation.json（FR-08-04）")
+    tst.add_argument("--no-transfer", dest="transfer", action="store_false", default=True,
+                     help="跳过完整局（medium×10 关）的次级「迁移」指标（Spec §8.6）")
+    tst.add_argument("--attestation", default=None, help="存证落盘路径")
+    _set_func(tst, _deferred(["eval", "test"], "eval"), ["eval", "test"])
 
     div = _sp(sp, "diversity", help="动作熵 / 坍缩监控")
     _common_run_id(div)
+    div.add_argument("--generation", type=int, default=None)
     _set_func(div, _deferred(["eval", "diversity"], "eval"), ["eval", "diversity"])
     p.set_defaults(func=None)
 

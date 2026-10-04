@@ -1,0 +1,25 @@
+{
+  "file": "policy_prompt_8d2d27bd4c19ce69.txt",
+  "memory_ids": [
+    "m-0002",
+    "m-0007",
+    "m-0011"
+  ],
+  "prompt_hash": "sha256:8d2d27bd4c19ce69ba6f366800befd31bf886dd630b3993e55c3d05300764fe4",
+  "source_ids": [
+    "obs:sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "template:<workspace>/GameRSI/gamer_rsi/agent/prompts/decision_fallback.md",
+    "harness:7",
+    "task:sha256:c0ad33e589ebce459e22135ee6997ebd6e288c4f9e87e50d5ab8e3d99684cca2",
+    "memory:m-0002",
+    "memory:m-0007",
+    "memory:m-0011",
+    "reflection:r-0009",
+    "reflection:r-0004",
+    "reflection:r-0001"
+  ],
+  "template_hash": "sha256:45d5aaed01799d9158a207e3118fa56a83f6889b9f9c230c1e0ac954e8774297",
+  "token_estimate": 1163,
+  "truncated": [],
+  "unknown_placeholders": []
+}

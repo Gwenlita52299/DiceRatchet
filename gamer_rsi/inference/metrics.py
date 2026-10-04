@@ -143,6 +143,11 @@ def robustness_report(records: Sequence[InferenceCallRecord | Mapping[str, Any]]
         limits.update({k: float(v) for k, v in thresholds.items()})
     passed = (overall["first_pass_valid_rate"] >= limits["first_pass_valid_rate_min"]
               and overall["schema_fail_rate"] <= limits["schema_fail_rate_max"])
+    # 溯源：M1 交付物要求的是**真实模型 + 真实固定 prompt**（PRD §11/§12）。这里显式
+    # 标注「这份报告能不能当 M1 证据用」，避免 mock / 合成 prompt 的产物被误读成真实测量
+    # （M1 验收 F2）。
+    real_model = str(backend) not in ("mock", "fake")
+    real_prompts = str(prompt_source).startswith("file:") and "synthetic" not in str(prompt_source)
     return {
         "schema_version": SCHEMA_VERSION,
         "kind": "format_robustness",
@@ -153,6 +158,10 @@ def robustness_report(records: Sequence[InferenceCallRecord | Mapping[str, Any]]
         "prompt_source": prompt_source,
         "thresholds": limits,
         "passed": bool(passed),
+        "real_model": real_model,
+        "real_prompts": real_prompts,
+        #: 只有「真实后端 + 真实 prompt 快照 + 阈值通过」才能作为 M1 验收证据入档。
+        "m1_evidence": bool(real_model and real_prompts and passed),
         "overall": overall,
         "by_model_purpose": agg["by_model_purpose"],
         "errors": [dict(e) for e in errors],

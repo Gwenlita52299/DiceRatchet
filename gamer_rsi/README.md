@@ -1,13 +1,19 @@
 # gamer_rsi —— RSI 训练链路（Python）
 
 已落地：**MOD-01 env-rules**（GAME 内核的 Python 逐位移植）、**MOD-02 env-sandbox**
-（观测投影 / 代码与进程隔离 / 泄漏审计 / 蜜罐）与 **MOD-03 inference**
-（MLX/llama.cpp 后端契约、约束解码 + 三级 JSON 修复、并发限流与内存预算），对齐
+（观测投影 / 代码与进程隔离 / 泄漏审计 / 蜜罐）、**MOD-03 inference**
+（MLX/llama.cpp 后端契约、约束解码 + 三级 JSON 修复、并发限流与内存预算）、
+**MOD-04 policy**（prompt 组装 / 三级校验 / 重试与轻罚 / harness 工具受限加载 /
+启发式 fallback）与 **MOD-08 evals**（seed 协议与 INV-5 护栏 / 三基线 / INV-7 主指标 /
+坍缩监控 / 消融 / 报告与 test 存证），对齐
 [模块拆分 Spec v1.4](../docs/模块拆分Spec-GameRSI.md)、
 [MOD-01 PRD](../docs/prd/MOD-01-env-rules-PRD.md)、
 [MOD-02 PRD](../docs/prd/MOD-02-env-sandbox-PRD.md)、
-[MOD-03 PRD](../docs/prd/MOD-03-inference-PRD.md)。
-其余模块（MOD-04..08）尚未落地，其命令已按 Spec §4.6 注册，调用时返回
+[MOD-03 PRD](../docs/prd/MOD-03-inference-PRD.md)、
+[MOD-04 PRD](../docs/prd/MOD-04-policy-PRD.md)、
+[MOD-08 PRD](../docs/prd/MOD-08-evals-PRD.md)（细节见 [`agent/README.md`](agent/README.md)
+与 [`evals/README.md`](evals/README.md)）。
+其余模块（MOD-05/06/07）尚未落地，其命令已按 Spec §4.6 注册，调用时返回
 `E_IO_MODULE_PENDING`（退出码 2）。
 
 MOD-03 按 Spec v1.4 B-31 交付 `MLXBackend` + `MockBackend`：`Backend` 契约与一致性
@@ -32,8 +38,11 @@ python -m gamer_rsi guards check --root gamer_rsi
 # MOD-01：规则/确定性自检 + GAME golden 对拍
 python -m gamer_rsi env selftest --seed 1
 
+# MOD-04：用指定 agent 跑局（llm|heuristic|random|fixed_prompt；离线可跑后两者）
+python -m gamer_rsi play --agent heuristic --seeds train:1000-1004 --run-id demo-0001
+
 # MOD-02：泄漏审计（0 无 finding / 1 仅 medium / 2 含 critical）+ 报告 0600 落盘
-python -m gamer_rsi audit leak --run-id <run_id>
+python -m gamer_rsi audit leak --run-id demo-0001
 
 # MOD-02：单测 / golden / 集成
 pytest tests/unit/sandbox/test_sandbox_projection.py -q
@@ -46,11 +55,40 @@ python -m gamer_rsi inference probe --model mock --mode eval --seed 7 --run-id d
 python -m gamer_rsi inference bench --model mock --mode eval --seed 7 --n 20 --run-id demo-0001
 
 # MOD-03：JSON 格式鲁棒性（M1 交付物 runs/<id>/metrics/format_robustness.json；未达阈值退出码 1）
+# prompt 来自 MOD-04 决策模板快照 tests/fixtures/inference/robustness_prompts.jsonl；
+# 报告里的 m1_evidence 只在「真实后端 + 真实 prompt + 阈值通过」时为 true（mock 恒为 false）
 python -m gamer_rsi inference robustness --model mock --mode eval --seed 7 --n 200 --run-id demo-0001
 
 # MOD-03：单测 / 集成 / golden
 pytest tests/unit/inference tests/golden/inference -q
 pytest tests/integration/test_inference_robustness.py -q
+
+# MOD-04：单测 / prompt golden / 集成（真实 SandboxEnv + 假后端）
+pytest tests/unit/agent tests/golden/agent -q
+pytest tests/integration/test_policy_with_sandbox.py -q
+
+# MOD-08：基线（heuristic 默认局参考通关率 45.5%，n=200 / seed 1–200，Spec §8.6）
+# 注意：不同 --model/--mode/--seed 会改变 config_hash，跨族命令请换 --run-id（见 F10）
+python -m gamer_rsi baseline --kind heuristic --split heldout --basket H1 --run-id demo-0001
+
+# MOD-08：fixed_prompt 是「冻结提示词 + 真实 LLM」，必须能加载模型；
+# 拿不到客户端即 fail-closed（退出码 3），不会静默降级成 heuristic 的副本（M1 验收 F1）
+python -m gamer_rsi baseline --kind fixed_prompt --split heldout --basket H1 \
+    --model qwen3-8b-q4 --run-id demo-0002
+python -m gamer_rsi baseline --kind fixed_prompt --split heldout --basket H1 \
+    --model mock --run-id demo-0002          # 离线冒烟
+
+# MOD-08：代际报告 / 多样性 / 消融 / test 终检
+python -m gamer_rsi eval report --split heldout --baseline all --run-id demo-0001
+python -m gamer_rsi eval diversity --run-id demo-0001 --generation 0
+python -m gamer_rsi eval ablation --run-id demo-0001 --generation 3 --arms no_reflection,no_self_edit
+python -m gamer_rsi eval test --run-id demo-0001 --unlock-once \
+    --attestation runs/demo-0001/generations/gen-003/test_attestation.json
+
+# MOD-08：单测（含覆盖率门 G1 ≥80%）/ golden / 集成
+pytest tests/unit/evals --cov=gamer_rsi.evals --cov-fail-under=80 -q
+pytest tests/integration/evals -q
+python tests/golden/evals/regen_metrics_golden.py   # G2：指标 golden 重生成
 
 # 只打印将执行的动作与配置摘要（stdout 为可解析 JSON，不落盘）
 python -m gamer_rsi loop run --generations 3 --k 30 --hitl --run-id demo-0001 --dry-run
@@ -146,6 +184,21 @@ python -m gamer_rsi inference robustness --model qwen3-8b-q4 --mode eval --seed 
 - **评估口径**（B-14）：`mode="eval"` 强制 `temperature=0`、显式 `seed`、`top_p=1.0`、`top_k=0`、
   `max_inflight=1`，harness 不可覆盖。
 - 文档与代码冲突时以 Spec 为准。
+
+## 模块结构（`gamer_rsi/evals/`，MOD-08）
+
+| 文件 | 职责 | 关键 FR |
+|---|---|---|
+| `seeds.py` | seed 唯一出口 `take()`（train 按代切块，越界 `E_EVAL_SEED_EXHAUSTED`）、`resolve_basket()`（H1/H2/H3/test_full/train_window，成员固定不重抽）、三类区间不相交（`E_EVAL_SEED_OVERLAP`）；INV-5 文本护栏 `guard_prompt_context()` 与 `guard_memory_write()`（`E_EVAL_INV5_LEAK`）；test 解锁 + `test_attestation.json`（`E_EVAL_TEST_LOCKED`） | FR-08-01…06 |
+| `metrics.py` | INV-7 数据模型（`EpisodeResult` **无** shaped 分数字段）、`wilson_ci`、`normalized_entropy`、`action_entropy_curve`（横轴 = 决策点）、`mcnemar_exact_p`、`aggregate`（整数累加后单次相除）、§8.2 verdict、`render_report_sections` | FR-08-15…18, 23/24 |
+| `diversity.py` | `js_divergence`（手算 0.108031）、`entropy_slope`、C1–C4 坍缩判定 + 两点确认 | FR-08-19/20 |
+| `harness.py` | `EvalSpec`/`run_eval`（并行、超时、dropped 计 lose、degraded 剔除、预算）、`evaluate_arm`/`compare_paired`/`evaluate_generation`（MOD-07 唯一统计口径）、`report.json`+`report.sha256`、`generations.csv`、`plots_data/`、`SandboxRunner`（MOD-02 门面） | FR-08-07…10, 17, 22, 25 |
+| `baselines.py` | `random`（`seed ^ 0x5EED` 显式 rng）/ `heuristic`（委托 MOD-04 `heuristic_policy`，默认局参考 45.5%）/ `fixed_prompt`（harness v0 冻结）；不可覆盖归档 + `registry.csv` | FR-08-11…14 |
+| `ablation.py` | H2 三臂配对消融 + Holm–Bonferroni（两臂时首个阈值 0.025）+ `attribution ∈ {reflection, self_edit, both, none}` | FR-08-21 |
+| `reward.py` | shaped reward（**仅学习/调试**，不进判定路径；`metrics.py` 不 import 它） | Spec §3 |
+| `cli.py` | `baseline` / `eval report|diversity|ablation|test`（经 `app.py::wire()` 注册） | G6 |
+
+细节与命令见 [`evals/README.md`](evals/README.md)。
 
 ## 约定
 

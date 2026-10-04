@@ -63,8 +63,9 @@ def _required_args(path: tuple[str, ...]) -> list[str]:
 
 
 def test_pending_module_returns_exit_2():
-    # 尚未落地的模块命令 → E_IO_MODULE_PENDING，退出码 2（env 已由 MOD-01 落地，改用 play）
-    code, out, err = _run(["play", "--seeds", "train:1000-1000"])
+    # 尚未落地的模块命令 → E_IO_MODULE_PENDING，退出码 2（MOD-01/02/03/04/08 均已落地，
+    # 用仍未落地的 MOD-06 loop 作为样例；2026-10-04 M1 验收 F4 后 play 已接线）
+    code, out, err = _run(["loop", "run", "--run-id", "r-pending"])
     assert code == 2
     assert E.E_IO_MODULE_PENDING in err
 
@@ -173,7 +174,10 @@ def clean_registry():
 
 def test_register_extension_point_overrides_pending(clean_registry):
     """FR-09-10：实现由模块经 register() 注入，未注册才落 E_IO_MODULE_PENDING。"""
-    assert E.E_IO_MODULE_PENDING in _run(["play"])[2] # 默认待落地模块
+    # 本用例测的是**机制**（未注册 → pending），因此显式摘掉 play 的接线
+    # （fixture 会在用后恢复；play 自 2026-10-04 M1 验收 F4 起已由组合根注册）
+    cli._HANDLERS.pop(("play",), None)
+    assert E.E_IO_MODULE_PENDING in _run(["play"])[2]
     cli.register(["play"], lambda args: 0)
     code, out, err = _run(["play", "--seeds", "train:1000-1000"])
     assert code == 0, err

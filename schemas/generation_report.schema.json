@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamer-si.local/schemas/generation_report.schema.json",
+  "title": "generation_report",
+  "description": "runs/<run_id>/generations/gen-{NNN}/report.json（Spec §4.5 / B-16）。字段由 Spec §4.5 定义：MOD-08 产出 heldout/train/gain_realism/diversity/ablation，MOD-07 填 candidates/decision/decided_by/reason，MOD-09 原子写入并算 sha256。数值一律 round(x,4)（B-34）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "generation", "harness_version", "parent_version", "heldout", "train",
+    "gain_realism", "diversity", "ablation", "candidates", "decision",
+    "decided_by", "reason"
+  ],
+  "properties": {
+    "generation": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "gen-000 是 v0 基线（decision=baseline），演化代从 1 开始"
+    },
+    "harness_version": { "type": "integer", "minimum": 0 },
+    "parent_version": { "type": "integer", "minimum": 0 },
+    "episode_config_hash": { "type": ["string", "null"] },
+    "heldout": { "$ref": "#/$defs/split_metrics" },
+    "train": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["window", "win_rate"],
+      "properties": {
+        "window": { "type": "integer", "minimum": 0 },
+        "win_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "n": { "type": "integer", "minimum": 0 },
+        "n_dropped": { "type": "integer", "minimum": 0 },
+        "low_confidence": { "type": "boolean" }
+      }
+    },
+    "gain_realism": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["win_rate_gap", "gap_threshold", "verdict"],
+      "properties": {
+        "win_rate_gap": { "type": "number" },
+        "gap_threshold": { "type": "number" },
+        "verdict": {
+          "enum": ["real_gain", "null", "overfit_suspect", "regress", "insufficient"]
+        },
+        "collapse_veto": { "type": "boolean" },
+        "mcnemar_p": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "bootstrap_gap_ci95": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "diversity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entropy_slope", "collapse_flag"],
+      "properties": {
+        "entropy_slope": { "type": "number" },
+        "collapse_flag": { "type": "boolean" },
+        "jsd_kind": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "ablation": {
+      "type": ["object", "null"],
+      "description": "非消融代为 null；消融代写 {arms, delta_full, mcnemar_p, attribution}"
+    },
+    "candidates": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "decision": { "enum": ["pending", "baseline", "accept", "reject", "rollback"] },
+    "decided_by": { "enum": ["auto", "human"] },
+    "reason": { "type": "string" },
+    "power_note": { "type": "string" }
+  },
+  "$defs": {
+    "split_metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "basket", "n", "win_rate", "win_rate_ci95", "mean_stages_cleared",
+        "mean_hearts_left", "mean_battles_won", "mean_decisions", "illegal_rate",
+        "fallback_rate", "truncation_rate", "degraded_n", "action_entropy_curve"
+      ],
+      "properties": {
+        "basket": { "type": "string" },
+        "n": { "type": "integer", "minimum": 0 },
+        "n_dropped": { "type": "integer", "minimum": 0 },
+        "low_confidence": { "type": "boolean" },
+        "win_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "win_rate_ci95": {
+          "type": "array",
+          "items": { "type": "number", "minimum": 0, "maximum": 1 },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "mean_stages_cleared": { "type": "number", "minimum": 0 },
+        "mean_hearts_left": { "type": "number" },
+        "mean_battles_won": { "type": "number", "minimum": 0 },
+        "mean_decisions": { "type": "number", "minimum": 0 },
+        "illegal_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "fallback_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "truncation_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+        "degraded_n": { "type": "integer", "minimum": 0 },
+        "entropy_mean_norm": { "type": "number", "minimum": 0, "maximum": 1 },
+        "action_entropy_curve": {
+          "type": "array",
+          "items": { "type": ["number", "null"] }
+        }
+      }
+    }
+  }
+}

@@ -103,12 +103,31 @@ DEFAULT_SEED_SPLITS: Final[tuple[str, ...]] = ("heldout", "test")
 #: 轨迹行里**非内容**字段：它们是审计侧的机器元数据（摘要/计数/时间戳/本局 seed），
 #: 不参与 seed 扫描——否则 sha256 片段、prompt_tokens、年份 2026 会刷出假阳性。
 #: 注意不含 ``llm_raw``/``action``/``illegal_reason`` 等模型产出内容（那才是泄漏面）。
+#:
+#: 2026-10-04（M1 验收 F3）：``events.jsonl`` 走同一条扫描路径，因此这里还必须收下
+#: 事件里真实出现的机器元数据键，否则「4 位数字落 2000–2099/9000–9099 即告警」会把
+#: 微秒耗时（``duration_us: 2072.8`` → ``2072``）和秒级耗时（``dur_s: 3.9022`` →
+#: ``9022``）当成 held-out/test seed，把 ``audit leak`` 在**任何**评估 run 上都刷成
+#: ``critical``（实测 136 条假阳性），G4 质量门随之失效。
 LOG_NON_CONTENT_KEYS: Final[frozenset[str]] = frozenset({
     "obs_digest", "prompt_hash", "tool_hash", "state_hash", "ts", "seed",
     "episode_key", "generation", "harness_version", "step", "decision_index",
     "plan_index", "attempt", "reward", "cum_reward", "arm", "split", "mode",
     "source", "type", "x_obs_keys", "llm_latency_ms", "prompt_tokens",
     "completion_tokens", "memory_ids",
+    # 计时：微秒/毫秒值极易落进 2000–2099 或 9000–9099（``duration_us=2072.8``、
+    # ``dur_s=3.9022`` 都被当成 held-out seed；M1 验收 F3 实测 16 条）。纯计时字段，
+    # 不承载文本。
+    "duration_us", "duration_ms", "duration_s", "dur_s", "dur_ms",
+    "latency_ms", "latency_us",
+    # 计数与规模：机器累加器
+    "n", "n_workers", "n_dropped", "degraded_n", "steps", "decisions",
+    "fields", "dropped_hidden", "missing_optional",
+    # 评估身份与判定（MOD-08 ``EvalSpec`` / 报告骨架）。``spec`` 是本次评估的描述符
+    # （run_id/generation/split/basket/**seeds**/并发/预算），MOD-06 ``--resume`` 与审计
+    # 复算都依赖它；``spec.seeds`` 也正因此被 M1 验收 F3 误判了 120 条。
+    "spec", "basket", "outcome", "dropped", "degraded", "error_code", "error_codes",
+    "report_sha256", "low_confidence", "config_hash", "exit_code",
 })
 
 

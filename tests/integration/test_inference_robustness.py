@@ -40,7 +40,8 @@ def test_robustness_meets_m1_thresholds(manager_builder, tmp_path: Path):
     records = []
     manager = manager_builder(registry_of(), factory=factory, sink=records.append)
     prompts, source = load_robustness_prompts(N_PROMPTS)
-    assert len(prompts) == N_PROMPTS and source.startswith("synthetic")
+    # M1 验收 F2：必须用真实 MOD-04 快照跑批，而不是合成兜底
+    assert len(prompts) == N_PROMPTS and source.startswith("file:")
 
     errors: list[dict] = []
 
@@ -108,11 +109,20 @@ def test_robustness_fails_when_thresholds_are_missed(manager_builder):
     assert report["passed"] is False
 
 
-def test_prompts_are_schema_agnostic_and_role_shaped():
-    prompts, _ = load_robustness_prompts(3)
+def test_prompts_come_from_the_real_mod04_snapshot_and_are_role_shaped():
+    """M1 验收 F2：默认 prompt 源必须是 MOD-04 决策模板快照，不再退化为合成兜底。
+
+    快照由 ``tests/golden/inference/regen_robustness_prompts.py`` 从真实 ``SandboxEnv``
+    观测 + ``PolicyAgent.prompt_bundle()`` 生成，因此每条是**单轮 user** 消息（模板自带
+    系统指令，无独立 system turn）。
+    """
+    prompts, source = load_robustness_prompts(3)
+    assert source.startswith("file:"), f"prompt 源退化为 {source!r}（快照缺失？）"
+    assert "synthetic" not in source
     for messages in prompts:
-        assert isinstance(messages[0], Message)
-        assert messages[0].role == "system" and messages[-1].role == "user"
+        assert all(isinstance(m, Message) for m in messages)
+        assert {m.role for m in messages} <= {"system", "user", "assistant"}
+        assert messages[-1].role == "user" and messages[-1].content.strip()
 
 
 @pytest.mark.slow

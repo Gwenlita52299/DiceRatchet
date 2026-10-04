@@ -129,12 +129,16 @@ def _build_registry() -> dict[str, EventSpec]:
         ("cost", frozenset({"episodes_spent", "episodes_cap"})),
     ]:
         entries.append(_spec("evolve", ev, "MOD-07 harness 自进化事件", req))
-    # ---- eval（MOD-08）----------------------------------------------------------------
+    # ---- eval（MOD-08 PRD §13：eval.start/seed_start/seed_done/report/guard_violation/
+    #      collapse/test_unlock）----------------------------------------------------------
     for ev, req in [
         ("start", frozenset({"split", "basket"})),
+        ("seed_start", frozenset({"seed", "split", "basket"})),
         ("seed_done", frozenset({"seed", "outcome"})),
         ("report", frozenset({"generation"})),
+        ("guard_violation", frozenset({"error_code", "split", "destination"})),
         ("collapse", frozenset({"generation", "flag"})),
+        ("test_unlock", frozenset({"generation", "attestation_path"})),
     ]:
         entries.append(_spec("eval", ev, "MOD-08 测量事件", req))
     return dict(entries)

@@ -1,0 +1,10 @@
+{
+  "version": 0,
+  "parent": null,
+  "git_commit": "",
+  "artifact_hash": "",
+  "created_at": "2026-09-30T00:00:00Z",
+  "reason": "M1 初始 harness（v0）：decision 模板 + 空工具目录；由 MOD-07 在代际边界演化",
+  "accepted_by": "human",
+  "base_model": null
+}

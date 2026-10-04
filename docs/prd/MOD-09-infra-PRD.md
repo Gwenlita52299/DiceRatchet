@@ -219,8 +219,8 @@ def scan_all(root: Path) -> list[GuardFinding]: ...          # 供 CI 与 CLI �
 | 命令 | 关键参数 | 退出码 |
 |---|---|---|
 | `env selftest` | `--seed INT` | 0/4 |
-| `play` | `--agent {llm,heuristic,fixed}` `--seeds SPEC` `--episodes N` `--dry-run` | 0/1/2/3 |
-| `baseline` | `--kind {random,heuristic,fixed_prompt}` `--seeds SPEC` | 0/1/2 |
+| `play` | `--agent {llm,heuristic,random,fixed_prompt}` `--seeds SPEC` `--episodes N` `--model ID` `--dry-run` | 0/1/2/3 |
+| `baseline` | `--kind {random,heuristic,fixed_prompt}` `--split {train,heldout,test}` `--seeds SPEC` \| `--basket {H1,H2,H3,test_full,train_window}`（二者互斥，省略 basket 时按 split 推导）`--model ID` | 0/1/2/3 |
 | `loop run` | `--generations N` `--k N` `--hitl/--no-hitl` `--run-id ID` `--resume` | 0/1/2/3/4/5 |
 | `loop status\|smoke` | `--run-id ID` | 0/1/2 |
 | `evolve approve\|rollback` | `--run-id ID` `--generation N` `--reason STR` | 0/2/4 |
