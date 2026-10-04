@@ -21,12 +21,24 @@ __all__ = ["DEFAULT_PROMPTS_PATH", "load_robustness_prompts", "probe_messages",
 DEFAULT_PROMPTS_PATH: Final[str] = "tests/fixtures/inference/robustness_prompts.jsonl"
 
 #: probe/bench 的固定单轮消息（确定性，不依赖环境）。
+#:
+#: 2026-10-04（M1 验收 F16）：这里必须**同时**给出输出契约与可选动作清单，否则真实 8B
+#: 只能瞎猜 ``kind``：先后实测到 ``plan`` 被写成一段自然语言（首答 100% 校验失败）与
+#: ``kind`` 编造成 ``use_card`` / ``attack``（3 次尝试全部失败）。真实 MOD-04 prompt
+#: 会带上 ``legal_actions`` 原文，模型只需照抄——probe/bench 也必须等价，否则量到的是
+#: 「提示词欠约束」，不是「模型格式鲁棒性」。
 PROBE_MESSAGES: Final[tuple[Message, ...]] = (
     Message(role="system",
-            content="你是《破咒骰》的决策器。只输出一个 JSON 对象，字段为 reasoning 与 plan。"),
+            content="你是《破咒骰》的决策器。只输出一个 JSON 对象，字段为 reasoning（≤200 字）与 "
+                    "plan（1..12 个动作，每个动作至少含 kind）。kind 只能取上面所列的"
+                    "legal_actions 里出现过的值，禁止自创。"),
     Message(role="user",
-            content="phase=player_turn stage=1 hand=[d1,d2] slots=[s1,s2] enemies=[e1]；"
-                    "请给出下一步动作计划。"),
+            content=("phase=player_turn stage=1 hand=[d1,d2] slots=[s1,s2] enemies=[e1]\n"
+                     'legal_actions=[{"kind":"play_face","dieId":"d1","slotId":"s1","targetId":"e1"},'
+                     '{"kind":"play_face","dieId":"d2","slotId":"s2"},'
+                     '{"kind":"discard_die","dieId":"d1"},'
+                     '{"kind":"end_turn"}]\n'
+                     "请给出下一步动作计划。")),
 )
 
 _SYSTEM: Final[str] = (

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import inspect
 import time
 from pathlib import Path
 from typing import Any, Final, Sequence
@@ -94,10 +95,10 @@ class MLXBackend(LocalBackend):
         try:
             import mlx.core as mx
 
-            mx.clear_cache()
-            metal = getattr(mx, "metal", None)
-            if metal is not None and hasattr(metal, "clear_cache"):
-                metal.clear_cache()
+            clearer = getattr(mx, "clear_cache", None) \
+                or getattr(getattr(mx, "metal", None), "clear_cache", None)
+            if clearer is not None:
+                clearer()
         except Exception: # pragma: no cover - mlx 未安装/版本差异：释放引用已足够
             pass
 
@@ -168,7 +169,25 @@ class MLXBackend(LocalBackend):
         if not Path(path).exists():
             raise InferenceError(E.E_LLM_UNAVAILABLE, f"权重路径不存在：{path}",
                                  hint="离线下载权重后重试；M1 不联网（NFR-03-06）")
-        model, tokenizer = load(path, tokenizer_path=spec.tokenizer_path or path)
+        # MLX API 变动全部收敛在这里（R-1）：``mlx_lm.load`` 在 0.2x 之后**去掉了**
+        # ``tokenizer_path`` 形参（改为从同一个 repo 读 tokenizer），旧版则有。
+        # 按安装版本的签名决定是否传，避免真实加载时 TypeError（M1 验收 F14）。
+        kwargs: dict[str, Any] = {}
+        try:
+            params = inspect.signature(load).parameters
+        except (TypeError, ValueError): # pragma: no cover - 内建/装饰器签名不可读
+            params = {}
+        if "tokenizer_path" in params:
+            kwargs["tokenizer_path"] = spec.tokenizer_path or path
+        elif spec.tokenizer_path and Path(spec.tokenizer_path).resolve() != Path(path).resolve():
+            # 新版 mlx-lm 不支持分离 tokenizer 路径：tokenizer 与权重不同源时只能
+            # 以权重路径为准，并把差异作为提示抛出，不做静默降级。
+            raise InferenceError(
+                E.E_LLM_BACKEND_ERROR,
+                f"当前 mlx-lm 不支持独立 tokenizer_path（tokenizer_path={spec.tokenizer_path}）",
+                hint="把 tokenizer 与权重放在同一目录并在注册表中使用同一路径",
+                retryable=False)
+        model, tokenizer = load(path, **kwargs)
         return model, tokenizer
 
     def _verify_weights(self, spec: ModelSpec) -> None:
@@ -194,7 +213,15 @@ class MLXBackend(LocalBackend):
         self._maybe_build_json_mask(json_mode)
         kwargs: dict[str, Any] = {"max_tokens": max_tokens, "sampler": sampler}
         if seed is not None:
-            kwargs["seed"] = int(seed)
+            # mlx-lm ≥ 0.2x 的 generate_step 已无 ``seed`` 形参，采样随机性由 MLX 全局
+            # RNG 决定；显式 seed 必须走 ``mx.random.seed``（INV-6 / B-14：评估局
+            # temperature=0 且 seed 显式，train 局由 harness 决定温度上限）。
+            try:
+                import mlx.core as mx
+
+                mx.random.seed(int(seed))
+            except Exception: # pragma: no cover - mlx 版本差异
+                kwargs["seed"] = int(seed)
         for response in stream_generate(self._model, self._tokenizer, prompt=prompt, **kwargs):
             if ttft_ms is None:
                 ttft_ms = int((time.monotonic() - started) * 1000)
@@ -221,6 +248,18 @@ class MLXBackend(LocalBackend):
             msgs = [{"role": "system", "content": JSON_INSTRUCTION}] + msgs
         tokenizer = self._tokenizer
         if tokenizer is not None and hasattr(tokenizer, "apply_chat_template"):
+            # Qwen3 等混合推理模型的模板默认开「思考模式」：会把预算全烧在 <think> 里，
+            # 到 max_tokens 还没吐 JSON（M1 验收 F15，实测 3/3 次均 JSONDecodeError）。
+            # 决策 agent 要求**只输出一个 JSON 对象**，因此显式关思考；模板不支持该
+            # 关键字时（非 Qwen3）退回原调用。
+            try:
+                return tokenizer.apply_chat_template(msgs, tokenize=False,
+                                                     add_generation_prompt=True,
+                                                     enable_thinking=False)
+            except TypeError:
+                pass
+            except Exception: # pragma: no cover - 模板缺失时退回朴素拼接
+                pass
             try:
                 return tokenizer.apply_chat_template(msgs, tokenize=False,
                                                      add_generation_prompt=True)
@@ -250,9 +289,11 @@ class MLXBackend(LocalBackend):
         try: # pragma: no cover - 依赖 mlx 运行时
             import mlx.core as mx
 
-            metal = getattr(mx, "metal", None)
-            if metal is not None and hasattr(metal, "get_active_memory"):
-                return round(metal.get_active_memory() / 1e9, 4)
+            # mlx ≥ 0.2x 把 ``mx.metal.*`` 提升为顶层 ``mx.*``（旧名仍可用但会告警）
+            getter = getattr(mx, "get_active_memory", None) \
+                or getattr(getattr(mx, "metal", None), "get_active_memory", None)
+            if getter is not None:
+                return round(getter() / 1e9, 4)
         except Exception: # pragma: no cover
             pass
         return float(self._spec.resident_gb_est) if self._spec is not None else 0.0

@@ -98,10 +98,31 @@ python -m gamer_rsi --help
 真实模型（`--model qwen3-8b-q4`）需要先落盘权重（离线、`models/` 已 gitignore）：
 
 ```bash
-uv pip install --python .venv/bin/python 'mlx-lm>=0.20'          # 阶段一（MLX）
-uv pip install --python .venv/bin/python 'llama-cpp-python>=0.2' # 阶段二（GBNF / server）
-python -m gamer_rsi inference robustness --model qwen3-8b-q4 --mode eval --seed 1042 --n 200
+# 依赖 + 权重（2026-10-04 实测环境：mlx 0.32.3 / mlx-lm 0.32.0）
+UV_CACHE_DIR=.local/uv-cache uv pip install --python .venv/bin/python 'mlx-lm>=0.20'
+HF_HOME=.local/hf .venv/bin/python -c "from huggingface_hub import snapshot_download as d; \
+  d(repo_id='mlx-community/Qwen3-8B-4bit', local_dir='models/Qwen3-8B-4bit', max_workers=4)"
+
+# 冒烟 → 基准 → 200 条真实 prompt 的 JSON 鲁棒性（报告里 m1_evidence 应为 true）
+python -m gamer_rsi inference probe      --model qwen3-8b-q4 --mode eval --seed 7 --run-id real-0001
+python -m gamer_rsi inference bench      --model qwen3-8b-q4 --mode eval --seed 7 --n 30 --run-id real-0001
+python -m gamer_rsi inference robustness --model qwen3-8b-q4 --mode eval --seed 1042 --n 200 --run-id real-0001
+
+# 三基线（H1 = seed 2000–2039；fixed_prompt 需要真实客户端，40 局约 8 h）
+python -m gamer_rsi baseline --kind random       --split heldout --basket H1 --run-id real-0001
+python -m gamer_rsi baseline --kind heuristic    --split heldout --basket H1 --run-id real-0001
+python -m gamer_rsi baseline --kind fixed_prompt --split heldout --basket H1 \
+    --model qwen3-8b-q4 --run-id real-0001
 ```
+
+实测（Apple Silicon，2026-10-04，详见 [M1 验收报告 §12](../../docs/reviews/2026-10-04-M1验收报告.md)）：
+常驻显存 **4.6077 GB**；`t_d` p50 **5.687 s**（真实决策 prompt，n=200；p95 11.70 s）；`tok_per_s` 12.0；
+首答通过率 **0.94**（`schema_fail_rate` 0.005）。因此 `inference.total_timeout_ms` 已回填 120 s、
+`evals.seed_timeout_s` 已回填 1800 s——**这两个默认值必须随实测更新**，否则正常决策会被判成超时/dropped。
+
+> MLX 后端会自动关掉 Qwen3 的思考模式（`enable_thinking=False`）并按安装版本的签名适配
+> `mlx_lm.load` / 显式 seed；这类 API 漂移只有真实权重才能暴露，改动 `mlx_backend.py` 后请务必跑一次上面的
+> `inference probe`。
 
 ## 模块结构（`gamer_rsi/sandbox/`，MOD-02）
 

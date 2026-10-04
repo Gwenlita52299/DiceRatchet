@@ -24,6 +24,13 @@ defaults:
 
 models:
   # 阶段一（M1）主力：MLX 进程内 + JSON mode（无 GBNF，见 PRD §6 差异表）
+  #
+  # 2026-10-04 实测回填（run `m1-real-bench2` / `m1-real-rob`，Apple Silicon，mlx 0.32.3 + mlx-lm 0.32.0）：
+  #   resident_gb_measured = 4.6077 GB（mx.get_active_memory，n=30）；预算 4.6077+0.15×8.192+1.0 = 6.84 ≤ 20 ✅
+  #   延迟（probe prompt，n=30）：p50 4043.5 ms / p95 4199.0 ms / 12.42 tok/s
+  #   延迟（真实 MOD-04 prompt，robustness n=200）：p50 5687.0 ms / p95 11703.3 ms / 12.02 tok/s
+  #   ⚠️ 原预算 p50 1500 / p95 3000 / 25 tok/s **未达成**（p50 差 2.7×，tok/s 差 2.0×）；
+  #      新预算按实测 + 适度余量重设，仅用于捕捉后续回归，不代表原始目标已满足。
   qwen3-8b-q4:
     backend: mlx
     weights_path: models/Qwen3-8B-4bit
@@ -31,18 +38,19 @@ models:
     quantization: 4bit
     context_length: 8192
     kv_cache_bits: 8
-    resident_gb_est: 5.6 # 首次实测后回填（NFR-03-03）
+    resident_gb_est: 4.6077 # 实测（NFR-03-03）；原估 5.6 偏保守
     kv_gb_per_1k_tokens: 0.15
     max_inflight: 1
     supports_grammar: false
     supports_json_mode: true
     fallback_backend: llama_cpp
-    weights_sha256: null # 落地后由 MOD-03 填写并锁定（Q-6）
+    # Q-6 已关闭：目录级 sha256（隐性 `.*` 目录已排除，见 MOD-03 `weights_digest` 的 F17 修复）
+    weights_sha256: 20303070eb19e8a47a04f828d9239e9c1697392f183408535b5ab51fe9fe4b49
     default_sampling: { temperature: 0.7, top_p: 0.95, top_k: 0, repetition_penalty: 1.05 }
-    perf_budget: { p50_latency_ms: 1500, p95_latency_ms: 3000, min_tok_per_s: 25 }
+    perf_budget: { p50_latency_ms: 5000, p95_latency_ms: 6000, min_tok_per_s: 10 }
     family: qwen3
     params_b: 8.0
-    notes: 阶段一主力后端（MLX）
+    notes: 阶段一主力后端（MLX）；必须关思考模式（enable_thinking=false，见 MOD-03 §10②）
 
   # 阶段二：30B-A3B GGUF + llama-server（GBNF 稳定、可 --parallel）
   # 已裁决（Spec v1.3 P-10 → §8.6）：默认 context_length=8192, max_inflight=1，

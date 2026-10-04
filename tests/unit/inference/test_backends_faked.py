@@ -83,6 +83,22 @@ def fake_mlx(monkeypatch: pytest.MonkeyPatch):
     sample.make_sampler = lambda **kwargs: calls.__setitem__("sampler", kwargs) or "SAMPLER"
     monkeypatch.setitem(sys.modules, "mlx_lm", module)
     monkeypatch.setitem(sys.modules, "mlx_lm.sample_utils", sample)
+
+    # 假 ``mlx.core``：让常驻显存（NFR-03-03）与显式 seed（INV-6）在**装没装真 mlx**
+    # 的环境下都确定。2026-10-04（M1 验收 F14）：真 mlx 一旦安装，``_resident_gb()``
+    # 会走真实 ``mx.get_active_memory()``，本用例原先只因「mlx 未安装」才拿到 1.0；
+    # 且 mlx-lm ≥0.2x 的 ``generate_step`` 已无 ``seed`` 形参，显式 seed 必须走
+    # ``mx.random.seed``，故断言点也从「转发 seed= 给 stream_generate」改为
+    # 「seed 真的设进了 MLX 全局 RNG」。
+    core = types.ModuleType("mlx.core")
+    core.get_active_memory = lambda: 1_000_000_000
+    core.clear_cache = lambda: None
+    core_rng = types.SimpleNamespace(seed=lambda value: calls.__setitem__("mx_seed", int(value)))
+    core.random = core_rng
+    mlx_pkg = types.ModuleType("mlx")
+    mlx_pkg.core = core
+    monkeypatch.setitem(sys.modules, "mlx", mlx_pkg)
+    monkeypatch.setitem(sys.modules, "mlx.core", core)
     return calls
 
 
@@ -107,7 +123,8 @@ def test_mlx_load_and_generate_with_fake_runtime(tmp_path, fake_mlx):
     assert result.text == '{"kind": "end_turn"}'
     assert result.usage.prompt_tokens > 0 and result.usage.completion_tokens == 5
     assert result.usage.ttft_ms is not None and result.usage.decode_ms is not None
-    assert fake_mlx["stream"][0]["seed"] == 7
+    # 显式 seed 必须真的设进 MLX 全局 RNG（mlx-lm ≥0.2x 的 generate_step 无 seed 形参）
+    assert fake_mlx.get("mx_seed") == 7
     assert fake_mlx["load"][0] == str(weights)
     assert tokens > 0
     assert "TEMPLATED" in templated

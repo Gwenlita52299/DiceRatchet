@@ -308,6 +308,14 @@ play_decision(env, obs, ctx):
 | 文档与命令验证（G6） | 0.5 | M1 |
 | **合计** | **13.5** | M1（关键路径 MOD-01→MOD-02→MOD-03/04） |
 
+**实际交付（M1）**：`gamer_rsi/agent/`（`policy.py` / `parser.py` / `heuristic.py` / `prompts/` / `tools/`）于
+**2026-10-04** 交付（提交 `bff9982`；同日落地的还有 MOD-08 与 M1 验收修复）。本项目**未单独记工**；
+按提交时间窗折算 ≤ 3 人日（计划 13.5），偏差 ≥ 78%。
+M1 验收的 **F1（`fixed_prompt` 无真实 LLM 路径 + 降级静默）** 与 **F4（`play` 未接线）** 都落在本模块边界上，
+已修复并补端到端守门用例；此外实测发现 **F16**（`probe/bench` 的固定 prompt 未给输出契约与 legal_actions，
+把「提示词欠约束」误报成「模型格式鲁棒性差」）与 **F13**（观测块未被 `prompt_token_budget` 裁剪，
+单决策点实测 19,633 token > `context_length=8192`，仍未修）。
+
 ## 16. 开放问题
 1. `legal_actions()` 的"噪声提示"具体指什么（错误候选占比？隐藏信息模糊化？）——影响 FR-04-8 误判率与 `E_ACTION_LEGAL_NOISE` 阈值，需 MOD-01/02 定稿。
 2. 轻罚通道最终形态：`SandboxEnv.reject()`（本 PRD 方案）vs MOD-06 代记账——需 MOD-02 owner 确认。

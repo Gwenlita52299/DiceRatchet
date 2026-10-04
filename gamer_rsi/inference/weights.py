@@ -39,8 +39,16 @@ def weights_digest(path: Path | str) -> str:
         return sha256_file(target)
     items: list[tuple[str, str]] = []
     for child in sorted(target.rglob("*")):
-        if child.is_file() and not child.name.startswith("."):
-            items.append((child.relative_to(target).as_posix(), sha256_file(child)))
+        if not child.is_file():
+            continue
+        rel = child.relative_to(target)
+        # 跳过**任意层级**的隐藏项（`.cache/`、`CACHEDIR.TAG`、`.gitignore` 等）。
+        # 2026-10-04（M1 验收 F17）：只判 `child.name` 会把 HuggingFace 下载缓存
+        # （`models/…/.cache/huggingface/download/*.metadata`、`.lock`）算进摘要，
+        # 于是「同一份权重、不同下载时间/重试」会得到不同 sha256，Q-6 的锁定形同虚设。
+        if any(part.startswith(".") for part in rel.parts):
+            continue
+        items.append((rel.as_posix(), sha256_file(child)))
     payload = "\n".join(f"{name}\x1f{digest}" for name, digest in items).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 

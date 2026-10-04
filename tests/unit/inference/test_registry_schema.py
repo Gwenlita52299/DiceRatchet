@@ -36,9 +36,14 @@ def test_shipped_registry_is_typed():
     assert isinstance(eight, ModelSpec)
     assert eight.backend == "mlx" and eight.supports_grammar is False
     assert eight.supports_json_mode is True and eight.max_inflight == 1
-    assert eight.weights_sha256 == "" # YAML null → 跳过校验（Q-6）
+    # Q-6 已关闭（2026-10-04 实测）：权重落地后写入目录级 sha256
+    assert eight.weights_sha256 == (
+        "20303070eb19e8a47a04f828d9239e9c1697392f183408535b5ab51fe9fe4b49")
+    # 2026-10-04 实测回填：原预算 1500/3000/25 未达成，按实测 + 余量重设
     assert eight.default_sampling["temperature"] == 0.7
-    assert eight.perf_budget["p95_latency_ms"] == 3000.0
+    assert eight.perf_budget["p95_latency_ms"] == 6000.0
+    assert eight.perf_budget["p50_latency_ms"] == 5000.0
+    assert eight.perf_budget["min_tok_per_s"] == 10.0
 
     big = registry.spec("qwen3-30b-a3b-q4")
     assert big.backend == "llama_server" and big.supports_grammar is True
@@ -51,8 +56,10 @@ def test_shipped_registry_is_typed():
 def test_registry_budget_formula_and_30b_ceiling():
     registry = load_registry(REGISTRY_PATH)
     eight = registry.spec("qwen3-8b-q4")
+    # resident_gb_est 已由实测回填 5.6 → 4.6077（M1 验收 §12），预算仍远低于 20 GB
+    assert eight.resident_gb_est == pytest.approx(4.6077)
     assert estimate_required_gb(eight, max_inflight=1, context_length=8192) == pytest.approx(
-        5.6 + 0.15 * 8.192 + 1.0)
+        4.6077 + 0.15 * 8.192 + 1.0)
     big = registry.spec("qwen3-30b-a3b-q4")
     # PRD §7：8192/1 临界（20.21 > 20.0）；32768/4 明确拒绝
     assert estimate_required_gb(big, max_inflight=1, context_length=8192) > 20.0

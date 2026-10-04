@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -132,16 +134,23 @@ def test_g6_commands_parse_and_dry_run(argv):
 
 @pytest.mark.slow
 def test_g6_baseline_and_report_actually_run(tmp_path):
-    run_id = "g6-eval-smoke"
-    proc = subprocess.run(
-        [sys.executable, "-m", "gamer_rsi", "baseline", "--kind", "heuristic",
-         "--split", "heldout", "--basket", "H1", "--run-id", run_id],
-        cwd=_REPO, capture_output=True, text=True, timeout=900)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert (_REPO / "runs" / run_id / "baselines" / "heuristic-heldout.json").is_file()
-    proc2 = subprocess.run(
-        [sys.executable, "-m", "gamer_rsi", "eval", "report", "--split", "heldout",
-         "--baseline", "all", "--run-id", run_id],
-        cwd=_REPO, capture_output=True, text=True, timeout=900)
-    assert proc2.returncode == 0, proc2.stdout + proc2.stderr
-    assert (_REPO / "runs" / run_id / "generations" / "gen-000" / "report.sha256").is_file()
+    # 独占 run_id：旧版写死 "g6-eval-smoke"，一旦仓库里留下同名 run 目录（且 config_hash
+    # 因默认值回填而变化）就会以 E_IO_RUN_CONFLICT 失败（2026-10-04 实测回填后触发）。
+    # 用例改为自建唯一 run 并在结束时清理，保证可重复执行。
+    run_id = f"g6-eval-smoke-{uuid4().hex[:8]}"
+    run_dir = _REPO / "runs" / run_id
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "gamer_rsi", "baseline", "--kind", "heuristic",
+             "--split", "heldout", "--basket", "H1", "--run-id", run_id],
+            cwd=_REPO, capture_output=True, text=True, timeout=900)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert (run_dir / "baselines" / "heuristic-heldout.json").is_file()
+        proc2 = subprocess.run(
+            [sys.executable, "-m", "gamer_rsi", "eval", "report", "--split", "heldout",
+             "--baseline", "all", "--run-id", run_id],
+            cwd=_REPO, capture_output=True, text=True, timeout=900)
+        assert proc2.returncode == 0, proc2.stdout + proc2.stderr
+        assert (run_dir / "generations" / "gen-000" / "report.sha256").is_file()
+    finally:
+        shutil.rmtree(run_dir, ignore_errors=True)

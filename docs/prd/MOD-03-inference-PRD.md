@@ -386,16 +386,23 @@ class InferenceError(RuntimeError):
 | 阶段二 30B-A3B 接入 + 内存/并发调优 + 性能基准 | 3.0 | M2 前 | R-3 |
 | 可选：真批处理（同前缀分组 + `--cont-batching`） | 2.0 | M3+ | 视评估吞吐需求 |
 
+**实际交付（M1）**：代码于 **2026-10-04** 落地（提交 `bff9982`，含 MOD-04/08 与 M1 验收修复；MOD-03 主体为 `2103157`）。
+本项目**未单独记工**；按提交时间窗折算 ≤ 3 人日（计划 14.0），偏差 ≥ 78%。
+**真实权重联调在同一日完成**（M1 验收原判定为「缺权重」，不属于计划内工作量）：落盘 `models/Qwen3-8B-4bit`（4.6 GB）后，
+实测暴露并修掉 4 个只有真模型才能发现的缺陷 —— MLX `load()` 形参漂移、`stream_generate` 无 `seed` 形参、
+Qwen3 思考模式烧光 token 预算、probe prompt 欠约束（详见 [M1 验收报告 §12](../reviews/2026-10-04-M1验收报告.md)），
+并回填 `resident_gb_est` / `weights_sha256` / `perf_budget`（Q-2 阶段一部分、Q-6）。
+
 ## 16. 开放问题
 
 | # | 问题 | 影响 | 建议决策 |
 |---|---|---|---|
 | Q-1 | **已裁决（Spec v1.4 B-31）** M1 是否必须同时维护 MLX 与 llama.cpp 两个后端（+4.5 人日）？ | §15 砍 2.5 人日 | M1 只交付 `MLXBackend` + `MockBackend`，`LlamaCppBackend` 与阶段二 30B 一起上；但 `Backend` 契约与一致性套件必须在 M1 定稿 |
-| Q-2 | 30B-A3B 在 24GB 上 `concurrent>1` 是否可行？需实测 MoE 真实常驻值（MLX 4bit vs GGUF Q4_K_M） | 决定评估并发是局级排队还是真批处理 | M1 结束前用 `inference bench` 实测并回填 `resident_gb_est`，再定 §7 的 `max_inflight` |
+| Q-2 | **部分关闭（2026-10-04 实测）** 30B-A3B 在 24GB 上 `concurrent>1` 是否可行？需实测 MoE 真实常驻值（MLX 4bit vs GGUF Q4_K_M） | 决定评估并发是局级排队还是真批处理 | 8B（阶段一）已实测：`resident_gb_measured = 4.6077 GB`（n=30，MLX 进程内），`resident_gb_est` 已回填 5.6 → **4.6077**，预算 `4.6077+0.1229+1.0 = 6.84 ≤ 20`，`max_inflight=1` 维持不动。**30B-A3B 仍未实测**（其权重未落盘）：Q-2 只对阶段一关闭，阶段二启用前必须按 mod-03 `inference bench --model qwen3-30b-a3b-q4` 重测 |
 | Q-3 | 评估模式 `temperature=0` 是否会让 MOD-08 的动作熵/坍缩监控失真？ | 影响 `action_entropy_curve` 的解释 | 评估模式保持 `temperature=0` 保可比性；坍缩监控另开"训练模式同 seed 多采样 k=5"专项 run，由 MOD-08 定义 |
 | Q-4 | `kv_cache_bits=4` 对 JSON 格式鲁棒性的实测影响未知 | 内存换质量的应急开关 | 默认 8；开启后必须重跑 `format_robustness` 做前后对比 |
 | Q-5 | 是否允许本模块"多候选并行采样 + 自选最优"（`n>1`）？ | 与 MOD-04 `rank_actions()` 职责重叠 | **不允许**。MOD-03 只做单次采样；候选排序归 MOD-04 的 harness 工具函数（Spec §4.4） |
-| Q-6 | 每次加载都校验 `weights_sha256` 是否太慢？ | 启动时间 | 默认开启（离线安全）；提供 `GAMERSI_INFERENCE_SKIP_HASH=1` 逃生开关，CI 保持开启 |
+| Q-6 | **已关闭（2026-10-04）** 每次加载都校验 `weights_sha256` 是否太慢？ | 启动时间 | 已实测：`models/Qwen3-8B-4bit` 目录摘要（含 `model.safetensors` 4.6 GB）**2.1 s**，`weights_sha256` 已写入 `configs/models.yaml` 并通过 `verify_weights` 校验；开销可接受，默认开启不变，逃生开关仅本地使用。顺带修掉摘要把 HuggingFace 下载缓存（`.cache/**`）算进去导致**同权重不同摘要**的缺陷（M1 验收 F17） |
 
 ## 17. 变更记录
 

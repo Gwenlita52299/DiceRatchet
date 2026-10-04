@@ -476,7 +476,8 @@ class EvalConfig:
     gap_threshold: float = 0.15
     t_max: int = 120
     n_workers: int = 2
-    seed_timeout_s: int = 300
+    # 2026-10-04 实测回填（原 300 s）；注意该超时目前未被 SandboxRunner 执行，见 M1 验收报告 F20
+    seed_timeout_s: int = 1800
     min_support: int = 3
     drop_rate_max: float = 0.10
     budget_seconds: int | None = None

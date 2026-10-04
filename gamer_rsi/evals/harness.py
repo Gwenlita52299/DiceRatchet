@@ -80,7 +80,8 @@ class EvalSpec:
     max_steps: int | None = None
     n_rep: int = 1
     n_workers: int = 1
-    seed_timeout_s: int = 300
+    # 2026-10-04 实测回填；⚠️ SandboxRunner.run_episode 目前未消费该值（M1 验收报告 F20）
+    seed_timeout_s: int = 1800
     budget_seconds: int | None = None
     t_max: int = 120
     min_support: int = 3

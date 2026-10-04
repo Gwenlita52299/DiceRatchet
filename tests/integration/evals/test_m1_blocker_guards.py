@@ -155,9 +155,20 @@ def test_play_runs_offline_agents(agent, run_id):
 
 
 def test_play_llm_without_weights_fails_closed(run_id):
-    """``play --agent llm`` 拿不到模型 → 退出码 3，而不是安静地跑一趟空测量。"""
-    proc = _run_cli("play", "--agent", "llm", "--seeds", "train:1000-1001",
-                    "--run-id", run_id)
+    """``play --agent llm`` 拿不到模型 → 退出码 3，而不是安静地跑一趟空测量。
+
+    用**阶段二 30B** 构造「模型不可用」：它的权重不在仓库里（`models/` 已 gitignore），
+    `load()` 会在路径校验处立刻抛 `E_LLM_UNAVAILABLE`，因此本用例不受「8B 权重是否已落盘」
+    影响——8B 一旦落盘，用 8B 反而会真的跑起来并 900 s 超时（2026-10-04 实测踩到）。
+    """
+    from gamer_rsi.inference.registry import load_registry
+
+    registry = load_registry(str(_REPO / "configs" / "models.yaml"))
+    spec = registry.spec("qwen3-30b-a3b-q4")
+    if Path(spec.weights_path).exists():
+        pytest.skip("阶段二权重已落盘，无法用 30B 构造「模型不可用」")
+    proc = _run_cli("play", "--agent", "llm", "--model", "qwen3-30b-a3b-q4",
+                    "--seeds", "train:1000-1000", "--run-id", run_id)
     assert proc.returncode == 3, proc.stdout + proc.stderr
     assert E.E_LLM_UNAVAILABLE in proc.stderr
 

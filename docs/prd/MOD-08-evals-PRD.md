@@ -343,6 +343,13 @@ python -m gamer_rsi eval test --run-id <run_id> --unlock-once --attestation runs
 | 横切 | INV-5 三重护栏 + 蜜罐用例 + golden 指标快照 + README 命令 | 3 |
 | **合计** | | **18 人日**（含约 +15% 评审与返工缓冲） |
 
+**实际交付（M1）**：`gamer_rsi/evals/`（`seeds.py` / `metrics.py` / `harness.py` / `baselines.py`）于
+**2026-10-04** 交付（提交 `bff9982`），并**提前**交付了原属 M3 的 `diversity.py` / `ablation.py` 与 test 单次解锁存证。
+本项目**未单独记工**；按提交时间窗折算 ≤ 2 人日（计划 M1 部分 4 人日），偏差 ≥ 50%。
+M1 验收的 **F1（三基线之一假入档）**、**F3（评估 run 上 `audit leak` 误判 critical）** 在本模块并已修，
+**F5（`eval report` 混臂聚合）仍未修**；真实 8B 跑批后三条 held-out 分数已入档（`runs/m1-real-h1/baselines/`），
+`format_robustness.json` 首次以 `m1_evidence=true` 通过。
+
 ## 16. 开放问题
 
 1. **test 池与冗余子集**：9000–9099（n=100）在 M3 只允许一次性使用；M4 前是否需要扩成两个不相交 test 篮子（9000–9049 / 9050–9099）以支持"跨代增益 vs 推理时增益"长期对比？另：若 train 池耗尽后循环复用同一 seed，代际 `win_rate` 比较是否仍有效（倾向：禁止复用，耗尽即停）？
