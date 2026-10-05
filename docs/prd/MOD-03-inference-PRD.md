@@ -396,7 +396,7 @@ Qwen3 思考模式烧光 token 预算、probe prompt 欠约束（详见 [M1 验�
 **§13.2 收口（2026-10-05，`<本轮提交>`）**：
 
 - 主 prompt 快照 `tests/fixtures/inference/robustness_prompts.jsonl` 因 **F13**（`legal_actions`
-  超预算压缩）与 **F21/F23**（模板契约补齐）**显式重新生成**（G2：变更需审阅 diff）；生成器
+  超预算压缩）与 **F21/F23/F25**（模板契约补齐）**显式重新生成**（G2：变更需审阅 diff）；生成器
   `regen_robustness_prompts.py` 增加 `--template {decision,fixed_v1}` / `--out`，可产出**同源换模板**的
   对照快照 `robustness_prompts_fixed_v1.jsonl`（F21 的「52% → ?」对照）。
 - `inference robustness` 的 `m1_evidence` 门是「真实后端 + 真实快照 + **阈值通过**」三者同时成立

@@ -255,7 +255,7 @@ def obs_field_paths() -> tuple[str, ...]:      # 所有 enabled 字段 name；�
 def project_state(game_obs: Mapping[str, Any], *, ctx: ProjectionCtx, mode: str = "strict") -> tuple[dict, ProjectionStat]:
     """GAME observe(state,"full") → obs-agent-1.0.0（纯函数，FR-02-3a）。mode ∈ {"strict","assert"}；非 optional 字段缺失 → E_ENV_PROJECTION_MISSING。"""
 def canonical_json(obj: Any) -> bytes: ...
-def obs_digest(obs: Mapping[str, Any]) -> str:          # 含 schema_version 的 canonical JSON → "sha256:<hex>"
+def obs_digest(obs: Mapping[str, Any]) -> str:          # 含 schema_version 的 canonical JSON → "sha256:&lt;hex&gt;"
 def validate_observation(obs: Mapping[str, Any]) -> list[str]:   # 违规字段路径（空=合法），供 G5 round-trip
 def render_compact(obs: Mapping[str, Any]) -> str: ...            # FR-02-3b，供 prompt</code></pre>
 
@@ -629,7 +629,7 @@ pytest tests/unit/sandbox tests/golden/sandbox tests/integration -q</code></pre>
 </section>
 
 </div>
-<footer>来源：docs/prd/MOD-02-env-sandbox-PRD.md · GameRSI 模块讲解系列 · 2026-10-04</footer>
+<footer>来源：docs/prd/MOD-02-env-sandbox-PRD.md · GameRSI 模块讲解系列 · 2026-10-04 · 同步 2026-10-05</footer>
 </main>
 </body>
 </html>

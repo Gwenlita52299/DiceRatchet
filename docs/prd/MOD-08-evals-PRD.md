@@ -123,6 +123,10 @@ class BaselineAgent(Protocol):   # name: str; reset(seed) -> None; act(obs, lega
 # fixed_prompt **没有**自己的 agent 类：build_agent 返回 MOD-04 PolicyAgent(mode="baseline_fixed_prompt")
 #   （SandboxRunner 检测 play_decision 即走决策点循环）：harness_version 恒 0、temperature=0、
 #   tools_enabled=false、memory_top_k=0、reflection_max=0、冻结模板 agent.policy.fixed_prompt_path（F22）
+EPISODE_PROTOCOL = "episode-protocol-v2"   # 逐局摘要的「测量协议」标识（单局语义变了就递增）
+def baseline_protocol(kind: str, *, config: Any = None,
+                      harness_dir: Path | str = Path("harness")) -> str: ...
+    # baseline --resume 的一致性键：EPISODE_PROTOCOL（fixed_prompt 再拼上冻结模板摘要）
 def fixed_prompt_policy_config(config: Any = None) -> PolicyConfig: ...   # 基线专用冻结策略配置
 def build_agent(kind: str, *, seed: int, harness_version: int = 0, client: Any = None,
                 config: Any = None, harness_dir: Path | str = Path("harness")) -> Any: ...

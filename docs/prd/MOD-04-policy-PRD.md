@@ -236,7 +236,7 @@ play_decision(env, obs, ctx):
 **已裁决（Spec v1.3 P-02 → B-15）**：一级失败（无 Action 可构造）也要产生带 `illegal_reason` 的 Observation 与 `-0.05`，故需 MOD-02 新增 `SandboxEnv.reject(*, stage, reason, raw) -> StepResult`：不改环境状态、返回当前投影 Observation、`info={"illegal":True,"illegal_reason":reason,...}`、由 MOD-01 记账 `reward=-0.05`。二级失败优先复用 `step()` 的自然非法路径，MOD-01 未覆盖时以 `reject()` 兜底；若 MOD-02 拒绝该 API，备选方案是由 MOD-06 代记账。
 
 ## 11. 测试计划（单测/集成，用「给定-当-则」写验收用例）
-单测（`tests/unit/agent/test_policy_*.py`，用例编号 U1–U10，每条均为「给定-当-则」）：
+单测（`tests/unit/agent/test_policy_*.py`，用例编号 U1–U11，每条均为「给定-当-则」）：
 - **U1/U2**：1) **给定** 合法模板 + obs + memory，**当** 调 `assemble_prompt()`，**则** `prompt_hash` 与 golden 一致且 `truncated==[]`；2) **给定** memory 超预算，**当** 组装，**则** Observation 段完整、反思保留最新 `reflection_max` 条、memory 只丢最低分者。
 - **U3/U4**：3) **给定** 模板缺 `{{memory}}`，**当** `load_template()`，**则** 抛/记 `E_ACTION_TEMPLATE` 且回退模板可用；4) **给定** 合法 JSON，**当** `parse_llm_output()`，**则** `level=="ok"` 且 `Action.canonical()` 与期望一致。
 - **U5/U6**：5) **给定** 合法但不在 `legal_actions()` 的动作，**当** 解析，**则** `level=="semantic"`、`error_code=="E_ACTION_ILLEGAL"` 且未调 `step()`；6) **给定** 连续 3 次非法，**当** `act()`，**则** `terminate_episode=True`、`outcome=="lose"`、`error_codes==[E_ACTION_ILLEGAL_STREAK]` 且 LLM 调用 ≤ 3 次。
@@ -317,8 +317,8 @@ play_decision(env, obs, ctx):
 按提交时间窗折算 ≤ 3 人日（计划 13.5），偏差 ≥ 78%。
 M1 验收的 **F1（`fixed_prompt` 无真实 LLM 路径 + 降级静默）** 与 **F4（`play` 未接线）** 都落在本模块边界上，
 已修复并补端到端守门用例；此外实测发现 **F16**（`probe/bench` 的固定 prompt 未给输出契约与 legal_actions，
-把「提示词欠约束」误报成「模型格式鲁棒性差」）与 **F13**（观测块未被 `prompt_token_budget` 裁剪，
-单决策点实测 19,633 token > `context_length=8192`，仍未修）。
+把「提示词欠约束」误报成「模型格式鲁棒性差」）与 **F13**（单决策点实测 19,633 token >
+`context_length=8192`；根因经复核为 **`legal_actions` 枚举**爆预算而非观测块，见下方 §13.2 收口）。
 
 **§13.2 前置项收口（2026-10-05，`<本轮提交>`）**：本模块承担的两项已闭环 ——
 

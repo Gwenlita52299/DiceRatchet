@@ -334,8 +334,8 @@ def scan_all(root: Path) -> list[GuardFinding]: ...          # 供 CI 与 CLI �
   <table>
     <tr><th>命令</th><th>关键参数</th><th>退出码</th></tr>
     <tr><td><code>env selftest</code></td><td><code>--seed INT</code></td><td>0/4</td></tr>
-    <tr><td><code>play</code></td><td><code>--agent {llm,heuristic,fixed}</code> <code>--seeds SPEC</code> <code>--episodes N</code> <code>--dry-run</code></td><td>0/1/2/3</td></tr>
-    <tr><td><code>baseline</code></td><td><code>--kind {random,heuristic,fixed_prompt}</code> <code>--seeds SPEC</code></td><td>0/1/2</td></tr>
+    <tr><td><code>play</code></td><td><code>--agent {llm,heuristic,random,fixed_prompt}</code> <code>--seeds SPEC</code> <code>--episodes N</code> <code>--model ID</code> <code>--dry-run</code></td><td>0/1/2/3</td></tr>
+    <tr><td><code>baseline</code></td><td><code>--kind {random,heuristic,fixed_prompt}</code> <code>--split {train,heldout,test}</code> <code>--seeds SPEC</code> | <code>--basket {H1,H2,H3,test_full,train_window}</code>（二者互斥，省略 basket 时按 split 推导）<code>--model ID</code> <code>--resume</code></td><td>0/1/2/3</td></tr>
     <tr><td><code>loop run</code></td><td><code>--generations N</code> <code>--k N</code> <code>--hitl/--no-hitl</code> <code>--run-id ID</code> <code>--resume</code></td><td>0/1/2/3/4/5</td></tr>
     <tr><td><code>loop status\|smoke</code></td><td><code>--run-id ID</code></td><td>0/1/2</td></tr>
     <tr><td><code>evolve approve\|rollback</code></td><td><code>--run-id ID</code> <code>--generation N</code> <code>--reason STR</code></td><td>0/2/4</td></tr>
@@ -349,6 +349,7 @@ def scan_all(root: Path) -> list[GuardFinding]: ...          # 供 CI 与 CLI �
   </table>
   <blockquote>注（2026-10-03，按评审修订）：<code>audit leak</code> 的退出码由<strong>归属模块</strong> MOD-02 决定，是<strong>两根正交轴</strong>——泄漏结论 <code>0</code> 无 finding / <code>1</code> 仅 medium / <code>2</code> 含 critical（FR-02-19、§11 集成用例），以及沙箱守卫违例 <code>4</code>（Spec §8.3；蜜罐自测失败等 <code>E_ENV_HONEYPOT</code>，与本模块 <code>EXIT_CODE[E_ENV_HONEYPOT] = 4</code> 的登记一致），优先级 <code>4 &gt; 2 &gt; 1 &gt; 0</code>。详见 MOD-02 PRD §18.2。本模块只负责命令面与报告落盘出口（<code>resolve_run_dir</code>/<code>RunPaths</code>/<code>infra.io.validate</code>）。</blockquote>
   <p><code>--seeds SPEC</code> 语法：<code>train:1000-1004</code>、<code>heldout:2000-2099</code>、<code>9000,9001</code>、<code>file:seeds.txt</code>。<code>guards check</code> 已回填 Spec v1.3 §4.6（P-20）。</p>
+  <p><code>--resume</code> 的两类语义（2026-10-05，M1 验收 F18）：<code>loop run</code> 走 <code>resolve_run_dir(resume=True)</code>，要求 <code>state.json</code> 存在（缺失即 <code>E_IO_STATE_MISSING</code>），语义归 MOD-06；<code>baseline</code> 走 <code>cli_init_run(require_state=False)</code>，只按 <code>episodes/&lt;split&gt;/</code> 已完成的局跳过重复 seed、只跑缺的（基线从不写 <code>state.json</code>）。另：<code>--model</code>/<code>--mode</code>/<code>--seed</code>/<code>--timeout-ms</code> 等覆盖会并入 <code>config_hash</code>（<code>config_overrides()</code>），因此<b>同一 <code>--run-id</code> 只能承载覆盖集合完全相同的命令</b>，否则 <code>E_IO_RUN_CONFLICT</code>（退出码 2）——这是 M1 验收 F10 的成因。</p>
 
   <h4>6.5 事件与错误码注册表（Spec v1.3 §8.2/§8.3 的落地）</h4>
 <pre><code># gamer_rsi/infra/events.py
@@ -606,7 +607,7 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
   </table>
 </section>
 
-<footer>来源：docs/prd/MOD-09-infra-PRD.md · GameRSI 模块讲解系列 · 2026-10-04</footer>
+<footer>来源：docs/prd/MOD-09-infra-PRD.md · GameRSI 模块讲解系列 · 2026-10-04 · 同步 2026-10-05</footer>
 
 </div></main>
 </body>

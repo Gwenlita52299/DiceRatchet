@@ -270,7 +270,7 @@ for f in src/game/tests/golden/*.jsonl:
 
 # 差分对拍（nightly）
 node src/game/scripts/golden-gen.js --random-walk --n 200 --out /tmp/diff   # JS 侧随机合法动作
-pytest tests/golden/test_diff.py --dir /tmp/diff</code></pre>
+pytest tests/golden/test_random_walk.py</code></pre>
   <h4>移植顺序（分层推进，每层先过 GAME-01 §9 测试向量再下一层）</h4>
   <div class="flow">
     <div class="step">rng</div><span class="arrow">→</span>
@@ -395,7 +395,7 @@ pytest tests/golden/test_diff.py --dir /tmp/diff</code></pre>
 </section>
 
 </div>
-<footer>来源：docs/prd/MOD-01-env-rules-PRD.md · GameRSI 模块讲解系列 · 2026-10-04</footer>
+<footer>来源：docs/prd/MOD-01-env-rules-PRD.md · GameRSI 模块讲解系列 · 2026-10-04 · 同步 2026-10-05</footer>
 </main>
 </body>
 </html>
