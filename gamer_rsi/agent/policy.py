@@ -302,7 +302,10 @@ class PolicyAgent:
     @property
     def harness_version(self) -> int:
         if self._harness_version is None:
-            self._harness_version = self._read_harness_version()
+            # R-6（F22）：``fixed_prompt`` 基线钉死 harness v0——不得读 ``harness/version.json``，
+            # 否则 MOD-07 每演化一代，基线 prompt 也跟着漂移，基线就不可比了。
+            self._harness_version = (0 if str(self.cfg.mode) == "baseline_fixed_prompt"
+                                     else self._read_harness_version())
         return int(self._harness_version)
 
     @property
@@ -329,8 +332,10 @@ class PolicyAgent:
             observation=render_compact(obs),
             task=self._task(),
             harness_version=self.harness_version,
-            tools=tool_summary(self.harness_dir),
+            # F22/R-6：基线关掉工具后，``{{tools}}`` 不得再随 harness 演化而变
+            tools=(tool_summary(self.harness_dir) if self._tools_enabled() else ""),
             legal_actions=_render_legal(legal),
+            legal_actions_compact=_render_legal_compact(legal),
             reflections=tuple(ctx.reflections or ()),
             memory=items,
             constraints=constraints,
@@ -628,6 +633,9 @@ class PolicyAgent:
         return reordered
 
     def _tool_hash(self) -> str | None:
+        if not self._tools_enabled():
+            # 基线（tools_enabled=false）：工具清单不参与，哈希恒 None（R-6 防漂移）
+            return None
         if self._tools is not None:
             return self._tools.tool_hash
         return tool_hash(self.harness_dir)
@@ -819,9 +827,76 @@ _DEFAULT_MEMORY_TOKEN_BUDGET: Final[int] = 900
 def _render_legal(legal: Sequence[Mapping[str, Any]] | None) -> str:
     if not legal:
         return "(none)"
-    return "\n".join(json.dumps(dict(item), ensure_ascii=False, sort_keys=True,
-                                separators=(",", ":"))
-                     for item in legal)
+    return "\n".join(_canonical_action(item) for item in legal)
+
+
+def _canonical_action(item: Mapping[str, Any]) -> str:
+    return json.dumps(dict(item), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+#: ``_render_legal_compact`` 每个字段最多列出的取值个数（超出部分记 ``…(+K)``）。
+_LEGAL_COMPACT_MAX_VALUES: Final[int] = 8
+#: ``_render_legal_compact`` 每种 ``kind`` 保留的**真实合法**样例动作条数（等距抽样）。
+_LEGAL_COMPACT_SAMPLES: Final[int] = 12
+
+
+def _render_legal_compact(legal: Sequence[Mapping[str, Any]] | None) -> str:
+    """``legal_actions`` 的压缩渲染（M1 验收 F13）。
+
+    ``phase=forge`` 这类阶段的合法动作是**笛卡尔积**（实测 seed 1000 的一个决策点：
+    23 张骰 × 6 个面 × 5 个候选 = **690** 条 ``forge_pick``，完整枚举 54,393 字符 /
+    19,633 token，远超 ``policy.prompt_token_budget=3072``），而观测本身只有 2,798 字符。
+    所以「观测块永不裁剪」（FR-04-3）并不足以让 prompt 装进预算——需要压缩动作清单。
+
+    压缩形式（确定性，无随机源）：
+
+    - 按 ``kind`` 分组，逐字段列出**取值集合**（每字段最多 ``_LEGAL_COMPACT_MAX_VALUES``
+      个，其余记 ``…(+K)``）；
+    - 每种 ``kind`` 再等距抽 ``_LEGAL_COMPACT_SAMPLES`` 条**真实合法**的动作原文，
+      保证模型有可直接照抄的样例，且抽样覆盖整个取值空间（不是只给前 N 条）。
+
+    ``_execute_plan`` 仍以 ``env.legal_actions()`` 的**全量**列表做语义校验（FR-04-8），
+    因此压缩只影响「模型看得到什么」，不影响「什么算合法」。
+    """
+    if not legal:
+        return "(none)"
+    by_kind: dict[str, list[Mapping[str, Any]]] = {}
+    for item in legal:
+        by_kind.setdefault(str(item.get("kind")), []).append(item)
+    lines: list[str] = []
+    for kind, items in by_kind.items():
+        fields: dict[str, list[str]] = {}
+        for item in items:
+            for key, value in item.items():
+                if key == "kind":
+                    continue
+                shown = json.dumps(value, ensure_ascii=False, sort_keys=True,
+                                   separators=(",", ":"))
+                bucket = fields.setdefault(key, [])
+                if shown not in bucket:
+                    bucket.append(shown)
+        parts: list[str] = []
+        for key, values in fields.items():
+            head = values[:_LEGAL_COMPACT_MAX_VALUES]
+            more = "" if len(values) <= _LEGAL_COMPACT_MAX_VALUES \
+                else f",…(+{len(values) - _LEGAL_COMPACT_MAX_VALUES})"
+            parts.append(f"{key}∈[{','.join(head)}{more}]")
+        lines.append(f"- {kind}（{len(items)} 条合法动作）字段取值：" + "；".join(parts))
+        for sample in _spread(items, _LEGAL_COMPACT_SAMPLES):
+            lines.append("  例：" + _canonical_action(sample))
+    lines.append(f"（合法动作共 {len(legal)} 条，以上为压缩清单：字段取值 + 等距样例；"
+                 f"id 只能取自上面的观测或样例。）")
+    return "\n".join(lines)
+
+
+def _spread(items: Sequence[Any], limit: int) -> list[Any]:
+    """等距抽样（确定性；``len(items) <= limit`` 时原样返回）。"""
+    if limit <= 0 or not items:
+        return []
+    if len(items) <= limit:
+        return list(items)
+    step = len(items) / float(limit)
+    return [items[min(len(items) - 1, int(index * step))] for index in range(limit)]
 
 
 def _out_text(out: Any) -> str:

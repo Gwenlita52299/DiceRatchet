@@ -31,68 +31,86 @@ uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python pyyaml j
 
 ## 快速开始（G6：可直接复制执行）
 
+> **`--run-id` 分族规则（F10，已修复）**：`--model` / `--mode` / `--seed` / `--timeout-ms`
+> （以及 `--k` / `--generations` / `--hitl` / `--log-level`）会被
+> `infra.cli.config_overrides()` 并入 `config_hash`。**同一个 `--run-id` 只能承载
+> 「覆盖集合完全相同」的命令**；跨族（带覆盖 ↔ 不带覆盖）或任一覆盖值不同（换 `--model`、
+> 换 `--seed`……）却复用同一目录时，`init_run_dir()` 报
+> `[E_IO_RUN_CONFLICT] run 目录已存在且 config_hash 不一致` 并以**退出码 2** 拒绝。
+> 因此下面拆成两族、两个 run-id——**族 A**（`inference probe/bench/robustness`，统一带
+> `--model mock --mode eval --seed 7`）用 `demo-inf-0001`；**族 B**（`play` / `audit leak` /
+> `baseline` / `eval *`，这些命令都不带上述三个覆盖）用 `demo-eval-0001`。fixed_prompt
+> 因额外带 `--model` 而属于第三族，需再用独立 run-id（见下）。
+
 ```bash
+# 先激活「环境要求」创建的 .venv；也可把下面的 python / pytest 换成 .venv/bin/python、.venv/bin/pytest
+source .venv/bin/activate
+
 # MOD-09：确定性守卫 + 分层 import 门禁（AST，非正则；违例退出码 4）
-python -m gamer_rsi guards check --root gamer_rsi
+python -m gamer_rsi guards check --root gamer_rsi                                  # 期望退出码 0
 
 # MOD-01：规则/确定性自检 + GAME golden 对拍
-python -m gamer_rsi env selftest --seed 1
+python -m gamer_rsi env selftest --seed 1                                          # 期望退出码 0
 
-# MOD-04：用指定 agent 跑局（llm|heuristic|random|fixed_prompt；离线可跑后两者）
-python -m gamer_rsi play --agent heuristic --seeds train:1000-1004 --run-id demo-0001
-
-# MOD-02：泄漏审计（0 无 finding / 1 仅 medium / 2 含 critical）+ 报告 0600 落盘
-python -m gamer_rsi audit leak --run-id demo-0001
-
-# MOD-02：单测 / golden / 集成
-pytest tests/unit/sandbox/test_sandbox_projection.py -q
-pytest tests/golden/sandbox tests/integration -q
-
+# ===== 族 A：推理后端族（三条覆盖必须完全一致：--model mock --mode eval --seed 7）=====
+# 换 --seed / --model 等任一覆盖都必须换 run-id，否则退出码 2（E_IO_RUN_CONFLICT）
 # MOD-03：后端可用性探针（离线用 mock，无需权重）
-python -m gamer_rsi inference probe --model mock --mode eval --seed 7 --run-id demo-0001
+python -m gamer_rsi inference probe --model mock --mode eval --seed 7 --run-id demo-inf-0001        # 期望退出码 0
 
 # MOD-03：延迟/吞吐基准（对照注册表 perf_budget；默认 n=50）
-python -m gamer_rsi inference bench --model mock --mode eval --seed 7 --n 20 --run-id demo-0001
+python -m gamer_rsi inference bench --model mock --mode eval --seed 7 --n 20 --run-id demo-inf-0001 # 期望退出码 0
 
 # MOD-03：JSON 格式鲁棒性（M1 交付物 runs/<id>/metrics/format_robustness.json；未达阈值退出码 1）
 # prompt 来自 MOD-04 决策模板快照 tests/fixtures/inference/robustness_prompts.jsonl；
 # 报告里的 m1_evidence 只在「真实后端 + 真实 prompt + 阈值通过」时为 true（mock 恒为 false）
-python -m gamer_rsi inference robustness --model mock --mode eval --seed 7 --n 200 --run-id demo-0001
+python -m gamer_rsi inference robustness --model mock --mode eval --seed 7 --n 200 --run-id demo-inf-0001  # mock 下期望 0
 
 # MOD-03：单测 / 集成 / golden
-pytest tests/unit/inference tests/golden/inference -q
-pytest tests/integration/test_inference_robustness.py -q
+pytest tests/unit/inference tests/golden/inference -q                              # 期望退出码 0
+pytest tests/integration/test_inference_robustness.py -q                           # 期望退出码 0
+
+# ===== 族 B：评估族（play / audit / baseline / eval 都不带 --model/--mode/--seed 覆盖）=====
+# MOD-04：用指定 agent 跑局（llm|heuristic|random|fixed_prompt；离线可跑后两者）
+python -m gamer_rsi play --agent heuristic --seeds train:1000-1004 --run-id demo-eval-0001         # 期望退出码 0
+
+# MOD-02：泄漏审计（0 无 finding / 1 仅 medium / 2 含 critical）+ 报告 0600 落盘
+python -m gamer_rsi audit leak --run-id demo-eval-0001                             # 干净 run 期望 0
+
+# MOD-02：单测 / golden / 集成
+pytest tests/unit/sandbox/test_sandbox_projection.py -q                            # 期望退出码 0
+pytest tests/golden/sandbox tests/integration -q                                   # 期望退出码 0
 
 # MOD-04：单测 / prompt golden / 集成（真实 SandboxEnv + 假后端）
-pytest tests/unit/agent tests/golden/agent -q
-pytest tests/integration/test_policy_with_sandbox.py -q
+pytest tests/unit/agent tests/golden/agent -q                                      # 期望退出码 0
+pytest tests/integration/test_policy_with_sandbox.py -q                            # 期望退出码 0
 
-# MOD-08：基线（heuristic 默认局参考通关率 45.5%，n=200 / seed 1–200，Spec §8.6）
-# 注意：不同 --model/--mode/--seed 会改变 config_hash，跨族命令请换 --run-id（见 F10）
-python -m gamer_rsi baseline --kind heuristic --split heldout --basket H1 --run-id demo-0001
+# MOD-08：基线（heuristic 默认局参考通关率 45.5%，Spec §8.6 的 n=200 口径；本命令 basket H1 为 40 局）
+python -m gamer_rsi baseline --kind heuristic --split heldout --basket H1 --run-id demo-eval-0001  # 期望退出码 0
 
-# MOD-08：fixed_prompt 是「冻结提示词 + 真实 LLM」，必须能加载模型；
+# MOD-08：fixed_prompt 是「冻结提示词 + 真实 LLM」，必须能加载模型；--model 也是 config_hash
+# 覆盖，故它不能与族 B 共用 run-id，且换 --model 就要再换 run-id。
 # 拿不到客户端即 fail-closed（退出码 3），不会静默降级成 heuristic 的副本（M1 验收 F1）
 python -m gamer_rsi baseline --kind fixed_prompt --split heldout --basket H1 \
-    --model qwen3-8b-q4 --run-id demo-0002
+    --model qwen3-8b-q4 --run-id demo-fixed-qwen-0001                              # 需已落盘权重，期望 0；否则 3
 python -m gamer_rsi baseline --kind fixed_prompt --split heldout --basket H1 \
-    --model mock --run-id demo-0002          # 离线冒烟
+    --model mock --run-id demo-fixed-mock-0001                                     # 离线冒烟：期望退出码 0
 
-# MOD-08：代际报告 / 多样性 / 消融 / test 终检
-python -m gamer_rsi eval report --split heldout --baseline all --run-id demo-0001
-python -m gamer_rsi eval diversity --run-id demo-0001 --generation 0
-python -m gamer_rsi eval ablation --run-id demo-0001 --generation 3 --arms no_reflection,no_self_edit
-python -m gamer_rsi eval test --run-id demo-0001 --unlock-once \
-    --attestation runs/demo-0001/generations/gen-003/test_attestation.json
+# MOD-08：代际报告 / 多样性 / 消融 / test 终检（均不带覆盖，继续用族 B 的 demo-eval-0001）
+python -m gamer_rsi eval report --split heldout --baseline all --run-id demo-eval-0001            # 期望退出码 0
+python -m gamer_rsi eval diversity --run-id demo-eval-0001 --generation 0                        # 期望退出码 0
+python -m gamer_rsi eval ablation --run-id demo-eval-0001 --generation 3 --arms no_reflection,no_self_edit  # 期望退出码 0
+# test 终检默认锁定，需 --unlock-once；它跑满 test 池（9000–9099，100 局）加迁移局，是本块最慢的一条
+python -m gamer_rsi eval test --run-id demo-eval-0001 --unlock-once \
+    --attestation runs/demo-eval-0001/generations/gen-003/test_attestation.json    # 期望退出码 0
 
 # MOD-08：单测（含覆盖率门 G1 ≥80%）/ golden / 集成
-pytest tests/unit/evals --cov=gamer_rsi.evals --cov-fail-under=80 -q
-pytest tests/integration/evals -q
-python tests/golden/evals/regen_metrics_golden.py   # G2：指标 golden 重生成
+pytest tests/unit/evals --cov=gamer_rsi.evals --cov-fail-under=80 -q               # 期望退出码 0
+pytest tests/integration/evals -q                                                  # 期望退出码 0
+python tests/golden/evals/regen_metrics_golden.py                                  # G2：指标 golden 重生成（期望 0）
 
-# 只打印将执行的动作与配置摘要（stdout 为可解析 JSON，不落盘）
-python -m gamer_rsi loop run --generations 3 --k 30 --hitl --run-id demo-0001 --dry-run
-python -m gamer_rsi --help
+# 只打印将执行的动作与配置摘要（stdout 为可解析 JSON，不落盘；dry-run 不建 run，故无冲突）
+python -m gamer_rsi loop run --generations 3 --k 30 --hitl --run-id demo-eval-0001 --dry-run      # 期望退出码 0
+python -m gamer_rsi --help                                                         # 期望退出码 0
 ```
 
 真实模型（`--model qwen3-8b-q4`）需要先落盘权重（离线、`models/` 已 gitignore）：
@@ -103,16 +121,18 @@ UV_CACHE_DIR=.local/uv-cache uv pip install --python .venv/bin/python 'mlx-lm>=0
 HF_HOME=.local/hf .venv/bin/python -c "from huggingface_hub import snapshot_download as d; \
   d(repo_id='mlx-community/Qwen3-8B-4bit', local_dir='models/Qwen3-8B-4bit', max_workers=4)"
 
-# 冒烟 → 基准 → 200 条真实 prompt 的 JSON 鲁棒性（报告里 m1_evidence 应为 true）
+# 冒烟 → 基准（--seed 7，可共用 real-0001）→ 200 条真实 prompt 的 JSON 鲁棒性
+# （报告里 m1_evidence 应为 true）；鲁棒性用 --seed 1042，覆盖值不同，必须另起 run-id
 python -m gamer_rsi inference probe      --model qwen3-8b-q4 --mode eval --seed 7 --run-id real-0001
 python -m gamer_rsi inference bench      --model qwen3-8b-q4 --mode eval --seed 7 --n 30 --run-id real-0001
-python -m gamer_rsi inference robustness --model qwen3-8b-q4 --mode eval --seed 1042 --n 200 --run-id real-0001
+python -m gamer_rsi inference robustness --model qwen3-8b-q4 --mode eval --seed 1042 --n 200 --run-id real-0002
 
 # 三基线（H1 = seed 2000–2039；fixed_prompt 需要真实客户端，40 局约 8 h）
-python -m gamer_rsi baseline --kind random       --split heldout --basket H1 --run-id real-0001
-python -m gamer_rsi baseline --kind heuristic    --split heldout --basket H1 --run-id real-0001
+# random / heuristic 不带覆盖，可共用 real-0003；fixed_prompt 带 --model，属另一族 → real-0004
+python -m gamer_rsi baseline --kind random       --split heldout --basket H1 --run-id real-0003
+python -m gamer_rsi baseline --kind heuristic    --split heldout --basket H1 --run-id real-0003
 python -m gamer_rsi baseline --kind fixed_prompt --split heldout --basket H1 \
-    --model qwen3-8b-q4 --run-id real-0001
+    --model qwen3-8b-q4 --run-id real-0004
 ```
 
 实测（Apple Silicon，2026-10-04，详见 [M1 验收报告 §12](../../docs/reviews/2026-10-04-M1验收报告.md)）：

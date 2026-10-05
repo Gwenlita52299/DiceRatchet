@@ -61,7 +61,7 @@ def wired(tmp_path, monkeypatch):
 
     cfg = load_config()
     monkeypatch.setattr(cli_mod.infra_cli, "cli_init_run",
-                        lambda args: (RunPaths(tmp_path), cfg, "r-cli"))
+                        lambda args, **kw: (RunPaths(tmp_path), cfg, "r-cli"))
     return tmp_path, cfg
 
 
@@ -79,6 +79,30 @@ def test_cmd_baseline_prints_and_archives(wired, monkeypatch, capsys):
     assert payload["kind"] == "heuristic" and "power_note" in payload
     assert calls["split"] == "heldout" and calls["basket"] == "H1"
     assert calls["run_dir"] == tmp_path
+    # F6：归档溯源字段必须真的传下去（后端名 / 模型 id / 单局预算）
+    assert calls["model_hash"] == "qwen3-8b-q4"
+    assert calls["model_backend"] in ("mlx", "mock", "unknown")
+    assert calls["seed_timeout_s"] == _cfg.evals.seed_timeout_s
+    assert payload["seeds"] == [2000, 2001, 2002] and payload["resumed_n"] == 0
+
+
+def test_cmd_baseline_resume_does_not_require_state_json(wired, monkeypatch):
+    """F18：``baseline --resume`` 只要求 run 目录 + episodes/，不要求 state.json。"""
+    tmp_path, cfg = wired
+    seen: dict[str, object] = {}
+
+    def fake_init(args, **kw):
+        seen["require_state"] = kw.get("require_state")
+        return RunPaths(tmp_path), cfg, "r-cli"
+
+    def fake_run_baseline(kind, **kw):
+        seen["resume"] = kw.get("resume")
+        return _arm()
+
+    monkeypatch.setattr(cli_mod.infra_cli, "cli_init_run", fake_init)
+    monkeypatch.setattr(cli_mod, "run_baseline", fake_run_baseline)
+    assert cli_mod.cmd_baseline(_ns(kind="heuristic", resume=True)) == 0
+    assert seen["require_state"] is False and seen["resume"] is True
 
 
 def test_cmd_baseline_rejects_unknown_kind(wired):

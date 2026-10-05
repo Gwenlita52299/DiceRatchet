@@ -56,8 +56,11 @@ agent:
   policy:
     mode: play
     template_path: harness/prompts/decision.md
-    fixed_prompt_path: harness/prompts/fixed_v1.md
-    task_path: harness/prompts/task.md
+    # 2026-10-05（M1 验收 F12）：原值指向 harness/prompts/{fixed_v1,task}.md，那两个文件
+    # 不存在——`policy.py` 靠包内回落兜住并静默，于是「改配置」根本不影响实际 prompt。
+    # 二者都是随包冻结件（R-6：基线模板不随 harness 演化），所以直接指向真实位置。
+    fixed_prompt_path: gamer_rsi/agent/prompts/fixed_v1.md
+    task_path: gamer_rsi/agent/prompts/task.md
     prompt_token_budget: 3072
     token_estimator: chars_div_3
     memory_top_k: 5

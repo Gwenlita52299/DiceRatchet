@@ -415,3 +415,54 @@ def test_repo_harness_layer_only_whitelisted_and_isolated_from_config_hash(tmp_p
     with pytest.raises(InfraError) as exc:
         load_config(harness_config=bad)
     assert exc.value.code == E.E_IO_CONFIG_INVALID
+
+
+# ---- M1 验收 F12：配置里的路径必须指向真实文件（死配置回归） -------------------------
+
+def test_policy_prompt_paths_point_to_real_files():
+    """F12：``policy.{fixed_prompt_path,task_path}`` 的默认值必须真实存在。
+
+    修复前它们指向 ``harness/prompts/{fixed_v1,task}.md``（**不存在**），``policy.py``
+    靠包内回落兜住并静默——于是「改了配置也不影响实际 prompt」，与 M0 的 F1（死配置）同类。
+    两个文件都是随包冻结件（R-6：基线模板不随 harness 演化），因此指向包内路径。
+    """
+    cfg = load_config(config_dir=CONFIGS)
+    for key, value in (("fixed_prompt_path", cfg.agent.policy.fixed_prompt_path),
+                       ("task_path", cfg.agent.policy.task_path),
+                       ("template_path", cfg.agent.policy.template_path)):
+        assert (REPO / value).is_file(), f"agent.policy.{key}={value!r} 指向不存在的文件"
+
+
+def test_policy_template_paths_are_consumed_by_the_agent(tmp_path):
+    """F12 的另一半：改配置必须**真的**改变 agent 读到的模板（不再被包内回落静默覆盖）。"""
+    from dataclasses import replace
+
+    from gamer_rsi.agent.policy import PolicyAgent
+    from gamer_rsi.agent.prompts.assembler import FIXED_TEMPLATE_PATH
+
+    frozen = tmp_path / "my_fixed.md"
+    frozen.write_text("# 自定义冻结模板\n\n观测:\n{{observation}}\n\n记忆:\n{{memory}}\n",
+                      encoding="utf-8")
+    cfg = load_config(config_dir=CONFIGS)
+    agent = PolicyAgent(replace(cfg.agent.policy, mode="baseline_fixed_prompt",
+                                fixed_prompt_path=str(frozen)),
+                        harness_dir=REPO / "harness")
+    assert agent.template_spec.path == str(frozen)
+    assert "自定义冻结模板" in agent.template_spec.text
+    # 反向：路径不可用时回落包内冻结件（仍然是固定的那一份，不会退化成兜底模板）
+    missing = PolicyAgent(replace(cfg.agent.policy, mode="baseline_fixed_prompt",
+                                  fixed_prompt_path=str(tmp_path / "nope.md")),
+                          harness_dir=REPO / "harness")
+    assert missing.template_spec.path == str(FIXED_TEMPLATE_PATH)
+    assert missing.template_spec.fallback_used is False
+
+
+def test_schema_ids_are_uniform():
+    """F12②：所有 ``schemas/*.json`` 都要有 ``$id``，且都用 ``gamersi.local`` 前缀。"""
+    ids = {}
+    for path in sorted((REPO / "schemas").glob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert "$id" in data, f"{path.name} 缺 $id"
+        ids[path.name] = data["$id"]
+    assert len(ids) == 8
+    assert all(value.startswith("https://gamersi.local/schemas/") for value in ids.values()), ids

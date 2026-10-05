@@ -41,3 +41,10 @@ Markdown 围栏、注释或 JSON 之外的任何字符。
    treasure_pick→defId（"skip" 表示跳过）；forge_pick→dieId,faceIndex,candidateId；
    relic_swap→relicId（"skip" 表示放弃）；end_turn/shop_refresh/shop_leave 无必填字段。
 5. 所有 id 必须逐字来自上面的观测或可选动作，禁止虚构。
+6. **动作必须逐字取自 `legal_actions` 的整条记录**（尤其是 `play_face`：`dieId` 与 `slotId`
+   是**一个配对**，必须照抄 legal_actions 里出现过的组合；**不要**自己把观测 `hand` 里的骰子
+   与 `slots` 里的槽位组合起来）。
+7. **同一个 `plan` 内不得重复使用同一个 `slotId` 或同一个 `dieId`**：槽位被填满后、骰子被用掉后
+   就不再合法；`use_ability` 只能用于还有次数的能力（观测里的 `x0` 表示已用完）。
+   每个动作执行前都会用**当时的**合法动作重新校验，**任一动作失效会让整个决策作废重试**，
+   因此不确定时宁可少写几个动作。

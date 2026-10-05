@@ -11,6 +11,10 @@
 
 - **seed 只从** ``evals.seeds.take/resolve_basket`` 来（INV-5）；
 - **dropped 计 n 且按 lose 计**，``degraded`` 剔出 n 并单列（Spec v1.3 §8.5）；
+- **单局预算真被消费**（F20）：``SandboxRunner`` 逐步检查 deadline，``run_eval`` 另有一道
+  硬看门狗；超时 → ``dropped`` + ``E_EVAL_TIMEOUT``；
+- **逐局增量落盘**（F18）：``on_result`` 钩子让调用方每局落一次 ``episodes/<split>/``，
+  长跑崩溃只丢当前局；
 - 结果**按 seed 升序**归一化聚合，``n_workers=1`` 与 ``n>1`` 必须逐字节一致（G3/T-15）；
 - 报告落盘 ``report.json`` + ``report.sha256``；同参数重跑 sha 不一致 → ``E_EVAL_NONDETERMINISTIC``。
 """
@@ -21,11 +25,13 @@ import concurrent.futures
 import csv
 import hashlib
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable, Literal, Mapping, Protocol, Sequence, runtime_checkable
+from typing import (Any, Callable, Final, Iterable, Literal, Mapping, Protocol, Sequence,
+                    runtime_checkable)
 
 from gamer_rsi.infra.errors import E, InfraError
 from gamer_rsi.infra.io import read_json, read_jsonl, sha256_file, write_json_atomic
@@ -42,7 +48,8 @@ __all__ = [
     "EvalSpec", "EvalResult", "TraceWriter", "EpisodeRunner", "ArmResult",
     "run_eval", "evaluate_arm", "compare_paired", "compare_all_metrics",
     "evaluate_generation", "SandboxRunner", "episode_result_from_rows",
-    "load_episode_results", "gather_results", "generation_report_path",
+    "load_episode_results", "gather_results", "read_episode_protocols",
+    "generation_report_path",
     "report_sha_path", "write_generation_report", "check_report_determinism",
     "append_generations_csv", "write_ext_metrics", "write_plots_data",
     "write_episode_summaries",
@@ -57,6 +64,22 @@ GENERATIONS_COLUMNS: tuple[str, ...] = (
     "entropy_mean_norm", "entropy_slope", "jsd_kind", "collapse_flag", "win_rate_gap",
     "verdict", "decision", "bootstrap_seed", "config_hash", "git_commit", "ts",
 )
+
+#: 单局硬看门狗的宽限（秒）。协同预算（``SandboxRunner`` 里的 deadline）已是第一道闸；
+#: 这里只兜住「worker 完全不消费 ``timeout_s``」的极端情形，宽限留给已进入的单次
+#: LLM 调用收尾（MOD-03 自身有 ``generate_timeout_ms`` / ``total_timeout_ms`` 上限）。
+_TIMEOUT_SLACK_S: Final[float] = 60.0
+#: 硬看门狗的巡检粒度（秒）。只影响「放弃一个卡死 worker」的判定延迟。
+_WATCHDOG_POLL_S: Final[float] = 0.5
+
+#: 逐局摘要的「测量协议」标识（随行落盘到 ``episodes/<split>/*.jsonl``）。
+#:
+#: 只要**单局语义**变了（推理粒度、超时语义、指标口径、prompt 契约……）就必须递增它：
+#: ``baseline --resume`` 会拒绝与不同协议的局混进同一份聚合，否则长跑（M3 ≈114 h）跨代码
+#: 改动续跑时，会把两套语义的成绩拼成一个「没有物理含义的数字」（M1 验收 F18 的隐患：
+#: F22 修复前的局是逐 env 步推理，修复后是逐决策点，二者不可混算）。
+#: v2 = F22（决策点粒度）+ F20（单局预算真被执行）之后的语义。
+EPISODE_PROTOCOL: Final[str] = "episode-protocol-v2"
 
 
 # =====================================================================
@@ -80,7 +103,10 @@ class EvalSpec:
     max_steps: int | None = None
     n_rep: int = 1
     n_workers: int = 1
-    # 2026-10-04 实测回填；⚠️ SandboxRunner.run_episode 目前未消费该值（M1 验收报告 F20）
+    # 单局预算（秒）。2026-10-04 实测回填；2026-10-05（M1 验收 F20）起**真正被消费**：
+    # ``SandboxRunner`` 在每个决策点前检查 deadline（协同预算），``run_eval`` 另有一道
+    # 硬看门狗（``seed_timeout_s + _TIMEOUT_SLACK_S``）兜住「worker 完全不看预算」的情形。
+    # 超时的局按 Spec §8.5 记 ``dropped=True`` + ``E_EVAL_TIMEOUT``，计 n 并按 lose 计。
     seed_timeout_s: int = 1800
     budget_seconds: int | None = None
     t_max: int = 120
@@ -207,20 +233,38 @@ def rng_for(spec: EvalSpec) -> Any:
 
 
 def run_eval(spec: EvalSpec, *, runner: EpisodeRunner, writer: TraceWriter | None = None,
-             protocol: seeds_mod.SeedProtocol | Any = None) -> EvalResult:
-    """执行一次评估：并行跑局 → 超时/崩溃记 dropped → 按 seed 升序聚合（FR-08-07…10）。"""
+             protocol: seeds_mod.SeedProtocol | Any = None,
+             resume_results: Sequence[EpisodeResult] = (),
+             on_result: Callable[[EpisodeResult], None] | None = None) -> EvalResult:
+    """执行一次评估：并行跑局 → 超时/崩溃记 dropped → 按 seed 升序聚合（FR-08-07…10）。
+
+    两个可选钩子支撑长跑（M1 验收 F18/F19/F20）：
+
+    - ``resume_results``：``--resume`` 时**已完成**的局（不重跑，直接并入聚合，INV-5）；
+    - ``on_result``：每完成一局**立刻**回调（MOD-08 的 ``baseline --resume`` 用它逐局增量
+      落盘 ``episodes/<split>/*.jsonl``）——进程崩溃/断电只丢当前那一局，不会废掉整个 run。
+    """
     started = time.perf_counter()
+    cpu_started = time.process_time()
     proto = seeds_mod.validate_protocol(seeds_mod.coerce_protocol(protocol))
     seeds_mod.assert_split_isolation(spec.split, spec.seeds, proto)
     _emit("eval.start", split=spec.split, basket=spec.basket_id,
           generation=spec.generation, harness_version=spec.harness_version,
-          n=len(spec.seeds), n_workers=spec.n_workers, spec=spec.as_dict())
+          n=len(spec.seeds), n_workers=spec.n_workers, resumed_n=len(resume_results),
+          seed_timeout_s=spec.seed_timeout_s, spec=spec.as_dict())
 
-    results: dict[int, EpisodeResult] = {}
+    results: dict[int, EpisodeResult] = {int(r.seed): r for r in resume_results}
     budget_exceeded = False
+    timed_out = False
+    abandoned = False
     error_codes: list[str] = []
 
+    started_at: dict[int, float] = {}
+    _lock = threading.Lock()
+
     def _one(seed: int) -> EpisodeResult:
+        with _lock:
+            started_at[int(seed)] = time.monotonic()
         reps: list[EpisodeResult] = []
         for _ in range(max(1, spec.n_rep)):
             reps.append(runner.run_episode(
@@ -228,30 +272,86 @@ def run_eval(spec: EvalSpec, *, runner: EpisodeRunner, writer: TraceWriter | Non
                 harness_version=spec.harness_version, timeout_s=spec.seed_timeout_s))
         return _majority(reps) if len(reps) > 1 else reps[0]
 
+    def _store(seed: int, result: EpisodeResult) -> None:
+        results[int(seed)] = result
+        begun = started_at.get(int(seed))
+        _emit("eval.seed_done", seed=int(seed), outcome=result.outcome,
+              steps=result.steps, decisions=result.decisions,
+              decisions_llm=result.decisions_llm,
+              dur_s=round(time.perf_counter() - started, 4),
+              episode_s=(None if begun is None else round(time.monotonic() - begun, 4)),
+              cpu_s=round(time.process_time() - cpu_started, 4),
+              dropped=result.dropped, degraded=result.degraded,
+              error_code=result.error_code)
+        if on_result is not None: # F18：逐局增量落盘（崩溃只丢当前局）
+            on_result(result)
+        if writer is not None:
+            writer.write({"type": "episode_end", "split": spec.split,
+                          "arm": spec.arm, **result.as_dict()})
+
+    # F20 的硬看门狗：协同预算归 runner；这里只兜住「worker 无视 timeout_s」。
+    # 宽限 _TIMEOUT_SLACK_S 留给「已进入单次 LLM 调用」的收尾（MOD-03 单调用自带上限）；
+    # ``n_rep`` 次重复是**串行**跑在同一 worker 上，所以上限也要乘 n_rep，否则会把
+    # 正常执行的多数票局误判成超时。
+    hard_limit = (None if spec.seed_timeout_s is None
+                  else float(spec.seed_timeout_s) * max(1, spec.n_rep) + _TIMEOUT_SLACK_S)
+    workers = max(1, spec.n_workers)
+    pools: list[concurrent.futures.ThreadPoolExecutor] = []
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+    pools.append(pool)
     futures: dict[concurrent.futures.Future[EpisodeResult], int] = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, spec.n_workers)) as pool:
-        for seed in spec.seeds:
-            _emit("eval.seed_start", seed=int(seed), split=spec.split, basket=spec.basket_id)
-            futures[pool.submit(_one, int(seed))] = int(seed)
-        for future in concurrent.futures.as_completed(futures):
-            seed = futures[future]
-            if spec.budget_seconds is not None and \
-                    (time.perf_counter() - started) > float(spec.budget_seconds):
-                budget_exceeded = True
-                result = _dropped_result(spec, seed, str(E.E_EVAL_BUDGET_EXCEEDED))
-            else:
+    queued = [int(s) for s in spec.seeds]
+    abandoned_workers = 0
+
+    def _pump() -> None:
+        """把排队中的 seed 提交到当前池，最多 ``workers`` 个在飞（与旧行为等价）。"""
+        while queued and len(futures) < workers:
+            seed = queued.pop(0)
+            _emit("eval.seed_start", seed=seed, split=spec.split, basket=spec.basket_id)
+            futures[pool.submit(_one, seed)] = seed
+
+    try:
+        _pump()
+        while futures:
+            done, _ = concurrent.futures.wait(
+                list(futures), timeout=_WATCHDOG_POLL_S,
+                return_when=concurrent.futures.FIRST_COMPLETED)
+            for future in done:
+                seed = futures.pop(future)
+                if spec.budget_seconds is not None and \
+                        (time.perf_counter() - started) > float(spec.budget_seconds):
+                    budget_exceeded = True
+                    _store(seed, _dropped_result(spec, seed, str(E.E_EVAL_BUDGET_EXCEEDED)))
+                    continue
                 try:
-                    result = future.result()
+                    _store(seed, future.result())
                 except Exception as exc: # 崩溃/TLE/沙箱异常 → dropped，不静默
-                    result = _dropped_result(spec, seed, _error_code_of(exc))
-            results[seed] = result
-            _emit("eval.seed_done", seed=int(seed), outcome=result.outcome,
-                  steps=result.steps, decisions=result.decisions,
-                  dur_s=round(time.perf_counter() - started, 4), dropped=result.dropped,
-                  degraded=result.degraded, error_code=result.error_code)
-            if writer is not None:
-                writer.write({"type": "episode_end", "split": spec.split,
-                              "arm": spec.arm, **result.as_dict()})
+                    _store(seed, _dropped_result(spec, seed, _error_code_of(exc)))
+            if hard_limit is not None:
+                now = time.monotonic()
+                for future, seed in list(futures.items()):
+                    begun = started_at.get(seed)
+                    if begun is None or (now - begun) <= hard_limit:
+                        continue
+                    # 看门狗接管：不再等这个 worker。``future.cancel()`` 对已运行的线程无效，
+                    # 该线程由 MOD-03 的调用级超时收尾；它占掉的 worker 名额用一个新池补回来，
+                    # 否则 n_workers=1 时「一个卡死的 worker」会让其余 seed 永远排不上队
+                    # （那正是 F20 描述的「eval 永久挂起」）。
+                    futures.pop(future)
+                    future.cancel()
+                    abandoned = True
+                    timed_out = True
+                    abandoned_workers += 1
+                    _store(seed, _dropped_result(spec, seed, str(E.E_EVAL_TIMEOUT)))
+                    pool.shutdown(wait=False)
+                    pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+                    pools.append(pool)
+                    break # 每次只放弃一个，避免对同一个池反复 shutdown
+            _pump()
+    finally:
+        # 有被放弃的 worker 时**不能** wait=True：那正是「一个卡住的 worker 让 eval 永久挂起」
+        for item in pools:
+            item.shutdown(wait=not abandoned)
 
     ordered = tuple(results[seed] for seed in sorted(results))
     metrics = aggregate(ordered, split=spec.split, basket=spec.basket_id, t_max=spec.t_max,
@@ -260,11 +360,14 @@ def run_eval(spec: EvalSpec, *, runner: EpisodeRunner, writer: TraceWriter | Non
         error_codes.append(str(E.E_EVAL_INSUFFICIENT_N))
     if budget_exceeded:
         error_codes.append(str(E.E_EVAL_BUDGET_EXCEEDED))
+    if timed_out:
+        error_codes.append(str(E.E_EVAL_TIMEOUT))
     dur_s = round(time.perf_counter() - started, 4)
     _emit("eval.report", generation=spec.generation, n=metrics.n,
           n_dropped=metrics.n_dropped, degraded_n=metrics.degraded_n, dur_s=dur_s,
+          cpu_s=round(time.process_time() - cpu_started, 4),
           report_sha256=None, low_confidence=metrics.low_confidence,
-          error_codes=error_codes)
+          abandoned_workers=abandoned_workers, error_codes=error_codes)
     return EvalResult(spec=spec, results=ordered, metrics=metrics, dur_s=dur_s,
                       rng_seed=spec.rng_seed, error_codes=tuple(error_codes),
                       budget_exceeded=budget_exceeded)
@@ -314,16 +417,35 @@ def load_episode_results(run_dir: Path | str, split: Split, *,
                          generation: int | None = None,
                          harness_version: int = 0,
                          seeds: Sequence[int] | None = None,
-                         arm: str = "") -> list[EpisodeResult]:
-    """读取 ``runs/<run_id>/episodes/<split>/*.jsonl``（``eval report`` 的数据来源）。"""
+                         arm: str | Sequence[str] = "",
+                         exclude_arms: Sequence[str] = ()) -> list[EpisodeResult]:
+    """读取 ``runs/<run_id>/episodes/<split>/*.jsonl``（``eval report`` 的数据来源）。
+
+    ``arm`` / ``exclude_arms`` 是**真过滤**（不是打标签）：``episodes/<split>/`` 下同时
+    住着 ``parent`` / ``candidates`` / ``smoke`` / ``baseline-*`` 四类局，混臂聚合会得出
+    一个没有任何物理含义的数字（M1 验收 F5：实测 ``heldout.n=120``、``win_rate=0.30``）。
+    返回的 ``EpisodeResult.arm`` 取**行里的** ``arm`` 字段（缺省时回落到请求值）。
+    """
     root = Path(run_dir) / "episodes" / split
     if not root.is_dir():
         return []
     wanted = {int(s) for s in seeds} if seeds else None
+    if isinstance(arm, str):
+        want_arms: set[str] | None = {arm} if arm else None
+        label = arm
+    else:
+        want_arms = {str(a) for a in arm} or None
+        label = ""
+    excluded = {str(a) for a in exclude_arms}
     out: list[EpisodeResult] = []
     for path in sorted(root.glob("*.jsonl")):
         rows, _truncated = read_jsonl(path)
         if not rows:
+            continue
+        row_arm = str(rows[0].get("arm") or "")
+        if want_arms is not None and row_arm not in want_arms:
+            continue
+        if excluded and row_arm in excluded:
             continue
         seed = int(rows[0].get("seed") or 0)
         if wanted is not None and seed not in wanted:
@@ -332,7 +454,7 @@ def load_episode_results(run_dir: Path | str, split: Split, *,
             rows, seed=seed, split=split,
             generation=int(generation if generation is not None
                            else rows[0].get("generation") or 0),
-            harness_version=int(harness_version), arm=arm)
+            harness_version=int(harness_version), arm=row_arm or label)
         if result is not None:
             out.append(result)
     return sorted(out, key=lambda r: r.seed)
@@ -342,6 +464,29 @@ def gather_results(run_dir: Path | str, split: Split, *, generation: int | None 
                    harness_version: int = 0, seeds: Sequence[int] | None = None) -> tuple[EpisodeResult, ...]:
     return tuple(load_episode_results(run_dir, split, generation=generation,
                                       harness_version=harness_version, seeds=seeds))
+
+
+def read_episode_protocols(run_dir: Path | str, split: Split, *,
+                           generation: int | None = None,
+                           arm: str = "") -> set[str]:
+    """已落盘各局的「测量协议」标识集合（``baseline --resume`` 的一致性检查用）。
+
+    旧版（F22 修复前）的局没有 ``protocol`` 字段，会以 ``""`` 出现——正是要靠它拦住的混算。
+    """
+    root = Path(run_dir) / "episodes" / split
+    if not root.is_dir():
+        return set()
+    found: set[str] = set()
+    for path in sorted(root.glob("*.jsonl")):
+        rows, _truncated = read_jsonl(path)
+        if not rows:
+            continue
+        if arm and str(rows[0].get("arm") or "") != arm:
+            continue
+        if generation is not None and int(rows[0].get("generation") or 0) != int(generation):
+            continue
+        found.add(str(rows[0].get("protocol") or ""))
+    return found
 
 
 # =====================================================================
@@ -363,6 +508,12 @@ class ArmResult:
     model_hash: str = ""
     error_codes: tuple[str, ...] = ()
     dur_s: float = 0.0
+    # ---- 跑批事实（F6 溯源 / F18 续跑；由 ``run_baseline`` 填写，其它调用方留空）----
+    resumed_n: int = 0
+    pending_seeds: tuple[int, ...] = ()
+    model_backend: str = ""
+    seed_timeout_s: int | None = None
+    archive_path: str = ""
 
     @property
     def seeds(self) -> tuple[int, ...]:
@@ -381,7 +532,11 @@ class ArmResult:
                 "memory_version": self.memory_version, "run_id": self.run_id,
                 "model_hash": self.model_hash, "metrics": self.metrics.as_dict(),
                 "error_codes": list(self.error_codes), "dur_s": self.dur_s,
-                "seeds": list(self.seeds)}
+                "seeds": list(self.seeds), "resumed_n": self.resumed_n,
+                "pending_seeds": list(self.pending_seeds),
+                "model_backend": self.model_backend,
+                "seed_timeout_s": self.seed_timeout_s,
+                "archive_path": self.archive_path}
 
 
 def _align(a: ArmResult, b: ArmResult) -> tuple[list[EpisodeResult], list[EpisodeResult]]:
@@ -782,8 +937,11 @@ def write_episode_summaries(run_dir: Path | str, results: Sequence[EpisodeResult
     written: list[Path] = []
     for result in results:
         key = f"e-{int(result.seed):06d}-g{int(generation):03d}-{arm}"
+        # 显式的 ``arm`` 形参是权威值（``result.as_dict()`` 里也有一份 ``arm``）：
+        # 行里的 ``arm`` 是 ``load_episode_results`` 唯一的过滤依据（F5），必须一致。
         row = {"type": "episode_end", "episode_key": key,
-               "generation": int(generation), "arm": arm, **result.as_dict()}
+               "generation": int(generation), **result.as_dict(),
+               "arm": arm or result.arm, "protocol": EPISODE_PROTOCOL}
         payload = json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
         path = root / f"{key}.jsonl"
         write_bytes_atomic(path, payload.encode("utf-8"))
@@ -829,6 +987,9 @@ class SandboxRunner:
         if cfg is not None and not isinstance(cfg, EpisodeConfig):
             cfg = EpisodeConfig.from_any(cfg)
         episode_id = f"e-{int(seed):06d}-g{int(generation):03d}-{arm}"
+        # F20：``evals.seed_timeout_s`` 真正被消费——每个决策点前检查 deadline，
+        # 超预算的局按 Spec §8.5 记 dropped（计 n、按 lose 计），而不是让 eval 永久挂起。
+        deadline = None if timeout_s is None else time.monotonic() + float(timeout_s)
         env = make_default_env(episode_config=cfg, honeypot=self.honeypot,
                                policy_failure_streak=self.policy_failure_streak,
                                illegal_penalty=self.illegal_penalty,
@@ -838,16 +999,19 @@ class SandboxRunner:
             if hasattr(agent, "play_decision"):
                 return self._policy_loop(env, agent, seed=seed, split=split, arm=arm,
                                          generation=generation,
-                                         harness_version=harness_version)
+                                         harness_version=harness_version,
+                                         deadline=deadline)
             return self._agent_loop(env, agent, seed=seed, split=split, arm=arm,
                                     generation=generation,
-                                    harness_version=harness_version)
+                                    harness_version=harness_version,
+                                    deadline=deadline)
         finally:
             env.close()
 
     # ---- 基线 agent 循环 ----------------------------------------------
     def _agent_loop(self, env: Any, agent: Any, *, seed: int, split: Split, arm: str,
-                    generation: int, harness_version: int) -> EpisodeResult:
+                    generation: int, harness_version: int,
+                    deadline: float | None = None) -> EpisodeResult:
         if hasattr(agent, "reset"):
             try:
                 agent.reset(seed)
@@ -862,7 +1026,11 @@ class SandboxRunner:
         last_index = -1
         last_step: Any = None
         degraded = _agent_degraded(agent)
+        timed_out = False
         while True:
+            if deadline is not None and time.monotonic() > deadline:
+                timed_out = True
+                break
             if obs.get("outcome"):
                 break
             legal = env.legal_actions()
@@ -908,7 +1076,7 @@ class SandboxRunner:
                              steps=steps, illegal=illegal, fallback=fallback,
                              kind_counts=kind_counts, slot_counts=slot_counts,
                              decision_kinds=decision_kinds, actions=actions,
-                             degraded=degraded)
+                             degraded=degraded, timed_out=timed_out)
 
     def _fallback_action(self, obs: Any, legal: Sequence[Any], hints: Any) -> Any:
         from gamer_rsi.agent.heuristic import heuristic_policy
@@ -920,7 +1088,8 @@ class SandboxRunner:
 
     # ---- MOD-04 PolicyAgent 循环 --------------------------------------
     def _policy_loop(self, env: Any, agent: Any, *, seed: int, split: Split, arm: str,
-                     generation: int, harness_version: int) -> EpisodeResult:
+                     generation: int, harness_version: int,
+                     deadline: float | None = None) -> EpisodeResult:
         from gamer_rsi.agent.policy import EpisodeContext
 
         ctx = EpisodeContext(run=self.run_id or "r-local",
@@ -937,14 +1106,23 @@ class SandboxRunner:
         actions: list[dict[str, Any]] = []
         degraded = False
         guards = 0
+        llm_decisions = 0
+        timed_out = False
         last_step: Any = None
         while True:
             guards += 1
             if guards > self.max_decisions_guard:
                 break
+            if deadline is not None and time.monotonic() > deadline:
+                timed_out = True
+                break
             if obs.get("outcome"):
                 break
             decision = agent.play_decision(env, obs, ctx=ctx)
+            if any(str(getattr(rec, "source", "")) == "llm"
+                   for rec in (getattr(decision, "steps", []) or [])):
+                # F22 的粒度证据：**每个决策点**一次推理（vs 每个 env 步一次）
+                llm_decisions += 1
             degraded = degraded or bool(getattr(decision, "degraded", False))
             fallback += 1 if str(getattr(decision, "source", "")) == "fallback" else 0
             for record in getattr(decision, "steps", []) or []:
@@ -975,14 +1153,16 @@ class SandboxRunner:
                              steps=steps, illegal=illegal, fallback=fallback,
                              kind_counts=kind_counts, slot_counts=slot_counts,
                              decision_kinds=decision_kinds, actions=actions,
-                             degraded=degraded)
+                             degraded=degraded, decisions_llm=llm_decisions,
+                             timed_out=timed_out)
 
 
 def _agent_degraded(agent: Any) -> bool:
     """基线 agent 的降级标记（Spec §8.5）。
 
-    ``FixedPromptAgent`` 在拿不到可用的 MOD-03 客户端、或单次调用失败时置
-    ``degraded=True`` 并改用启发式动作。``_agent_loop`` 必须把它抬进
+    基线 agent（如 ``build_agent("fixed_prompt", …)`` 返回的 MOD-04 ``PolicyAgent``）
+    在拿不到可用的 MOD-03 客户端、或单次调用全局失败时置 ``degraded=True`` 并改用
+    启发式动作。``_agent_loop`` / ``_policy_loop`` 必须把它抬进
     ``EpisodeResult.degraded``，否则整局降级会被静默当成真实 LLM 结果入档。
     """
     return bool(getattr(agent, "degraded", False))
@@ -1024,8 +1204,12 @@ def _build_result(*, seed: int, split: Split, arm: str, generation: int,
                   truncated: bool, steps: int, illegal: int, fallback: int,
                   kind_counts: list[int], slot_counts: Mapping[str, int],
                   decision_kinds: Sequence[int], actions: Sequence[Mapping[str, Any]],
-                  degraded: bool = False) -> EpisodeResult:
+                  degraded: bool = False, decisions_llm: int = 0,
+                  timed_out: bool = False) -> EpisodeResult:
     outcome = "win" if str(info.get("outcome")) == "win" else "lose"
+    if timed_out:
+        # Spec §8.5：超时的局记 dropped，计 n 并按 lose 计（防幸存者偏差）
+        outcome = "lose"
     payload = json.dumps([dict(a) for a in actions], sort_keys=True,
                          ensure_ascii=False, separators=(",", ":"))
     return EpisodeResult(
@@ -1040,5 +1224,7 @@ def _build_result(*, seed: int, split: Split, arm: str, generation: int,
         illegal_attempts=int(illegal), fallback_decisions=int(fallback),
         kind_counts=tuple(kind_counts), slot_counts=dict(slot_counts),
         seq_hash=hashlib.sha256(payload.encode("utf-8")).hexdigest(),
-        dropped=False, degraded=bool(degraded), decision_kinds=tuple(decision_kinds),
-        arm=arm)
+        dropped=bool(timed_out), degraded=bool(degraded),
+        decision_kinds=tuple(decision_kinds), arm=arm,
+        error_code=(str(E.E_EVAL_TIMEOUT) if timed_out else None),
+        decisions_llm=int(decisions_llm))

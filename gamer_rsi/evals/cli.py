@@ -25,7 +25,7 @@ from gamer_rsi.infra.io import read_json, write_json_atomic
 
 from . import seeds as seeds_mod
 from .ablation import ablation_path, run_ablation
-from .baselines import BASELINE_KINDS, baselines_dir, run_baseline
+from .baselines import BASELINE_KINDS, baseline_arm, baselines_dir, run_baseline
 from .diversity import (CollapseConfig, collapse_check, distinct_sequence_ratio,
                         js_divergence, kind_distribution, slot_distribution)
 from .harness import (EvalSpec, append_generations_csv, evaluate_arm, generation_report_path,
@@ -63,9 +63,13 @@ def build_inference_client(cfg: Any, *, run_id: str, runs_root: Path) -> Any:
 
 
 
-def _paths(args: argparse.Namespace) -> tuple[Any, Any, str]:
-    """建/定位 run（复用 MOD-09 的启动序列：load_config → run_id → events.bind）。"""
-    return infra_cli.cli_init_run(args)
+def _paths(args: argparse.Namespace, *, require_state: bool = True) -> tuple[Any, Any, str]:
+    """建/定位 run（复用 MOD-09 的启动序列：load_config → run_id → events.bind）。
+
+    ``require_state=False``：``baseline --resume`` 用——基线 run 从不写 ``state.json``
+    （那是 MOD-06 的语义），因此续跑只要求 run 目录 + ``episodes/`` 已存在的局（F18）。
+    """
+    return infra_cli.cli_init_run(args, require_state=require_state)
 
 
 def _default_basket_for(split: str) -> str:
@@ -125,8 +129,15 @@ def cmd_baseline(args: argparse.Namespace) -> int:
 
     ``fixed_prompt`` 需要真实 MOD-03 客户端：先经组合根登记的提供者装配，拿不到就
     fail-closed（``E_LLM_UNAVAILABLE`` / 退出码 3），绝不静默降级成启发式（M1 验收 F1）。
+    ``fixed_prompt`` 走 MOD-04 ``PolicyAgent(mode="baseline_fixed_prompt")``（F22）：
+    每**决策点**一次推理。
+
+    ``--resume``（F18）：跳过 ``episodes/<split>/`` 里已完成的 seed，只跑缺的；
+    归档时把 ``resumed_n`` 一并入档。基线的续跑**不要求** ``state.json``（没有它时
+    先找 ``episodes/``；一个已完成的 run 上重复 ``--resume`` 不会重复归档）。
     """
-    paths, cfg, run_id = _paths(args)
+    resume = bool(getattr(args, "resume", False))
+    paths, cfg, run_id = _paths(args, require_state=not resume)
     kind = str(getattr(args, "kind", "heuristic"))
     if kind not in BASELINE_KINDS:
         raise InfraError(E.E_EVAL_ARM_NOT_ALLOWED, f"未知基线 kind={kind!r}",
@@ -144,18 +155,41 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     proto = _protocol(cfg, args.config_dir)
     client = (build_inference_client(cfg, run_id=run_id, runs_root=paths.root.parent)
               if kind == "fixed_prompt" else None)
+    model_id = str(cfg.inference.model_id)
     arm = run_baseline(kind, split=split, basket=basket, run_id=run_id,  # type: ignore[arg-type]
                        run_dir=paths.root, config=cfg, protocol=proto, client=client,
-                       model_hash=str(getattr(cfg.inference, "model_id", "")),
+                       model_hash=model_id,
                        git_commit=str(getattr(args, "git_commit", "") or ""),
-                       n_workers=int(getattr(cfg.evals, "n_workers", 1)))
+                       n_workers=int(getattr(cfg.evals, "n_workers", 1)),
+                       resume=resume,
+                       model_backend=_registry_backend(cfg, model_id),
+                       seed_timeout_s=int(getattr(cfg.evals, "seed_timeout_s", 1800)))
     payload = {"kind": kind, "split": split, "basket": basket, "run_id": run_id,
                "archive_dir": str(baselines_dir(run_id, paths.root)),
+               "archive_path": arm.archive_path or None,
                "metrics": arm.metrics.as_dict(), "dur_s": arm.dur_s,
                "error_codes": list(arm.error_codes), "power_note": power_note(arm.metrics.n),
-               "inference_client": bool(client), "model_id": str(cfg.inference.model_id)}
+               "inference_client": bool(client), "model_id": model_id,
+               "model_hash": arm.model_hash, "model_backend": arm.model_backend,
+               "seeds": list(arm.seeds), "resumed_n": arm.resumed_n,
+               "pending_seeds": list(arm.pending_seeds),
+               "seed_timeout_s": arm.seed_timeout_s}
     _print(payload)
     return 0
+
+
+def _registry_backend(cfg: Any, model_id: str) -> str:
+    """注册表里该模型的真实后端名（F6：归档要记「哪个后端产出的」）。"""
+    try:
+        from gamer_rsi.inference.registry import load_registry
+
+        return str(load_registry(str(cfg.inference.registry_path)).spec(model_id).backend)
+    except Exception: # 注册表不可用不该阻断测量；如实记 unknown
+        return "unknown"
+
+
+#: ``eval report`` / ``eval diversity`` 必须排除的臂（F5：基线局不得混进代际分母）
+_BASELINE_ARMS: tuple[str, ...] = tuple(baseline_arm(k) for k in BASELINE_KINDS)
 
 
 # =====================================================================
@@ -170,13 +204,15 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
     proto = _protocol(cfg, args.config_dir)
     eval_cfg = cfg.evals
     results = load_episode_results(paths.root, split, generation=generation,  # type: ignore[arg-type]
-                                   harness_version=generation)
+                                   harness_version=generation,
+                                   exclude_arms=_BASELINE_ARMS)
     heldout = aggregate(results, split=split, basket=_basket_of(args),  # type: ignore[arg-type]
                         t_max=int(eval_cfg.t_max), min_support=int(eval_cfg.min_support),
                         drop_rate_max=float(eval_cfg.drop_rate_max))
     window = seeds_mod.train_window(generation, protocol=proto, window=60)
     train_results = load_episode_results(paths.root, "train", generation=generation,
-                                         harness_version=generation, seeds=window)
+                                         harness_version=generation, seeds=window,
+                                         exclude_arms=_BASELINE_ARMS)
     train = aggregate(train_results, split="train", basket="train_window",
                       t_max=int(eval_cfg.t_max), min_support=int(eval_cfg.min_support),
                       drop_rate_max=float(eval_cfg.drop_rate_max))
@@ -321,7 +357,8 @@ def cmd_eval_diversity(args: argparse.Namespace) -> int:
     paths, cfg, run_id = _paths(args)
     generation = _generation_of(args, paths.root)
     results = load_episode_results(paths.root, "heldout", generation=generation,
-                                   harness_version=generation)
+                                   harness_version=generation,
+                                   exclude_arms=_BASELINE_ARMS)
     metrics = aggregate(results, split="heldout", basket="H1",
                         t_max=int(cfg.evals.t_max), min_support=int(cfg.evals.min_support))
     diversity = _diversity_from_history(paths.root, generation, cfg, metrics)

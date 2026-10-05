@@ -184,8 +184,10 @@ class PolicyConfig:
 
     mode: str = "play" # play | eval | baseline_fixed_prompt | baseline_heuristic
     template_path: str = "harness/prompts/decision.md"
-    fixed_prompt_path: str = "harness/prompts/fixed_v1.md"
-    task_path: str = "harness/prompts/task.md"
+    # F12（M1 验收）：默认值必须指向**真实存在**的文件。基线模板与任务说明都随包冻结
+    # （R-6：`fixed_prompt` 基线不随 harness 演化），因此指向包内路径而不是 harness/。
+    fixed_prompt_path: str = "gamer_rsi/agent/prompts/fixed_v1.md"
+    task_path: str = "gamer_rsi/agent/prompts/task.md"
     prompt_token_budget: int = 3072
     token_estimator: str = "chars_div_3" # chars_div_3 | backend_tokenizer
     memory_top_k: int = 5

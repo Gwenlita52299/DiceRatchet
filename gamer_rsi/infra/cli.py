@@ -518,7 +518,8 @@ def parse_seeds_spec(spec: str, *, seeds_file_dir: Path = Path(".")) -> dict[str
 
 # ---- 供各模块复用的 run 定位助手 ------------------------------------------------------
 
-def cli_init_run(args: argparse.Namespace) -> tuple[Any, Any, Any]:
+def cli_init_run(args: argparse.Namespace, *,
+                 require_state: bool = True) -> tuple[Any, Any, Any]:
     """CLI 命令通用的启动序列（bootstrap 之后）：load_config → make_run_id → init_run_dir。
 
     同时：
@@ -526,13 +527,18 @@ def cli_init_run(args: argparse.Namespace) -> tuple[Any, Any, Any]:
     - 发 ``infra.run_start``（含进程确定性快照 FR-09-17、未知键清单 FR-09-1）；
     - 未知键非空时补发 ``infra.config_unknown_key``（E_IO_CONFIG_UNKNOWN）；
     - 登记本进程活跃 run，供 ``main()`` 收尾发 ``infra.run_end`` 并写 io_latency（§13）。
+
+    ``require_state=False``（``baseline --resume``，M1 验收 F18）：``--resume`` 定位已有 run
+    时只校验 ``config_hash``，**不要求** ``state.json``——基线的续跑语义是「跳过
+    ``episodes/`` 里已完成的局」，而 ``state.json`` 的语义归 MOD-06（基线从不写它）。
     """
     global _ACTIVE_RUN
     cfg = load_config(config_overrides(args), config_dir=Path(args.config_dir))
     unknown = list(getattr(load_config, "unknown_keys", []) or [])
     run_id, _sha = make_run_id(cfg, explicit=getattr(args, "run_id", None))
     if getattr(args, "resume", False):
-        paths = resolve_run_dir(run_id, cfg, Path(cfg.infra.runs_root), resume=True)
+        paths = resolve_run_dir(run_id, cfg, Path(cfg.infra.runs_root),
+                                resume=bool(require_state))
     else:
         paths = init_run_dir(run_id, cfg, Path(cfg.infra.runs_root),
                              content_hash=_content_hash())

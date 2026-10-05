@@ -137,3 +137,27 @@ def test_real_model_robustness_when_weights_present():
     manager = BackendManager("configs/models.yaml", mode="eval",
                              config=None) # 真实跑批由 `inference robustness` 承担
     assert manager.registry.spec("qwen3-8b-q4").supports_grammar is False
+
+
+def test_fixed_v1_snapshot_is_the_frozen_baseline_template():
+    """M1 验收 F21：冻结基线模板的 prompt 快照必须与主快照同源、可对照。
+
+    ``robustness_prompts_fixed_v1.jsonl`` 与 ``robustness_prompts.jsonl`` 来自**同一批真实
+    观测**（同 seed 区间、同 ``PolicyAgent.prompt_bundle()`` 出口），只换模板 —— 因此两份
+    ``format_robustness.json`` 的「首答通过率」之差可以干净地归因到**模板契约强度**
+    （修复前 ``fixed_v1.md`` 52% vs ``decision.md`` 94%，F21）。
+    """
+    import json
+
+    repo = Path(__file__).resolve().parents[2]
+    path = repo / "tests" / "fixtures" / "inference" / "robustness_prompts_fixed_v1.jsonl"
+    assert path.is_file(), f"缺 F21 的对照快照：{path}"
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    assert len(rows) == N_PROMPTS
+    assert len({row["prompt_hash"] for row in rows}) == N_PROMPTS
+    assert len({row["template_hash"] for row in rows}) == 1, "必须全部来自同一份冻结模板"
+    for row in rows[:5]:
+        messages = row["messages"]
+        assert [m["role"] for m in messages] == ["user"]
+        assert "fixed-prompt baseline v1" in messages[0]["content"]
+        assert "输出契约" in messages[0]["content"], "F21：冻结模板必须带同等明确度的输出契约"

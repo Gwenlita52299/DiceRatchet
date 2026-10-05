@@ -22,8 +22,14 @@
 ## G6：可直接复制执行的命令
 
 ```bash
-# 基线（三选一；heuristic 的默认局参考通关率 45.5%，n=200 / seed 1–200，见 Spec §8.6）
-python -m gamer_rsi baseline --kind random|heuristic|fixed_prompt --split heldout --basket H1 --run-id <run_id>
+# 基线（三选一，拆成三条真实可执行命令；heuristic 的 45.5% 参考通关率是 Spec §8.6 的
+# n=200 / seed 1–200 口径，与这里的 --basket H1（40 局，seed 2000–2039）不是同一批）
+# random / heuristic 不带 --model 覆盖，可与下文 eval report 等共用同一个 <run_id>（F10）
+python -m gamer_rsi baseline --kind random    --split heldout --basket H1 --run-id <run_id>     # 期望退出码 0
+python -m gamer_rsi baseline --kind heuristic --split heldout --basket H1 --run-id <run_id>     # 期望退出码 0
+# fixed_prompt 必须带 --model（同样并入 config_hash）：单独用一个 run-id，换 --model 再换一次
+python -m gamer_rsi baseline --kind fixed_prompt --split heldout --basket H1 \
+    --model qwen3-8b-q4 --run-id <fixed_run_id>    # 需权重，期望 0；否则 3
 
 # 代际报告（从 run 的 episodes/ 重算指标 → generations/gen-000/report.json + report.sha256）
 python -m gamer_rsi eval report --split heldout --baseline all --run-id <run_id>

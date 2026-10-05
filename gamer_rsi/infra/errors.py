@@ -104,6 +104,8 @@ class E(StrEnum):
     E_EVAL_SEED_EXHAUSTED = "E_EVAL_SEED_EXHAUSTED"
     E_EVAL_INSUFFICIENT_N = "E_EVAL_INSUFFICIENT_N"
     E_EVAL_BUDGET_EXCEEDED = "E_EVAL_BUDGET_EXCEEDED"
+    # 单局超过 ``evals.seed_timeout_s``：按 dropped 计 n 并按 lose 计（Spec §8.5）
+    E_EVAL_TIMEOUT = "E_EVAL_TIMEOUT"
     E_EVAL_NONDETERMINISTIC = "E_EVAL_NONDETERMINISTIC"
     E_EVAL_SCHEMA = "E_EVAL_SCHEMA"
     E_EVAL_BASELINE_MISSING = "E_EVAL_BASELINE_MISSING"
@@ -165,6 +167,7 @@ EXIT_CODE: Final[Mapping[E, int]] = {
     E.E_EVAL_INV5_LEAK: EXIT_SANDBOX,
     E.E_EVAL_ARM_NOT_ALLOWED: EXIT_CONFIG,
     E.E_EVAL_BASELINE_MISSING: EXIT_DOMAIN,
+    E.E_EVAL_TIMEOUT: EXIT_DOMAIN,
     E.E_EVOLVE_VERSION_CONFLICT: EXIT_CONFIG,
     E.E_LLM_UNAVAILABLE: EXIT_MODEL,
     E.E_LLM_LOAD_FAILED: EXIT_MODEL,
@@ -212,6 +215,8 @@ ERROR_MESSAGE: Final[Mapping[E, str]] = {
     E.E_LLM_BACKEND_ERROR: "后端错误：采样参数越界 / server 5xx / grammar 不可用且无 JSON mode",
     E.E_LLM_UNSUPPORTED: "可选辅助接口未实现（B-01）",
     E.E_LLM_EXTRACT_FAILED: "LLM 抽取失败（MOD-05 降级为规则抽取）",
+    # MOD-08 评估（Spec §8.5 的降级契约）
+    E.E_EVAL_TIMEOUT: "单局超过 evals.seed_timeout_s：该局记 dropped，计 n 并按 lose 计",
 }
 
 

@@ -148,6 +148,9 @@ class PromptContext:
     harness_version: int = 0
     tools: str = ""
     legal_actions: str = ""
+    #: ``legal_actions`` 的**压缩渲染**（F13）：仅当完整枚举装不下预算时启用。
+    #: 空串表示没有可用的压缩形式（此时保持原行为：记 ``E_ACTION_BUDGET``）。
+    legal_actions_compact: str = ""
     reflections: tuple[ReflectionItem, ...] = ()
     memory: tuple[MemoryItem, ...] = ()
     constraints: str = ""
@@ -349,23 +352,30 @@ def source_ids(spec: PromptSpec, ctx: PromptContext,
 
 
 def assemble_prompt(spec: PromptSpec, ctx: PromptContext) -> PromptBundle:
-    """把 ``PromptSpec`` + ``PromptContext`` 组装为确定性 ``PromptBundle``（FR-04-2..4）。"""
+    """把 ``PromptSpec`` + ``PromptContext`` 组装为确定性 ``PromptBundle``（FR-04-2..4）。
+
+    裁剪顺序（FR-04-3 的优先级 + F13 的补充）：
+
+    1. ``{{task}}``/``{{harness_version}}``/``{{tools}}``/``{{observation}}`` **永不裁剪**；
+    2. 丢 ``memory``（``(score desc, id asc)`` 的末尾 = 分数最低者）；
+    3. 丢 ``reflections``（末尾 = 最旧）；
+    4. **仍超预算时**才把 ``legal_actions`` 换成压缩渲染（``ctx.legal_actions_compact``，
+       记录 ``TruncationRecord("legal_actions", …, "budget")``）并再走一遍 2/3；
+    5. 仍然超预算 → ``E_ACTION_BUDGET``（Observation 单独超限，由调用方降级为启发式）。
+    """
     from gamer_rsi.inference import Message
 
     budget = int(ctx.token_budget)
-    reflections, truncated = _select_reflections(ctx.reflections, ctx.reflection_max)
-    memory, mem_drops = _select_memory(ctx.memory, ctx.memory_top_k)
-    truncated = list(truncated) + list(mem_drops)
     error_codes: list[str] = []
 
-    def render(memory_items: Sequence[MemoryItem],
-               reflection_items: Sequence[ReflectionItem]) -> str:
+    def render(memory_items: Sequence[MemoryItem], reflection_items: Sequence[ReflectionItem],
+               legal_text: str) -> str:
         values: dict[str, str] = {
             "task": ctx.task,
             "harness_version": str(int(ctx.harness_version)),
             "tools": ctx.tools or _EMPTY_SECTION,
             "observation": ctx.observation,
-            "legal_actions": ctx.legal_actions or _EMPTY_SECTION,
+            "legal_actions": legal_text or _EMPTY_SECTION,
             "reflections": render_reflections(reflection_items),
             "memory": render_memory(memory_items),
             "constraints": ctx.constraints or "(none)",
@@ -379,23 +389,41 @@ def assemble_prompt(spec: PromptSpec, ctx: PromptContext) -> PromptBundle:
 
         return _PLACEHOLDER_RE.sub(_sub, spec.text)
 
-    text = render(memory, reflections)
-    estimate = estimate_tokens(text, ctx.token_estimator)
+    def shrink(legal_text: str) -> tuple[str, int, list[MemoryItem],
+                                        list[ReflectionItem], list[TruncationRecord]]:
+        """在给定 legal 渲染下按 2/3 的顺序丢 memory/reflections，返回最终文本与估算。"""
+        kept_reflections, dropped = _select_reflections(ctx.reflections, ctx.reflection_max)
+        kept_memory, mem_drops = _select_memory(ctx.memory, ctx.memory_top_k)
+        records = list(dropped) + list(mem_drops)
+        text = render(kept_memory, kept_reflections, legal_text)
+        estimate = estimate_tokens(text, ctx.token_estimator)
+        while estimate > budget and kept_memory:
+            dropped_item = kept_memory.pop() # 已按 (score desc, id asc) 排序 → 末尾分最低
+            records.append(TruncationRecord("memory", dropped_item.memory_id, "budget",
+                                            score=dropped_item.score))
+            text = render(kept_memory, kept_reflections, legal_text)
+            estimate = estimate_tokens(text, ctx.token_estimator)
+        while estimate > budget and kept_reflections:
+            dropped_item = kept_reflections.pop() # 末尾即最旧（generation 最小）
+            records.append(TruncationRecord("reflection", dropped_item.reflection_id, "budget"))
+            text = render(kept_memory, kept_reflections, legal_text)
+            estimate = estimate_tokens(text, ctx.token_estimator)
+        return text, estimate, kept_memory, kept_reflections, records
 
-    # 优先级：Observation > 反思 > 记忆（FR-04-3）。前半段永不裁剪。
-    while estimate > budget and memory:
-        dropped = memory.pop() # 已按 (score desc, id asc) 排序 → 末尾即最低分
-        truncated.append(TruncationRecord("memory", dropped.memory_id, "budget",
-                                          score=dropped.score))
-        text = render(memory, reflections)
-        estimate = estimate_tokens(text, ctx.token_estimator)
-    while estimate > budget and reflections:
-        dropped = reflections.pop() # 末尾即最旧（generation 最小）
-        truncated.append(TruncationRecord("reflection", dropped.reflection_id, "budget"))
-        text = render(memory, reflections)
-        estimate = estimate_tokens(text, ctx.token_estimator)
+    text, estimate, memory, reflections, truncated = shrink(ctx.legal_actions)
+    if estimate > budget and ctx.legal_actions_compact \
+            and ctx.legal_actions_compact != ctx.legal_actions:
+        # F13：观测块永不裁剪（FR-04-3），所以最后一步是压缩 **legal_actions** 枚举。
+        # 只有在真的更省时才切换（避免无谓地牺牲动作清单的完整性）。
+        alt_text, alt_estimate, alt_memory, alt_reflections, alt_truncated = shrink(
+            ctx.legal_actions_compact)
+        if alt_estimate < estimate:
+            text, estimate = alt_text, alt_estimate
+            memory, reflections = alt_memory, alt_reflections
+            truncated = list(alt_truncated)
+            truncated.append(TruncationRecord("legal_actions", "compact", "budget"))
     if estimate > budget:
-        # 丢光 memory/reflections 仍超预算 → Observation 单独超限（FR-04-3/§10）
+        # 丢光 memory/reflections 且压缩 legal 后仍超预算 → Observation 单独超限（§10）
         error_codes.append(E.E_ACTION_BUDGET)
     error_codes.extend(spec.error_codes)
 

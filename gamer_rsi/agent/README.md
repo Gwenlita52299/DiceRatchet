@@ -73,16 +73,18 @@ agent.close()
 > `tests/unit/agent/test_policy_heuristic.py::test_heuristic_win_rate_within_3pp_of_js_reference_on_default_run`
 > 是 `@pytest.mark.slow`：按 Spec §8.6 的 n=200、seed 1–200 跑一遍默认局（约 1 分钟），
 > 断言 MOD-04 启发式与 JS 参考 45.5% 的差距 ≤ 3pp（实测 48.0%，差 2.5pp）。
+> 这批 seed 与 `baseline --basket H1`（40 局，seed 2000–2039）不是同一批，勿混用口径。
 
 `play` 已由组合根接线（2026-10-04，M1 验收 F4）：
 
 ```bash
 # 离线可直接跑（不需要权重）：random / heuristic
-python -m gamer_rsi play --agent heuristic --seeds train:1000-1004 --run-id demo-0001
+python -m gamer_rsi play --agent heuristic --seeds train:1000-1004 --run-id demo-0001             # 期望退出码 0
 
 # 需要 MOD-03 后端的 agent：llm（PolicyAgent 全链路）/ fixed_prompt
-python -m gamer_rsi play --agent llm --model mock --seeds train:1000-1004 --run-id demo-0001
-python -m gamer_rsi play --agent llm --model qwen3-8b-q4 --seeds train:1000-1004 --run-id demo-0001
+# 注意（F10）：--model 会并入 config_hash——带/不带 --model、或换 --model 都必须换 run-id，否则退出码 2
+python -m gamer_rsi play --agent llm --model mock --seeds train:1000-1004 --run-id demo-0002        # 期望退出码 0
+python -m gamer_rsi play --agent llm --model qwen3-8b-q4 --seeds train:1000-1004 --run-id demo-0003 # 需权重，期望 0；否则 3
 ```
 
 拿不到模型时 `llm` / `fixed_prompt` 按 Spec §8.5 降级并**显眼标注**（打印 `degraded_n`），
