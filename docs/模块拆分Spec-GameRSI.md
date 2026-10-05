@@ -1,6 +1,6 @@
 # GameRSI 模块拆分 Spec
 
-> 版本：v1.4（2026-09-30 17:49，全部待裁决条目已裁决，见 §11/§12）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
+> 版本：v1.5（2026-10-05，M1 验收 §13.2 修复回填，见 §12）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
 > 上游：[项目计划-GameRSI.md](../项目计划-GameRSI.md) · [RSI调研纪要.md](../RSI调研纪要.md)
 > 游戏本体：`docs/prd/GAME-00/01/02`（规则、观测、动作的游戏侧事实来源，B-09）
 > 下游：`docs/prd/MOD-*.md`（每个模块的技术 PRD 必须与本文件一致；冲突时以本文件为准）
@@ -221,6 +221,12 @@ harness/
 
 - `artifact_hash = sha256(按路径排序的 (相对路径, 文件 sha256) 列表)`，由 MOD-09 计算（B-19）。
 - git tag 统一为 `harness-v{N}`（不建同名分支，B-22）。
+- **冻结基线模板不在 `harness/` 里**（R-6 / M1 验收 F12 + F22）：MOD-08 `fixed_prompt` 基线用的
+  模板是**随包冻结件** `gamer_rsi/agent/prompts/fixed_v1.md`（配置键 `agent.policy.fixed_prompt_path`），
+  任务说明同理取 `gamer_rsi/agent/prompts/task.md`（`agent.policy.task_path`）。二者**不参与**
+  MOD-07 的代际演化、也不进 `artifact_hash`——否则「基线不随 harness 漂移」（R-6）不成立。
+  基线 agent 由 MOD-04 `PolicyAgent(mode="baseline_fixed_prompt")` 承担（`tools_enabled=false`、
+  `harness_version` 恒 0），MOD-08 不再自带第二套固定提示词 agent（F22）。
 - **历史快照布局（B-29）**：`harness/versions/v{N}/` 是不可变快照，内容为 `version.json` + `diff.patch`（相对 parent）+ `prompts/` + `tools/` + `config.json`（全量拷贝）。候选与门禁记录不进 `harness/`，写到 `runs/<run_id>/generations/gen-{NNN}/{candidates/,patches/,gate.json}`。
 - `version.json.base_model` 为 MOD-10 预留：M0–M3 恒为 `null`，启用 LoRA 新基座后记录基座标识，并参与 `artifact_hash`（B-33）。
 
@@ -295,9 +301,12 @@ arm ∈ train | parent | cand-{id} | baseline-{random|heuristic|fixed_prompt} | 
 ```bash
 python -m gamer_rsi env selftest --seed 1              # M0：规则/确定性自检 + GAME golden 对拍
 python -m gamer_rsi play --agent llm|heuristic|random|fixed_prompt --seeds train:1000-1004 [--model ID]
-python -m gamer_rsi baseline --kind random|heuristic|fixed_prompt --basket H1 [--model ID]
+python -m gamer_rsi baseline --kind random|heuristic|fixed_prompt --basket H1 [--model ID] [--resume]
                        # --basket 与 --seeds 互斥；--basket 省略时按 --split 推导（train_window/test_full/H1）
                        # --model 仅 fixed_prompt 需要（冻结提示词 + 真实 LLM；拿不到即退出码 3）
+                       # fixed_prompt 走 MOD-04 PolicyAgent(mode="baseline_fixed_prompt")：**每决策点一次推理**
+                       # （M1 验收 F22）；--resume 按 episodes/<split>/ 已完成的局跳过重复 seed，
+                       # 且**不要求** state.json（那是 loop 的续跑语义，见下方统一约定）
 python -m gamer_rsi loop run --generations 3 --k 30 [--hitl] [--run-id ID] [--resume]
 python -m gamer_rsi loop status|smoke --run-id ID
 python -m gamer_rsi evolve approve|rollback --run-id ID --generation 3 [--reason STR]
@@ -311,6 +320,15 @@ python -m gamer_rsi guards check [--root PATH]         # MOD-09（P-20）
 ```
 
 统一约定：run 一律用 `--run-id ID` 指定，续跑用 `--resume` 开关；所有命令都支持 `--dry-run`。
+两类续跑语义（M1 验收 F18 后明确）：
+
+- **编排续跑**（`loop run`）由 `state.json` 决定（缺失即 `E_IO_STATE_MISSING`），语义归 MOD-06；
+- **测量续跑**（`baseline --resume`）只看 `episodes/<split>/` 里已完成的局：跳过重复 seed、只跑缺的，
+  且逐局增量落盘（`run_eval` 的 `on_result` 钩子），**不依赖** `state.json`。
+
+另：`--model/--mode/--seed/--timeout-ms/--k/--generations/--hitl/--log-level` 会并入 `config_hash`
+（FR-09-1），因此**同一 `--run-id` 只能承载覆盖集合完全相同的命令**，否则 `E_IO_RUN_CONFLICT`
+（退出码 2）——这正是 M1 验收 F10 的成因，各 README 的快速开始块按「族」分 run_id。
 
 ### 4.7 模块间调用签名表（唯一登记处，B-17）
 
@@ -489,9 +507,9 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 - 单局耗时 `t_ep ≈ D·t_d + t_reflect`：按实测 `t_d = 5.687 s` → 96 × 5.687 ≈ **546 s ≈ 9.1 分钟**（含重试 ≈ 9.7 分钟）；原估 5 分钟是 t_d=3 s 的产物。
 - 每代局数 `E_gen = K + (H + S) + C·(S + H)`：训练 K=30；parent 的 heldout H=40 与冒烟 S=5（与候选使用同一个冻结的记忆快照，所以每代都要重跑）；候选数 C=**2**（上限 3），每个候选也跑冒烟 S 与 heldout H。默认值下 E_gen = 30 + 45 + 2×45 = **165 局**；按实测 → 165 × 546 s ≈ **25.0 小时/代**（原估 14 h）。
 - M3 全程为 3 代，加上 gen-000 基线 40 局、fixed_prompt 基线 40 局、消融 2 臂 × 40 局、test 100 局：按实测线性放大 **≈ 114 小时（4.7 天）连续推理**（原估 60 h ≈ 2.5 天），含重试约 **121 小时（5.0 天）**。
-- **衍生硬约束**：`inference.total_timeout_ms` 由 8000 ms 回填为 **120000 ms**（原值 < 实测 p50，正常决策会被判 `E_LLM_TIMEOUT`）。`evals.seed_timeout_s` 同时按实测单局 ≈546 s 把默认值由 300 s 调到 **1800 s**，但**该超时目前并未被真正执行**：`SandboxRunner.run_episode()` 收下 `timeout_s` 后从不消费，`run_eval` 也没有 `future.result(timeout=…)`，所以长跑中一个卡住的 worker 会让整个 eval 永久挂起（M1 验收 F20）——§8.5「超时/崩溃造成的 dropped 局计为 lose 并单列」在实现落地前是空转的。
+- **衍生硬约束**：`inference.total_timeout_ms` 由 8000 ms 回填为 **120000 ms**（原值 < 实测 p50，正常决策会被判 `E_LLM_TIMEOUT`）。`evals.seed_timeout_s` 同时按实测单局 ≈546 s 把默认值由 300 s 调到 **1800 s**。**（2026-10-05 更新，M1 验收 F20 已修）** 该超时现在**真正被执行**，两道闸：① `SandboxRunner.run_episode()` 把 `timeout_s` 作为 deadline 传给决策循环，超预算的局收尾为 `dropped=true` + `E_EVAL_TIMEOUT`（计 n、按 lose 计）；② `run_eval` 以 `seed_timeout_s + 60 s` 为上限巡检，超限即放弃该 worker、记 dropped，并**换新线程池**继续跑剩余 seed（否则 `n_workers=1` 时一个卡死的 worker 会让其余 seed 永远排不上队）。残余风险：Python 无法杀死已运行的线程，被放弃的 worker 由 MOD-03 的调用级超时（`generate_timeout_ms`/`total_timeout_ms`）收尾。
 - **若要把 M3 实跑压回 2.5 天**：优先按排期 §6 下调 C（候选数 2→1）与 S（冒烟 5→2），或改 K=30→15；`H=40` 与 test=100 属统计功效底线，不建议动。
-- **⚠️ 口径警告（2026-10-04 实测，M1 验收 F22）**：`t_ep ≈ D·t_d` 只对**按决策点推理**的 agent 成立（MOD-04 `PolicyAgent` 一次 `play_decision()` 执行整个 plan）。MOD-08 的三个基线走的是 `SandboxRunner._agent_loop`，**每推进一个 env 步就问一次模型**：实测 `fixed_prompt` 的 env 步/决策点 = **3.1**，单局平均 **245 次推理**（决策点口径只需 ~79 次）。因此上表中**任何含基线的行**（gen-000 基线 40 局、fixed_prompt 基线 40 局、消融 2 臂）在 F22 修复前应按 **×3.1** 计算：`fixed_prompt` 40 局实测约 **12.3 h**（原估 4 h）。
+- **✅ 口径修正（2026-10-05，M1 验收 F22 已修）**：`t_ep ≈ D·t_d` 现在对**基线也成立**。修复前 MOD-08 的三个基线走 `SandboxRunner._agent_loop`，**每推进一个 env 步就问一次模型**（实测基线 `fixed_prompt` 的 env 步/决策点 = **3.1**，单局平均 **245 次推理**，决策点口径只需 ~79 次）；修复后基线改走 MOD-04 `PolicyAgent(mode="baseline_fixed_prompt")`，**每个决策点一次推理**，与演化 agent 粒度一致。受控实测（假客户端、真实沙箱）：`steps/calls = 2.5–2.7`、`calls/决策点 = 1.07`。因此上表中**含基线的行按 `D·t_d` 正常计算**，不再需要 ×3.1。
 
 **硬约束**：
 - `E_gen` 由 MOD-06 按上式统一计算，超出 `loop.max_episodes_per_generation`（默认 170）即拒绝启动。MOD-07 不再单独设成本上限。
@@ -625,3 +643,4 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 | v1.2 | 2026-09-30 | 新增 GAME 系列 PRD（游戏本体：GAME-00/01/02，见 [docs/README.md](README.md)）；登记 P-28..P-30：游戏本体改为前后端分离网页实现（MOD-11 待立项，MOD-01 转为纯 Python 等价移植）、动作集统一与新增、难度配置化与失心粒度上移 |
 | v1.3 | 2026-09-30 17:21 | 按 [MOD PRD 评审](reviews/2026-09-30-MOD-PRD评审.md) 修订：裁决 P-28/29/30 并结案 19 项待裁决条目；§4 全面对齐 GAME（obs-agent-1.0.0、决策计划、三层校验唯一口径、轨迹路径与 report 写入分工）；新增 §4.7 模块间调用签名表；§8 拆分为 8.1–8.6，新增「一局」定义与成本模型；INV-7 主指标改为 outcome/stages_cleared/hearts_left/battles_won；新登记 B-09..B-22 |
 | v1.4 | 2026-09-30 17:49 | 确认 v1.3 全部裁决；剩余 11 项待裁决全部确认并回填正文（B-23..B-33），另收录 3 项 PRD 内未登记决策（B-34..B-36）；新增 §1「不变量实施细则」；P-06、P-17 的登记文字按 v1.3 后的实际设计调整；§11.2 清零 |
+| v1.5 | 2026-10-05 | M1 验收 §13.2 的接口面回填（不改架构与模块边界）：§4.4 明确**冻结基线模板是包内工件**（`gamer_rsi/agent/prompts/fixed_v1.md` / `task.md`，不进 `harness/`、不进 `artifact_hash`；基线由 MOD-04 `PolicyAgent(mode="baseline_fixed_prompt")` 承担，F12/F22）；§4.6 补 `baseline --resume` 与「两类续跑语义」、并把「覆盖并入 `config_hash` → 同 run-id 只能同族」写成命令面约定（F10/F18）；§8.6 把 F20 的「`seed_timeout_s` 未被消费」改为「两道闸真被执行」，把 F22 的「基线成本 ×3.1」口径警告改为「已修，按 `D·t_d` 计算」 |

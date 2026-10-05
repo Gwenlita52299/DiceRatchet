@@ -220,7 +220,7 @@ def scan_all(root: Path) -> list[GuardFinding]: ...          # 供 CI 与 CLI �
 |---|---|---|
 | `env selftest` | `--seed INT` | 0/4 |
 | `play` | `--agent {llm,heuristic,random,fixed_prompt}` `--seeds SPEC` `--episodes N` `--model ID` `--dry-run` | 0/1/2/3 |
-| `baseline` | `--kind {random,heuristic,fixed_prompt}` `--split {train,heldout,test}` `--seeds SPEC` \| `--basket {H1,H2,H3,test_full,train_window}`（二者互斥，省略 basket 时按 split 推导）`--model ID` | 0/1/2/3 |
+| `baseline` | `--kind {random,heuristic,fixed_prompt}` `--split {train,heldout,test}` `--seeds SPEC` \| `--basket {H1,H2,H3,test_full,train_window}`（二者互斥，省略 basket 时按 split 推导）`--model ID` `--resume` | 0/1/2/3 |
 | `loop run` | `--generations N` `--k N` `--hitl/--no-hitl` `--run-id ID` `--resume` | 0/1/2/3/4/5 |
 | `loop status\|smoke` | `--run-id ID` | 0/1/2 |
 | `evolve approve\|rollback` | `--run-id ID` `--generation N` `--reason STR` | 0/2/4 |
@@ -240,6 +240,13 @@ def scan_all(root: Path) -> list[GuardFinding]: ...          # 供 CI 与 CLI �
 > （`resolve_run_dir`/`RunPaths`/`infra.io.validate`）。
 
 `--seeds SPEC` 语法：`train:1000-1004`、`heldout:2000-2099`、`9000,9001`、`file:seeds.txt`。`guards check` 已回填 Spec v1.3 §4.6（P-20）。
+
+`--resume` 的两类语义（2026-10-05，M1 验收 F18）：`loop run` 走 `resolve_run_dir(resume=True)`，
+要求 `state.json` 存在（缺失即 `E_IO_STATE_MISSING`），语义归 MOD-06；`baseline` 走
+`cli_init_run(require_state=False)`，只按 `episodes/<split>/` 已完成的局跳过重复 seed、只跑缺的
+（基线从不写 `state.json`）。另：`--model/--mode/--seed/--timeout-ms` 等覆盖会并入 `config_hash`
+（`config_overrides()`），因此同一 `--run-id` 只能承载覆盖集合完全相同的命令，否则
+`E_IO_RUN_CONFLICT`（退出码 2）——这是 M1 验收 F10 的成因。
 
 ### 6.5 事件与错误码注册表（Spec v1.3 §8.2/§8.3 的落地）
 

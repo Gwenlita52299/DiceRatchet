@@ -50,8 +50,11 @@ MOD-08 是 L3 测量层，**只读轨迹与报告，不参与决策**（Spec §1
 - **FR-08-04** `test`（9000–9099）默认锁定；仅 `test_unlock` 解锁，每里程碑 ≤1 次，落 `test_attestation.json`；结果**不得**进入代际决策路径。test 同时跑两种局：默认局（主结论）和完整局 medium × 10 关（次级「迁移」指标，Spec §8.6，只报告不判定）。
 - **FR-08-05 / 06** `guard_prompt_context()` 在 prompt/memory/reflection 三 destination 上断言文本不含 heldout/test seed 数值 token；`split != "train"` 的局任何 memory 写入与 reflection 落库被拦截；两者命中均抛 `E_EVAL_INV5_LEAK`。
 - **FR-08-07 / 08 / 09 / 10** `run_eval()` 支持 `n_workers≥1`，结果按 `seed` 升序归一化聚合且与串行逐字节一致；评估 `temperature=0.0`（训练沿用计划 §3 的 ≥0.7）；每 seed 默认 1 局（后端非确定时 `n_rep=3` 多数票）；超时或崩溃的局记为 `dropped`，**计入 n 并按 lose 计**（Spec v1.3 §8.5，防止幸存者偏差），另外单列 `n_dropped`；`dropped/n > 0.10` 时抛 `E_EVAL_INSUFFICIENT_N` 并标 `low_confidence=true`。`degraded` 局（模型不可用、由启发式代打）则从 n 中剔除，并单列 `degraded_n`。
+  - **单局超时真的执行**（2026-10-05，M1 验收 F20）：`evals.seed_timeout_s` 经 `run_eval` 传给 `EpisodeRunner.run_episode(timeout_s=…)`，`SandboxRunner` 把它变成决策循环的 deadline（超预算 → `dropped=true` + `E_EVAL_TIMEOUT`，计 n 按 lose 计）；`run_eval` 另设 `seed_timeout_s + 60 s` 的硬看门狗，超限即放弃该 worker、记 dropped，并**换新线程池**继续跑剩余 seed（否则 `n_workers=1` 时一个卡死的 worker 会让其余 seed 永远排不上队）。
+  - **逐局增量落盘 + 续跑**（2026-10-05，M1 验收 F18）：`run_eval(..., on_result=…)` 每完成一局即回调，`on_result` 缺省由 `run_baseline` 用来立刻写 `episodes/<split>/<episode_key>.jsonl`；`run_eval(..., resume_results=…)` 把 `--resume` 时已完成的局直接并入聚合。`baseline --resume` 按已落盘的局跳过重复 seed，**不要求** `state.json`（那是 MOD-06 编排续跑的语义）。
 - **FR-08-11 / 12** 三基线可用同一 `EvalSpec` 跑通并归档；归档不可覆盖：同名时写 `<kind>-<split>-<ts>.json` 并向 `registry.csv` 追加一行。
-- **FR-08-13 / 14** `heuristic` 复用 MOD-04 `agent.heuristic.heuristic_policy()`（Spec §4.7，禁止复制第二份启发式逻辑；它移植自 GAME `greedy_counter`，默认局上的参考通关率为 45.5%（n=200，seed 1–200，复现命令见 Spec §8.6））；`fixed_prompt` 固定 `harness_version=0`、`memory_enabled=false`、`reflection_enabled=false`。
+  - **溯源字段必须真实**（2026-10-05，M1 验收 F6）：归档与 `registry.csv` 记录真实短 sha（`git_short_sha()`）、真实 `seeds_hash`/`protocol_hash`、**实际加载的**模型 id 与后端名（没加载模型时 `none`，有客户端但未报后端时 `unknown`——不得照抄配置里的 `model_id`/`backend`）、seed 列表、`n_workers`、`seed_timeout_s`、`resumed_n`。
+- **FR-08-13 / 14** `heuristic` 复用 MOD-04 `agent.heuristic.heuristic_policy()`（Spec §4.7，禁止复制第二份启发式逻辑；它移植自 GAME `greedy_counter`，默认局上的参考通关率为 45.5%（n=200，seed 1–200，复现命令见 Spec §8.6））；`fixed_prompt` 由 MOD-04 `PolicyAgent(mode="baseline_fixed_prompt")` 承担，**恒 `harness_version=0`、`temperature=0`、关闭工具与记忆/反思**，**每个决策点一次推理**（2026-10-05，M1 验收 F22：此前 MOD-08 自带一套逐 env 步的固定提示词 agent，成本是决策点口径的 2.5–3.1 倍，且与演化 agent 推理粒度不一致）。
 - **FR-08-15 / 16** 计算 `win_rate`/`wilson_ci()`/`mean_stages_cleared`/`mean_hearts_left`/`mean_battles_won`/`mean_decisions`/`illegal_rate`/`fallback_rate`/`truncation_rate`，全部由整数累加器聚合后单次相除。`action_entropy_curve` 以**决策点序号**为横轴，长度 `T_max`（默认 120），样本数 < `min_support` 的位置写 `null`。截断局的 outcome 一律记为 lose。
 - **FR-08-17** 生成 `report.json` 并通过 `additionalProperties=false` schema 校验；扩展指标写入 `metrics/gen-XXX.ext.json`。
 - **FR-08-18** 计算 `win_rate_gap = train.win_rate - heldout.win_rate`，按 §8.2 有序规则产出 `verdict`。
@@ -115,9 +118,26 @@ def run_ablation(generation: int, *, arms: Sequence[AblationArm], run_id: str, s
 def attribution(full: Sequence[bool], arm: Sequence[bool], *, alpha: float = 0.05) -> str: ...
 # gamer_rsi/evals/baselines.py
 class BaselineAgent(Protocol):   # name: str; reset(seed) -> None; act(obs, legal) -> Action
-# RandomAgent: rng = np.random.default_rng(seed ^ 0x5EED) 在 legal_actions 上均匀采样；HeuristicAgent: 委托 MOD-04 agent.heuristic.heuristic_policy(obs, legal)；FixedPromptAgent: harness_version=0，memory/reflection 关闭，temperature=0
-def build_agent(kind: str, *, seed: int, harness_version: int = 0) -> BaselineAgent: ...
-def archive_baseline(kind: str, split: Split, metrics: SplitMetrics, *, run_id: str, model_hash: str, git_commit: str) -> Path: ...
+# RandomAgent: rng = np.random.default_rng(seed ^ 0x5EED) 在 legal_actions 上均匀采样；HeuristicAgent: 委托 MOD-04 agent.heuristic.heuristic_policy(obs, legal)
+# fixed_prompt **没有**自己的 agent 类：build_agent 返回 MOD-04 PolicyAgent(mode="baseline_fixed_prompt")
+#   （SandboxRunner 检测 play_decision 即走决策点循环）：harness_version 恒 0、temperature=0、
+#   tools_enabled=false、memory_top_k=0、reflection_max=0、冻结模板 agent.policy.fixed_prompt_path（F22）
+def fixed_prompt_policy_config(config: Any = None) -> PolicyConfig: ...   # 基线专用冻结策略配置
+def build_agent(kind: str, *, seed: int, harness_version: int = 0, client: Any = None,
+                config: Any = None, harness_dir: Path | str = Path("harness")) -> Any: ...
+    # fixed_prompt 无 client → E_LLM_UNAVAILABLE（fail-closed，绝不静默降级成启发式）
+def run_baseline(kind, *, split, basket, run_id, run_dir=None, config=None, protocol=None,
+                 client=None, model_hash="", git_commit="", n_workers=1, generation=0,
+                 episode_config=None, archive=True, write_summaries=True,
+                 harness_dir=Path("harness"), resume=False, model_backend="none",
+                 seed_timeout_s=None) -> ArmResult: ...   # resume=True 时跳过已完成的 seed（F18）
+def archive_baseline(kind: str, split: Split, metrics: SplitMetrics, *, run_id: str,
+                     model_hash: str, git_commit: str, seeds=None, seeds_hash=None,
+                     protocol_hash=None, model_backend="none", seed_timeout_s=None,
+                     resumed_n=0, ...) -> Path: ...   # 溯源字段（F6）
+def load_episode_results(run_dir, split, *, generation=None, harness_version=0, seeds=None,
+                         arm: str | Sequence[str] = "", exclude_arms=()) -> list[EpisodeResult]: ...
+    # arm/exclude_arms 是**真过滤**（F5）：episodes/<split>/ 下同时住着 parent/candidates/smoke/baseline-*
 ```
 
 `report.json` schema：唯一文件为 `schemas/generation_report.schema.json`（Spec v1.3 §4.5 / B-16，由 MOD-09 登记），本模块不再单独维护副本。与 v0.1 相比有以下变化：
@@ -262,6 +282,7 @@ eval:
 | `E_EVAL_SEED_OVERLAP` / `E_EVAL_TEST_LOCKED` | 三类区间相交 / 未解锁即跑 test | P0 / P1 | 拒绝启动（必须修 yaml）；test 直接拒绝执行 |
 | `E_EVAL_SEED_EXHAUSTED` | train 切块越界 | P1 | 停止演化，提示扩大 train 池或降低 K |
 | `E_EVAL_INSUFFICIENT_N` / `E_EVAL_BUDGET_EXCEEDED` | 有效 n 不足、`dropped/n > drop_rate_max`、软预算耗尽 | P1 / P2 | 出报告但 `low_confidence=true`，`verdict` 只能为 `null`/`regress`（保守，对齐 Spec §8.5） |
+| `E_EVAL_TIMEOUT` | 单局超过 `evals.seed_timeout_s`（协同预算到期，或硬看门狗放弃 worker） | P2 | 该局记 `dropped=true` + `error_code=E_EVAL_TIMEOUT`，**计 n 并按 lose 计**；整批超时进 `EvalResult.error_codes`（M1 验收 F20） |
 | `E_EVAL_NONDETERMINISTIC` | 重跑 sha256 不一致 | P2 | 转 `n_rep=3` 多数票；报告标注，禁 `real_gain` |
 | `E_EVAL_SCHEMA` | `report.json` 校验失败 | P1 | 不写正式路径，保留 `.invalid.json` 供排查（不得静默丢弃） |
 | `E_EVAL_BASELINE_MISSING` / `E_EVAL_ARM_NOT_ALLOWED` | `--baseline all` 但归档缺失 / 请求未知消融臂 | P2 | 报告 `baselines: null` 并标注对照缺失；拒绝该臂，其余继续 |
@@ -282,14 +303,20 @@ eval:
 - **T-10 verdict + McNemar 手算**：给定 4 组 `(gap, p_improve, p_regress, collapse_flag)` 参数化用例 → 则依次返回 `regress/overfit_suspect/real_gain/null`，且 `collapse_flag=true` 时永不返回 `real_gain`；给定 b=6,c=0 → 则双尾 p=0.03125、单尾 0.015625，b=5,c=0 → 则双尾 0.0625（不显著）。
 - **T-11 坍缩两点确认**：给定 C1 仅第 g 代触发 → 则 `collapse_flag=false`；第 g、g+1 连续触发 → 则 `true`。
 - **T-12 基线复用**：给定 `HeuristicAgent` 与 MOD-04 `heuristic_policy` 在同一 obs 上 → 则选同一动作（防逻辑分叉）。
+- **T-19 单局预算真的被消费**（M1 验收 F20）：给定 `timeout_s` 极小 → 当 `SandboxRunner.run_episode()`（逐 env 步循环与决策点循环各一例）→ 则结果 `dropped=true`、`error_code=E_EVAL_TIMEOUT`、`win=false`，且 `aggregate()` 计入 n 与 `n_dropped`；给定一个**无视预算**的 runner → 当 `run_eval()` → 则硬看门狗在 `seed_timeout_s + 60 s` 内放弃该 worker、记 dropped，**其余 seed 仍被新线程池接着跑**，且被放弃的池以 `shutdown(wait=False)` 收尾（`test_abandoned_pools_are_not_joined`）；给定预算充足 → 则不得误报 dropped。
+- **T-20 逐局增量落盘与续跑**（M1 验收 F18）：给定 `on_result` 钩子 → 当 `run_eval()` 跑 3 局 → 则回调顺序 = 完成顺序且每次落一个 `episodes/<split>/*.jsonl`；给定删掉一局后的 run → 当 `run_baseline(resume=True)` → 则只补那一局（`pending_seeds=(seed,)`）、`resumed_n=2`、聚合仍是 n=3；给定无剩余 seed → 则不重复归档。**两道一致性闸**：逐局摘要带 `protocol` 字段（`EPISODE_PROTOCOL`，`fixed_prompt` 再拼上冻结模板摘要 `baseline_protocol()`）；`--resume` 见到不同协议（含 F22 修复前的无字段旧局、或换过提示词模板）→ 抛 `E_EVAL_ARM_NOT_ALLOWED` 拒绝续跑，不允许把两套单局语义拼进同一份聚合。
+- **T-21 臂过滤**（M1 验收 F5）：给定同一 `episodes/<split>/` 下混装 `parent` / `candidates` / `baseline-*` → 当 `load_episode_results(arm=…/exclude_arms=…)` → 则按行内的 `arm` **真过滤**且结果带出 `arm`；给定 `eval report` / `eval diversity` → 则 `baseline-*` 三类臂不进入 held-out/train 分母。用例：`tests/unit/evals/test_evals_longrun_guards.py`。
+- **T-22 `fixed_prompt` 的推理粒度**（M1 验收 F22）：给定按 prompt 的 `legal_actions` 段组 plan 并显式 `end_turn` 的假客户端 → 当 `run_baseline("fixed_prompt", …)` 跑真实沙箱 → 则 `决策点数 ≤ 调用数 ≤ 1.25 × 决策点数` 且 `steps ≥ 2 × 调用数`（修复前是逐 env 步：`调用数 == env 步数`）。用例：`tests/integration/evals/test_m1_blocker_guards.py`。
+- **T-23 归档溯源**（M1 验收 F6）：给定 `archive_baseline(..., git_commit="abc123", seeds_hash=…, model_backend=…)` → 则归档 JSON 与 `registry.csv` 的对应字段逐一同值；`model_hash` 无客户端时为 `none`。用例：`tests/unit/evals/test_evals_baselines.py`。
 
 集成 `tests/integration/`：
 
-- **T-13 Golden 指标快照**：给定固定 5 seed 的 `episodes/*.jsonl` 夹具 → 当 `aggregate()` → 则与 `tests/golden/metrics/split_metrics.json` 逐字段一致。
+- **T-13 Golden 指标快照**：给定固定 5 seed 的 `episodes/*.jsonl` 夹具 → 当 `aggregate()` → 则与 `tests/golden/evals/split_metrics.json` 逐字段一致。
 - **T-14 报告 schema round-trip**：给定 `render_report()` 输出 → 则通过 `GenerationReport` 校验，且 `json.loads(json.dumps(report))` 与原对象等值（G5）。
 - **T-15 并行=串行**：给定同一 spec，`n_workers=1` vs `4` → 则 `SplitMetrics` 与 `report.json` 逐字节相同（G3）。
 - **T-16 蜜罐 + 消融端到端**：给定在 heldout 局注入含 `2043` 的假 prompt → 则 `audit leak` 命中且 `E_EVAL_INV5_LEAK` 被记录（G4）；给定 3 臂 × 40 seed 小规模夹具 → 则产出 `ablation/gen-XXX.json`，含 `delta_full`/`mcnemar_p`/`attribution`。
 - **T-17 可复现命令**：给定 §12 中每条命令 → 则在干净 run 上复制执行成功（G6）。
+- **T-18 PRD 测试路径守门**（M1 验收 F9 防退化）：给定 `docs/prd/*.md` 全文 → 当提取其中每个 `tests/...` 路径 token → 则每个 token 或文件/目录存在、或 glob 能命中、或为 `*`/`<...>`/`{...}` 命名模式（占位符不是可复制路径，故放宽）、或命中白名单（MOD-05/06/07 未实现模块的前瞻登记，条目在模块落地后自动失效）→ 否则失败并列出「文档:行号 + 写错的路径 + 建议候选」。用例：`tests/integration/test_prd_paths.py`（Spec §9 G6）。
 
 ## 12. 验收标准（DoD，对齐 Spec §9 质量门 G1–G6 与计划 §6 三项验收）
 
@@ -346,9 +373,18 @@ python -m gamer_rsi eval test --run-id <run_id> --unlock-once --attestation runs
 **实际交付（M1）**：`gamer_rsi/evals/`（`seeds.py` / `metrics.py` / `harness.py` / `baselines.py`）于
 **2026-10-04** 交付（提交 `bff9982`），并**提前**交付了原属 M3 的 `diversity.py` / `ablation.py` 与 test 单次解锁存证。
 本项目**未单独记工**；按提交时间窗折算 ≤ 2 人日（计划 M1 部分 4 人日），偏差 ≥ 50%。
-M1 验收的 **F1（三基线之一假入档）**、**F3（评估 run 上 `audit leak` 误判 critical）** 在本模块并已修，
-**F5（`eval report` 混臂聚合）仍未修**；真实 8B 跑批后三条 held-out 分数已入档（`runs/m1-real-h1/baselines/`），
-`format_robustness.json` 首次以 `m1_evidence=true` 通过。
+M1 验收的 **F1（三基线之一假入档）**、**F3（评估 run 上 `audit leak` 误判 critical）** 已在本模块修复；
+真实 8B 跑批后三条 held-out 分数已入档（`runs/m1-real-h1/baselines/`），`format_robustness.json` 首次以 `m1_evidence=true` 通过。
+
+**§13.2 前置项收口（2026-10-05，`<本轮提交>`）**：本模块的 5 项全部闭环 ——
+**F5**（`load_episode_results` 的 `arm`/`exclude_arms` 真过滤，基线臂不再进入代际分母，T-21）、
+**F6**（归档与 `registry.csv` 的溯源字段真实化，T-23）、
+**F18**（`on_result` 逐局增量落盘 + `baseline --resume`，T-20）、
+**F20**（`E_EVAL_TIMEOUT` + 协同预算 + 硬看门狗，T-19）、
+**F22**（`fixed_prompt` 改走 MOD-04 `PolicyAgent(mode="baseline_fixed_prompt")`，推理粒度回到决策点，T-22）。
+新增 `tests/unit/evals/test_evals_longrun_guards.py`（9 条）与 `tests/integration/evals/test_m1_blocker_guards.py`
+的 F22 用例；`tests/fixtures/evals/episodes/heldout/*.jsonl` 的 `arm` 由 `baseline-heuristic` 更正为
+`parent`（它们充当的是「某一代的 held-out 局」），**golden 指标快照逐字节不变**。
 
 ## 16. 开放问题
 
@@ -365,3 +401,4 @@ M1 验收的 **F1（三基线之一假入档）**、**F3（评估 run 上 `audit
 | v0.1 | 2026-09-30 | 首版 |
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：指标改为 INV-7 新口径（outcome/stages_cleared/hearts_left/battles_won），新增 fallback/truncation/degraded（P0-1）；步数上限改读 Spec §8.6，删除 `max_steps=60`（P0-2）；NFR-08-05 改由成本模型推出（P0-3）；`KIND_SPACE` 改为 16 个 GAME kind，熵曲线横轴改为决策点；修正 T-02 手算值；dropped 计为 lose（防幸存者偏差）；新增 FR-08-25 MOD-07 门面（P1-3/4）；report schema 改为引用唯一文件（P1-5/6）；heuristic 改为委托 `heuristic_policy`（P1-16）；事件改名为 `eval.*` |
 | v0.3 | 2026-09-30 17:49 | 报告精度回填为 Spec B-34；CLI 标注改为已回填 §4.6 |
+| v0.4 | 2026-10-05 | M1 验收 §13.2 收口：FR-08-07…10 增加「单局超时真的执行（F20）」与「逐局增量落盘 + 续跑（F18）」；FR-08-11/12 增加溯源字段要求（F6）；FR-08-13/14 明确 `fixed_prompt` 走 MOD-04 `PolicyAgent(mode="baseline_fixed_prompt")`、每决策点一次推理（F22）；§6 签名表更新（`fixed_prompt_policy_config`/`build_agent`/`run_baseline`/`archive_baseline`/`load_episode_results` 的 `arm` 过滤）；§10 增加 `E_EVAL_TIMEOUT`；§11 新增 T-19（超时）/T-20（续跑）/T-21（臂过滤）/T-22（推理粒度）/T-23（归档溯源）与 subagent 登记的 T-18（PRD 路径守门，F9）；§15 更新实际交付说明 |

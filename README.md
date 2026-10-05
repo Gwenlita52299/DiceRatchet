@@ -73,12 +73,15 @@ node scripts/golden-gen.js                               # 重新生成 golden �
 RSI 训练链路（Python，`gamer_rsi/`）已落地 MOD-01/02/03，命令面对齐 [Spec §4.6](docs/模块拆分Spec-GameRSI.md)：
 
 ```bash
-python -m gamer_rsi env selftest --seed 1
-python -m gamer_rsi inference probe --model mock --mode eval --seed 7 --run-id <id>
-python -m gamer_rsi inference bench --model mock --mode eval --seed 7 --n 50 --run-id <id>
-python -m gamer_rsi inference robustness --model mock --mode eval --seed 7 --n 200 --run-id <id>
-python -m gamer_rsi loop run --generations 3 --k 30 --hitl --run-id <id>   # MOD-06 未落地 → 退出码 2
-python -m gamer_rsi eval report --run-id <id> --split heldout --baseline all
+python -m gamer_rsi env selftest --seed 1                                       # 期望退出码 0
+# 注意（F10）：--model/--mode/--seed 会并入 config_hash——同一 run-id 只能跑覆盖集合相同的命令
+# 下面三条 inference 覆盖相同（--model mock --mode eval --seed 7），可共用 <inf_run_id>
+python -m gamer_rsi inference probe      --model mock --mode eval --seed 7         --run-id <inf_run_id>   # 期望退出码 0
+python -m gamer_rsi inference bench      --model mock --mode eval --seed 7 --n 50  --run-id <inf_run_id>   # 期望退出码 0
+python -m gamer_rsi inference robustness --model mock --mode eval --seed 7 --n 200 --run-id <inf_run_id>   # 期望退出码 0
+python -m gamer_rsi loop run --generations 3 --k 30 --hitl --run-id <loop_run_id>   # MOD-06 未落地 → 退出码 2
+# eval report 不带 --model/--mode/--seed（与 inference 族覆盖不同）→ 必须换一个 run-id
+python -m gamer_rsi eval report --run-id <eval_run_id> --split heldout --baseline all   # 期望退出码 0
 ```
 
 ## CI 门禁

@@ -393,6 +393,18 @@ class InferenceError(RuntimeError):
 Qwen3 思考模式烧光 token 预算、probe prompt 欠约束（详见 [M1 验收报告 §12](../reviews/2026-10-04-M1验收报告.md)），
 并回填 `resident_gb_est` / `weights_sha256` / `perf_budget`（Q-2 阶段一部分、Q-6）。
 
+**§13.2 收口（2026-10-05，`<本轮提交>`）**：
+
+- 主 prompt 快照 `tests/fixtures/inference/robustness_prompts.jsonl` 因 **F13**（`legal_actions`
+  超预算压缩）与 **F21/F23**（模板契约补齐）**显式重新生成**（G2：变更需审阅 diff）；生成器
+  `regen_robustness_prompts.py` 增加 `--template {decision,fixed_v1}` / `--out`，可产出**同源换模板**的
+  对照快照 `robustness_prompts_fixed_v1.jsonl`（F21 的「52% → ?」对照）。
+- `inference robustness` 的 `m1_evidence` 门是「真实后端 + 真实快照 + **阈值通过**」三者同时成立
+  （`metrics.py`），因此拿着 `--prompts` 跑冻结模板对照时它只作对照、不当 M1 证据；**eval 模式必须
+  同时给 `--seed`**（`inference.mode=eval` 要求显式 seed，INV-6/B-14），本轮实测踩到过这个。
+- 本轮最终的真实模型证据（主快照 n=200、冻结模板对照 n=200、三基线 n=40）见
+  [M1 验收报告 §14.6/§14.15](../reviews/2026-10-04-M1验收报告.md)。
+
 ## 16. 开放问题
 
 | # | 问题 | 影响 | 建议决策 |

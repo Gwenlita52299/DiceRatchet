@@ -150,7 +150,7 @@ for f in src/game/tests/golden/*.jsonl:
 
 # 差分对拍（nightly）
 node src/game/scripts/golden-gen.js --random-walk --n 200 --out /tmp/diff   # JS 侧随机合法动作
-pytest tests/golden/test_diff.py --dir /tmp/diff
+pytest tests/golden/test_random_walk.py
 ```
 
 移植顺序：`rng → digest → loader → state/slots/counter/risk → combat → map/shop/forge/event/relic → engine`。每一层都先用 GAME-01 §9 的测试向量单测通过，再进入下一层。
