@@ -209,7 +209,14 @@ eval:
   # ⚠️ 该超时**目前并未被真正执行**：SandboxRunner.run_episode() 收下 timeout_s 后从不消费，
   #    run_eval 也没有 future.result(timeout=…)——卡住的 worker 会让 eval 永久挂起（M1 验收 F20）。
   #    本值先按「实现落地后应有的预算」定；修 F20 时直接使用即可。
-  seed_timeout_s: 1800
+  # 2026-10-05（M1 验收 F24）：本值是**墙钟**预算（SandboxRunner 的 deadline 与 run_eval 的
+  # 硬看门狗都按它计时），而 n_workers 个局共享同一个模型实例（max_inflight=1），所以
+  #   单局墙钟 ≈ D × 每决策调用数 × t_d × n_workers
+  # 实测（`runs/m1-real-h1n40e/`，fixed_prompt，8B+MLX，n_workers=2）：D ≈ 185–207 决策点、
+  # 调用/决策点 ≈ 1.6–1.8、t_d p50 ≈ 7.9 s / p95 ≈ 10.8 s（实际 prompt 2500–3000 token）→
+  # 单局 ≈ 43 分钟模型时间、墙钟 ≈ 90 分钟。故按「最坏 300 决策点 × 1.8 调用 × 12 s × 2 worker
+  # ≈ 13000 s」取 14400 s（4 h）。原值 1800 s / 5400 s 分别把两批 n=40 判成 dropped。
+  seed_timeout_s: 14400
   min_support: 3
   drop_rate_max: 0.10
   budget_seconds: null

@@ -50,7 +50,8 @@ MOD-08 是 L3 测量层，**只读轨迹与报告，不参与决策**（Spec §1
 - **FR-08-04** `test`（9000–9099）默认锁定；仅 `test_unlock` 解锁，每里程碑 ≤1 次，落 `test_attestation.json`；结果**不得**进入代际决策路径。test 同时跑两种局：默认局（主结论）和完整局 medium × 10 关（次级「迁移」指标，Spec §8.6，只报告不判定）。
 - **FR-08-05 / 06** `guard_prompt_context()` 在 prompt/memory/reflection 三 destination 上断言文本不含 heldout/test seed 数值 token；`split != "train"` 的局任何 memory 写入与 reflection 落库被拦截；两者命中均抛 `E_EVAL_INV5_LEAK`。
 - **FR-08-07 / 08 / 09 / 10** `run_eval()` 支持 `n_workers≥1`，结果按 `seed` 升序归一化聚合且与串行逐字节一致；评估 `temperature=0.0`（训练沿用计划 §3 的 ≥0.7）；每 seed 默认 1 局（后端非确定时 `n_rep=3` 多数票）；超时或崩溃的局记为 `dropped`，**计入 n 并按 lose 计**（Spec v1.3 §8.5，防止幸存者偏差），另外单列 `n_dropped`；`dropped/n > 0.10` 时抛 `E_EVAL_INSUFFICIENT_N` 并标 `low_confidence=true`。`degraded` 局（模型不可用、由启发式代打）则从 n 中剔除，并单列 `degraded_n`。
-  - **单局超时真的执行**（2026-10-05，M1 验收 F20）：`evals.seed_timeout_s` 经 `run_eval` 传给 `EpisodeRunner.run_episode(timeout_s=…)`，`SandboxRunner` 把它变成决策循环的 deadline（超预算 → `dropped=true` + `E_EVAL_TIMEOUT`，计 n 按 lose 计）；`run_eval` 另设 `seed_timeout_s + 60 s` 的硬看门狗，超限即放弃该 worker、记 dropped，并**换新线程池**继续跑剩余 seed（否则 `n_workers=1` 时一个卡死的 worker 会让其余 seed 永远排不上队）。
+  - **单局超时真的执行**（2026-10-05，M1 验收 F20）：`evals.seed_timeout_s` 经 `run_eval` 传给 `EpisodeRunner.run_episode(timeout_s=…)`，`SandboxRunner` 把它变成决策循环的 deadline（超预算 → `dropped=true` + `E_EVAL_TIMEOUT`，计 n 按 lose 计）；`run_eval` 另设 `seed_timeout_s × n_rep + 60 s` 的硬看门狗，超限即放弃该 worker、记 dropped，并**换新线程池**继续跑剩余 seed（否则 `n_workers=1` 时一个卡死的 worker 会让其余 seed 永远排不上队）。
+  - **⚠️ 这是「墙钟」预算，与并发度耦合**（2026-10-05，M1 验收 F24）：`n_workers` 个局共享同一个模型实例（`max_inflight=1`），所以 **单局墙钟 ≈ D × 每决策调用数 × t_d × n_workers**；默认值已由 1800 s 经实测标定为 **14400 s**（实测 `D≈185–207 决策点 × 1.6–1.8 调用/决策点 × t_d p50 7.9 s / p95 10.8 s × 2 worker` → 单局墙钟 ≈90 min；取最坏 300 决策点的 ≈13000 s）。原值 1800 s 与 5400 s 分别把两批 n=40 判成 `E_EVAL_TIMEOUT`/dropped。**M2 建议改成计算量预算**（`max_llm_calls` 或等效推理秒数），别让预算随 `n_workers` 漂移。
   - **逐局增量落盘 + 续跑**（2026-10-05，M1 验收 F18）：`run_eval(..., on_result=…)` 每完成一局即回调，`on_result` 缺省由 `run_baseline` 用来立刻写 `episodes/<split>/<episode_key>.jsonl`；`run_eval(..., resume_results=…)` 把 `--resume` 时已完成的局直接并入聚合。`baseline --resume` 按已落盘的局跳过重复 seed，**不要求** `state.json`（那是 MOD-06 编排续跑的语义）。
 - **FR-08-11 / 12** 三基线可用同一 `EvalSpec` 跑通并归档；归档不可覆盖：同名时写 `<kind>-<split>-<ts>.json` 并向 `registry.csv` 追加一行。
   - **溯源字段必须真实**（2026-10-05，M1 验收 F6）：归档与 `registry.csv` 记录真实短 sha（`git_short_sha()`）、真实 `seeds_hash`/`protocol_hash`、**实际加载的**模型 id 与后端名（没加载模型时 `none`，有客户端但未报后端时 `unknown`——不得照抄配置里的 `model_id`/`backend`）、seed 列表、`n_workers`、`seed_timeout_s`、`resumed_n`。
@@ -264,7 +265,7 @@ eval:
   n_heldout: 40; n_test: 100; n_ablation: 40        # 依次为 H1 / test_full / H2 篮子
   bootstrap_B: 10000; alpha: 0.05; fdr_q: 0.10; gap_threshold: 0.15
   t_max: 120; n_workers: 2;   # 步数/决策上限读 Spec §8.6 的 episode.*，本模块不另设
-  seed_timeout_s: 300; min_support: 3; drop_rate_max: 0.10
+  seed_timeout_s: 5400; min_support: 3; drop_rate_max: 0.10   # 墙钟预算，按 F24 的公式定
   budget_seconds: null; entropy: {base: 2.0, kind_space: 16}
   collapse: {c1_slope_threshold: -0.010, c2_ratio_threshold: 0.60, c3_jsd_freeze: 0.010,
              c3_winrate_jump: 0.05, c4_seq_ratio: 0.50, confirm_generations: 2}

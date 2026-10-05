@@ -107,7 +107,7 @@ class EvalSpec:
     # ``SandboxRunner`` 在每个决策点前检查 deadline（协同预算），``run_eval`` 另有一道
     # 硬看门狗（``seed_timeout_s + _TIMEOUT_SLACK_S``）兜住「worker 完全不看预算」的情形。
     # 超时的局按 Spec §8.5 记 ``dropped=True`` + ``E_EVAL_TIMEOUT``，计 n 并按 lose 计。
-    seed_timeout_s: int = 1800
+    seed_timeout_s: int = 14400
     budget_seconds: int | None = None
     t_max: int = 120
     min_support: int = 3
@@ -671,7 +671,7 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
         run_id=run_id, generation=int(generation), harness_version=int(harness_version),
         split=split, basket=(basket if isinstance(basket, str) else seed_list),
         seeds=seed_list, agent_kind=arm, n_rep=int(n_rep), n_workers=int(n_workers),
-        seed_timeout_s=int(getattr(eval_cfg, "seed_timeout_s", 300)),
+        seed_timeout_s=int(getattr(eval_cfg, "seed_timeout_s", 14400)),
         budget_seconds=getattr(eval_cfg, "budget_seconds", None),
         t_max=int(getattr(eval_cfg, "t_max", 120)),
         min_support=int(getattr(eval_cfg, "min_support", 3)),

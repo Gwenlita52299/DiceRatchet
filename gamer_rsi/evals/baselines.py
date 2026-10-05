@@ -341,7 +341,7 @@ def run_baseline(kind: str, *, split: Split, basket: BasketId | Sequence[int],
             hint="显式给出 --seeds（如 --seeds train:1000-1004），或换用有 seed 的篮子"
                  "（heldout H1/H2/H3）；train_window 在第 0 代为空是预期行为")
     timeout_s = (int(seed_timeout_s) if seed_timeout_s is not None
-                 else int(getattr(eval_cfg, "seed_timeout_s", 1800)))
+                 else int(getattr(eval_cfg, "seed_timeout_s", 14400)))
     harness_version = 0 # 三基线一律钉在 harness v0（R-6：基线不可随 harness 漂移）
     arm_name = baseline_arm(kind)
     protocol_id = baseline_protocol(kind, config=config, harness_dir=harness_dir)

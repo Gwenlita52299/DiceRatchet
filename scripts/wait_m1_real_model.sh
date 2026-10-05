@@ -5,8 +5,8 @@
 #   退出条件：log 里出现「完成：」或跑批进程消失；随后打印摘要与关键工件路径。
 set -uo pipefail
 cd "$(dirname "$0")/.."
-LOG="${1:-logs/m1-real-final2.log}"
-RUN="${RUN_ID:-m1-real-h1n40d}"
+LOG="${1:-logs/m1-real-final3.log}"
+RUN="${RUN_ID:-m1-real-h1n40e}"
 
 while true; do
   if grep -q "^=== .*完成：" "$LOG" 2>/dev/null; then
@@ -39,7 +39,7 @@ for path in sorted((run / "baselines").glob("*.json")):
 PY
 echo
 echo "=== robustness 报告（如有）==="
-for r in m1-rob-refresh3 m1-f21-fixed3 m1-f21-smoke3; do
+for r in m1-rob-refresh4 m1-f21-fixed4 m1-f21-smoke4; do
   f="runs/$r/metrics/format_robustness.json"
   [ -f "$f" ] && "${PYTHON:-.venv/bin/python}" - "$f" <<'PY'
 import json, sys

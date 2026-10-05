@@ -479,7 +479,10 @@ class EvalConfig:
     t_max: int = 120
     n_workers: int = 2
     # 2026-10-04 实测回填（原 300 s）；注意该超时目前未被 SandboxRunner 执行，见 M1 验收报告 F20
-    seed_timeout_s: int = 1800
+    # 单局**墙钟**预算（F24）：必须 ≥ D×每决策调用数×t_d×n_workers。
+    # 实测（fixed_prompt，8B+MLX，2 worker）：D≈185-207、1.6-1.8 调用/决策点、t_d p50 7.9 s
+    # → 单局墙钟 ≈90 min；取最坏 300 决策点的 ≈13000 s 作为默认 14400 s。
+    seed_timeout_s: int = 14400
     min_support: int = 3
     drop_rate_max: float = 0.10
     budget_seconds: int | None = None
