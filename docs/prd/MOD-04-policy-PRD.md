@@ -334,6 +334,17 @@ M1 验收的 **F1（`fixed_prompt` 无真实 LLM 路径 + 降级静默）** 与 
   （`gamer_rsi/agent/prompts/{fixed_v1,task}.md`），不再依赖「静默回落」；`fixed_v1.md` 同时提升到与
   `harness/prompts/decision.md` **同级**的契约明确度（F21：同批 200 条真实 prompt 的首答通过率由 52% 提升）。
 
+**n=10 `fixed_prompt` 归档回填（2026-10-05）**：本模块承担的 `PolicyAgent(mode="baseline_fixed_prompt")`
+已在最终契约（F21/F23/F25 后的两条模板）上跑完 n=10 并归档（`runs/m1-real-h1n10b/`，seed 2000–2009）：
+10 局 `protocol` 完全一致（`episode-protocol-v2+153c4b3fa904c5b4`，即 `fixed_v1.md` 的摘要）、
+`n=10 / degraded_n=0 / n_dropped=0`、**`win_rate = 0/10 = 0.0%`（Wilson 95% CI [0.000, 0.278]）**。
+**基线的推理成本与质量实测**（[M1 验收报告 §14.19](../reviews/2026-10-04-M1验收报告.md)）：
+`t_d` p50 **7.46 s** / p95 10.13 s（prompt 约 1.9k–3.6k token）、`calls/决策点 = **1.62**`、
+schema 三级全失败率 **5.8%**、`policy.reject` **739 次**（`illegal_rate=0.3021`）、
+`fallback_decisions` **122 次**（`fallback_rate=0.181`）、`D` 均值 **97.1**（中位 69、max 245）、
+单局模型时间 **19.6 min**。**口径提示**：`E_LLM_SCHEMA_INVALID` 的语义重试与 `fallback` 仍占决策点的
+约 1/5，是基线偏弱（0/10）的直接成本来源；M2 若要用中等难度局或更小模型压成本，先看这两项是否随之下降。
+
 ## 16. 开放问题
 1. `legal_actions()` 的"噪声提示"具体指什么（错误候选占比？隐藏信息模糊化？）——影响 FR-04-8 误判率与 `E_ACTION_LEGAL_NOISE` 阈值，需 MOD-01/02 定稿。
 2. 轻罚通道最终形态：`SandboxEnv.reject()`（本 PRD 方案）vs MOD-06 代记账——需 MOD-02 owner 确认。
@@ -351,3 +362,4 @@ M1 验收的 **F1（`fixed_prompt` 无真实 LLM 路径 + 降级静默）** 与 
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：入口改为 `play_decision(env, obs, ctx)`，引入决策点与动作计划（P0-2/3、P1-1）；重试按决策计、换 seed，尝试耗尽走 fallback，本模块不判负（P0-5）；评估温度改为 0.0（P0-4）；schema 改为共用 `decision.schema.json`（P1-19）；启发式改为移植 GAME `greedy_counter`，与 MOD-08 基线共用（P0-1、P1-16）；MOD-02 调用名对齐 §4.7；修正围栏用例的自相矛盾 |
 | v0.3 | 2026-09-30 17:49 | P-01/P-03/P-05 裁决回填为 Spec B-23/B-26/B-27；其余临时决策标注改为已裁决的出处 |
 | v0.4 | 2026-10-05 | M1 验收 §13.2 收口：FR-04-3 增加「`{{legal_actions}}` 超预算时的压缩」（F13，观测段仍永不裁剪）；**FR-04-7 增加「模板必须写清逐动作校验的配对/不重复约束」（F23）**；§11 增加 U11；§15 补实际交付与 F12/F13/F21/F22 的收口说明 |
+| v0.5 | 2026-10-05 | **n=10 `fixed_prompt` 归档回填**：§15 补 `PolicyAgent(mode="baseline_fixed_prompt")` 在最终契约上的 n=10 结果（`runs/m1-real-h1n10b/`，seed 2000–2009，10 局 `protocol` 一致、`n=10 / degraded_n=0 / n_dropped=0`、**0/10 = 0.0%，CI [0.000, 0.278]**）与推理成本/质量实测（`t_d` p50 7.46 s、`calls/决策点` 1.62、schema 全失败率 5.8%、`policy.reject` 739、`fallback` 122、`D` 均值 97.1、单局模型时间 19.6 min）；数字来源 [M1 验收报告 §14.19](../reviews/2026-10-04-M1验收报告.md) |
