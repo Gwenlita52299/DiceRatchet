@@ -130,3 +130,26 @@ def test_archive_baseline_is_not_overwritable(tmp_path):
     assert json.loads(first.read_text(encoding="utf-8"))["kind"] == "heuristic"
     registry = (tmp_path / "baselines" / "registry.csv").read_text(encoding="utf-8")
     assert len(registry.strip().splitlines()) == 3 # 表头 + 两行
+
+
+def test_archive_reproduce_command_is_actually_reproducible(tmp_path):
+    """G6：归档里的 ``reproduce`` 必须能复制执行。
+
+    显式 seed 集合的 ``basket`` 是占位值 ``"explicit"``，**不是**合法篮子 id；早先把它拼进
+    ``--basket`` 会得到 `python -m gamer_rsi baseline ... --basket explicit`（跑不通，
+    M1 的 n=10 归档就是这样）。现在显式集合改写成 ``--seeds a,b,c``。
+    """
+    metrics = aggregate([make_result(2000, outcome="win")], basket="explicit")
+    path = archive_baseline("heuristic", "heldout", metrics, run_id="r-rep",
+                            model_hash="none", git_commit="abc", run_dir=tmp_path,
+                            seeds=[2000, 2001], ts="20260101T000000Z")
+    command = json.loads(path.read_text(encoding="utf-8"))["reproduce"]
+    assert command == ("python -m gamer_rsi baseline --kind heuristic --split heldout "
+                       "--seeds 2000,2001 --run-id r-rep")
+    assert "--basket explicit" not in command
+
+    named = aggregate([make_result(2000, outcome="win")], basket="H1")
+    path2 = archive_baseline("heuristic", "heldout", named, run_id="r-rep2",
+                             model_hash="none", git_commit="abc", run_dir=tmp_path,
+                             seeds=[2000], ts="20260101T000001Z")
+    assert "--basket H1" in json.loads(path2.read_text(encoding="utf-8"))["reproduce"]

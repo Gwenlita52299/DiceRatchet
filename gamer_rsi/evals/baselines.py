@@ -52,6 +52,9 @@ BASELINE_KINDS: tuple[str, ...] = ("random", "heuristic", "fixed_prompt")
 #: ``harness/`` 根（fixed_prompt 的 ``PolicyAgent`` 需要它定位模板/工具；工具对基线关闭）。
 DEFAULT_HARNESS_DIR: Path = Path("harness")
 
+#: 合法的 ``--basket`` 取值（Spec §4.6 / MOD-09 §6.4）；其余（含 ``explicit``）一律走 ``--seeds``。
+_BASKET_IDS: frozenset[str] = frozenset({"H1", "H2", "H3", "test_full", "train_window"})
+
 #: ``model_hash`` 在「本次基线根本没加载任何模型」时的取值（F6：不假装记录了模型）。
 NO_MODEL: str = "none"
 
@@ -254,12 +257,29 @@ def archive_baseline(kind: str, split: Split, metrics: SplitMetrics, *,
         "seed_timeout_s": (None if seed_timeout_s is None else int(seed_timeout_s)),
         "resumed_n": int(resumed_n),
         "degraded_reason": degraded_reason,
-        "reproduce": f"python -m gamer_rsi baseline --kind {kind} --split {split} "
-                     f"--basket {metrics.basket} --run-id {run_id}",
+        "reproduce": _reproduce_command(kind=kind, split=split,
+                                        basket=str(metrics.basket), seeds=seed_list,
+                                        run_id=run_id),
     }
     write_json_atomic(path, payload)
     _append_registry(base_dir / "registry.csv", payload, path)
     return path
+
+
+def _reproduce_command(*, kind: str, split: Split, basket: str, seeds: Sequence[int],
+                       run_id: str) -> str:
+    """归档里的可复制命令（G6）。
+
+    ``basket="explicit"`` 是「显式给 seed 集合」时的占位值，**不是**合法篮子 id；早先直接把
+    它拼进 ``--basket`` 会得到一条跑不通的命令（M1 的 n=10 归档就是这样）。因此显式 seed
+    集合改写成 ``--seeds a,b,c``。
+    """
+    if basket in _BASKET_IDS:
+        selector = f"--basket {basket}"
+    else:
+        selector = "--seeds " + ",".join(str(int(s)) for s in sorted(seeds))
+    return (f"python -m gamer_rsi baseline --kind {kind} --split {split} "
+            f"{selector} --run-id {run_id}")
 
 
 def _append_registry(path: Path, payload: Mapping[str, Any], archive_path: Path) -> None:

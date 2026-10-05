@@ -204,11 +204,10 @@ eval:
   t_max: 120
   n_workers: 2
   # 2026-10-04（M1 实测回填）：原 300 s 是按「t_d ≈ 3 s × 决策点 96」定的（≈288 s，本就贴边）；
+  #（F20 已于 2026-10-05 修复：该预算现在真的被执行——SandboxRunner 的 deadline +
+  #  run_eval 的硬看门狗，超时记 dropped + E_EVAL_TIMEOUT，计 n 按 lose 计。）
   # 真实 8B 实测 t_d p50 = 5.69 s → 单局 ≈546 s，含重试与晚局长决策可到 ~950 s。
   # 取 1800 s ≈ 实测单局的 2 倍余量（依据见 M1 验收报告 §12）。
-  # ⚠️ 该超时**目前并未被真正执行**：SandboxRunner.run_episode() 收下 timeout_s 后从不消费，
-  #    run_eval 也没有 future.result(timeout=…)——卡住的 worker 会让 eval 永久挂起（M1 验收 F20）。
-  #    本值先按「实现落地后应有的预算」定；修 F20 时直接使用即可。
   # 2026-10-05（M1 验收 F24）：本值是**墙钟**预算（SandboxRunner 的 deadline 与 run_eval 的
   # 硬看门狗都按它计时），而 n_workers 个局共享同一个模型实例（max_inflight=1），所以
   #   单局墙钟 ≈ D × 每决策调用数 × t_d × n_workers
