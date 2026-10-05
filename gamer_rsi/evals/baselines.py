@@ -41,7 +41,8 @@ from . import seeds as seeds_mod
 
 __all__ = ["BaselineAgent", "RandomAgent", "HeuristicAgent", "fixed_prompt_policy_config",
            "build_agent", "archive_baseline", "run_baseline", "BASELINE_KINDS",
-           "baselines_dir", "RANDOM_RNG_SALT", "baseline_arm", "DEFAULT_HARNESS_DIR"]
+           "baselines_dir", "RANDOM_RNG_SALT", "baseline_arm", "baseline_protocol",
+           "DEFAULT_HARNESS_DIR"]
 
 #: 固定随机盐（PRD §6：``rng = np.random.default_rng(seed ^ 0x5EED)``）
 RANDOM_RNG_SALT: int = 0x5EED
@@ -74,6 +75,30 @@ class BaselineAgent(Protocol):
 def baseline_arm(kind: str) -> str:
     """基线在 ``episodes/<split>/*.jsonl`` 里的 ``arm`` 标签（F5 的过滤键）。"""
     return f"baseline-{kind}"
+
+
+def baseline_protocol(kind: str, *, config: Any = None,
+                      harness_dir: Path | str = DEFAULT_HARNESS_DIR) -> str:
+    """基线的「测量协议」标识：``EPISODE_PROTOCOL`` + **冻结提示词模板的摘要**。
+
+    F18 的续跑一致性闸要拦住的不只是「逐 env 步 vs 逐决策点」这种代码级语义变化，还包括
+    **模板被改过**（F23 一轮里就改过三次）：同一份 run 的局必须来自同一份提示词，
+    否则「基线分数」是一锅两套提示词的混合物。
+    """
+    from gamer_rsi.agent.prompts.assembler import FIXED_TEMPLATE_PATH, resolve_path, sha256_of
+
+    if kind != "fixed_prompt":
+        return EPISODE_PROTOCOL
+    policy = getattr(getattr(config, "agent", None), "policy", None)
+    configured = str(getattr(policy, "fixed_prompt_path", "") or "") if policy else ""
+    path = resolve_path(configured, harness_dir=Path(harness_dir)) if configured else None
+    if path is None or not path.is_file():
+        path = FIXED_TEMPLATE_PATH
+    try:
+        digest = sha256_of(Path(path).read_text(encoding="utf-8"))[7:23]
+    except OSError: # pragma: no cover - 模板不可读时退化为协议本身
+        return EPISODE_PROTOCOL
+    return f"{EPISODE_PROTOCOL}+{digest}"
 
 
 class RandomAgent:
@@ -319,6 +344,7 @@ def run_baseline(kind: str, *, split: Split, basket: BasketId | Sequence[int],
                  else int(getattr(eval_cfg, "seed_timeout_s", 1800)))
     harness_version = 0 # 三基线一律钉在 harness v0（R-6：基线不可随 harness 漂移）
     arm_name = baseline_arm(kind)
+    protocol_id = baseline_protocol(kind, config=config, harness_dir=harness_dir)
 
     prior: list[Any] = []
     pending = seed_list
@@ -327,12 +353,13 @@ def run_baseline(kind: str, *, split: Split, basket: BasketId | Sequence[int],
         # 的「逐 env 步推理」局与修复后的「逐决策点」局拼进同一份聚合（F18 的隐患）。
         protocols = read_episode_protocols(run_dir, split, generation=int(generation),
                                           arm=arm_name)
-        stale = sorted(p for p in protocols if p != EPISODE_PROTOCOL)
+        stale = sorted(p for p in protocols if p != protocol_id)
         if stale:
             raise InfraError(
                 E.E_EVAL_ARM_NOT_ALLOWED,
-                f"--resume 的 run 里已有不同测量协议的局：{stale}（当前 {EPISODE_PROTOCOL}）",
-                hint="换一个 --run-id 重跑，或删除那些局后再续跑；两套单局语义不可混算")
+                f"--resume 的 run 里已有不同测量协议的局：{stale}（当前 {protocol_id}）",
+                hint="换一个 --run-id 重跑，或删除那些局后再续跑；"
+                     "两套单局语义（含提示词模板不同）不可混算")
         prior = load_episode_results(run_dir, split, generation=int(generation),
                                      arm=arm_name, seeds=seed_list)
         done = {r.seed for r in prior}
@@ -354,7 +381,8 @@ def run_baseline(kind: str, *, split: Split, basket: BasketId | Sequence[int],
         if run_dir is None or not write_summaries:
             return
         written.extend(write_episode_summaries(run_dir, [result], split=split,
-                                               generation=int(generation), arm=arm_name))
+                                               generation=int(generation), arm=arm_name,
+                                               protocol=protocol_id))
 
     factory = _baseline_factory(kind, client=client, harness_version=harness_version,
                                 config=config, harness_dir=harness_dir)

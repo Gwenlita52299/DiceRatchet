@@ -195,6 +195,14 @@ def test_resume_with_nothing_left_does_not_archive_again(tmp_path):
 # F5：arm 真过滤
 # =====================================================================
 
+def _with_fixed_path(cfg, path) -> object:
+    from dataclasses import replace
+
+    return replace(cfg, agent=replace(cfg.agent,
+                                       policy=replace(cfg.agent.policy,
+                                                      fixed_prompt_path=str(path))))
+
+
 def _write(tmp_path: Path, arm: str, seeds: list[int]) -> None:
     write_episode_summaries(tmp_path, [_result(s, arm=arm) for s in seeds],
                             split="heldout", generation=0, arm=arm)
@@ -305,12 +313,70 @@ def test_resume_refuses_to_mix_measurement_protocols(tmp_path):
     path.write_text(path.read_text(encoding="utf-8").replace(
         '"protocol": "episode-protocol-v2"', '"protocol": "episode-protocol-v1"'),
         encoding="utf-8")
+
+
+def test_baseline_protocol_binds_the_frozen_template(tmp_path):
+    """F23：固定提示词模板换过就不许续跑（一轮里改过三次模板，这条闸拦的就是它）。"""
+    from gamer_rsi.evals.baselines import baseline_protocol
+
+    cfg = load_config(config_dir=_CONFIG_DIR)
+    frozen = tmp_path / "frozen.md"
+    frozen.write_text("观测:\n{{observation}}\n记忆:\n{{memory}}\n", encoding="utf-8")
+    other = tmp_path / "other.md"
+    other.write_text("观测:\n{{observation}}\n记忆:\n{{memory}}\n（改过）\n", encoding="utf-8")
+    assert baseline_protocol("heuristic", config=cfg) == "episode-protocol-v2"
+    base = baseline_protocol("fixed_prompt", config=cfg)
+    assert base.startswith("episode-protocol-v2+")
+    a = baseline_protocol("fixed_prompt", config=_with_fixed_path(cfg, frozen))
+    b = baseline_protocol("fixed_prompt", config=_with_fixed_path(cfg, other))
+    assert a != b and a != base
+
+
+def test_resume_refuses_when_the_frozen_template_changed(tmp_path):
+    """已落盘的局用了模板 A，现在换成模板 B 再 --resume → 必须拒绝（不许混算）。"""
+    from gamer_rsi.agent.prompts.assembler import sha256_of
+
+    cfg = load_config(config_dir=_CONFIG_DIR)
+    a = tmp_path / "a.md"
+    a.write_text("观测:\n{{observation}}\n记忆:\n{{memory}}\n", encoding="utf-8")
+    b = tmp_path / "b.md"
+    b.write_text("观测:\n{{observation}}\n记忆:\n{{memory}}\n（改过）\n", encoding="utf-8")
+    proto_a = "episode-protocol-v2+" + sha256_of(a.read_text(encoding="utf-8"))[7:23]
+    _write_protocol_row(tmp_path, 2000, "baseline-fixed_prompt", proto_a)
     with pytest.raises(InfraError) as exc:
-        run_baseline("heuristic", split="train", basket=(1000,), run_id="r-f18c",
-                     run_dir=tmp_path, config=cfg, protocol=None, archive=False,
-                     resume=True)
+        run_baseline("fixed_prompt", split="heldout", basket=(2000,), run_id="r-f18e",
+                     run_dir=tmp_path, config=_with_fixed_path(cfg, b), protocol=None,
+                     client=_NeverCalledClient(), archive=False, resume=True)
     assert exc.value.code == E.E_EVAL_ARM_NOT_ALLOWED
     assert "测量协议" in str(exc.value)
+
+
+class _NeverCalledClient:
+    """模板闸必须在任何推理之前触发。"""
+
+    model_id = "never"
+
+    def generate_json(self, *a, **kw):  # pragma: no cover - 不该被调用
+        raise AssertionError("测量协议不一致时不应发生任何推理")
+
+
+def _write_protocol_row(tmp_path: Path, seed: int, arm: str, protocol: str) -> None:
+    root = tmp_path / "episodes" / "heldout"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / f"e-{seed:06d}-g000-{arm}.jsonl").write_text(
+        json.dumps({"type": "episode_end", "seed": seed, "arm": arm, "generation": 0,
+                    "protocol": protocol}) + "\n", encoding="utf-8")
+
+
+def test_same_protocol_rows_are_accepted(tmp_path):
+    """反向：协议一致时必须放行（闸不能空转）。"""
+    from gamer_rsi.evals.harness import EPISODE_PROTOCOL
+
+    _write_protocol_row(tmp_path, 2000, "baseline-fixed_prompt", EPISODE_PROTOCOL)
+    from gamer_rsi.evals.harness import read_episode_protocols
+
+    assert read_episode_protocols(tmp_path, "heldout", generation=0,
+                                  arm="baseline-fixed_prompt") == {EPISODE_PROTOCOL}
 
 
 def test_resume_accepts_same_protocol_and_skips_everything(tmp_path):

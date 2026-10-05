@@ -923,12 +923,16 @@ def utc_now() -> str:
 
 
 def write_episode_summaries(run_dir: Path | str, results: Sequence[EpisodeResult], *,
-                            split: Split, generation: int, arm: str) -> list[Path]:
+                            split: Split, generation: int, arm: str,
+                            protocol: str | None = None) -> list[Path]:
     """把逐局摘要写成 ``episodes/<split>/e-{seed}-g{gen}-{arm}.jsonl``（Spec §4.5）。
 
     一行 ``{"type":"episode_end", ...}``：主指标与 ``decision_kinds`` 都在其中，
     因此 ``eval report`` / ``eval diversity`` 可以从 run 工件**重新聚合**（G3/T-13）。
     真实轨迹的逐步行仍归 MOD-06；本函数只保证测量层可自洽复算。
+
+    ``protocol``：本局的「测量协议」标识（缺省 = ``EPISODE_PROTOCOL``）。基线会把它细化成
+    「协议 + 冻结模板摘要」，使 ``--resume`` 连**模板换过**这件事也拦得住（F18/F23）。
     """
     from gamer_rsi.infra.io import write_bytes_atomic
 
@@ -941,7 +945,8 @@ def write_episode_summaries(run_dir: Path | str, results: Sequence[EpisodeResult
         # 行里的 ``arm`` 是 ``load_episode_results`` 唯一的过滤依据（F5），必须一致。
         row = {"type": "episode_end", "episode_key": key,
                "generation": int(generation), **result.as_dict(),
-               "arm": arm or result.arm, "protocol": EPISODE_PROTOCOL}
+               "arm": arm or result.arm,
+               "protocol": protocol or EPISODE_PROTOCOL}
         payload = json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n"
         path = root / f"{key}.jsonl"
         write_bytes_atomic(path, payload.encode("utf-8"))

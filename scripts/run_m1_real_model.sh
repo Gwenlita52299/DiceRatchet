@@ -17,13 +17,13 @@
 #
 # 断点续跑：第 4 步中断后，直接重跑
 #   .venv/bin/python -m gamer_rsi baseline --kind fixed_prompt --split heldout \
-#       --basket H1 --run-id m1-real-h1n40c --resume
+#       --basket H1 --run-id m1-real-h1n40d --resume
 # （逐局增量落盘见 F18；已完成的 seed 会跳过，未完成的接着跑。）
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
 PY="${PYTHON:-.venv/bin/python}"
-RUN="${RUN_ID:-m1-real-h1n40c}"
+RUN="${RUN_ID:-m1-real-h1n40d}"
 mkdir -p logs
 
 say() { echo; echo "=== $(date -u +%FT%TZ) $* ==="; }
@@ -36,7 +36,7 @@ pmset -g | grep -i "sleep" | head -3 || true
 say "1/7 冻结模板 fixed_v1 冒烟（n=5，eval 模式）"
 "$PY" -m gamer_rsi inference robustness --model qwen3-8b-q4 --n 5 --mode eval --seed 7 \
     --prompts tests/fixtures/inference/robustness_prompts_fixed_v1.jsonl \
-    --run-id m1-f21-smoke2
+    --run-id m1-f21-smoke3
 
 say "2/7 random 基线 H1（n=40）→ run=$RUN"
 "$PY" -m gamer_rsi baseline --kind random --split heldout --basket H1 --run-id "$RUN"
@@ -49,12 +49,12 @@ say "4/7 fixed_prompt 基线 H1（n=40，真实 8B，长跑）→ run=$RUN"
 
 say "5/7 decision.md 主快照 robustness（n=200，eval 模式；刷新判据 2 证据）"
 "$PY" -m gamer_rsi inference robustness --model qwen3-8b-q4 --n 200 --mode eval --seed 7 \
-    --run-id m1-rob-refresh2
+    --run-id m1-rob-refresh3
 
 say "6/7 fixed_v1 冻结模板 robustness（n=200，eval 模式；F21 对照）"
 "$PY" -m gamer_rsi inference robustness --model qwen3-8b-q4 --n 200 --mode eval --seed 7 \
     --prompts tests/fixtures/inference/robustness_prompts_fixed_v1.jsonl \
-    --run-id m1-f21-fixed2
+    --run-id m1-f21-fixed3
 
 say "7/7 泄漏审计 + 代际报告（G4 / 工件落盘）"
 "$PY" -m gamer_rsi audit leak --run-id "$RUN"

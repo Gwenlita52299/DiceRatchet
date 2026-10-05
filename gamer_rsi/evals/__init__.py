@@ -19,7 +19,7 @@ from __future__ import annotations
 from .ablation import (AblationArm, AblationReport, ablation_path, attribution,
                        combine_attribution, run_ablation)
 from .baselines import (BASELINE_KINDS, BaselineAgent, HeuristicAgent, RandomAgent,
-                        archive_baseline, baseline_arm, build_agent,
+                        archive_baseline, baseline_arm, baseline_protocol, build_agent,
                         fixed_prompt_policy_config, run_baseline)
 from .diversity import (CollapseConfig, collapse_check, distinct_sequence_ratio,
                         entropy_slope, js_divergence, kind_distribution, slot_distribution)
@@ -65,6 +65,7 @@ __all__ = [
     "write_ext_metrics", "write_plots_data", "generation_report_path", "report_sha_path",
     # baselines
     "BASELINE_KINDS", "BaselineAgent", "RandomAgent", "HeuristicAgent", "baseline_arm",
+    "baseline_protocol",
     "build_agent", "fixed_prompt_policy_config", "archive_baseline", "run_baseline",
     # ablation
     "AblationArm", "AblationReport", "run_ablation", "attribution", "combine_attribution",
