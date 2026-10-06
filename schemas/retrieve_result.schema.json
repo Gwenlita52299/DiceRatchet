@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamersi.local/schemas/retrieve_result.schema.json",
+  "title": "RetrieveResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "entries",
+    "scores",
+    "tokens",
+    "dropped",
+    "conflict_groups",
+    "elapsed_ms",
+    "text",
+    "obs_digest",
+    "n_candidates"
+  ],
+  "properties": {
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entry_id",
+          "score",
+          "tokens",
+          "rank",
+          "text"
+        ],
+        "properties": {
+          "entry_id": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          },
+          "tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rank": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "text": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "polarity": {
+            "enum": [
+              "do",
+              "avoid"
+            ]
+          },
+          "harness_version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "situation_key": {
+            "type": "string"
+          },
+          "conflict_group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "action_hint": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "scores": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      }
+    },
+    "tokens": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "dropped": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "entry_id",
+          "reason"
+        ],
+        "properties": {
+          "entry_id": {
+            "type": "string"
+          },
+          "reason": {
+            "enum": [
+              "below_min_score",
+              "token_budget_exceeded",
+              "top_k_exceeded",
+              "conflict_suppressed",
+              "inv5_leak",
+              "stale_harness",
+              "expired",
+              "not_active"
+            ]
+          },
+          "score": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "conflict_groups": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "elapsed_ms": {
+      "type": "number",
+      "minimum": 0
+    },
+    "text": {
+      "type": "string"
+    },
+    "obs_digest": {
+      "type": "string"
+    },
+    "n_candidates": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

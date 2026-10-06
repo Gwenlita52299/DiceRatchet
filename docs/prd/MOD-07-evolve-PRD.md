@@ -219,8 +219,8 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
 | # | 条件 | 表达式 | 不满足时 reason / 错误码 |
 |---|---|---|---|
 | C0 | 前置完备 | `report.heldout.n >= cfg.evolve.min_heldout_n` 且关键字段非 `null` | `C0:incomplete_report` / `E_EVOLVE_JUDGE_FAILED` |
-| C1 | 主指标不降 | `report.win_rate >= parent.win_rate - cfg.evolve.win_rate_tol`（`tol=0.0`，不允许下降） | `C1:win_rate {v}<{p}` / `E_EVOLVE_NO_GAIN` |
-| C2 | 至少一指标显著提升 | `paired.significant == True and paired.direction == "up"`，`metric ∈ {win_rate, mean_stages_cleared, mean_hearts_left}`，方法与口径全部由 MOD-08 `compare_paired` 决定（胜率用 McNemar，连续量用配对 bootstrap B=10000） | `C2:no_significant_gain` / `E_EVOLVE_NO_GAIN` |
+| C1 | 主指标不降 | `report.win_rate >= parent.win_rate - cfg.evolve.win_rate_tol`（**`tol=0.05`**，2026-10-06 D-3 由 0.0 上调；n=40 的 win_rate 粒度是 1/40=0.025，tol<0.025 等于"少赢 1 局即拒"，会拒掉约一半真正等价的候选） | `C1:win_rate {v}<{p}` / `E_EVOLVE_NO_GAIN` |
+| C2 | 至少一指标显著提升 | `paired.significant == True and paired.direction == "up"`，`metric ∈ {win_rate, mean_stages_cleared, mean_hearts_left}`，方法与口径全部由 MOD-08 `compare_paired` 决定（胜率用 McNemar，连续量用配对 bootstrap B=10000）。**2026-10-06 D-3：H=40 下 `win_rate` 只能判 ≥15pp（见 MOD-08 §8.2），M3 的 4–5pp 结论必须由 `mean_stages_cleared` 承担** | `C2:no_significant_gain` / `E_EVOLVE_NO_GAIN` |
 | C3 | 增益真实性 | `train.win_rate - heldout.win_rate <= cfg.evolve.gap_threshold`（0.15，对齐 Spec §4.5 `gap_threshold`） | `C3:gap {gap}>{thr}` / `E_EVOLVE_OVERFIT_SUSPECT` |
 | C4 | 无坍缩 | `diversity.collapse_flag == False and diversity.entropy_slope >= cfg.evolve.min_entropy_slope`（−0.01；Spec 示例 −0.004 属通过区间） | `C4:collapse` / `E_EVOLVE_COLLAPSE` |
 | C5 | 合法性与健壮性 | `illegal_rate ≤ 0.05` 且 `fallback_rate ≤ 0.10` 且 `truncation_rate ≤ 0.05`（Spec v1.3 P-25 结案；不再用回合数，因为 GAME 的回合上限针对单场战斗而非整局） | `C5:illegal/fallback/truncation` / `E_EVOLVE_ILLEGAL_RATE` |
@@ -245,7 +245,7 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | `evolve.max_diff_lines` / `evolve.max_diff_chars` | int | 40 / 4000 | 单候选改动面硬上限 |
 | `evolve.smoke_n` | int | 5 | 冒烟局数，取本代训练块末尾（FR-07-6）。v0.1 的 `train_eval_seeds` 已删除：`train.win_rate` 按 MOD-08 的滚动窗口口径，1030–1069 与第 2～3 代训练块重叠 |
 | `evolve.heldout_seeds` | str | 由 MOD-09 注册表注入 | heldout 评估组（40 局），**不得写入任何 prompt** |
-| `evolve.min_heldout_n` / `evolve.win_rate_tol` | int / float | 20 / 0.0 | C0 门槛 / C1 允许下降幅度 |
+| `evolve.min_heldout_n` / `evolve.win_rate_tol` | int / float | 20 / **0.05** | C0 门槛 / C1 允许下降幅度（2026-10-06 D-3：0.0 → 0.05） |
 | `evolve.alpha` | float | 0.05 | C2 显著性水平（方法归 MOD-08） |
 | `evolve.gap_threshold` / `evolve.min_entropy_slope` | float | 0.15 / −0.01 | C3 `win_rate_gap` 阈值 / C4 熵斜率下限 |
 | `evolve.max_illegal_rate` / `evolve.max_fallback_rate` / `evolve.max_truncation_rate` | float | 0.05 / 0.10 / 0.05 | C5 上限 |
@@ -324,7 +324,7 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | MOD-02 sandbox | `guard.gate` + `guard.load_harness_tools` | **阻塞上线**：无扫描即违反 INV-4（M0 已交付） |
 | MOD-03 inference / MOD-04 policy | `generate_json()` 结构化输出 / `harness_tool` 注册表与 prompt 渲染契约 | `propose` 不可用 → `E_EVOLVE_PROPOSE_FAILED`；新 harness 无法被加载验证 |
 
-**风险**：① 8B 牌力弱导致判定表全拒 → M2 先用宽松档（`alpha=0.10`、`win_rate_tol=0.02`）跑通管线，M3 收紧到默认值并给出收紧前后对比；② heldout 预算被候选数放大 → 冒烟前置 + `cost_cap` 硬截断；③ diff 质量低 → `propose_max_retries=2` + 去重，`propose` 失败率 >50% 时回看 MOD-04 prompt 契约；④ HITL 拖慢实验节奏 → `--hitl=false` 跑批量实验（标 `decided_by="auto"`，不计入 M3 验收样本）；⑤ git 分支污染主仓 → 只经 MOD-09 `git_ops`，禁裸 `subprocess`，`E_EVOLVE_GIT_FAILED` 时不动 `version.json`。
+**风险**：① 8B 牌力弱导致判定表全拒 → M2 先用宽松档（`alpha=0.10`、`win_rate_tol=0.05`；默认档已是 `win_rate_tol=0.05`，宽松档只把 `alpha` 放宽到 0.10，见 2026-10-06 D-3）跑通管线，M3 收紧到默认值并给出收紧前后对比；② heldout 预算被候选数放大 → 冒烟前置 + `cost_cap` 硬截断（2026-10-06 D-1：`C=1`、`S=2`、`H=40`、`E_gen=114 ≤ loop.max_episodes_per_generation=120`）；③ diff 质量低 → `propose_max_retries=2` + 去重，`propose` 失败率 >50% 时回看 MOD-04 prompt 契约；④ HITL 拖慢实验节奏 → `--hitl=false` 跑批量实验（标 `decided_by="auto"`，不计入 M3 验收样本）；⑤ git 分支污染主仓 → 只经 MOD-09 `git_ops`，禁裸 `subprocess`，`E_EVOLVE_GIT_FAILED` 时不动 `version.json`；⑥ **（2026-10-06 D-2/D-3）`C=1` 削弱"多候选择优"信号、且 `win_rate` 在 H=40 上只能判 ≥15pp** → 必须在 M2 §3.2 冒烟里确认 C=1 仍能产出 ≥1 轮可判定的演化（判据落在 `mean_stages_cleared` 的配对显著性上，而非 win_rate 点估计），否则回头调 D-1。
 
 ## 15. 里程碑与工作量估算（人日）
 

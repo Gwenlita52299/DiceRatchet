@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamersi.local/schemas/loop_reflection.schema.json",
+  "title": "loop_reflection",
+  "description": "runs/<run_id>/reflections/<episode_key>.json —— 每局一份反思或 skipped 标注（MOD-06 PRD §6，FR-06-3/FR-06-4）。`entry` 的内容 schema 归 MOD-05（schemas/reflection_entry.schema.json）；本文件只固定「调用元数据 + status/reason」外壳，使降级路径（status=skipped）与成功路径共用同一落点。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "reflection_id",
+    "episode_key",
+    "seed",
+    "generation",
+    "harness_version",
+    "tick",
+    "outcome",
+    "status",
+    "template_sha256"
+  ],
+  "properties": {
+    "reflection_id": { "type": ["string", "null"] },
+    "episode_key": { "type": "string", "minLength": 1 },
+    "seed": { "type": "integer" },
+    "generation": { "type": "integer", "minimum": 0 },
+    "harness_version": { "type": "integer", "minimum": 0 },
+    "tick": { "type": "integer", "minimum": 0 },
+    "outcome": { "enum": ["win", "lose"] },
+    "truncation_reason": { "type": ["string", "null"] },
+    "status": { "enum": ["ok", "skipped"] },
+    "reason": {
+      "type": ["string", "null"],
+      "description": "status=skipped 时的 E_* 错误码（PRD §10：E_LLM_TIMEOUT / E_LLM_SCHEMA_INVALID / E_IO_MEMORY_WRITE_FAILED …）"
+    },
+    "entry": {
+      "type": ["object", "null"],
+      "description": "MOD-05 ReflectionEntry（成功路径）；schema 归 MOD-05，本文件不重复约束其字段"
+    },
+    "llm": {
+      "type": ["object", "null"],
+      "additionalProperties": true,
+      "properties": {
+        "model": { "type": ["string", "null"] },
+        "latency_ms": { "type": ["integer", "null"] },
+        "prompt_tokens": { "type": ["integer", "null"] },
+        "completion_tokens": { "type": ["integer", "null"] }
+      }
+    },
+    "template_sha256": { "type": "string" }
+  }
+}

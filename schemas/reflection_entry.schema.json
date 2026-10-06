@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamersi.local/schemas/reflection_entry.schema.json",
+  "title": "ReflectionEntry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "reflection_id",
+    "schema_version",
+    "created_at",
+    "run_id",
+    "episode_id",
+    "seed",
+    "split",
+    "generation",
+    "harness_version",
+    "tick",
+    "text",
+    "outcome",
+    "stages_cleared",
+    "hearts_left",
+    "battles_won",
+    "decisions",
+    "illegal_attempts",
+    "fallback_decisions",
+    "failure_cause",
+    "tags",
+    "extracted_memory_ids",
+    "scan"
+  ],
+  "properties": {
+    "reflection_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "schema_version": {
+      "const": "1.1"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "episode_id": {
+      "type": "string"
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "split": {
+      "const": "train"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "harness_version": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tick": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "outcome": {
+      "enum": [
+        "win",
+        "lose"
+      ]
+    },
+    "truncation_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stages_cleared": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "hearts_left": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "battles_won": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "decisions": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "illegal_attempts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "fallback_decisions": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "failure_cause": {
+      "enum": [
+        "none",
+        "illegal_action",
+        "low_damage",
+        "wrong_target",
+        "virtue_management",
+        "corruption_misuse",
+        "counter_ignored",
+        "route_choice",
+        "economy",
+        "policy_failure",
+        "unknown"
+      ]
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "extracted_memory_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "scan": {
+      "type": "object",
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "pass",
+            "quarantined"
+          ]
+        },
+        "hits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "pattern",
+              "span"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string"
+              },
+              "span": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          }
+        }
+      }
+    },
+    "llm_latency_ms": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "prompt_tokens": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "completion_tokens": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    }
+  }
+}

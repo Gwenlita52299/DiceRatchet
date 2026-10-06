@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamersi.local/schemas/add_result.schema.json",
+  "title": "AddResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "added",
+    "merged",
+    "conflicted",
+    "quarantined",
+    "memory_version"
+  ],
+  "properties": {
+    "added": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "merged": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "conflicted": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "quarantined": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "evicted": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "memory_version": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "entry_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

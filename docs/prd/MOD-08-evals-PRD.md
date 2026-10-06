@@ -223,6 +223,14 @@ else:                                                       verdict = "null"
 ```
 **n=40 的现实约束（必须写入报告 `power_note`）**：配对 McNemar 精确检验在 n=40 下最小可判显著的不一致对数 `k=6`（k=6 双尾 p=0.031，k=5 p=0.0625）。故 `verdict` 实际由 `gap` 主导、显著性为辅——"未判 `real_gain`" **不等于**"无提升"，只是证据不足。
 
+> **2026-10-06（M2 开工 D-3 裁决，Spec §8.6 / B-39）：把 `k=6@n=40` 换算成效应量，并据此换主判据。**
+> 精确配对 McNemar 在真实 `+5pp` 胜率增益（`p01 − p10 = 0.05`）下的功效：每 seed 不一致率 q=0.10 时 n=40→**0.03**、n=80→0.17、n=160→0.43、n=320→0.78；q=0.05 时 n=40→0.01、n=160→0.82。**即 `k=6@n=40` 等价于「只能判 ≥15pp 的净跳变」**（n=40 下 Δ=15pp→power 0.57、20pp→0.84）。结论：
+> 1. **`win_rate` 不再承担 4–5pp 量级的结论**，它在 H=40 上是粗门（<15pp 不出结论），保留为第一报告指标；
+> 2. **4–5pp 量级的增益改由 `mean_stages_cleared`（0–6）的配对 bootstrap 承担**：n=40、配对 sd 0.5 / 0.8 时，Δ=0.30 关（= 6 关制的 **5.0pp**）→ power **0.97 / 0.66**（Δ=0.50 关 → 1.00 / 0.98）；
+> 3. `H` 保持 **40**（H1 篮子 2000–2039 定义即 40；H>40 会动 B-07 seed 协议、占用 H2 消融篮子，且 H 每 +10 局在 C=1 下是 +20 局 = **+6.5 h/代**，H=50 即顶破 `loop.max_episodes_per_generation=120`）；
+> 4. `n_rep` 保持 1（B-14 已定 `eval_temperature=0.0` + `decode_seed=0`）；全面 `n_rep=3` 在 heldout 臂上是 **+52 h/代**，故改为：M3 前做**一次性确定性验证**（H1 前 5 个 seed 重跑对 sha256，≈1.6 h），失败再走既有的 `E_EVAL_NONDETERMINISTIC → n_rep=3` 升级路径；
+> 5. `evals.gap_threshold` 与 `evolve.gap_threshold` 本次保持 0.15（H 未变，不随 H 重标）；等 M2 §3.2 冒烟产出第一批 train/heldout 配对后按实测 `win_rate_gap` 分布决定是否重标。
+
 **8.3 `collapse_flag` 触发条件（对齐调研 §4 失败模式 2）**
 
 | # | 条件 | 默认阈值 | 含义 |
@@ -347,6 +355,7 @@ python -m gamer_rsi eval test --run-id <run_id> --unlock-once --attestation runs
 ## 13. 指标与埋点
 
 - **主指标（INV-7 白名单来源）**：`win_rate`（第一主指标），`mean_stages_cleared` / `mean_hearts_left` / `mean_battles_won`（并列次指标）。
+  - **2026-10-06（M2 开工 D-3 裁决，Spec §8.6 / B-39）判据分工**：`win_rate` 仍是第一报告指标，但**在 H=40（H1 篮子）下只能判 ≥15pp 的净跳变**（见 §8.2 的功效换算），故 M3 的「4–5pp 量级增益」结论**由 `mean_stages_cleared` 的配对 bootstrap 承担**（Δ=0.30 关 = 6 关制的 5.0pp，n=40 下 power 0.66–0.97），`mean_battles_won` 作并列证据。**hard × 6 上 `fixed_prompt` 基线 win_rate = 0.0%（n=10），win_rate 无方差可用**，D-2 已据此把 M3 判据改为 `mean_stages_cleared`/`mean_battles_won`。报告必须同时给出两个口径的 `delta + CI + p + method`，并保留 `power_note`。
 - **次级指标与判定量**：`illegal_rate`、`entropy_mean_norm`、`entropy_slope`、`jsd_kind`、`jsd_slot`、`distinct_sequence_ratio`、`llm_latency_ms_p50/p95`、`mean_cum_reward_debug`（**仅调试，禁止进入 verdict**）；判定量为 `win_rate_gap`、`verdict`、`collapse_flag`、`attribution`。
 - **埋点事件**（统一经 MOD-09 `emit` 写入 `events.jsonl`）：`eval.start{spec}`、`eval.seed_start{seed,split,basket}`、`eval.seed_done{seed,outcome,steps,decisions,dur_s,dropped,degraded,error_code}`、`eval.report{n,n_dropped,degraded_n,dur_s,report_sha256}`、`eval.guard_violation{error_code,split,seed,destination,matched_token}`、`eval.collapse{generation,reasons}`、`eval.test_unlock{generation,attestation_path,decided_by}`。
 - **绘图数据（MOD-09 消费）**：`metrics/generations.csv` 列固定为 `generation,harness_version,parent_version,split,basket,n,win_rate,ci_lo,ci_hi,mean_stages_cleared,mean_hearts_left,mean_battles_won,mean_decisions,illegal_rate,fallback_rate,truncation_rate,entropy_mean_norm,entropy_slope,jsd_kind,collapse_flag,win_rate_gap,verdict,decision,bootstrap_seed,config_hash,git_commit,ts`。

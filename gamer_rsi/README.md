@@ -4,17 +4,24 @@
 （观测投影 / 代码与进程隔离 / 泄漏审计 / 蜜罐）、**MOD-03 inference**
 （MLX/llama.cpp 后端契约、约束解码 + 三级 JSON 修复、并发限流与内存预算）、
 **MOD-04 policy**（prompt 组装 / 三级校验 / 重试与轻罚 / harness 工具受限加载 /
-启发式 fallback）与 **MOD-08 evals**（seed 协议与 INV-5 护栏 / 三基线 / INV-7 主指标 /
-坍缩监控 / 消融 / 报告与 test 存证），对齐
+启发式 fallback）、**MOD-05 memory**（反思记忆库：写入管线 / 去重冲突 / TTL 淘汰 /
+BM25 检索 / 快照回滚）与 **MOD-06 loop**（闭环编排：单局时序与逐步落盘 / 局末反思与降级 /
+周期幂等 / `--resume` 与计分幂等 / `E_gen` 成本闸门 / HITL 挂起）与 **MOD-08 evals**
+（seed 协议与 INV-5 护栏 / 三基线 / INV-7 主指标 / 坍缩监控 / 消融 / 报告与 test 存证），对齐
 [模块拆分 Spec v1.4](../../docs/模块拆分Spec-GameRSI.md)、
 [MOD-01 PRD](../docs/prd/MOD-01-env-rules-PRD.md)、
 [MOD-02 PRD](../docs/prd/MOD-02-env-sandbox-PRD.md)、
 [MOD-03 PRD](../docs/prd/MOD-03-inference-PRD.md)、
 [MOD-04 PRD](../docs/prd/MOD-04-policy-PRD.md)、
-[MOD-08 PRD](../docs/prd/MOD-08-evals-PRD.md)（细节见 [`agent/README.md`](agent/README.md)
-与 [`evals/README.md`](evals/README.md)）。
-其余模块（MOD-05/06/07）尚未落地，其命令已按 Spec §4.6 注册，调用时返回
-`E_IO_MODULE_PENDING`（退出码 2）。
+[MOD-05 PRD](../docs/prd/MOD-05-memory-PRD.md)、
+[MOD-06 PRD](../docs/prd/MOD-06-loop-PRD.md)、
+[MOD-08 PRD](../docs/prd/MOD-08-evals-PRD.md)（细节见 [`agent/README.md`](agent/README.md)、
+[`memory/README.md`](memory/README.md)、[`loop/README.md`](loop/README.md)、
+[`evolve/README.md`](evolve/README.md)
+**MOD-07 evolve**（harness 自进化：证据束白名单与 INV-5 硬闸 / 候选合法性校验 /
+冒烟快速淘汰与 heldout 判定表 / 不可变版本化与回滚 / HITL 门）与
+[`evals/README.md`](evals/README.md)）。
+九个模块**全部落地**，命令面无 `E_IO_MODULE_PENDING` 悬空项。
 
 MOD-03 按 Spec v1.4 B-31 交付 `MLXBackend` + `MockBackend`：`Backend` 契约与一致性
 套件已定稿，`LlamaCppBackend` / `LlamaServerBackend` 同步实现（依赖懒加载，阶段二直接可用）。
@@ -110,6 +117,7 @@ python tests/golden/evals/regen_metrics_golden.py                               
 
 # 只打印将执行的动作与配置摘要（stdout 为可解析 JSON，不落盘；dry-run 不建 run，故无冲突）
 python -m gamer_rsi loop run --generations 3 --k 30 --hitl --run-id demo-eval-0001 --dry-run      # 期望退出码 0
+python -m gamer_rsi loop smoke --seeds train:1000-1002 --k 3 --no-reflect --run-id demo-loop-0001 # 期望退出码 0（免模型）
 python -m gamer_rsi --help                                                         # 期望退出码 0
 ```
 

@@ -1,0 +1,78 @@
+{
+  "$id": "https://gamersi.local/schemas/evolve_candidate.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "MOD-07 Candidate（PRD §6.1）。落盘于 runs/<run_id>/generations/gen-{NNN}/candidates/{candidate_id}.json 的 candidate 段。",
+  "properties": {
+    "candidate_id": {
+      "maxLength": 12,
+      "minLength": 12,
+      "pattern": "^[0-9a-f]{12}$",
+      "type": "string"
+    },
+    "diff": {
+      "type": "string"
+    },
+    "diff_lines": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "expected_effect": {
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "enum": [
+            "win_rate",
+            "mean_stages_cleared",
+            "mean_hearts_left"
+          ]
+        },
+        {
+          "enum": [
+            "up",
+            "down"
+          ]
+        },
+        {
+          "maximum": 3,
+          "minimum": 1,
+          "type": "integer"
+        }
+      ],
+      "type": "array"
+    },
+    "gen_id": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "prompt_patch",
+        "tool_patch",
+        "config_patch"
+      ]
+    },
+    "rationale": {
+      "maxLength": 300,
+      "type": "string"
+    },
+    "touched_files": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "candidate_id",
+    "kind",
+    "diff",
+    "rationale",
+    "expected_effect",
+    "touched_files",
+    "diff_lines",
+    "gen_id"
+  ],
+  "title": "evolve_candidate",
+  "type": "object"
+}

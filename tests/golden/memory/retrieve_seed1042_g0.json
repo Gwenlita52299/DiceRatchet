@@ -1,0 +1,81 @@
+{
+  "conflict_groups": [],
+  "dropped_reasons": {},
+  "entries": [
+    {
+      "action_hint": {
+        "kind": "play_face",
+        "school": "neutral",
+        "slotKind": "defense"
+      },
+      "conflict_group": null,
+      "entry_id": "mem-0c40c36ba01a",
+      "harness_version": 1,
+      "polarity": "do",
+      "rank": 0,
+      "score": 1.006672,
+      "situation_key": "sk-0d618bd9",
+      "tags": [
+        "defense",
+        "combat"
+      ],
+      "text": "[defense|combat] 应该先把光盾骰放进防御槽，再考虑输出。（hint=play_face→defense, conf=0.80, util=0.32）",
+      "tokens": 28
+    },
+    {
+      "action_hint": {
+        "kind": "purify",
+        "school": null,
+        "slotKind": null
+      },
+      "conflict_group": null,
+      "entry_id": "mem-996974329031",
+      "harness_version": 1,
+      "polarity": "avoid",
+      "rank": 1,
+      "score": 0.969214,
+      "situation_key": "sk-36d9e879",
+      "tags": [
+        "low_virtue",
+        "combat"
+      ],
+      "text": "[low_virtue|combat] 避免：净化值只剩 4 时我还在打输出，结果被打死。（hint=purify, conf=0.80, util=0.20）",
+      "tokens": 27
+    },
+    {
+      "action_hint": {
+        "kind": "play_face",
+        "school": null,
+        "slotKind": "attack"
+      },
+      "conflict_group": null,
+      "entry_id": "mem-e5f668b76103",
+      "harness_version": 1,
+      "polarity": "avoid",
+      "rank": 2,
+      "score": 0.155123,
+      "situation_key": "sk-1e4306a1",
+      "tags": [
+        "elite",
+        "map_route",
+        "shop"
+      ],
+      "text": "[elite|map_route|shop] 避免：地图路线优先走左侧商店，避免精英战。（hint=play_face→attack, conf=0.90, util=0.20）",
+      "tokens": 30
+    }
+  ],
+  "entry_ids": [
+    "mem-0c40c36ba01a",
+    "mem-996974329031",
+    "mem-e5f668b76103"
+  ],
+  "memory_version": 0,
+  "obs_digest": "sha256:eb698c5e654f5409",
+  "scores": [
+    1.006672,
+    0.969214,
+    0.155123
+  ],
+  "text": "[defense|combat] 应该先把光盾骰放进防御槽，再考虑输出。（hint=play_face→defense, conf=0.80, util=0.32）\n[low_virtue|combat] 避免：净化值只剩 4 时我还在打输出，结果被打死。（hint=purify, conf=0.80, util=0.20）\n[elite|map_route|shop] 避免：地图路线优先走左侧商店，避免精英战。（hint=play_face→attack, conf=0.90, util=0.20）",
+  "tokens": 85
+}

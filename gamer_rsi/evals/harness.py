@@ -385,15 +385,29 @@ def _error_code_of(exc: BaseException) -> str:
 def episode_result_from_rows(rows: Sequence[Mapping[str, Any]], *, seed: int, split: Split,
                              generation: int, harness_version: int,
                              arm: str = "") -> EpisodeResult | None:
-    """从 ``episodes/<split>/*.jsonl`` 的 ``episode_end`` 行还原一局（无则 ``None``）。"""
+    """从 ``episodes/<split>/*.jsonl`` 的 ``episode_end`` 行还原一局（无则 ``None``）。
+
+    逐局汇总字段优先读 Spec §4.5 的裸键（``write_episode_summaries`` 的写法），缺失时
+    回落到 ``x_`` 前缀扩展位——MOD-06 的真实轨迹按 ``trajectory_line`` schema 的
+    ``EpisodeEnd`` 分支落盘（``additionalProperties:false``），只能把 MOD-08 复算多样性
+    所需的 ``kind_counts/decision_kinds/slot_counts/seq_hash`` 放在 schema 预留的
+    ``^x_`` 扩展位里。两条来源因此产出同一份 ``EpisodeResult``。
+    """
     end: Mapping[str, Any] | None = None
     for row in rows:
         if row.get("type") == "episode_end":
             end = row
     if end is None:
         return None
+
+    def _pick(name: str, default: Any = None) -> Any:
+        if name in end:
+            return end[name]
+        return end.get(f"x_{name}", default)
+
     outcome = "win" if str(end.get("outcome")) == "win" else "lose"
     truncation = end.get("truncation_reason")
+    kind_raw = list(_pick("kind_counts") or [])
     return EpisodeResult(
         seed=int(end.get("seed", seed)), split=split, generation=int(generation),
         harness_version=int(harness_version), outcome=outcome,
@@ -401,16 +415,16 @@ def episode_result_from_rows(rows: Sequence[Mapping[str, Any]], *, seed: int, sp
         stages_cleared=int(end.get("stages_cleared") or 0),
         hearts_left=int(end.get("hearts_left") or 0),
         battles_won=int(end.get("battles_won") or 0),
-        decisions=int(end.get("decisions") or 0), steps=int(end.get("steps") or 0),
-        illegal_attempts=int(end.get("illegal_attempts") or 0),
-        fallback_decisions=int(end.get("fallback_decisions") or 0),
-        kind_counts=tuple(int(x) for x in (end.get("kind_counts") or [0] * 16))[:16]
-        + tuple([0] * max(0, 16 - len(end.get("kind_counts") or []))),
-        slot_counts=dict(end.get("slot_counts") or {}),
-        seq_hash=str(end.get("seq_hash") or ""), dropped=bool(end.get("dropped", False)),
+        decisions=int(end.get("decisions") or 0), steps=int(_pick("steps") or 0),
+        illegal_attempts=int(_pick("illegal_attempts") or 0),
+        fallback_decisions=int(_pick("fallback_decisions") or 0),
+        kind_counts=tuple(int(x) for x in kind_raw)[:16]
+        + tuple([0] * max(0, 16 - len(kind_raw))),
+        slot_counts=dict(_pick("slot_counts") or {}),
+        seq_hash=str(_pick("seq_hash") or ""), dropped=bool(_pick("dropped", False)),
         degraded=bool(end.get("degraded", False)),
-        decision_kinds=tuple(int(x) for x in (end.get("decision_kinds") or [])),
-        arm=arm)
+        decision_kinds=tuple(int(x) for x in (_pick("decision_kinds") or [])),
+        arm=arm, decisions_llm=int(_pick("decisions_llm") or 0))
 
 
 def load_episode_results(run_dir: Path | str, split: Split, *,
@@ -1062,12 +1076,12 @@ class SandboxRunner:
                 actions.append(dict(action))
                 index = int(info.get("decision_index") or 0)
                 if index != last_index:
-                    kind = _kind_index(action)
+                    kind = kind_index(action)
                     if kind >= 0:
                         decision_kinds.append(kind)
                         kind_counts[kind] += 1
                     last_index = index
-                key = _slot_key(action, obs)
+                key = slot_key(action, obs)
                 if key:
                     slot_counts[key] = slot_counts.get(key, 0) + 1
             obs = step.observation
@@ -1137,11 +1151,11 @@ class SandboxRunner:
                 steps += 1
                 action = getattr(record, "action", None) or {}
                 actions.append(dict(action))
-                kind = _kind_index(action)
+                kind = kind_index(action)
                 if kind >= 0:
                     kind_counts[kind] += 1
                     decision_kinds.append(kind)
-                key = _slot_key(action, obs)
+                key = slot_key(action, obs)
                 if key:
                     slot_counts[key] = slot_counts.get(key, 0) + 1
             last = getattr(decision, "last", None)
@@ -1173,12 +1187,14 @@ def _agent_degraded(agent: Any) -> bool:
     return bool(getattr(agent, "degraded", False))
 
 
-def _kind_index(action: Mapping[str, Any]) -> int:
+def kind_index(action: Mapping[str, Any]) -> int:
+    """动作 ``kind`` 在 ``KIND_SPACE`` 里的下标；未登记返回 ``-1``（公开给 MOD-06 复用）。"""
     from .metrics import KIND_INDEX
 
     return int(KIND_INDEX.get(str(action.get("kind")), -1))
 
-def _slot_key(action: Mapping[str, Any], obs: Mapping[str, Any]) -> str | None:
+
+def slot_key(action: Mapping[str, Any], obs: Mapping[str, Any]) -> str | None:
     """``play_face`` 的 ``slotKind×school`` 键（FR-08-20 的 jsd_slot 口径）。"""
     if str(action.get("kind")) != "play_face":
         return None

@@ -1,0 +1,305 @@
+"""``loop run|status|smoke`` 的实现（Spec §4.6；经组合根注册进 MOD-09 命令面）。
+
+可复现命令（MOD-06 PRD §3，G6 必须可直接复制执行）::
+
+    python -m gamer_rsi loop run --agent llm --seeds train:1000-1029 --k 30 --hitl
+    python -m gamer_rsi loop status --run-id <run_id>
+    python -m gamer_rsi loop run --run-id <run_id> --resume
+    python -m gamer_rsi loop smoke --seeds train:1000-1002 --k 3 --no-reflect
+
+退出码（Spec §8.3 / PRD §10）：``0`` 成功（含 HITL 挂起）/ ``1`` 预算闸门等领域失败 /
+``2`` 配置错误 / ``3`` 模型不可用 / ``4`` 沙箱守卫违例 / ``5`` IO 落盘失败 / ``130`` Ctrl-C。
+
+NFR-09-5：``infra`` 不 import 任何子包；本文件是 MOD-06 侧的命令实现，由
+``gamer_rsi/app.py`` 的 ``wire()`` 注册。MOD-03 客户端与 MOD-07 演化函数同样由组合根
+经 ``set_inference_client_provider`` / ``set_evolve_provider`` 注入，避免反向依赖。
+
+INV-1：本文件只经 ``gamer_rsi.sandbox.api`` 触达环境，**不** import ``gamer_rsi.env``。
+"""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import replace
+import json
+from pathlib import Path
+import sys
+from typing import Any, Callable
+
+from ..infra import cli as infra_cli
+from ..infra.errors import E, InfraError
+from ..infra.run import RunPaths, read_state
+from .generation import LoopOrchestrator, write_gen000_baseline
+from .runner import EpisodeRunner, RunContext, read_harness_version
+from .state import init_state, load_state
+
+__all__ = ["HANDLERS", "cmd_loop_run", "cmd_loop_smoke", "cmd_loop_status",
+           "get_evolve_provider", "set_evolve_provider", "set_inference_client_provider"]
+
+
+# =====================================================================
+# 组合根注入点（与 memory/evals 的 provider 模式一致）
+# =====================================================================
+
+_CLIENT_PROVIDER: Callable[..., Any] | None = None
+_EVOLVE_PROVIDER: Callable[..., Any] | None = None
+
+
+def set_inference_client_provider(provider: Callable[..., Any] | None) -> None:
+    """注册 MOD-03 客户端工厂（签名 ``(cfg, *, run_id, runs_root) -> client``）。"""
+    global _CLIENT_PROVIDER
+    _CLIENT_PROVIDER = provider
+
+
+def set_evolve_provider(provider: Callable[..., Any] | None) -> None:
+    """注册 MOD-07 的 ``evolve_fn`` 工厂（签名 ``(cfg, runner, run_ctx) -> callable``）。"""
+    global _EVOLVE_PROVIDER
+    _EVOLVE_PROVIDER = provider
+
+
+def get_evolve_provider() -> Callable[..., Any] | None:
+    """当前注册的 MOD-07 工厂（``None`` = 未注册）。组合根用它避免覆盖显式注册。"""
+    return _EVOLVE_PROVIDER
+
+
+# =====================================================================
+# 命令实现
+# =====================================================================
+
+def cmd_loop_run(args: argparse.Namespace) -> int:
+    """``loop run``：跑（或续跑）N 代闭环。"""
+    paths, cfg, run_id = infra_cli.cli_init_run(args)
+    _guard_concurrency(cfg)
+    resume = bool(getattr(args, "resume", False))
+    orch, run_ctx = _build_orchestrator(paths, cfg, run_id, args)
+    seeds = _resolve_seeds(args, orch.config, resume=resume)
+    run_baseline = getattr(args, "baseline", None)
+    if run_baseline is None:
+        run_baseline = orch.evolve_fn is not None
+    if not resume and run_baseline:
+        # gen-000 基线（FR-06-13a）：只在真的会演化时默认执行；stub/--no-baseline 跳过
+        write_gen000_baseline(run_ctx, harness_version=int(run_ctx.state.harness_version),
+                              runner=orch.runner)
+    summary = orch.run(seeds, resume=resume,
+                       force_rerun=bool(getattr(args, "force_rerun", False)))
+    print(json.dumps(summary.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+    if summary.phase == "hitl_wait":
+        print("已挂起等人工裁决（退出码 0）："
+              f"python -m gamer_rsi evolve approve|rollback --run-id {run_id} "
+              f"--generation {summary.generation}；随后 "
+              f"python -m gamer_rsi loop run --run-id {run_id} --resume", file=sys.stderr)
+    return int(summary.exit_code)
+
+
+def cmd_loop_status(args: argparse.Namespace) -> int:
+    """``loop status``：打印 ``state.json``（只读；不校验 config_hash、不写盘）。"""
+    cfg = infra_cli.load_config(infra_cli.config_overrides(args),
+                                config_dir=Path(args.config_dir))
+    run_id = getattr(args, "run_id", None)
+    if not run_id:
+        raise InfraError(E.E_IO_CONFIG_INVALID, "loop status 必须指定 --run-id",
+                         hint="用法：python -m gamer_rsi loop status --run-id <run_id>")
+    root = Path(cfg.infra.runs_root) / str(run_id)
+    if not root.is_dir():
+        raise InfraError(E.E_IO_CONFIG_INVALID, f"run 目录不存在：{root}",
+                         hint="检查 --run-id 是否正确")
+    paths = RunPaths(root)
+    if not paths.state.is_file():
+        raise InfraError(E.E_IO_STATE_MISSING, f"state.json 不存在：{paths.state}",
+                         hint="该 run 尚未启动（loop run 会先写 state.json）")
+    state = load_state(paths)
+    payload = read_state(paths)
+    payload["completed"] = len(state.completed_train_seeds)
+    payload["pending"] = len(state.pending_queue)
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_loop_smoke(args: argparse.Namespace) -> int:
+    """``loop smoke``：只验编排，不触网不调模型（``--no-reflect`` 免模型路径，NFR-06-6）。"""
+    if getattr(args, "agent", None) in (None, "llm"):
+        args.agent = "heuristic"
+    args.no_reflect = True
+    args.no_evolve = True
+    if getattr(args, "generations", None) in (None, 3):
+        args.generations = 1
+    return cmd_loop_run(args)
+
+
+HANDLERS: dict[tuple[str, ...], Callable[[argparse.Namespace], int]] = {
+    ("loop", "run"): cmd_loop_run,
+    ("loop", "status"): cmd_loop_status,
+    ("loop", "smoke"): cmd_loop_smoke,
+}
+
+
+# =====================================================================
+# 装配
+# =====================================================================
+
+def _loop_options(args: argparse.Namespace, cfg: Any) -> dict[str, Any]:
+    """CLI → ``LoopConfig`` 的运行期覆盖（配置优先级：CLI > env > yaml）。"""
+    overrides: dict[str, Any] = {}
+    if getattr(args, "no_reflect", False):
+        overrides["reflect_enabled"] = False
+    if getattr(args, "retry_reflections", False):
+        overrides["retry_reflections_on_resume"] = True
+    if getattr(args, "hitl", None) is not None:
+        overrides["hitl"] = bool(args.hitl)
+    if getattr(args, "k", None) is not None:
+        overrides["k"] = int(args.k)
+    if getattr(args, "generations", None) is not None:
+        overrides["max_generations"] = int(args.generations)
+    return overrides
+
+
+def _guard_concurrency(cfg: Any) -> None:
+    """FR-06-14：``train_concurrency>1`` 启动即拒绝（``E_IO_CONCURRENCY``，退出码 2）。"""
+    value = int(getattr(cfg.loop, "train_concurrency", 1))
+    if value != 1:
+        raise InfraError(
+            E.E_IO_CONCURRENCY,
+            f"loop.train_concurrency={value} 非法：训练局必须串行（固定 1）",
+            hint="共享记忆写入无法在训练局之间并发（Spec §8.6 P-10 / FR-06-14）；"
+                 "评估局的并发由 loop.eval_concurrency 单独控制")
+
+
+def _resolve_seeds(args: argparse.Namespace, loop_cfg: Any, *,
+                   resume: bool) -> list[int] | None:
+    """``--seeds`` 解析；省略时按 MOD-08 ``seeds.take`` 取本 run 各代的 train 块。"""
+    raw = getattr(args, "seeds", None)
+    if raw:
+        parsed = infra_cli.parse_seeds_spec(str(raw))
+        declared = next((name for name, values in parsed.items()
+                         if name != "default" and values), "")
+        seeds = sorted({int(s) for values in parsed.values() for s in values})
+        if declared and declared != "train":
+            raise InfraError(
+                E.E_EVAL_SPLIT_VIOLATION,
+                f"--seeds 的 split 前缀是 {declared!r}，训练局只接受 train seed（INV-5）",
+                hint="loop run 只消费 train 池；held-out/test 由 MOD-07/MOD-08 在评估口取用")
+        return seeds
+    if resume:
+        return None                      # 续跑：以 state.json 的 pending_queue 为准
+    from ..evals.seeds import coerce_protocol, take, validate_protocol
+
+    proto = validate_protocol(coerce_protocol(None))
+    seeds: list[int] = []
+    for generation in range(1, int(getattr(loop_cfg, "max_generations", 3)) + 1):
+        seeds.extend(take("train", generation=generation, protocol=proto))
+    return seeds
+
+
+def _build_orchestrator(paths: RunPaths, cfg: Any, run_id: str,
+                        args: argparse.Namespace) -> tuple[LoopOrchestrator, RunContext]:
+    options = _loop_options(args, cfg)
+    loop_cfg = replace(cfg.loop, **options) if options else cfg.loop
+    loop_cfg.validate()
+
+    harness_dir = Path(getattr(args, "harness_dir", "harness"))
+    memory = _build_memory(paths, cfg, run_id, args)
+    agent_kind = str(getattr(args, "agent", "llm") or "llm")
+    client = _build_client(cfg, run_id, paths, args, agent_kind=agent_kind)
+    if agent_kind == "llm" and client is None:
+        raise InfraError(
+            E.E_LLM_UNAVAILABLE,
+            f"loop run --agent {agent_kind} 需要可用的 MOD-03 推理客户端",
+            hint="指定可加载的模型（如 --model qwen3-8b-q4；离线冒烟用 --model mock），"
+                 "或改跑 --agent heuristic（或 loop smoke --no-reflect）")
+
+    resume = bool(getattr(args, "resume", False))
+    if resume:
+        # 续跑：``k`` 以 state.json 为准（同一 run 的 k 不可在续跑时被改小/改大，
+        # 否则周期边界会漂移）；CLI 的 --k 只对新建 run 生效。
+        state = load_state(paths)
+        if int(loop_cfg.k) != int(state.k):
+            raise InfraError(
+                E.E_IO_RUN_CONFLICT,
+                f"--k {loop_cfg.k} 与 state.json 的 k={state.k} 不一致",
+                hint="同一 run 的 K 必须恒定（周期幂等键 len(completed)//k）；"
+                     "要改 K 请开新 run")
+    else:
+        state = init_state(run_id, k=int(loop_cfg.k), seeds=[],
+                           harness_version=read_harness_version(harness_dir),
+                           budget_cap=int(loop_cfg.max_episodes_per_generation))
+
+    run_ctx = RunContext(run_id=run_id, paths=paths, config=loop_cfg, state=state,
+                         app_config=cfg, episode_config=cfg.env.episode,
+                         harness_dir=harness_dir,
+                         memory_version=int(state.memory_version), memory=memory,
+                         client=client)
+    env = _make_env(cfg, episode_id=f"loop-{run_id}")
+    runner = EpisodeRunner(env=env, close_env=False,
+                           policy_factory=_policy_factory(cfg, client, agent_kind,
+                                                          harness_dir),
+                           memory=memory, writer=_build_writer(paths, loop_cfg),
+                           config=loop_cfg, run_ctx=run_ctx, client=client)
+    evolve_fn = None
+    if not getattr(args, "no_evolve", False) and _EVOLVE_PROVIDER is not None:
+        evolve_fn = _EVOLVE_PROVIDER(cfg, runner, run_ctx)
+    orch = LoopOrchestrator(run_ctx=run_ctx, config=loop_cfg, runner=runner,
+                            evolve_fn=evolve_fn)
+    return orch, run_ctx
+
+
+def _build_writer(paths: RunPaths, loop_cfg: Any) -> Any:
+    from .trajectory import TrajectoryWriter
+
+    return TrajectoryWriter(paths, io_retry=int(loop_cfg.io_retry),
+                            io_backoff_ms=int(loop_cfg.io_backoff_ms),
+                            max_run_bytes=int(loop_cfg.max_run_bytes))
+
+
+def _build_memory(paths: RunPaths, cfg: Any, run_id: str,
+                  args: argparse.Namespace) -> Any:
+    if not bool(getattr(cfg.memory, "enabled", True)):
+        return None
+    try:
+        from ..memory import MemoryStore
+
+        return MemoryStore(paths.root, cfg.memory,
+                           config_dir=Path(getattr(args, "config_dir", "configs")),
+                           run_id=run_id)
+    except Exception as exc: # noqa: BLE001 - 记忆是增强项：不可用即降级为不检索
+        print(f"[{E.E_IO_MEMORY_WRITE_FAILED}] 记忆库不可用，本 run 关闭记忆：{exc}",
+              file=sys.stderr)
+        return None
+
+
+def _build_client(cfg: Any, run_id: str, paths: RunPaths, args: argparse.Namespace,
+                  *, agent_kind: str) -> Any:
+    if agent_kind != "llm" or _CLIENT_PROVIDER is None:
+        return None
+    try:
+        return _CLIENT_PROVIDER(cfg, run_id=run_id, runs_root=paths.root.parent)
+    except InfraError:
+        raise
+    except Exception as exc: # noqa: BLE001 - 装配失败 → 视为模型不可用（退出码 3）
+        raise InfraError(E.E_LLM_UNAVAILABLE,
+                         f"MOD-03 客户端装配失败：{exc}",
+                         hint="检查 inference.model_id 与权重是否已落盘") from exc
+
+
+def _policy_factory(cfg: Any, client: Any, agent_kind: str,
+                    harness_dir: Path) -> Callable[[int, str], Any]:
+    """每个局一个 ``PolicyAgent``（FR-06-14：评估局并发时 MOD-04 不可共享实例）。"""
+    from ..agent.policy import PolicyAgent
+
+    base = cfg.agent.policy
+    if agent_kind == "heuristic":
+        base = replace(base, mode="baseline_heuristic", temperature=0.0)
+    else:
+        base = replace(base, mode="play")
+
+    def factory(seed: int, _key: str) -> Any:
+        return PolicyAgent(base, llm=client, memory=None, harness_dir=harness_dir)
+
+    return factory
+
+
+def _make_env(cfg: Any, *, episode_id: str) -> Any:
+    """经 MOD-02 门面构造环境（INV-1：本模块不 import ``gamer_rsi.env``）。"""
+    from ..sandbox.api import EpisodeConfig, make_default_env
+
+    return make_default_env(episode_config=EpisodeConfig.from_any(cfg.env.episode),
+                            episode_id=episode_id)

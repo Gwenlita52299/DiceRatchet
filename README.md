@@ -24,7 +24,7 @@ RSI（Recursive Self-Improvement，递归自我改进）的公开讨论大多停
 | M0 环境 | MOD-09 骨架、MOD-01 Python 移植、MOD-02 沙箱 | ✅ 2026-10-03 验收通过（[报告](docs/reviews/2026-10-03-M0验收报告.md)）：5 组 golden 逐行对拍、200 局差分 0 分歧、heuristic 差 0.0pp、G1–G6 全过 |
 | M1 基线 | MOD-03 本地推理：后端契约 + 三级 JSON 修复 + 内存预算/并发限流 + 聚合指标 | ✅ 代码落地（`tests/unit/inference` / `tests/integration/test_inference_*` / `tests/golden/inference`）；真实 8B 200 条跑批待权重落盘（`inference robustness`） |
 | M1 基线 | 决策策略（MOD-04）+ 三基线 | 计划 → 2027-01-14 |
-| M2 闭环 | 反思记忆 + 闭环编排 + harness 自进化 | 计划 → 2027-03-26 |
+| M2 闭环 | 反思记忆（MOD-05）+ 闭环编排（MOD-06）+ harness 自进化（MOD-07） | ✅ 代码落地：`tests/unit/{memory,loop,evolve}` + `tests/integration/{test_loop_*,evolve}`；真实 8B 端到端跑代待 M2 冒烟（检查单 §3.2） |
 | M3 测量 | held-out 裁判、消融、多样性、test 终检 | 计划 → 2027-04-22 |
 
 ## 系统结构
@@ -70,7 +70,8 @@ node scripts/golden-gen.js                               # 重新生成 golden �
 
 玩法、架构和内核 API 见 [src/game/README.md](src/game/README.md)。
 
-RSI 训练链路（Python，`gamer_rsi/`）已落地 MOD-01/02/03，命令面对齐 [Spec §4.6](docs/模块拆分Spec-GameRSI.md)：
+RSI 训练链路（Python，`gamer_rsi/`）已落地 MOD-01…09（含 MOD-07 evolve 的初版），
+命令面对齐 [Spec §4.6](docs/模块拆分Spec-GameRSI.md)：
 
 ```bash
 python -m gamer_rsi env selftest --seed 1                                       # 期望退出码 0
@@ -79,7 +80,14 @@ python -m gamer_rsi env selftest --seed 1                                       
 python -m gamer_rsi inference probe      --model mock --mode eval --seed 7         --run-id <inf_run_id>   # 期望退出码 0
 python -m gamer_rsi inference bench      --model mock --mode eval --seed 7 --n 50  --run-id <inf_run_id>   # 期望退出码 0
 python -m gamer_rsi inference robustness --model mock --mode eval --seed 7 --n 200 --run-id <inf_run_id>   # 期望退出码 0
-python -m gamer_rsi loop run --generations 3 --k 30 --hitl --run-id <loop_run_id>   # MOD-06 未落地 → 退出码 2
+# MOD-06 闭环 + MOD-07 自进化：冒烟不触网（--no-reflect 免模型），真实演化需要 MOD-03 客户端
+python -m gamer_rsi loop smoke --seeds train:1000-1002 --k 3 --no-reflect           # 期望退出码 0
+python -m gamer_rsi loop run --agent llm --seeds train:1000-1029 --k 30 --hitl --run-id <loop_run_id>
+python -m gamer_rsi loop status --run-id <loop_run_id>                              # 期望退出码 0
+# HITL 挂起（退出码 0）→ 人工裁决 → 续跑执行 accept/rollback
+python -m gamer_rsi evolve approve  --run-id <loop_run_id> --generation 1           # 期望退出码 0
+python -m gamer_rsi evolve rollback --run-id <loop_run_id> --generation 1 --reason "效果可疑"
+python -m gamer_rsi loop run --run-id <loop_run_id> --resume                        # 期望退出码 0
 # eval report 不带 --model/--mode/--seed（与 inference 族覆盖不同）→ 必须换一个 run-id
 python -m gamer_rsi eval report --run-id <eval_run_id> --split heldout --baseline all   # 期望退出码 0
 ```
@@ -137,7 +145,7 @@ gh workflow run ci.yml -F slow=true    # 需要时手动补一次慢门（push �
 │   └── tools/gen_diagrams.py     # 图表生成脚本（零依赖）
 ├── schemas/                      # 跨模块 JSON schema（Spec §4.5，MOD-09 登记）
 ├── harness/                      # harness 工件（Spec §4.4）：config.json（可演化层，v1 = {} 无覆盖）
-│                                 #   + prompts/（M1 由 MOD-04 读）+ tools/（M2 由 MOD-07 写）+ versions/v{N}/
+│                                 #   + prompts/（MOD-04 读）+ tools/（MOD-07 写）+ versions/v{N}/（MOD-07 不可变快照）
 ├── tests/                        # unit / integration / golden（Python 训练链路）
 ├── gamer_rsi/                    # RSI 训练链路：env / sandbox / inference / infra
 ├── scripts/ci_gate.sh            # CI 门禁入口（本地与 CI 同一份）

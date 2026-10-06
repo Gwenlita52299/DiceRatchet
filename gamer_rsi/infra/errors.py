@@ -111,6 +111,10 @@ class E(StrEnum):
     E_EVAL_BASELINE_MISSING = "E_EVAL_BASELINE_MISSING"
     E_EVAL_ARM_NOT_ALLOWED = "E_EVAL_ARM_NOT_ALLOWED"
     E_EVAL_CONFLICT_UNRESOLVED = "E_EVAL_CONFLICT_UNRESOLVED"
+    # INV-5：训练/评估 seed 越权（MOD-06 PRD §10；P0，立即中止）
+    E_EVAL_SPLIT_VIOLATION = "E_EVAL_SPLIT_VIOLATION"
+    # 评估局执行失败（MOD-08 记为 dropped，按 lose 计入 n）
+    E_EVAL_EPISODE = "E_EVAL_EPISODE"
 
     # ---- E_IO_*（MOD-09，工程横切；本模块为默认出口）----------------------------------
     E_IO_CONFIG_INVALID = "E_IO_CONFIG_INVALID" # 退出码 2
@@ -138,6 +142,9 @@ class E(StrEnum):
     E_IO_SNAPSHOT_MISSING = "E_IO_SNAPSHOT_MISSING"
     E_IO_MODULE_PENDING = "E_IO_MODULE_PENDING" # 命令面已冻结、所属模块尚未落地（M0 过渡期）
     E_IO_SCHEMA_MISSING = "E_IO_SCHEMA_MISSING"
+    # MOD-06 闭环编排（PRD §10）
+    E_IO_CONCURRENCY = "E_IO_CONCURRENCY" # 非法并发配置（如 train_concurrency>1）：启动即拒绝
+    E_IO_INTERRUPTED = "E_IO_INTERRUPTED" # SIGINT/SIGTERM（事件级）：落盘后以 130 退出，可 --resume
 
 
 # ---- 默认退出码映射 ---------------------------------------------------------------
@@ -162,6 +169,8 @@ EXIT_CODE: Final[Mapping[E, int]] = {
     E.E_ENV_AST_DENIED: EXIT_SANDBOX,
     E.E_ENV_ESCAPE: EXIT_SANDBOX,
     E.E_ENV_HONEYPOT: EXIT_SANDBOX,
+    # MOD-06 PRD §10：环境内核错误（不变式违反/分派异常）是 fail-closed 违例 → 4
+    E.E_ENV_INTERNAL: EXIT_SANDBOX,
     E.E_EVAL_SEED_OVERLAP: EXIT_CONFIG,
     E.E_EVAL_TEST_LOCKED: EXIT_CONFIG,
     E.E_EVAL_INV5_LEAK: EXIT_SANDBOX,
@@ -174,6 +183,11 @@ EXIT_CODE: Final[Mapping[E, int]] = {
     E.E_LLM_OOM: EXIT_MODEL,
     E.E_LLM_UNSUPPORTED: EXIT_MODEL,
     E.E_IO_MODULE_PENDING: EXIT_CONFIG,
+    # MOD-06 闭环编排（PRD §10）：并发配置非法 → 2；信号中断 → 130
+    E.E_IO_CONCURRENCY: EXIT_CONFIG,
+    E.E_IO_INTERRUPTED: EXIT_INTERRUPT,
+    E.E_EVAL_SPLIT_VIOLATION: EXIT_SANDBOX,
+    E.E_EVAL_EPISODE: EXIT_DOMAIN,
     # 可观测性缺失 → 降级 + 告警，不得非零退出
     E.E_IO_CONFIG_UNKNOWN: EXIT_OK,
     E.E_IO_GIT_UNAVAILABLE: EXIT_OK,
@@ -181,6 +195,12 @@ EXIT_CODE: Final[Mapping[E, int]] = {
     E.E_IO_TRAILING_TRUNCATED: EXIT_OK,
     E.E_IO_REDACTION_HIT: EXIT_OK, # 命中本身写 guard_finding 事件，不直接退出
     E.E_ENV_PARITY_MISMATCH: EXIT_DOMAIN,
+    # MOD-05 记忆库（PRD §10/§7.4）：回滚目标缺失 → 退出码 2；落盘类 → 退出码 5
+    E.E_IO_SNAPSHOT_MISSING: EXIT_CONFIG,
+    E.E_IO_MEMORY_CORRUPT: EXIT_IO,
+    E.E_IO_MEMORY_LOCKED: EXIT_IO,
+    E.E_IO_MEMORY_QUOTA: EXIT_IO,
+    E.E_IO_MEMORY_WRITE_FAILED: EXIT_IO,
 }
 
 
@@ -205,6 +225,10 @@ ERROR_MESSAGE: Final[Mapping[E, str]] = {
     E.E_IO_PLOT_UNAVAILABLE: "matplotlib 不可用，绘图已降级",
     E.E_IO_MODULE_PENDING: "命令面已冻结，但所属模块尚未落地",
     E.E_IO_SCHEMA_MISSING: "schema 文件缺失",
+    E.E_IO_CONCURRENCY: "并发配置非法（MOD-06：训练局必须串行，train_concurrency 固定 1）",
+    E.E_IO_INTERRUPTED: "收到 SIGINT/SIGTERM：当前 step 已落盘，可用 --resume 无损续跑",
+    E.E_EVAL_SPLIT_VIOLATION: "seed 的 split 标签越权（INV-5：训练局不得消费 held-out/test seed）",
+    E.E_EVAL_EPISODE: "评估局执行失败（MOD-08 记为 dropped，按 lose 计入 n）",
     # MOD-03 推理后端（Spec §8.3 以 MOD-03 为准）
     E.E_LLM_UNAVAILABLE: "模型不可用：未知 model_id / 权重缺失 / sha256 不匹配",
     E.E_LLM_LOAD_FAILED: "模型加载失败（可退避后换 fallback_backend 重试 1 次）",
@@ -217,6 +241,12 @@ ERROR_MESSAGE: Final[Mapping[E, str]] = {
     E.E_LLM_EXTRACT_FAILED: "LLM 抽取失败（MOD-05 降级为规则抽取）",
     # MOD-08 评估（Spec §8.5 的降级契约）
     E.E_EVAL_TIMEOUT: "单局超过 evals.seed_timeout_s：该局记 dropped，计 n 并按 lose 计",
+    # MOD-05 记忆库（Spec §8.3 已登记码；处置见 PRD §10）
+    E.E_IO_MEMORY_CORRUPT: "记忆文件行损坏 / content_sha256 不符 / entry_id 重复（坏行入 quarantine）",
+    E.E_IO_MEMORY_LOCKED: "memory.lock 被占用 > 5 s：跳过本次压实（写入仍走追加）",
+    E.E_IO_MEMORY_QUOTA: "记忆单文件 > 16 MB 或 active > 2*max_entries：强制淘汰+压实，仍超则停写",
+    E.E_IO_MEMORY_WRITE_FAILED: "记忆写入失败（记忆是增强项：本局继续，第 3 次后本 run 停写）",
+    E.E_IO_SNAPSHOT_MISSING: "回滚目标 memory_v{N}.jsonl 不存在：保持当前版本，CLI 退出码 2",
 }
 
 

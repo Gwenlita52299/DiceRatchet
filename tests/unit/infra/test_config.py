@@ -464,7 +464,22 @@ def test_schema_ids_are_uniform():
         data = json.loads(path.read_text(encoding="utf-8"))
         assert "$id" in data, f"{path.name} 缺 $id"
         ids[path.name] = data["$id"]
-    assert len(ids) == 8
+    # 逐名登记（不用 len==N）：新增 schema 必须显式出现在这里，同时登记
+    # infra/io.py::_SCHEMA_ERROR_CODES 的错误码归属（test_logging 守门）。
+    expected = {
+        "audit_report.schema.json", "decision.schema.json",
+        "generation_report.schema.json", "harness_gate.schema.json",
+        "inference_call.schema.json", "models.schema.json",
+        "observation.schema.json", "trajectory_line.schema.json",
+        # 2026-10-06 MOD-05 memory 落地：两个 entry + 两个跨模块返回值（G5）
+        "memory_entry.schema.json", "reflection_entry.schema.json",
+        "retrieve_result.schema.json", "add_result.schema.json",
+        # 2026-10-06 MOD-06 loop 落地：run 状态机 + 计分台账 + 反思记录外壳（G5）
+        "run_state.schema.json", "scoreboard.schema.json", "loop_reflection.schema.json",
+        # 2026-10-06 MOD-07 evolve 落地：候选改动 + 候选评估记录（G5）
+        "evolve_candidate.schema.json", "evolve_candidate_report.schema.json",
+    }
+    assert set(ids) == expected, sorted(set(ids) ^ expected)
     assert all(value.startswith("https://gamersi.local/schemas/") for value in ids.values()), ids
 
 

@@ -1,6 +1,6 @@
 # GameRSI 模块拆分 Spec
 
-> 版本：v1.6（2026-10-05，§8.6 成本模型按 n=10 实测回填，见 §12/changelog；此前误留在 v1.5）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
+> 版本：v1.7（2026-10-06，M2 开工 D-1/D-2/D-3 裁决回填 §8.6 与 §11.1d，见 §12/changelog）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
 > 上游：[项目计划-GameRSI.md](../项目计划-GameRSI.md) · [RSI调研纪要.md](../RSI调研纪要.md)
 > 游戏本体：`docs/prd/GAME-00/01/02`（规则、观测、动作的游戏侧事实来源，B-09）
 > 下游：`docs/prd/MOD-*.md`（每个模块的技术 PRD 必须与本文件一致；冲突时以本文件为准）
@@ -467,6 +467,14 @@ docs/        模块拆分Spec-GameRSI.md  prd/  README.md
 
 **默认局**：`EpisodeConfig(difficulty="hard", stage_count=6, toggles=全开, character="warrior")`，即第 1–2 章，以第 6 关 Boss 收尾。
 
+**bring-up 口径（2026-10-06，M2 开工 D-2 裁决）**：默认局仍是 hard × 6（M3 主口径），但 M2 的闭环联调与 §3.2 冒烟改用 `difficulty="medium", stage_count=6, toggles=全开`（run 级 override，不改 `configs/default.yaml` 的默认值）。**可执行的 override 写法是环境变量**（B-30：`__` 分层；M1 的 CLI 没有通用 `--set`，只有 `--k/--generations/--hitl/--model/--mode/--seed/--timeout-ms/--log-level`）：
+
+```bash
+GAMERSI_ENV__EPISODE__DIFFICULTY=medium <cmd>   # 等价于 --set env.episode.difficulty=medium
+```
+
+`difficulty` 参与 `config_hash`（实测 hard → `141bef5f…`、medium → `2dc294eb…`），所以 medium 口径属另一个 run-id 族（F10），不会与 hard 基线的归档混族。理由：hard × 6 上 `fixed_prompt` 基线 `win_rate = 0.0%`（n=10，`runs/m1-real-h1n10b`），win_rate 在该局型上没有方差、无法判定演化；medium × 6 先提供可判定的信号，闭环跑通后再回到 hard × 6。**medium × 6 的 `greedy_counter` 通关率与 `D` 尚未实测**（下表只有 medium × 10 与 medium × 3），M2 冒烟前必须补测并登记——`random`/`heuristic` 是秒级，`fixed_prompt` n=10 ≈3.3 h。**补测的判据是"既不是地板也不是天花板"**：若 8B 在 medium × 6 上通关率→100% 或 `mean_stages_cleared` 顶到 6（对照上表 medium × 3 = 100% 的天花板），bring-up 同样没有可判定的方差，D-2 必须再调（改用 medium × 10，或回 hard × 6 并只走连续指标）。
+
 **复现命令（唯一登记处，M0 验收 F5）**：下表每一行都由同一条命令产出，**seed 区间是数字身份的一部分**：
 
 ```bash
@@ -516,9 +524,15 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 - **✅ 口径修正（2026-10-05，M1 验收 F22 已修）**：`t_ep ≈ D·t_d` 现在对**基线也成立**。修复前 MOD-08 的三个基线走 `SandboxRunner._agent_loop`，**每推进一个 env 步就问一次模型**（实测基线 `fixed_prompt` 的 env 步/决策点 = **3.1**，单局平均 **245 次推理**，决策点口径只需 ~79 次）；修复后基线改走 MOD-04 `PolicyAgent(mode="baseline_fixed_prompt")`，**每个决策点一次推理**，与演化 agent 粒度一致。受控实测（假客户端、真实沙箱）：`steps/calls = 2.5–2.7`、`calls/决策点 = 1.07`。因此上表中**含基线的行按 `D·t_d` 正常计算**，不再需要 ×3.1。
 
 **硬约束**：
-- `E_gen` 由 MOD-06 按上式统一计算，超出 `loop.max_episodes_per_generation`（默认 170）即拒绝启动。MOD-07 不再单独设成本上限。
+- `E_gen` 由 MOD-06 按上式统一计算，超出 `loop.max_episodes_per_generation`（2026-10-06 D-1 由 170 定为 **120**）即拒绝启动。MOD-07 不再单独设成本上限。
 - 并发一律采用 P-10 的「局级并发 + 共享串行推理队列」，不得每个 worker 各载一份模型。
 - 任何声称「n 局在 x 分钟内完成」的 NFR 都必须由本式推出。
+
+**✅ 2026-10-06 M2 开工定价（D-1 成本 / D-2 难度 / D-3 功效，见 [M2 开工检查单 §2](tasks/2026-10-06-M2开工检查单.md)）**：
+- **D-1 成本口径落定**：`loop.max_episodes_per_generation = 120`、`C = n_candidates = 1`、`S = smoke_n = 2`、`H = heldout_n = 40`、`K = 30`。按 `E_gen = K + (1+C)(S+H)` → **E_gen = 30 + 2×42 = 114 局 ≤ 120**（上限留 6 局余量）。按 n=10 实测单价 **19.6 min/局**（`D` 均值 97.1）→ **≈37 h/代**（按上限 120 算是 ≈39 h）。`loop.n_candidates == evolve.n_candidates` 有自动校验（`config.py:558`），但 **`loop.smoke_n` 与 `evolve.smoke_n` 没有**——改 `S` 必须两处同步改。**`H` 的边际成本是 `(1+C)` 支臂**：C=1 时 H 每 +10 局 = +20 局 = **+6.5 h/代**（不是单臂的 +3.3 h）；且 H=50 会让 E_gen=134 > 120，即 **H=40 是用满本上限的最大值**。
+- **D-2 难度口径：混合裁决**。默认局保持 hard × 6（M3 主口径），M2 用 medium × 6 做 bring-up（见上方「bring-up 口径」）。由此**遗留一项必须在 MOD-06 联调前写进判据**：hard × 6 上 `fixed_prompt` 基线 win_rate = 0.0%，M3 的「相对基线提升」不能建在 win_rate 上，须改用 `mean_stages_cleared` / `mean_battles_won`（与下方 D-3 同一条结论，对齐 MOD-07 C2 已有的 `metric ∈ {win_rate, mean_stages_cleared, mean_hearts_left}`）。
+- **D-3 功效口径（H 与 n_rep 不变，改两处判据）**：① **H 保持 40**、`n_rep` 保持 1（B-14 已定 `eval_temperature=0.0` + `decode_seed=0`；全面 `n_rep=3` 在 heldout 臂上是 **+52 h/代**，代价高于整代预算），另在 M3 前做**一次性确定性验证**（H1 前 5 个 seed 重跑对 sha256，≈1.6 h），失败走既有的 `E_EVAL_NONDETERMINISTIC → n_rep=3` 升级路径；② `evolve.win_rate_tol: 0.0 → 0.05`，`evolve.gap_threshold` 保持 0.15（H 未变，不随 H 重标；等 §3.2 冒烟产出第一批 train/heldout 配对后再定）。
+- **D-3 的统计依据（n=40 下 win_rate 无法坐实 4–5pp，连续指标可以）**：精确配对 McNemar 在 `p01 − p10 = 0.05` 时的功效——每 seed 不一致率 q=0.10 时 n=40→**0.03**、n=80→0.17、n=160→0.43、n=320→0.78；q=0.05 时 n=40→0.01、n=160→0.82。即 MOD-08 §8.2 的「n=40 最小可判不一致对数 k=6」等价于 **n=40 只能判 ≥15pp 的净跳变**（Δ=15pp→power 0.57、20pp→0.84）。而连续指标 `mean_stages_cleared`（0–6）在 n=40、配对 sd 0.5 / 0.8 下：Δ=0.30 关（= 6 关制的 **5.0pp**）→ power **0.97 / 0.66**。故 **M3 的「4–5pp 量级增益」以 `mean_stages_cleared` 的配对 bootstrap 为准，`win_rate` 降为报告项 + 粗门（<15pp 不用它下结论）**，并保留 MOD-08 报告里的 `power_note`。
 
 ---
 
@@ -630,6 +644,14 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 | B-35 | MOD-05 §3 | 新增 `memory/snapshot.py` | §5 |
 | B-36 | MOD-06 §7 | seed 只能经 `evals.seeds.take` 取用，MOD-06 只校验 split 标签（与 P-14 结论一致） | §4.7 |
 
+### 11.1d v1.7 已回填（2026-10-06，M2 开工 D-1/D-2/D-3 裁决）
+
+| # | 来源 | 决策 | 回填位置 |
+|---|---|---|---|
+| B-37 | M2 开工 D-1 | 成本硬约束落定为 `max_episodes_per_generation=120 / C=1 / S=2 / H=40 / K=30` → `E_gen=114` 局 ≤ 120（≈37 h/代）；`n_candidates` 两处与 `smoke_n` 两处的同步要求、`H` 的 `(1+C)` 支臂边际成本（+10 H = +6.5 h）一并写明 | §8.6 |
+| B-38 | M2 开工 D-2 | 难度**混合裁决**：默认局保持 hard × 6（M3 主口径），M2 联调/冒烟用 medium × 6 bring-up（run 级 override）；hard × 6 的 `fixed_prompt` 基线 win_rate=0.0% ⇒ M3 判据改用 `mean_stages_cleared`/`mean_battles_won`；medium × 6 的基线率与 `D` 待实测 | §8.6 |
+| B-39 | M2 开工 D-3 | 功效口径：`H` 保持 40、`n_rep` 保持 1（一次性确定性验证 + `E_EVAL_NONDETERMINISTIC → n_rep=3` 升级）、`evolve.win_rate_tol` 0.0→0.05、`gap_threshold` 保持 0.15 暂不重标；**M3 的 4–5pp 结论以 `mean_stages_cleared` 配对 bootstrap 为准**（n=40 的 win_rate 只能判 ≥15pp） | §8.6、MOD-08 §8.2/§13、MOD-07 §8.2 |
+
 ### 11.2 待裁决
 
 （无。v1.4 起，新的 PRD 临时决策登记到这里，编号从 P-31 开始。）
@@ -649,3 +671,4 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 | v1.4 | 2026-09-30 17:49 | 确认 v1.3 全部裁决；剩余 11 项待裁决全部确认并回填正文（B-23..B-33），另收录 3 项 PRD 内未登记决策（B-34..B-36）；新增 §1「不变量实施细则」；P-06、P-17 的登记文字按 v1.3 后的实际设计调整；§11.2 清零 |
 | v1.5 | 2026-10-05 | M1 验收 §13.2 的接口面回填（不改架构与模块边界）：§4.4 明确**冻结基线模板是包内工件**（`gamer_rsi/agent/prompts/fixed_v1.md` / `task.md`，不进 `harness/`、不进 `artifact_hash`；基线由 MOD-04 `PolicyAgent(mode="baseline_fixed_prompt")` 承担，F12/F22）；§4.6 补 `baseline --resume` 与「两类续跑语义」、并把「覆盖并入 `config_hash` → 同 run-id 只能同族」写成命令面约定（F10/F18）；§8.6 把 F20 的「`seed_timeout_s` 未被消费」改为「两道闸真被执行」，把 F22 的「基线成本 ×3.1」口径警告改为「已修，按 `D·t_d` 计算」 |
 | v1.6 | 2026-10-05 | **§8.6 成本模型按 n=10 实测回填**（用真实 8B 跑完 `fixed_prompt` n=10 子集并归档于 `runs/m1-real-h1n10b/`，seed 2000–2009）：新增一条实测条目——n=10 **墙钟 3.32 h**、模型时间 3.26 h、1,551 次调用、`t_d` p50 7.46 s / p95 10.13 s、schema 全失败率 5.8%、`fallback` 122 次、`illegal_rate=0.3021`、**`win_rate` 0/10 = 0.0%（CI [0.000, 0.278]）**、`D` 均值 **97.1**（中位 69、min 33、max 245）；并把 §14.18 的「单局 43 min / n=40 29–34 h」标注为**按重尾高端 2 局外推的上界**（按本次均值外推 n=40 模型独占下限 ≈13.1 h）。同时修正「单局墙钟 × `n_workers`」的表述：实测 `d_wall / d_model = 1.02`，**`n_workers` 不放大单局墙钟**，`n` 局墙钟 ≈ `n × 单局模型时间`。明细见 [M1 验收报告 §14.19](reviews/2026-10-04-M1验收报告.md) |
+| v1.7 | 2026-10-06 | **M2 开工 D-1/D-2/D-3 裁决回填**（依据 [M2 开工检查单](tasks/2026-10-06-M2开工检查单.md) §2，登记 B-37..B-39）：§8.6 新增「2026-10-06 M2 开工定价」条目与「bring-up 口径」段。① **D-1**：`loop.max_episodes_per_generation` 170→**120**、`C`（`loop.n_candidates`=`evolve.n_candidates`）2→**1**、`S`（`smoke_n` 两处）5→**2**、`H` 保持 **40** → `E_gen=114` 局（≈37 h/代）；写明 `smoke_n` 无自动校验、`H` 的 `(1+C)` 支臂边际成本为 +10 H = +6.5 h/代（纠正检查单的 +3.3 h）。② **D-2**：难度**混合裁决**——默认局保持 hard × 6，M2 联调/冒烟用 medium × 6 bring-up（run 级 override，`configs/default.yaml` 默认值不动）；hard × 6 的 `fixed_prompt` 基线 win_rate=0.0% ⇒ M3 判据改用 `mean_stages_cleared`/`mean_battles_won`；medium × 6 的基线率与 `D` 列为待实测。③ **D-3**：`H=40`、`n_rep=1` 保持不变（改为 M3 前一次性确定性验证 + 既有的 `n_rep=3` 升级路径），`evolve.win_rate_tol` 0.0→**0.05**、`gap_threshold` 保持 0.15；并以精确配对 McNemar / 配对 bootstrap 的功效计算证明 **n=40 的 win_rate 只能判 ≥15pp**，4–5pp 量级增益改由 `mean_stages_cleared`（Δ=0.30 关 = 6 关制的 5.0pp，power 0.66–0.97）承担。同步改 `configs/default.yaml` 与 `gamer_rsi/infra/config.py` 的对应默认值 |

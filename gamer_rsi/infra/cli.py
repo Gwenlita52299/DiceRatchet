@@ -173,7 +173,16 @@ def _write_io_latency(paths: Any, run_id: str, exit_code: int) -> None:
 
 def _dry_run(parser: argparse.ArgumentParser, args: argparse.Namespace,
              argv: Sequence[str]) -> int:
-    """FR-09-12：不调模型、不写 runs/，stdout 输出可解析 JSON。"""
+    """FR-09-12：不调模型、不写 runs/，stdout 输出可解析 JSON。
+
+    例外：``memory rollback --dry-run``（MOD-05 PRD §8.3）要的是一份**真实**的
+    ``RollbackReport(entries_delta, active_delta, lost_entry_ids)``，静态计划 JSON
+    满足不了该契约，因此按命令路径转发给所属模块的实现（仍不写库）。
+    """
+    if tuple(getattr(args, "command_path", []) or ()) == ("memory", "rollback"):
+        handler = getattr(args, "func", None)
+        if handler is not None:
+            return int(handler(args) or 0)
     cfg = load_config(config_overrides(args), config_dir=Path(args.config_dir))
     plan = {"command": " ".join(argv), "dry_run": True,
             "config": json.loads(canonical_json(cfg)),
@@ -343,16 +352,57 @@ def _add_loop(sub: Any) -> None:
     sp = p.add_subparsers(dest="subcommand", metavar="<subcommand>")
 
     run = _sp(sp, "run", help="运行演化闭环")
-    run.add_argument("--generations", type=int, default=3, help="演化代数")
+    run.add_argument("--generations", type=int, default=None, help="演化代数（覆盖 loop.max_generations）")
     run.add_argument("--k", type=int, default=None, help="每 K 局训练触发一次演化（覆盖 loop.k）")
     run.add_argument("--hitl", dest="hitl", action="store_true", default=None,
                      help="每代挂起等人工 approve/rollback")
     run.add_argument("--no-hitl", dest="hitl", action="store_false", default=None)
+    run.add_argument("--agent", choices=["llm", "heuristic"], default="llm",
+                     help="训练局使用的 agent（Spec §4.6；smoke 默认 heuristic，不触网）")
+    run.add_argument("--seeds", default=None,
+                     help="seed 规格：train:1000-1029（省略时按 MOD-08 seeds.take 取各代 train 块）")
+    run.add_argument("--no-reflect", dest="no_reflect", action="store_true",
+                     help="关闭局末反思（消融「去反思」；免模型路径）")
+    run.add_argument("--no-evolve", dest="no_evolve", action="store_true",
+                     help="不调用 MOD-07（用 stub 只验编排，PRD §14）")
+    run.add_argument("--force-rerun", dest="force_rerun", action="store_true",
+                     help="同 seed 重跑时把旧计分记录标 superseded_by（不删除）")
+    run.add_argument("--retry-reflections", dest="retry_reflections", action="store_true",
+                     help="--resume 时重试此前 status=skipped 的反思（FR-06-4）")
+    run.add_argument("--harness-dir", default="harness", help="harness 工件目录")
+    run.add_argument("--model", default=None, help="MOD-03 模型 id（覆盖 inference.model_id）")
+    run.add_argument("--mode", choices=["train", "eval"], default=None,
+                     help="MOD-03 采样模式（训练局默认 train）")
+    run.add_argument("--timeout-ms", dest="timeout_ms", type=int, default=None,
+                     help="覆盖 inference.total_timeout_ms")
+    run.add_argument("--baseline", dest="baseline", action="store_true", default=None,
+                     help="run 启动时先跑 gen-000 基线（默认：使用真实 MOD-07 时开启）")
+    run.add_argument("--no-baseline", dest="baseline", action="store_false", default=None,
+                     help="跳过 gen-000 基线（只验编排时用）")
     _common_run_id(run)
     _set_func(run, _deferred(["loop", "run"], "loop"), ["loop", "run"])
 
-    for name, help_text in (("status", "查看 run 进度"), ("smoke", "冒烟跑一代（5 局 train）")):
+    for name, help_text in (("status", "查看 run 进度"), ("smoke", "冒烟跑一代（免模型）")):
         sp_run = _sp(sp, name, help=help_text)
+        if name == "smoke":
+            sp_run.add_argument("--seeds", default="train:1000-1002",
+                                help="seed 规格（默认 train:1000-1002）")
+            sp_run.add_argument("--k", type=int, default=3, help="每 K 局触发一次演化（默认 3）")
+            sp_run.add_argument("--generations", type=int, default=1)
+            sp_run.add_argument("--agent", choices=["llm", "heuristic"],
+                                default="heuristic", help="smoke 默认启发式（不触网）")
+            sp_run.add_argument("--no-reflect", dest="no_reflect", action="store_true",
+                                default=True, help="smoke 恒不反思（免模型路径）")
+            sp_run.add_argument("--no-evolve", dest="no_evolve", action="store_true",
+                                default=True)
+            sp_run.add_argument("--force-rerun", dest="force_rerun", action="store_true")
+            sp_run.add_argument("--retry-reflections", dest="retry_reflections",
+                                action="store_true")
+            sp_run.add_argument("--harness-dir", default="harness")
+            sp_run.add_argument("--baseline", dest="baseline", action="store_true",
+                                default=None)
+            sp_run.add_argument("--no-baseline", dest="baseline", action="store_false",
+                                default=None)
         _common_run_id(sp_run)
         _set_func(sp_run, _deferred(["loop", name], "loop"), ["loop", name])
     p.set_defaults(func=None)
@@ -447,10 +497,38 @@ def _add_inference(sub: Any) -> None:
 def _add_memory(sub: Any) -> None:
     p = _sp(sub, "memory", help="反思记忆库（MOD-05）")
     sp = p.add_subparsers(dest="subcommand", metavar="<subcommand>")
-    for name in ("stats", "snapshot", "rollback", "verify", "retrieve"):
-        sp_run = _sp(sp, name)
-        _common_run_id(sp_run)
-        _set_func(sp_run, _deferred(["memory", name], "memory"), ["memory", name])
+    st = _sp(sp, "stats", help="条目数/版本/去重率/冲突数/淘汰数/命中率")
+    _common_run_id(st)
+    _set_func(st, _deferred(["memory", "stats"], "memory"), ["memory", "stats"])
+
+    snap = _sp(sp, "snapshot", help="产出 memory_v{N}.jsonl（I3 复扫全库）")
+    _common_run_id(snap)
+    snap.add_argument("--reason", default="manual", help="快照原因（如 gen-003）")
+    snap.add_argument("--version", dest="memory_version", type=int, default=None,
+                      help="显式版本号（默认 index.memory_version + 1）")
+    _set_func(snap, _deferred(["memory", "snapshot"], "memory"), ["memory", "snapshot"])
+
+    back = _sp(sp, "rollback", help="回滚到 memory_v{N}.jsonl（校验 sha256）")
+    _common_run_id(back)
+    back.add_argument("--to-version", dest="to_version", type=int, default=None,
+                      help="目标快照版本号；缺失/不存在 → 退出码 2（E_IO_SNAPSHOT_MISSING）")
+    _set_func(back, _deferred(["memory", "rollback"], "memory"), ["memory", "rollback"])
+
+    ver = _sp(sp, "verify", help="行完整性 / entry_id 唯一 / sha256 复算")
+    _common_run_id(ver)
+    ver.add_argument("--full", action="store_true",
+                     help="全量自检：复算 content_sha256/situation_key 并执行 I3 复扫")
+    ver.add_argument("--tick", type=int, default=None, help="逻辑时钟（默认库内最大 tick）")
+    _set_func(ver, _deferred(["memory", "verify"], "memory"), ["memory", "verify"])
+
+    ret = _sp(sp, "retrieve", help="按观测检索（供人工复核；MOD-04 走 API）")
+    _common_run_id(ret)
+    ret.add_argument("--obs", default=None, help="观测 JSON 文件路径或内联 JSON")
+    ret.add_argument("--top-k", dest="top_k", type=int, default=None)
+    ret.add_argument("--token-budget", dest="token_budget", type=int, default=None)
+    ret.add_argument("--tick", type=int, default=0, help="逻辑时钟（训练局序号）")
+    ret.add_argument("--tags", default="", help="逗号分隔的标签提示（并入 TagSim）")
+    _set_func(ret, _deferred(["memory", "retrieve"], "memory"), ["memory", "retrieve"])
     p.set_defaults(func=None)
 
 

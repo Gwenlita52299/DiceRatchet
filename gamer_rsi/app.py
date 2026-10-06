@@ -40,13 +40,40 @@ def wire() -> None:
         cli.register(path, handler)
     # MOD-08 测量子命令（G6：baseline / eval report|diversity|ablation|test）
     from .evals.cli import HANDLERS as _EVAL_HANDLERS
-    from .evals.cli import set_inference_client_provider
+    from .evals.cli import set_inference_client_provider as _set_eval_client_provider
 
     for path, handler in _EVAL_HANDLERS.items():
         cli.register(path, handler)
-    # MOD-04 → MOD-03：fixed_prompt 基线 / play --agent llm 需要的客户端由组合根装配
-    # （evals 与 agent 都不自己 import 组合根；与 register_content_hash_provider 同一模式）。
-    set_inference_client_provider(_inference_client)
+    # MOD-05 记忆库子命令（G6：memory stats|snapshot|rollback|verify|retrieve，B-08）
+    from .memory.cli import HANDLERS as _MEMORY_HANDLERS
+
+    for path, handler in _MEMORY_HANDLERS.items():
+        cli.register(path, handler)
+    # MOD-06 闭环编排子命令（G6：loop run|status|smoke）
+    from .loop.cli import HANDLERS as _LOOP_HANDLERS
+    from .loop.cli import get_evolve_provider as _evolve_provider_registered
+    from .loop.cli import set_evolve_provider as _set_evolve_provider
+    from .loop.cli import set_inference_client_provider as _set_loop_client_provider
+
+    for path, handler in _LOOP_HANDLERS.items():
+        cli.register(path, handler)
+    # MOD-07 演化子命令（G6：evolve approve|rollback）
+    from .evolve.cli import HANDLERS as _EVOLVE_HANDLERS
+    from .evolve.proposer import set_client_provider as _set_propose_client_provider
+
+    for path, handler in _EVOLVE_HANDLERS.items():
+        cli.register(path, handler)
+    # MOD-04 → MOD-03：fixed_prompt 基线 / play --agent llm / loop run --agent llm 需要的
+    # 客户端由组合根装配（各模块都不自己 import 组合根；与 register_content_hash_provider
+    # 同一模式）。
+    _set_eval_client_provider(_inference_client)
+    _set_loop_client_provider(_inference_client)
+    # MOD-07 → MOD-03：proposer 的结构化生成同样经组合根装配（INV-1：evolve 不 import inference）。
+    _set_propose_client_provider(_inference_client)
+    # MOD-07 → MOD-06：演化函数由组合根注入；MOD-07 未落地时返回 None，编排走 stub 路径。
+    # 已有显式注册（测试 hook / 未来的 MOD-07 自注册）时不覆盖——组合根只提供默认值。
+    if _evolve_provider_registered() is None:
+        _set_evolve_provider(_evolve_fn_provider)
     # Spec §7：config.json 需要 MOD-01 的配表摘要 content_hash；
     # infra 不能反向 import env（NFR-09-5），因此由组合根注入提供者。
     cli.register_content_hash_provider(_content_hash)
@@ -225,6 +252,28 @@ def _inference_client(cfg: Any, *, run_id: str, runs_root: Path) -> Any:
         manager, model_id=str(inference.model_id),
         total_timeout_ms=int(inference.total_timeout_ms),
         max_attempts=int(inference.max_attempts))
+
+
+# =====================================================================
+# MOD-07 evolve 的注入点（PRD §14 风险表：依赖注入 + --no-evolve 兜底）
+# =====================================================================
+
+def _evolve_fn_provider(cfg: Any, runner: Any, run_ctx: Any) -> Any:
+    """返回 ``evolve_fn(state, run_ctx) -> EvolveOutcome``（MOD-07 的 ``run_one_generation``）。
+
+    PRD §14 风险表：「MOD-07 接口在 M2 前未就绪 → ``evolve_fn`` 依赖注入 +
+    ``--no-evolve`` 开关，用 stub 跑通 M2 前半段」。MOD-07 未落地（import 失败）时返回
+    ``None``，编排自动回到 stub 路径。
+    """
+    try:
+        from .evolve import run_one_generation
+    except Exception: # noqa: BLE001 - MOD-07 未落地
+        return None
+
+    def evolve_fn(state: Any, ctx: Any) -> Any:
+        return run_one_generation(state=state, run_ctx=ctx, runner=runner)
+
+    return evolve_fn
 
 
 if __name__ == "__main__": # pragma: no cover - 便于 `python -m gamer_rsi.app`

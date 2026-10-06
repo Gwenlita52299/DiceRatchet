@@ -76,7 +76,7 @@ python -m gamer_rsi loop smoke --seeds train:1000-1002 --k 3 --no-reflect   # �
 - **FR-06-12（评估执行器）**：MOD-08 `evaluate_arm()` 通过注入的 `EpisodeRunner.run_episode(split="heldout", arm=...)` 执行评估局。本模块只负责执行与落盘，**不做任何聚合指标**（聚合归 MOD-08）。v1.0 的 `run_evaluation_batch()` 已并入 MOD-08 门面。
 - **FR-06-13（成本闸门，Spec v1.3 §8.6）**：
   - 每代启动前按 `E_gen = K + (H + S) + C·(S + H)` 计算本代局数：训练 K、parent 的 heldout H 与冒烟 S、C 个候选各自的冒烟与 heldout。默认 30 + 45 + 2×45 = 165。
-  - `E_gen > loop.max_episodes_per_generation`（默认 170）时拒绝启动该代，记 `loop.budget_exhausted`，退出码 1，并提示下调 C 或 S。这是全系统**唯一**的成本上限，MOD-07 不另设。
+  - `E_gen > loop.max_episodes_per_generation`（**默认 120**，2026-10-06 M2 开工 D-1 由 170 下调；D-1 下 `E_gen = K + (1+C)(S+H) = 30 + 2×42 = 114`）时拒绝启动该代，记 `loop.budget_exhausted`，退出码 1，并提示下调 C 或 S。这是全系统**唯一**的成本上限，MOD-07 不另设。
   - 每代开始写一条 `loop.cycle_start{e_gen, est_hours}` 事件，其中 `est_hours = E_gen × D × t_d`，`t_d` 取 MOD-03 实测 p50。
 - **FR-06-13a（gen-000 基线）**：run 启动时（`generation=0`），先对 harness v0 在 H1 上调 MOD-08 `evaluate_arm` 与 `evaluate_generation`，生成 `generations/gen-000/report.json`（`decision="baseline"`），后续各代与它对比。
 - **FR-06-14（并发纪律）**：
@@ -294,8 +294,8 @@ def run(self, seeds=None, *, resume=False):
 | `loop.eval_concurrency` | int | 2 | 评估局的局级并发数（共享推理队列） |
 | `loop.max_candidates_per_generation` | int | 3 | 每代候选数上限，硬上限 3（Spec §8.6） |
 | `loop.eval_seeds_per_candidate` | int | 40 | 单候选评估局数；`× candidates` 不得超下一条 |
-| `loop.max_episodes_per_generation` | int | 170 | 每代总局数上限，与 `E_gen` 比较（FR-06-13，全系统唯一成本上限） |
-| `loop.n_candidates` / `loop.smoke_n` / `loop.heldout_n` | int | 2 / 5 / 40 | 参与 `E_gen` 计算；与 MOD-07 `evolve.n_candidates`、MOD-08 `n_heldout` 取同一值（由 MOD-09 配置合并时校验一致） |
+| `loop.max_episodes_per_generation` | int | **120** | 每代总局数上限，与 `E_gen` 比较（FR-06-13，全系统唯一成本上限）；2026-10-06 D-1：170 → 120，与 `C=1/S=2/H=40` 一起定（`E_gen=114`） |
+| `loop.n_candidates` / `loop.smoke_n` / `loop.heldout_n` | int | **1 / 2 / 40** | 参与 `E_gen` 计算；`n_candidates` 与 MOD-07 `evolve.n_candidates`、`heldout_n` 与 MOD-08 `n_heldout` 由 `load_config()` 校验一致（`config.py:558/562`）；**`smoke_n` 与 `evolve.smoke_n` 无自动校验，改 S 必须两处同步**（2026-10-06 D-1） |
 | `loop.io_retry` / `loop.io_backoff_ms` | int / int | 3 / 200 | 磁盘写失败重试次数与指数退避基数（200/400/800 ms） |
 | `loop.llm_timeout_s` | float | 90.0 | 单次决策生成超时（透传 MOD-03） |
 | `loop.fallback_on_llm_failure` | bool | true | 模型连续失败降级 heuristic，该局标 `not_for_eval` |
@@ -337,7 +337,7 @@ def run(self, seeds=None, *, resume=False):
 - **T-06-7 断点续跑不重复计分**：给定 `k=3` 跑到第 4 局后中断（状态已落盘）；当 `--resume`；则 `completed_train_seeds` 无重复、`scoreboard.episodes` 的 `episode_key` 全局唯一、总局数等于期望值。
 - **T-06-8 中断粒度**：给定第 7 局第 3 步后抛 `KeyboardInterrupt`；当 恢复；则前 2 步已在 JSONL、该 seed 从 `pending_queue` 头部重跑且不产生重复 `episode_key`。
 - **T-06-9 HITL 挂起/恢复**：给定 `hitl=true`、假 `evolve_fn` 返回 `pending_human=True`；当 `run()`；则 `phase=="hitl_wait"`、`hitl_pending.cycle` 正确、退出码 0；当 写好新 harness 后 `--resume`；则 `hitl_pending is None` 且 `harness_version` 为新值。
-- **T-06-10 成本闸门**：给定 `K=30, H=40, S=5, C=3`（E_gen=210）与 `max_episodes_per_generation=170`；当 到达周期边界；则不调用 MOD-07，发 `loop.budget_exhausted{e_gen:210,cap:170}`，退出码 1；把 C 改为 2（E_gen=165）后正常触发。
+- **T-06-10 成本闸门**：给定 `K=30, H=40, S=5, C=3`（E_gen=210）与 `max_episodes_per_generation=170`；当 到达周期边界；则不调用 MOD-07，发 `loop.budget_exhausted{e_gen:210,cap:170}`，退出码 1；把 C 改为 2（E_gen=165）后正常触发。**另加 D-1 默认档用例**：给定默认 `K=30, H=40, S=2, C=1`（E_gen=114）与 `max_episodes_per_generation=120`；当 到达周期边界；则**不**触发预算闸门（114 ≤ 120），正常调用 MOD-07；把 `H` 改为 50（E_gen=134）后则发 `loop.budget_exhausted{e_gen:134,cap:120}`（这条用例同时锁住「`H` 每 +10 在 C=1 下是 +20 局」的算式）。
 - **T-06-11 训练并发守卫**：给定 `train_concurrency=2`；当 启动；则 立即以 `E_IO_CONCURRENCY` 拒绝（退出码 2）。
 - **T-06-12 split 越权**：给定 seed 标 `heldout` 却被当训练局传入；当 run；则 抛 `E_EVAL_SPLIT_VIOLATION`（INV-5 回归）。
 - **T-06-13 Schema round-trip（G5）**：`RunState → JSON → RunState` 完全相等，且 `state.json` 通过 §6 JSON Schema 校验。

@@ -9,6 +9,15 @@ env:
   golden_dir: src/game/tests/golden
   check_invariants: true
   episode: # 默认局（Spec §8.6）：hard × 6 关，greedy_counter 通关率 45.5%（n=200，seed 1–200；复现命令见 Spec §8.6）
+    # 2026-10-06（M2 开工 D-2 裁决）：默认局**保持 hard × 6**（M3 主口径），本值不动。
+    # M2 的闭环联调与 §3.2 冒烟改用 run 级 override 的 medium × 6 bring-up 口径：
+    #   GAMERSI_ENV__EPISODE__DIFFICULTY=medium <cmd>      # B-30：__ 分层，等价于 env.episode.difficulty
+    # （stage_count 保持 6、toggles 全开；M1 的 CLI 没有通用 --set，只有 --k/--generations/--hitl/
+    #   --model/--mode/--seed/--timeout-ms/--log-level 这 8 个显式覆盖键。）
+    # hard × 6 的 fixed_prompt 基线 win_rate = 0.0%，win_rate 无方差、无法判定演化，
+    # 先跑 medium × 6 把闭环跑通，再回到 hard × 6。medium × 6 的基线与 D 需实测登记（Spec §8.6）。
+    # 注意：difficulty 参与 config_hash（实测 hard→141bef5f…、medium→2dc294eb…），
+    # 因此 medium 口径属另一个 run-id 族（F10），不会与 hard 基线的归档混淆。
     difficulty: hard
     stage_count: 6
     character: warrior
@@ -158,10 +167,14 @@ loop:
   eval_concurrency: 2
   max_candidates_per_generation: 3 # 硬上限 3
   eval_seeds_per_candidate: 40
-  max_episodes_per_generation: 170 # 全系统唯一成本上限（E_gen 比较）
-  n_candidates: 2
-  smoke_n: 5
-  heldout_n: 40
+  # 2026-10-06（M2 开工 D-1 裁决）：170 → 120。按 C=1/S=2/H=40 实测单价 19.6 min/局，
+  # E_gen = K + (1+C)(S+H) = 30 + 2×42 = 114 局 ≤ 120，≈37 h/代（按上限 120 算是 ≈39 h）。
+  # H=40 是用满本上限的最大值：H=50 → E_gen=134 > 120（且 +20 局 = +6.5 h，不是 +3.3 h——
+  # H 被 (1+C) 支臂各花一次）。改动本值必须同步重算 Spec §8.6 的成本条目。
+  max_episodes_per_generation: 120 # 全系统唯一成本上限（E_gen 比较）
+  n_candidates: 1 # 2026-10-06 D-1：2 → 1（多候选择优的削弱由 §3.2 冒烟确认）
+  smoke_n: 2 # 2026-10-06 D-1：5 → 2。**必须与 evolve.smoke_n 同步改**（config.py 不做该校验）
+  heldout_n: 40 # 2026-10-06 D-3：保持 40（H1 篮子 2000–2039；与 eval.n_heldout 必须相等）
   io_retry: 3
   io_backoff_ms: 200
   llm_timeout_s: 90.0
@@ -172,15 +185,19 @@ loop:
 
 # ============ evolve（MOD-07 harness 自进化）============
 evolve:
-  n_candidates: 2
+  n_candidates: 1 # 2026-10-06 D-1：2 → 1（必须 == loop.n_candidates，config.py:558 已校验）
   n_traj: 20
   memory_top_k: 12
   max_diff_lines: 40
   max_diff_chars: 4000
-  smoke_n: 5
+  smoke_n: 2 # 2026-10-06 D-1：5 → 2。**必须与 loop.smoke_n 同步改**（无自动校验）
   min_heldout_n: 20
-  win_rate_tol: 0.0
+  # 2026-10-06 D-3：0.0 → 0.05。win_rate 在 n=40 上的粒度是 1/40 = 0.025，tol < 0.025
+  # 等于「候选比 parent 少赢 1 局即被 C1 拒」，会拒掉约一半真正等价的候选。
+  win_rate_tol: 0.05
   alpha: 0.05
+  # 2026-10-06 D-3：保持 0.15（H 未变故不随 H 重标定）。M2 §3.2 冒烟产出第一批
+  # train/heldout 配对后，再按实测 win_rate_gap 分布决定是否重标。
   gap_threshold: 0.15
   min_entropy_slope: -0.01
   max_illegal_rate: 0.05

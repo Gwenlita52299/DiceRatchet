@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamersi.local/schemas/scoreboard.schema.json",
+  "title": "scoreboard",
+  "description": "runs/<run_id>/metrics/scoreboard.json —— 训练局计分台账（MOD-06 PRD §6/§7.3，FR-06-10）。计分幂等键为 episode_key；同一 seed 因 --force-rerun 重跑时旧记录标 superseded_by，不删除。评估局**不写**本台账（Spec P-15）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["episodes"],
+  "properties": {
+    "episodes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/score_row" }
+    }
+  },
+  "$defs": {
+    "score_row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "episode_key",
+        "seed",
+        "split",
+        "generation",
+        "harness_version",
+        "outcome",
+        "truncation_reason",
+        "steps",
+        "decisions",
+        "cum_reward",
+        "stages_cleared",
+        "hearts_left",
+        "battles_won",
+        "illegal_attempts",
+        "fallback_decisions",
+        "superseded_by"
+      ],
+      "properties": {
+        "episode_key": {
+          "type": "string",
+          "pattern": "^e-[0-9]{6}-g[0-9]{3}-.+$",
+          "description": "Spec §4.5 B-16：e-{seed:06d}-g{generation:03d}-{arm}"
+        },
+        "seed": { "type": "integer" },
+        "split": { "enum": ["train", "heldout", "test"] },
+        "generation": { "type": "integer", "minimum": 0 },
+        "harness_version": { "type": "integer", "minimum": 0 },
+        "outcome": { "enum": ["win", "lose"] },
+        "truncation_reason": { "type": ["string", "null"] },
+        "steps": { "type": "integer", "minimum": 0 },
+        "decisions": { "type": "integer", "minimum": 0 },
+        "cum_reward": { "type": "number" },
+        "stages_cleared": { "type": "integer", "minimum": 0 },
+        "hearts_left": { "type": "integer", "minimum": 0 },
+        "battles_won": { "type": "integer", "minimum": 0 },
+        "illegal_attempts": { "type": "integer", "minimum": 0 },
+        "fallback_decisions": { "type": "integer", "minimum": 0 },
+        "superseded_by": {
+          "type": ["string", "null"],
+          "description": "--force-rerun 时指向新记录的 episode_key；旧记录保留供审计"
+        }
+      }
+    }
+  }
+}

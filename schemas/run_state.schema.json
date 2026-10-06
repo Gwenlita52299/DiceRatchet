@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamersi.local/schemas/run_state.schema.json",
+  "title": "run_state",
+  "description": "runs/<run_id>/state.json —— run 级状态机（MOD-06 PRD §6/§7.1，FR-06-8）。语义归 MOD-06，原子写原语归 MOD-09（infra.run.write_state）。state.json 必须能独立重建「下一步做什么」，不依赖内存态（NFR-06-2）。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "phase",
+    "generation",
+    "harness_version",
+    "k",
+    "completed_train_seeds",
+    "pending_queue",
+    "hitl_pending",
+    "counters",
+    "budget",
+    "updated_at"
+  ],
+  "properties": {
+    "run_id": { "type": "string", "minLength": 1 },
+    "phase": {
+      "enum": ["pending", "playing", "reflecting", "evolving", "hitl_wait", "done", "failed"],
+      "description": "PRD §7.2：pending → playing → (reflecting → playing)* → evolving → (hitl_wait → playing | playing) → … → done；异常边任意 phase → failed"
+    },
+    "generation": { "type": "integer", "minimum": 0 },
+    "harness_version": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "FR-06-7：每局开始从 harness/version.json 重读，不跨代缓存"
+    },
+    "k": { "type": "integer", "minimum": 1, "default": 30 },
+    "tick": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "FR-06-3a 逻辑时钟 = 已完成训练局数；MOD-05 淘汰/TTL/时新度的唯一时间源"
+    },
+    "completed_train_seeds": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "uniqueItems": true
+    },
+    "pending_queue": {
+      "type": "array",
+      "items": { "type": "integer" }
+    },
+    "hitl_pending": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["cycle", "generation", "candidate_dir", "report"],
+      "properties": {
+        "cycle": { "type": "integer", "minimum": 0 },
+        "generation": { "type": "integer", "minimum": 0 },
+        "candidate_dir": { "type": "string" },
+        "report": { "type": "string" }
+      }
+    },
+    "last_completed_cycle": { "type": ["integer", "null"], "minimum": 0 },
+    "evolving_cycle": { "type": ["integer", "null"], "minimum": 0 },
+    "memory_version": { "type": "integer", "minimum": 0, "default": 0 },
+    "resume_count": { "type": "integer", "minimum": 0, "default": 0 },
+    "counters": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "episodes_total",
+        "episodes_truncated",
+        "reflections_ok",
+        "reflections_skipped",
+        "illegal_actions",
+        "env_errors",
+        "llm_timeouts",
+        "io_retries"
+      ],
+      "properties": {
+        "episodes_total": { "type": "integer", "minimum": 0 },
+        "episodes_truncated": { "type": "integer", "minimum": 0 },
+        "reflections_ok": { "type": "integer", "minimum": 0 },
+        "reflections_skipped": { "type": "integer", "minimum": 0 },
+        "illegal_actions": { "type": "integer", "minimum": 0 },
+        "env_errors": { "type": "integer", "minimum": 0 },
+        "llm_timeouts": { "type": "integer", "minimum": 0 },
+        "io_retries": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eval_episodes_used", "eval_episodes_cap", "candidates_used"],
+      "properties": {
+        "eval_episodes_used": { "type": "integer", "minimum": 0 },
+        "eval_episodes_cap": { "type": "integer", "minimum": 0 },
+        "candidates_used": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "interrupted_at": { "type": ["string", "null"] },
+    "updated_at": { "type": "string", "format": "date-time" }
+  }
+}

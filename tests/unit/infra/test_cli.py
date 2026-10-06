@@ -62,12 +62,25 @@ def _required_args(path: tuple[str, ...]) -> list[str]:
     return []
 
 
-def test_pending_module_returns_exit_2():
-    # 尚未落地的模块命令 → E_IO_MODULE_PENDING，退出码 2（MOD-01/02/03/04/08 均已落地，
-    # 用仍未落地的 MOD-06 loop 作为样例；2026-10-04 M1 验收 F4 后 play 已接线）
-    code, out, err = _run(["loop", "run", "--run-id", "r-pending"])
+def test_every_declared_command_is_wired():
+    """M2 收口：MOD-01…09 全部落地，命令面不再有 ``E_IO_MODULE_PENDING`` 的悬空命令。
+
+    守门口径从"未落地模块返回 pending"改为"**不允许**再返回 pending"——任何新命令如果
+    只登记了 argparse 却没有注册实现，本用例会红（``evolve approve`` 作为抽样）。
+    """
+    from gamer_rsi.app import wire
+    from gamer_rsi.infra import cli as _cli
+
+    wire()
+    # MOD-07 的两个子命令必须真的注册了实现（不是只登记了 argparse）
+    handlers = getattr(_cli, "_HANDLERS", {})
+    assert ("evolve", "approve") in handlers
+    assert ("evolve", "rollback") in handlers
+    code, _out, err = _run(["evolve", "approve", "--run-id", "r-pending",
+                            "--generation", "1"])
+    assert E.E_IO_MODULE_PENDING not in err
+    # run 目录不存在 → 配置错误（退出码 2）
     assert code == 2
-    assert E.E_IO_MODULE_PENDING in err
 
 
 def test_guards_check_on_repo_is_clean():

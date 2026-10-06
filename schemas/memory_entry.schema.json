@@ -1,0 +1,295 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gamersi.local/schemas/memory_entry.schema.json",
+  "title": "MemoryEntry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "entry_id",
+    "schema_version",
+    "created_at",
+    "created_tick",
+    "expires_tick",
+    "ttl_ticks",
+    "run_id",
+    "generation",
+    "harness_version",
+    "source_episode_id",
+    "source_reflection_id",
+    "situation",
+    "situation_key",
+    "tags",
+    "lesson",
+    "polarity",
+    "confidence",
+    "n_ref",
+    "n_adopted",
+    "n_win_adopted",
+    "n_not_adopted",
+    "n_win_not_adopted",
+    "utility",
+    "status",
+    "text_hash",
+    "content_sha256"
+  ],
+  "properties": {
+    "entry_id": {
+      "type": "string",
+      "pattern": "^mem-[0-9a-f]{12}$"
+    },
+    "schema_version": {
+      "const": "1.1"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "created_tick": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "expires_tick": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "ttl_ticks": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "harness_version": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "source_episode_id": {
+      "type": "string"
+    },
+    "source_reflection_id": {
+      "type": "string"
+    },
+    "situation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "phase",
+        "stage_bucket",
+        "virtue_bucket",
+        "hearts_left",
+        "hand_count"
+      ],
+      "properties": {
+        "phase": {
+          "enum": [
+            "map",
+            "player_turn",
+            "shop",
+            "event",
+            "treasure",
+            "shrine",
+            "forge",
+            "rest",
+            "relic_swap"
+          ]
+        },
+        "stage_bucket": {
+          "enum": [
+            "1-2",
+            "3-4",
+            "5-6",
+            "7+"
+          ]
+        },
+        "node_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "virtue_bucket": {
+          "enum": [
+            "critical",
+            "low",
+            "mid",
+            "high"
+          ]
+        },
+        "hearts_left": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "enemy_school": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "intent_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "counter_arrow": {
+          "enum": [
+            "up",
+            "down",
+            "eq",
+            null
+          ]
+        },
+        "hand_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 8
+        },
+        "corrupt_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "slot_kinds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 8
+        }
+      }
+    },
+    "situation_key": {
+      "type": "string",
+      "pattern": "^sk-[0-9a-f]{8}$"
+    },
+    "tags": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "enum": [
+          "combat",
+          "low_virtue",
+          "defense",
+          "corruption",
+          "school_counter",
+          "target_choice",
+          "map_route",
+          "shop",
+          "event",
+          "forge",
+          "relic",
+          "elite",
+          "boss",
+          "status_effect",
+          "end_turn",
+          "ability"
+        ]
+      }
+    },
+    "lesson": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240
+    },
+    "action_hint": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "polarity": {
+      "enum": [
+        "do",
+        "avoid"
+      ]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "last_ref_tick": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "n_ref": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "n_adopted": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "n_win_adopted": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "n_not_adopted": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "n_win_not_adopted": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "utility": {
+      "type": "number",
+      "minimum": -1,
+      "maximum": 1
+    },
+    "status": {
+      "enum": [
+        "active",
+        "evicted",
+        "superseded",
+        "quarantined"
+      ]
+    },
+    "supersedes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "superseded_by": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "conflict_group": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "merged_from": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "embedding": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "number"
+      }
+    },
+    "text_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

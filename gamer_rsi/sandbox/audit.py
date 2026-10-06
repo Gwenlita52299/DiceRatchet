@@ -130,6 +130,32 @@ LOG_NON_CONTENT_KEYS: Final[frozenset[str]] = frozenset({
     "report_sha256", "low_confidence", "config_hash", "exit_code",
 })
 
+#: 记忆/反思文件里**非内容**字段（2026-10-06，MOD-05 落地时新增）。
+#:
+#: 与 ``LOG_NON_CONTENT_KEYS`` 同理：``memory`` 面此前按**原始行**扫 seed，于是
+#: ``created_at: "2026-10-02T09:14:11Z"`` 的年份 ``2026`` 落在 heldout H1 的
+#: 2000–2039 区间，被当成 seed 泄漏——实测在**任何**有记忆库的 run 上刷出 7 条
+#: critical 假阳性，G4「自测 run 0 告警」直接失效。这里按「内容 / 机器元数据」
+#: 分流：seed 规则只扫内容字段，其余规则（field/canary）仍扫原始行。
+#: **不含** ``lesson`` / ``text`` / ``tags`` / ``action_hint`` / ``situation`` /
+#: ``hits`` / ``reflection`` / ``scan``——那才是真正的泄漏面。
+MEMORY_NON_CONTENT_KEYS: Final[frozenset[str]] = frozenset({
+    # 时间与版本（ISO 年份会撞 heldout 区间；逻辑时钟可以长到 4 位）
+    "created_at", "ts", "generated_at", "tick", "created_tick", "expires_tick",
+    "last_ref_tick", "ttl_ticks", "run_id", "episode_id", "source_episode_id",
+    "reflection_id", "source_reflection_id", "entry_id", "situation_key",
+    "memory_version", "parent_memory_version", "store_schema_version",
+    "harness_version", "generation",
+    # 摘要与哈希（十六进制片段必须整段带字母，但显式排除更稳）
+    "content_sha256", "text_hash", "config_hash",
+    # 计数/效用/向量：机器累加器与浮点数组（``0.2072`` 也会被当成 seed）
+    "n_ref", "n_adopted", "n_win_adopted", "n_not_adopted", "n_win_not_adopted",
+    "utility", "embedding", "confidence",
+    "decisions", "illegal_attempts", "fallback_decisions", "battles_won",
+    "stages_cleared", "hearts_left", "llm_latency_ms", "prompt_tokens",
+    "completion_tokens",
+})
+
 
 # ----------------------------------------------------------------------
 # 数据结构（PRD §6）
@@ -749,13 +775,30 @@ def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "tr
                 rel = _rel(path, run_dir)
                 text = _read_text(path, io_errors)
                 for line_no, line in enumerate(text.splitlines(), start=1):
-                    record(scan_text(line, forbidden=forbidden, surface="memory",
-                                     episode_id=path.stem, step=max(0, line_no - 1),
+                    step = max(0, line_no - 1)
+                    # seed 规则只扫内容字段（见 MEMORY_NON_CONTENT_KEYS：ISO 年份 2026
+                    # 撞 heldout 区间）；其余规则仍扫原始行。
+                    seed_text = line
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        row = None
+                    if isinstance(row, dict):
+                        seed_text = json.dumps(
+                            {k: v for k, v in row.items()
+                             if k not in MEMORY_NON_CONTENT_KEYS},
+                            ensure_ascii=False, sort_keys=True)
+                    record(scan_text(seed_text, forbidden=seed_tokens, surface="memory",
+                                     episode_id=path.stem, step=step,
+                                     evidence_chars=evidence_chars,
+                                     line_ref=f"{rel}:{line_no}"))
+                    record(scan_text(line, forbidden=other_tokens, surface="memory",
+                                     episode_id=path.stem, step=step,
                                      evidence_chars=evidence_chars,
                                      line_ref=f"{rel}:{line_no}"))
                     record(_honeypot_findings(line, surface="memory",
                                               episode_id=path.stem,
-                                              step=max(0, line_no - 1),
+                                              step=step,
                                               line_ref=f"{rel}:{line_no}"))
 
     # ---- surface: log（轨迹 / events 的 JSONL 全字段）------------------------

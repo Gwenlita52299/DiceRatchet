@@ -41,6 +41,15 @@ _SCHEMA_ERROR_CODES: Final[Mapping[str, E]] = {
     "models": E.E_LLM_UNAVAILABLE, # MOD-03：模型注册表
     "inference_call": E.E_LLM_BACKEND_ERROR, # MOD-03：推理埋点记录
     "generation_report": E.E_EVAL_SCHEMA, # MOD-08：代际报告（Spec §4.5 B-16）
+    "memory_entry": E.E_IO_MEMORY_CORRUPT, # MOD-05：记忆条目（坏行/未知字段）
+    "reflection_entry": E.E_EVAL_SCHEMA, # MOD-05：反思条目（文本由 MOD-06 产出）
+    "retrieve_result": E.E_EVAL_SCHEMA, # MOD-05：跨模块检索返回值（G5）
+    "add_result": E.E_EVAL_SCHEMA, # MOD-05：跨模块写入返回值（G5）
+    "run_state": E.E_IO_RUN_STATE, # MOD-06：run 级状态机（PRD §6 FR-06-8）
+    "scoreboard": E.E_IO_RUN_STATE, # MOD-06：训练局计分台账（PRD §6 FR-06-10）
+    "loop_reflection": E.E_EVAL_SCHEMA, # MOD-06：局末反思记录外壳（entry 归 MOD-05）
+    "evolve_candidate": E.E_EVOLVE_PATCH_INVALID, # MOD-07：候选改动（PRD §6.1）
+    "evolve_candidate_report": E.E_EVOLVE_JUDGE_FAILED, # MOD-07：候选评估记录（PRD §7）
 }
 
 #: 未登记 schema 的兜底码（MOD-08 测量报告等）；登记表是一一对应的，正常不该走到这里。
@@ -77,6 +86,7 @@ def schema_dir(path: Path | str) -> None:
         _SCHEMA_ROOTS.insert(0, root)
     with _LOCK:
         _SCHEMA_CACHE.clear()
+        _VALIDATORS.clear()
 
 
 def register_schema_dir(path: Path | str) -> None: # pragma: no cover - 别名，语义同 schema_dir
@@ -111,6 +121,28 @@ def _get_jsonschema() -> Any:
     return _validator_mod
 
 
+#: 已实例化的校验器缓存：``fname → Draft202012Validator``。
+#:
+#: 为什么缓存：``jsonschema.validate(instance, schema)`` 每次都会**重新构建**校验器并
+#: 重新解析 ``$ref`` / ``if-then``。轨迹是每步一行（Spec §4.5），MOD-06 的
+#: NFR-06-3 要求编排层单步 ≤ 5 ms —— 重建校验器一项就占掉大半预算。schema 文件在
+#: 一个进程内不变，因此按文件名缓存实例是安全的（``validate()`` 不修改校验器状态）。
+_VALIDATORS: dict[str, Any] = {}
+
+
+def _validator_for(fname: str, schema: dict[str, Any]) -> Any:
+    cached = _VALIDATORS.get(fname)
+    if cached is not None:
+        return cached
+    jsonschema = _get_jsonschema()
+    validator_cls = jsonschema.validators.validator_for(schema)
+    validator_cls.check_schema(schema)
+    validator = validator_cls(schema)
+    with _LOCK:
+        _VALIDATORS[fname] = validator
+    return validator
+
+
 def validate(name: str, obj: Any) -> None:
     """按 ``schemas/<name>.schema.json`` 校验 ``obj``；失败抛携带 json_path 的错误。
 
@@ -118,9 +150,12 @@ def validate(name: str, obj: Any) -> None:
     ``_SCHEMA_ERROR_CODES`` 按 **schema 归属模块** 选定，不再用名字前缀硬编码；
     登记原则与兜底见该表。
     """
+    fname = name if name.endswith(".schema.json") else f"{name}.schema.json"
     schema = _load_schema(name)
     try:
-        _get_jsonschema().validate(instance=obj, schema=schema)
+        _validator_for(fname, schema).validate(obj)
+    except InfraError:
+        raise
     except Exception as exc: # jsonschema.ValidationError / SchemaError
         path = getattr(exc, "json_path", "$")
         message = getattr(exc, "message", str(exc))

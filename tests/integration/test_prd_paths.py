@@ -42,18 +42,14 @@ _PATTERN_CHARS = "*<>{}"
 _TRAILING_PUNCT = ".,:;"
 
 # ---- 白名单（必须尽量小；每条都要写明理由）-----------------------------------
-# MOD-05/06/07 尚未实现（排期 §2 归 M2），相关 PRD 已定稿并**先行登记**测试路径。
-# 这是「前瞻登记」而非「路径漂移」，所以显式豁免；模块一落地，下面
+# 这是「前瞻登记」而非「路径漂移」的显式豁免；模块一落地，
 # test_pending_whitelist_has_no_stale_entries 就会因「路径已存在」而失败，逼维护者删条目。
-_PENDING_MODULE_PATHS: dict[str, str] = {
-    "tests/unit/memory/": "MOD-05 memory 未实现（M2）",
-    "tests/integration/test_loop_memory.py": "MOD-05 memory 未实现（M2）",
-    "tests/fakes.py": "MOD-06 loop 未实现（M2）",
-    "tests/integration/test_loop_closure.py": "MOD-06 loop 未实现（M2）",
-    "tests/unit/evolve/": "MOD-07 evolve 未实现（M2）",
-    "tests/integration/evolve/": "MOD-07 evolve 未实现（M2）",
-    "tests/unit/evolve/test_malicious_candidates.py": "MOD-07 evolve 未实现（M2）",
-}
+# 2026-10-06：MOD-05 memory（tests/unit/memory/ + tests/golden/memory/）、
+# MOD-06 loop（tests/fakes.py + tests/integration/test_loop_closure.py +
+# tests/integration/test_loop_memory.py + tests/unit/loop/）、
+# MOD-07 evolve（tests/unit/evolve/ 含 test_malicious_candidates.py +
+# tests/integration/evolve/）均已落地，对应条目全部删除 —— 当前白名单为空。
+_PENDING_MODULE_PATHS: dict[str, str] = {}
 
 
 def _extract_tokens(line: str) -> list[str]:

@@ -27,8 +27,8 @@ from .harness import (ArmResult, EpisodeRunner, EvalResult, EvalSpec, SandboxRun
                       TraceWriter, append_generations_csv, check_report_determinism,
                       compare_all_metrics, compare_paired, episode_result_from_rows,
                       evaluate_arm, evaluate_generation, generation_report_path,
-                      load_episode_results, read_episode_protocols, report_sha_path,
-                      run_eval, utc_now,
+                      kind_index, load_episode_results, read_episode_protocols,
+                      report_sha_path, run_eval, slot_key, utc_now,
                       write_ext_metrics, write_generation_report, write_plots_data)
 from .metrics import (EpisodeResult, GainVerdict, CollapseVerdict, PairedTest, SplitMetrics,
                       aggregate, action_entropy_curve, bootstrap_mean_ci, bootstrap_seed,
@@ -60,7 +60,7 @@ __all__ = [
     "EvalSpec", "EvalResult", "EpisodeRunner", "TraceWriter", "ArmResult", "SandboxRunner",
     "run_eval", "evaluate_arm", "compare_paired", "compare_all_metrics",
     "evaluate_generation", "load_episode_results", "read_episode_protocols",
-    "episode_result_from_rows", "EPISODE_PROTOCOL",
+    "episode_result_from_rows", "EPISODE_PROTOCOL", "kind_index", "slot_key",
     "write_generation_report", "check_report_determinism", "append_generations_csv",
     "write_ext_metrics", "write_plots_data", "generation_report_path", "report_sha_path",
     # baselines

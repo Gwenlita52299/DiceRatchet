@@ -1,0 +1,178 @@
+{
+  "$id": "https://gamersi.local/schemas/evolve_candidate_report.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "MOD-07 candidates/{candidate_id}.json（PRD §7：candidate + report + decision + reason + error_code）。",
+  "properties": {
+    "candidate_id": {
+      "maxLength": 12,
+      "minLength": 12,
+      "pattern": "^[0-9a-f]{12}$",
+      "type": "string"
+    },
+    "decided_by": {
+      "enum": [
+        "auto",
+        "human",
+        null
+      ],
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "decision": {
+      "enum": [
+        "accept",
+        "reject",
+        "pending",
+        "rollback",
+        null
+      ],
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "diff": {
+      "type": "string"
+    },
+    "diff_lines": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "error_code": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "expected_effect": {
+      "maxItems": 3,
+      "minItems": 3,
+      "prefixItems": [
+        {
+          "enum": [
+            "win_rate",
+            "mean_stages_cleared",
+            "mean_hearts_left"
+          ]
+        },
+        {
+          "enum": [
+            "up",
+            "down"
+          ]
+        },
+        {
+          "maximum": 3,
+          "minimum": 1,
+          "type": "integer"
+        }
+      ],
+      "type": "array"
+    },
+    "gen_id": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "prompt_patch",
+        "tool_patch",
+        "config_patch"
+      ]
+    },
+    "rationale": {
+      "type": "string"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "report": {
+      "additionalProperties": false,
+      "properties": {
+        "diversity": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "elapsed_s": {
+          "minimum": 0,
+          "type": "number"
+        },
+        "error_code": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "heldout": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "paired": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "smoke": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "train": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "smoke",
+        "heldout",
+        "paired",
+        "elapsed_s",
+        "error_code"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "type": "string"
+    },
+    "touched_files": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "verdict": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "kind",
+    "diff",
+    "rationale",
+    "expected_effect",
+    "touched_files",
+    "diff_lines",
+    "gen_id",
+    "report",
+    "decision",
+    "decided_by",
+    "reason",
+    "error_code"
+  ],
+  "title": "evolve_candidate_report",
+  "type": "object"
+}

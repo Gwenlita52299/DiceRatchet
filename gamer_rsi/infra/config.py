@@ -371,10 +371,10 @@ class LoopConfig:
     eval_concurrency: int = 2
     max_candidates_per_generation: int = 3 # 硬上限 3（Spec §8.6）
     eval_seeds_per_candidate: int = 40
-    max_episodes_per_generation: int = 170 # 全系统唯一成本上限
-    n_candidates: int = 2
-    smoke_n: int = 5
-    heldout_n: int = 40
+    max_episodes_per_generation: int = 120 # 全系统唯一成本上限（Spec §8.6 D-1：170 → 120）
+    n_candidates: int = 1 # D-1：2 → 1
+    smoke_n: int = 2 # D-1：5 → 2（必须与 evolve.smoke_n 同步）
+    heldout_n: int = 40 # D-3：保持 40（H1 篮子；必须 == eval.n_heldout）
     io_retry: int = 3
     io_backoff_ms: int = 200
     llm_timeout_s: float = 90.0
@@ -386,8 +386,14 @@ class LoopConfig:
     def validate(self) -> None:
         _check("loop.k", self.k, int, minv=1)
         _check("loop.max_generations", self.max_generations, int, minv=1)
-        _check("loop.train_concurrency", self.train_concurrency, int, minv=1, maxv=1,
-               extra="训练局并发度固定 1（共享记忆写入）")
+        # FR-06-14：训练局必须串行（共享记忆写入）→ 非法并发用 E_IO_CONCURRENCY（退出码 2），
+        # 而不是泛化的 E_IO_CONFIG_INVALID（MOD-06 PRD §10 明确登记了该码）。
+        if int(self.train_concurrency) != 1:
+            raise InfraError(
+                E.E_IO_CONCURRENCY,
+                f"loop.train_concurrency={self.train_concurrency} 非法：训练局必须串行（固定 1）",
+                hint="共享记忆写入无法在训练局之间并发（Spec §8.6 P-10 / FR-06-14）；"
+                     "评估局的并发由 loop.eval_concurrency 单独控制")
         _check("loop.eval_concurrency", self.eval_concurrency, int, minv=1, maxv=8)
         _check("loop.max_candidates_per_generation", self.max_candidates_per_generation,
                int, minv=1, maxv=3, extra="Spec §8.6 硬上限 3")
@@ -399,14 +405,14 @@ class LoopConfig:
 class EvolveConfig:
     """MOD-07 harness 自进化（evolve.*）。"""
 
-    n_candidates: int = 2
+    n_candidates: int = 1 # D-1：2 → 1（必须 == loop.n_candidates）
     n_traj: int = 20 # 证据束最近 train 轨迹摘要条数
     memory_top_k: int = 12
     max_diff_lines: int = 40
     max_diff_chars: int = 4000
-    smoke_n: int = 5
+    smoke_n: int = 2 # D-1：5 → 2（必须与 loop.smoke_n 同步）
     min_heldout_n: int = 20 # C0 门槛
-    win_rate_tol: float = 0.0 # C1 允许下降幅度
+    win_rate_tol: float = 0.05 # C1 允许下降幅度（D-3：0.0 → 0.05；n=40 的 win_rate 粒度 0.025）
     alpha: float = 0.05 # C2 显著性水平
     gap_threshold: float = 0.15 # C3 win_rate_gap 阈值
     min_entropy_slope: float = -0.01 # C4 熵斜率下限
