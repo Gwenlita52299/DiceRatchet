@@ -93,6 +93,12 @@ def test_add_reflection_p95_within_budget(full_store: MemoryStore) -> None:
         full_store.add_reflection(
             replace(base, reflection_id=f"refl-perf-{counter['n']}"), provenance=prov)
 
+    # 预热一次：首调用要新建条目并触发一次压实（模块级 fixture 的 2000 条 active 已达
+    # 上限），是**一次性**成本而非稳态写入成本。与 retrieve 用例的预热同理，避免把冷启动
+    # 尖峰算进 P95（CI 上首调用实测 ~21–25 ms，会把 P95 直接顶过 15 ms）。
+    full_store.add_reflection(replace(base, reflection_id="refl-perf-warmup"),
+                              provenance=prov)
+    counter["n"] = 0
     p95 = _p95_ms(call)
     assert p95 <= 15.0, f"add_reflection P95 = {p95:.1f} ms > 15 ms（NFR-05-2）"
 

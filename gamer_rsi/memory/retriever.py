@@ -594,16 +594,22 @@ def doc_tokens(entry: MemoryEntry) -> list[str]:
 
 def bm25_score(query_tokens: Sequence[str], doc_tokens_: Sequence[str],
                df: Mapping[str, int], n_docs: int, avgdl: float,
-               k1: float = 1.2, b: float = 0.75) -> float:
-    """标准 BM25（k1/b 可配）；空查询/空文档/空库返回 0.0。"""
+               k1: float = 1.2, b: float = 0.75, *,
+               doc_freqs: Mapping[str, int] | None = None,
+               query_set: Sequence[str] | None = None) -> float:
+    """标准 BM25（k1/b 可配）；空查询/空文档/空库返回 0.0。
+
+    ``doc_freqs`` / ``query_set`` 是调用方（``MemoryStore._retrieve_over``）传入的预算结果：
+    文档词频与「查询词去重排序」，避免在 2000 条打分里逐条重算。
+    """
     if not query_tokens or not doc_tokens_ or n_docs <= 0:
         return 0.0
     length = len(doc_tokens_)
     if length == 0 or avgdl <= 0:
         return 0.0
-    freqs = Counter(doc_tokens_)
+    freqs = doc_freqs if doc_freqs is not None else Counter(doc_tokens_)
     total = 0.0
-    for token in sorted(set(query_tokens)):
+    for token in query_set if query_set is not None else sorted(set(query_tokens)):
         freq = freqs.get(token, 0)
         if freq == 0:
             continue
@@ -626,23 +632,28 @@ def score_entry(entry: MemoryEntry, *, obs_key: str, obs_tags: Mapping[str, floa
                 recency_lambda: float, tick: int,
                 query_embedding: Sequence[float] | None = None,
                 doc: Sequence[str] | None = None,
+                doc_freqs: Mapping[str, int] | None = None,
+                query_set: Sequence[str] | None = None,
+                entry_tags: set[str] | None = None,
                 bm25_k1: float = 1.2, bm25_b: float = 0.75) -> float:
     """§6.3 的 ``S(e)``（已含硬过滤之外的五项加权 + 同情境加成），``round(S, 6)``。
 
-    ``doc`` 为可选的预算好的文档 token（``MemoryStore`` 的索引缓存，NFR-05-2）；
-    缺省时现算 ``doc_tokens(entry)``（纯函数调用路径）。
+    ``doc`` / ``doc_freqs`` / ``query_set`` / ``entry_tags`` 均为可选预算结果
+    （``MemoryStore`` 的索引缓存，NFR-05-2）；缺省时现算，保持纯函数调用路径不变。
     """
     wrapped = float(weights.get("tag", 1.0))
     total_weight = sum(float(w) for w in obs_tags.values())
     if total_weight > 0.0:
-        tag_sim = sum(float(w) for tag, w in obs_tags.items() if tag in set(entry.tags))
+        tags_of_entry = entry_tags if entry_tags is not None else set(entry.tags)
+        tag_sim = sum(float(w) for tag, w in obs_tags.items() if tag in tags_of_entry)
         tag_sim /= total_weight
     else:
         tag_sim = 0.0
 
     doc_tokens_ = doc if doc is not None else doc_tokens(entry)
     bm25 = bm25_score(query_tokens, doc_tokens_, df, n_docs, avgdl,
-                      k1=bm25_k1, b=bm25_b)
+                      k1=bm25_k1, b=bm25_b, doc_freqs=doc_freqs,
+                      query_set=query_set)
     bm25_norm = _bm25_norm(bm25)
 
     vec_sim = 0.0

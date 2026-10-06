@@ -19,6 +19,7 @@ import json
 import os
 import re
 import time
+from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Final, Mapping, Sequence
@@ -109,6 +110,7 @@ class MemoryStore:
         self._df: dict[str, int] = {}
         self._doc_len: dict[str, int] = {}
         self._doc_tokens_cache: dict[str, list[str]] = {}
+        self._doc_freq_cache: dict[str, dict[str, int]] = {}
         self._line_cache: dict[str, str] = {}
         self._total_len = 0
         self._appends = 0
@@ -116,7 +118,13 @@ class MemoryStore:
         self._write_disabled = False
         self._emitting = False
         self._last_tick = 0
-        self._dirty = False
+        # 「已有行的内容被改写、必须整档重写才能落盘」= ``_replace``（合并/效用回填/
+        # 冲突标记）置位，``_compact_locked``/``rollback`` 清零。**淘汰不置位**：
+        # ``_archive`` 只是删行，文件里少一行无需重写（``_load_active`` 会忽略它）。
+        self._lines_dirty = False
+        # 自上次压实以来淘汰的行数（这些行仍留在 ``active`` 文件里，``close()`` 据此决定
+        # 是否补一次压实）。
+        self._removed_rows = 0
 
         self._forbidden_seeds: dict[str, str] = {}
         self._forbidden_tokens: dict[str, str] = {}
@@ -400,7 +408,8 @@ class MemoryStore:
         self._appends = 0
         self._counters["appends"] = 0
         self._counters["compact_count"] = int(self._counters.get("compact_count", 0)) + 1
-        self._dirty = False
+        self._lines_dirty = False
+        self._removed_rows = 0
         self._save_index()
 
     def _file_order_entries(self) -> list[MemoryEntry]:
@@ -443,11 +452,13 @@ class MemoryStore:
         self._df = {}
         self._doc_len = {}
         self._doc_tokens_cache = {}
+        self._doc_freq_cache = {}
         self._line_cache = {}
         self._total_len = 0
         for entry in self._entries.values():
             tokens = doc_tokens(entry)
             self._doc_tokens_cache[entry.entry_id] = tokens
+            self._doc_freq_cache[entry.entry_id] = Counter(tokens)
             self._line_cache[entry.entry_id] = entry_line(entry)
             self._doc_len[entry.entry_id] = len(tokens)
             self._total_len += len(tokens)
@@ -466,6 +477,7 @@ class MemoryStore:
     def _index_add(self, entry: MemoryEntry) -> None:
         tokens = doc_tokens(entry)
         self._doc_tokens_cache[entry.entry_id] = tokens
+        self._doc_freq_cache[entry.entry_id] = Counter(tokens)
         self._doc_len[entry.entry_id] = len(tokens)
         self._total_len += len(tokens)
         for token in set(tokens):
@@ -473,6 +485,7 @@ class MemoryStore:
 
     def _index_remove(self, entry: MemoryEntry) -> None:
         self._line_cache.pop(entry.entry_id, None)
+        self._doc_freq_cache.pop(entry.entry_id, None)
         tokens = self._doc_tokens_cache.pop(entry.entry_id, None)
         length = self._doc_len.pop(entry.entry_id, 0)
         self._total_len = max(0, self._total_len - length)
@@ -647,7 +660,8 @@ class MemoryStore:
         self._entries[entry.entry_id] = entry
         self._index_add(entry)
         self._line_cache[entry.entry_id] = entry_line(entry)
-        self._dirty = True
+        # 行内容变了：必须整档重写才能落盘（``_load_active`` 视重复 entry_id 为损坏）。
+        self._lines_dirty = True
 
     # =================================================================
     # 事件与埋点
@@ -1070,8 +1084,20 @@ class MemoryStore:
         self._save_index()
 
     def _after_write(self) -> None:
+        """写入收尾：需要时压实（FR-05-4），随后查配额并落索引。
+
+        ``_appends`` 由 ``_compact_locked`` 清零，因此 ``>=`` 即「距上次压实已追加
+        ``compact_every`` 次」。
+
+        压实只在两种情形发生：追加到阈值（FR-05-4 的「每 ``compact_every`` 次」），或
+        ``_lines_dirty``（``_replace`` 改写了已有行，必须整档重写才能落盘）。
+        **``_archive`` 淘汰不在此列**：它只删行，文件里少一行无需重写。库满
+        （``active == max_entries``）时每次新增都会淘汰一条，若因淘汰而压实，就会退化成
+        「每个 ``add_reflection()`` 全量重写 2000 行」——实测 P95 由 ~1.2 ms 恶化到
+        ~3.4 ms，叠加 CI 的慢盘即击穿 NFR-05-2 的 15 ms 预算（CI 实测 24.9 ms）。
+        """
         compact_every = int(getattr(self.cfg, "compact_every", 200))
-        if self._dirty or (compact_every > 0 and self._appends >= compact_every):
+        if self._lines_dirty or (compact_every > 0 and self._appends >= compact_every):
             self._compact()
         self._check_quota()
         self._save_index()
@@ -1153,13 +1179,20 @@ class MemoryStore:
         return evicted
 
     def _archive(self, entry: MemoryEntry, *, reason: str) -> None:
-        """归档：从 active 库移出 → 追加 ``memory_evicted.jsonl`` → 事件 ``memory.evict``。"""
+        """归档：从 active 库移出 → 追加 ``memory_evicted.jsonl`` → 事件 ``memory.evict``。
+
+        淘汰只**删行**、不改行内容，因此**不置 ``_lines_dirty``**：``active`` 文件里多出的
+        那一行会在下次压实（追加阈值 / ``snapshot()`` / ``close()``）或下次加载时被忽略
+        （``_load_active`` 的重复 id 守卫同样兜底）。库满（``active == max_entries``）时
+        每个新增都会淘汰一条，若在此置位就会退化成「每次写入全量重写 2000 行」——
+        NFR-05-2 的 15 ms 预算即被击穿。
+        """
         archived = entry.with_updates(status="evicted")
         self._entries.pop(entry.entry_id, None)
         self._line_cache.pop(entry.entry_id, None)
         self._evicted[entry.entry_id] = archived
         self._index_remove(entry)
-        self._dirty = True
+        self._removed_rows += 1
         self._evicted_count += 1
         self._counters["evicted"] = int(self._counters.get("evicted", 0)) + 1
         try:
@@ -1217,30 +1250,46 @@ class MemoryStore:
         key, _situation, obs_tags_tuple = situation_key(obs, tags_hint)
         tag_weights = obs_tag_weights(obs, tags_hint)
         query_tokens = list(dict.fromkeys([*obs_tags_tuple, *map(str, tags_hint)]))
+        # 查询词去重排序在 2000 条打分里是纯重复劳动：这里算一次，循环内直接复用。
+        query_set = tuple(sorted(set(query_tokens)))
+        entry_tags = {e.entry_id: set(e.tags) for e in entries.values()}
         query_embedding = self._query_embedding(
             " ".join([*obs_tags_tuple, *map(str, tags_hint)]), weights)
 
         live = [e for e in entries.values()]
         tokens_map = self._tokens_map_for(entries)
-        df, n_docs, avgdl = _stats_from_tokens(tokens_map)
+        # BM25 的 (df, n_docs, avgdl)：对 ``self._entries`` 直接复用增量维护的索引
+        # （``_index_add``/``_index_remove``）；否则（``MemoryView`` 的独立条目集）现算一次。
+        if entries is self._entries:
+            df, n_docs, avgdl = self._stats_for_ranking()
+        else:
+            df, n_docs, avgdl = _stats_from_tokens(tokens_map)
 
         dropped: list[DroppedEntry] = []
         scored: list[tuple[MemoryEntry, float]] = []
         harness_now = int(self.harness_version if current_harness is None
                           else current_harness)
-        for entry in sorted(live, key=lambda e: e.entry_id):
+        live_sorted = sorted(live, key=lambda e: e.entry_id)
+        # 增量维护的 df/doc_len 与 ``live`` 同源时，逐条取缓存；否则退化为现算。
+        indexed = df is self._df and tokens_map is self._doc_tokens_cache
+        for entry in live_sorted:
             reason = self._hard_filter(entry, tick=tick,
                                        exclude_stale=exclude_stale_harness,
                                        harness_now=harness_now)
             if reason:
                 dropped.append(DroppedEntry(entry_id=entry.entry_id, reason=reason))
                 continue
+            doc = tokens_map.get(entry.entry_id)
             score = score_entry(entry, obs_key=key, obs_tags=tag_weights,
                                 query_tokens=query_tokens, df=df, n_docs=n_docs,
                                 avgdl=avgdl, weights=weights, same_situation_bonus=bonus,
                                 recency_lambda=recency_lambda, tick=int(tick),
                                 query_embedding=query_embedding,
-                                doc=tokens_map.get(entry.entry_id),
+                                doc=doc,
+                                doc_freqs=(self._doc_freq_cache.get(entry.entry_id)
+                                           if indexed else None),
+                                query_set=query_set, entry_tags=entry_tags.get(
+                                    entry.entry_id),
                                 bm25_k1=float(bm25_cfg.get("k1", 1.2)),
                                 bm25_b=float(bm25_cfg.get("b", 0.75)))
             scored.append((entry, score))
@@ -1421,7 +1470,9 @@ class MemoryStore:
             write_bytes_atomic(self.active_path, body.encode("utf-8"), fsync=True)
             self._entries = {e.entry_id: e for e in data.entries}
             self._rebuild_index()
-            self._dirty = False
+            self._lines_dirty = False
+            self._removed_rows = 0
+            self._appends = 0
             self._index_state["memory_version"] = new_version
             self._index_state["parent_memory_version"] = target_version
             self._record_lineage(new_version)
@@ -1572,8 +1623,13 @@ class MemoryStore:
         return dict(self._index_state)
 
     def close(self) -> None:
-        """收尾：压实并落 index.json（幂等）。"""
-        if self._dirty:
+        """收尾：把内存态与 ``active`` 文件对齐（需要时压实）并落 index.json（幂等）。
+
+        压实条件：有改写过的行（``_lines_dirty``）或本段有淘汰（``_removed_rows``，
+        active 文件里留着已淘汰的行）。只是追加且未到阈值时无需重写——那些行本来就已经
+        追加落盘了。
+        """
+        if self._lines_dirty or self._removed_rows:
             self._compact()
         self._save_index()
 
