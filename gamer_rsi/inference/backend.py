@@ -814,7 +814,7 @@ class BackendManager:
         max_attempts = int(kwargs.get("max_attempts", getattr(config, "max_attempts", 3)))
         backoff_ms = int(kwargs.get("retry_backoff_ms", getattr(config, "retry_backoff_ms", 200)))
         total_timeout_ms = int(kwargs.get("total_timeout_ms",
-                                          getattr(config, "total_timeout_ms", 8_000)))
+                                          getattr(config, "total_timeout_ms", 120_000)))
         ctx = kwargs.get("call_context") or CallContext(run_id=self.infra.run_id())
         if ctx.seed is None and sampling.get("seed") is not None:
             ctx = replace(ctx, seed=sampling["seed"])

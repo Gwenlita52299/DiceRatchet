@@ -1,6 +1,6 @@
 # MOD-03 inference 技术 PRD
 
-> 版本：v1.4（2026-10-06 补记 2026-10-04 真实模型实测回填与 §11 测试登记，见 §17）· 状态：草案（待复核）· 所属里程碑：M1
+> 版本：v1.5（2026-10-06 对齐超时默认值的三层漂移，见 §17）· 状态：草案（待复核）· 所属里程碑：M1
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（**唯一事实来源**；冲突以 Spec 为准）
 > 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md) §4 技术栈（Mac M5 24GB / MLX 或 llama.cpp / Qwen3-8B → 27B Q4）、§8 风险（LLM 输出非 JSON）
 > 作者：GameRSI 技术文档（MOD-03 负责模块）· 依赖：MOD-09 infra（配置、日志、run_id、CLI）
@@ -264,7 +264,7 @@ async def _attempt_loop(spec, messages, schema, grammar, sampling, deadline) -> 
 | `registry_path` / `model_id` | str | `configs/models.yaml` / `qwen3-8b-q4` | 注册表路径 / 默认模型（阶段二切 `qwen3-30b-a3b-q4`） |
 | `mode` | enum | `train` | `train`/`eval`；`eval` 收紧采样并强制 seed（FR-03-07） |
 | `ram_budget_gb` | float | `20.0` | 内存预算上限；注册表可覆盖 |
-| `max_attempts` / `retry_backoff_ms` / `total_timeout_ms` | int | `3` / `200` / `120000` | 尝试次数（含首答）/ 退避基数（指数倍增）/ 全程墙钟预算（2026-10-04 实测由 8000 回填） |
+| `max_attempts` / `retry_backoff_ms` / `total_timeout_ms` | int | `3` / `200` / `120000` | 尝试次数（含首答）/ 退避基数（指数倍增）/ 全程墙钟预算（2026-10-04 实测由 8000 回填；**2026-10-06 起 dataclass 默认与 `configs/default.yaml` 一致**，此前 `InferenceConfig.total_timeout_ms` 停留在 8000——只影响「不读 YAML 直接构造配置」的路径，`config_hash` 不变；守门用例见 `tests/unit/infra/test_config.py::test_inference_defaults_match_yaml`） |
 | `generate_timeout_ms` / `max_tokens` / `reasoning_max_tokens` | int | `30000` / `256` / `160` | 单次 `generate` 超时 / 决策 tok 上限（Spec §8.6）/ 分两次生成时 `reasoning` 预算 |
 | `context_overflow_policy` | enum | `reject` | `reject` → `E_LLM_CONTEXT_OVERFLOW`；`truncate` → 截断最早的 user 消息 |
 | `eval_temperature` / `train_temperature_min` | float | `0.0`（固定）/ `0.7` | 评估温度（B-14，不可配置为其他值）/ 训练温度下限（计划 §3.3） |
@@ -425,4 +425,5 @@ Qwen3 思考模式烧光 token 预算、probe prompt 欠约束（详见 [M1 验�
 | v1.1 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：评估温度固定为 0.0（P0-4）；`ACTION_SCHEMA` 改为扁平的 `DECISION_SCHEMA`（动作计划，GBNF 可编译，与 MOD-04 共用同一文件，P1-19）；L0 修复失败计为一次尝试（P0-5）；评估并发默认 2 局、共享推理队列；删除误写的父类 `BuildManagerFacade` |
 | v1.2 | 2026-09-30 17:49 | P-11、P-24 裁决回填为 Spec B-28/B-31；Q-1 结案 |
 | v1.3 | 2026-10-06 | **按 M1 验收复核（M-1/M-5）对齐 §11 测试登记**：① 新增单测 `test_cli_smoke.py` 条目——补集成套件观测不到的 `robustness` **未达阈值退出码 1** 分支（集成 `test_inference_cli.py` 已覆盖成功路径；此前单测口径下 `cli.py` 显示 0%，是"不收集 `tests/integration/`"造成的假象，补后 0% → 42%）；并注明「`init_run_dir` 预建 `metrics/`，失败判据是报告文件不存在」这一易错点。② 集成 `test_inference_robustness.py` 条目补「工件必须与当前快照/模板同批产出」——旧工件早于 F13/F23/F25 模板改动，已用当前快照重跑 n=200 覆盖（首答 0.94 → 0.995、`schema_fail_rate` 0.005 → 0.0）。依据 [M1 验收复核 §M-1/§M-5](../reviews/2026-10-05-M1验收复核.md) |
+| v1.5 | 2026-10-06 | **对齐超时默认值的三层漂移**（复核登记 → 已修）：① `InferenceConfig.total_timeout_ms` dataclass 默认 8000 → **120000**（与 `configs/default.yaml` 一致）；② `inference/backend.py` 的同键 `getattr` 兜底 8_000 → **120_000**；③ 连带把 `app.py` / `evals/cli.py` 的 `seed_timeout_s` 兜底（300 / 1800）对齐为 **14400**（`EvalConfig` / `EvalSpec` / YAML 三方原已一致）。依据：`_default_dict()` 取自 dataclass、YAML 逐键覆盖，故改 dataclass 默认**不改变生效值**（仍 120000 / 14400），**`config_hash` 实测不变**（`b6f119ca325e282d`），存量 run 不会 `E_IO_RUN_CONFLICT`；差异只影响「不读 YAML 直接构造配置」的路径。新增守门用例 `tests/unit/infra/test_config.py`（7 条，含源码文本级兜底校验），并做变异验证 |
 | v1.4 | 2026-10-06 | **补记 2026-10-04 的真实模型实测回填**（此前只在 §16 Q-2/Q-6 与配置注释里，变更记录缺一条）：权重 `mlx-community/Qwen3-8B-4bit` 落盘（`weights_sha256=20303070…`）、`resident_gb_est` 5.6 → **4.6077**、`perf_budget` 1500/3000/25 → **5000/6000/10**（原目标实测未达成，按实测重设）、`total_timeout_ms` 8000 ms → **120000 ms**（8 s < 实测 p50，正常决策会被判 `E_LLM_TIMEOUT`）；主快照 n=200 实测 `m1_evidence=true`、首答 0.94、`schema_fail_rate` 0.005、`t_d` p50 5.687 s / p95 11.70 s；并登记只有真实权重能暴露的 **F14**（mlx-lm API 漂移：`load(tokenizer_path=)` / `stream_generate(seed=)` / `mx.metal.*` 改名）、**F15**（Qwen3 思考模式烧光 token 预算 → 显式 `enable_thinking=False`）、**F16**（probe/bench 固定 prompt 欠约束）、**F17**（权重摘要误把 HF 下载缓存算进去）。依据 [M1 验收报告 §12](../reviews/2026-10-04-M1验收报告.md) |

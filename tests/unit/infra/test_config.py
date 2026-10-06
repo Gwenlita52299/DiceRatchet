@@ -466,3 +466,71 @@ def test_schema_ids_are_uniform():
         ids[path.name] = data["$id"]
     assert len(ids) == 8
     assert all(value.startswith("https://gamersi.local/schemas/") for value in ids.values()), ids
+
+
+# ---- 推理/评估关键默认值的三层一致性（M1 验收复核发现的默认值漂移） ----------------
+
+@pytest.mark.parametrize("key,expected", [
+    ("total_timeout_ms", 120000),
+    ("generate_timeout_ms", 30000),
+    ("max_attempts", 3),
+    ("max_tokens", 256),
+    ("retry_backoff_ms", 200),
+])
+def test_inference_defaults_match_yaml(key, expected):
+    """dataclass 默认必须与 ``configs/default.yaml`` 一致。
+
+    背景（2026-10-06 M1 验收复核）：``total_timeout_ms`` 的 YAML 值是实测回填的 120000，
+    但 dataclass 默认长期停留在 8000。两者不一致时，凡「不读 default.yaml 直接构造
+    ``InferenceConfig()``」的路径（库式调用/测试夹具）都会拿到把正常决策判成
+    ``E_LLM_TIMEOUT`` 的旧值；且 ``_default_dict()`` 取自 dataclass，会让 YAML 缺失该键时静默回落。
+    """
+    from gamer_rsi.infra.config import InferenceConfig
+
+    assert getattr(InferenceConfig(), key) == expected
+    assert getattr(load_config(config_dir=CONFIGS, harness_config=REPO / "harness/config.json").inference,
+                   key) == expected
+
+
+def test_seed_timeout_defaults_agree_across_layers():
+    """``EvalConfig`` / ``EvalSpec`` / YAML 的 ``seed_timeout_s`` 必须同为 14400（F24 实测标定值）。"""
+    from gamer_rsi.evals.harness import EvalSpec
+    from gamer_rsi.infra.config import EvalConfig
+
+    yaml_value = load_config(config_dir=CONFIGS,
+                             harness_config=REPO / "harness/config.json").evals.seed_timeout_s
+    spec_value = EvalSpec(run_id="r", generation=0, harness_version=0, split="train",
+                          basket="train_window", seeds=[1], agent_kind="heuristic").seed_timeout_s
+    assert yaml_value == 14400
+    assert EvalConfig().seed_timeout_s == yaml_value
+    assert spec_value == yaml_value
+
+
+def test_numeric_getattr_fallbacks_for_timeouts_are_canonical():
+    """超时的 ``getattr(cfg, key, <字面量>)`` 兜底必须与规范值一致。
+
+    这类兜底只在属性缺失时才生效，因此很容易在改默认值时被漏掉——M1 验收复核时一次查到
+    三处漂移（``app.py`` 300、``evals/cli.py`` 1800、``inference/backend.py`` 8000）。
+    这里直接读源码文本，保证以后再改默认值时这三处不会再次分叉。
+    """
+    import inspect
+
+    from gamer_rsi import app as app_mod
+    from gamer_rsi.evals import cli as evals_cli
+    from gamer_rsi.inference import backend as backend_mod
+
+    cases = [
+        (app_mod, "seed_timeout_s", "14400"),
+        (evals_cli, "seed_timeout_s", "14400"),
+        (backend_mod, "total_timeout_ms", "120_000"),
+    ]
+    for module, key, expected in cases:
+        source = inspect.getsource(module)
+        hits = [line.strip() for line in source.splitlines()
+                if "getattr(" in line and f'"{key}"' in line]
+        assert hits, f"{module.__name__} 里找不到 {key} 的 getattr 兜底"
+        for hit in hits:
+            compact = hit.replace(" ", "").replace("_", "")
+            assert expected.replace("_", "") in compact, \
+                f"{module.__name__} 的 {key} 兜底不是 {expected}：{hit}"
+

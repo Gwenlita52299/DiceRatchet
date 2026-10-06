@@ -164,7 +164,7 @@ def _play(args: argparse.Namespace) -> int:
     spec = EvalSpec(
         run_id=run_id, generation=0, harness_version=0, split=split,  # type: ignore[arg-type]
         basket=seeds, seeds=seeds, agent_kind=agent_kind, n_workers=1,
-        seed_timeout_s=int(getattr(eval_cfg, "seed_timeout_s", 300)),
+        seed_timeout_s=int(getattr(eval_cfg, "seed_timeout_s", 14400)),
         t_max=int(getattr(eval_cfg, "t_max", 120)),
         min_support=int(getattr(eval_cfg, "min_support", 3)),
         drop_rate_max=float(getattr(eval_cfg, "drop_rate_max", 0.10)),

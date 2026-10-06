@@ -248,7 +248,7 @@ class InferenceConfig:
     ram_budget_gb: float = 20.0
     max_attempts: int = 3
     retry_backoff_ms: int = 200
-    total_timeout_ms: int = 8000
+    total_timeout_ms: int = 120000 # 实测回填（与 default.yaml 同值）；原 8000 < 实测 p50，会把正常决策判成 E_LLM_TIMEOUT
     generate_timeout_ms: int = 30000
     max_tokens: int = 256
     reasoning_max_tokens: int = 160

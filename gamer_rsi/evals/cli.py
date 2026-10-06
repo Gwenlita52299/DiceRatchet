@@ -163,7 +163,7 @@ def cmd_baseline(args: argparse.Namespace) -> int:
                        n_workers=int(getattr(cfg.evals, "n_workers", 1)),
                        resume=resume,
                        model_backend=_registry_backend(cfg, model_id),
-                       seed_timeout_s=int(getattr(cfg.evals, "seed_timeout_s", 1800)))
+                       seed_timeout_s=int(getattr(cfg.evals, "seed_timeout_s", 14400)))
     payload = {"kind": kind, "split": split, "basket": basket, "run_id": run_id,
                "archive_dir": str(baselines_dir(run_id, paths.root)),
                "archive_path": arm.archive_path or None,

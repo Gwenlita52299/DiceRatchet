@@ -49,7 +49,7 @@ L0 环境        MOD-01 env-rules    MOD-02 env-sandbox
 |---|---|---|---|---|
 | MOD-01 | env-rules（GAME 内核的 Python 逐位移植） | L0 | M0 | [PRD](prd/MOD-01-env-rules-PRD.md) v1.0 |
 | MOD-02 | env-sandbox（投影/隔离/审计/蜜罐） | L0 | M0 | [PRD](prd/MOD-02-env-sandbox-PRD.md) v1.2.1 |
-| MOD-03 | inference（本地模型推理） | L1 | M1 | [PRD](prd/MOD-03-inference-PRD.md) v1.4 |
+| MOD-03 | inference（本地模型推理） | L1 | M1 | [PRD](prd/MOD-03-inference-PRD.md) v1.5 |
 | MOD-04 | policy（prompt/解析/工具契约） | L1 | M1 | [PRD](prd/MOD-04-policy-PRD.md) v0.6 |
 | MOD-05 | memory（策略记忆与反思库） | L1 | M2 | [PRD](prd/MOD-05-memory-PRD.md) v1.2 |
 | MOD-06 | loop（闭环编排） | L2 | M2 | [PRD](prd/MOD-06-loop-PRD.md) v1.2 |
