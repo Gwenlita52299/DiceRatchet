@@ -8,10 +8,18 @@
 
 取 60 次样本的 p95（``sorted[samples*95//100]``）；实测通常远低于上界（本机实测
 retrieve ≈ 20 ms、add ≈ 2 ms、加载 ≈ 0.26 s），断言留足余量以避免 CI 抖动。
+
+**硬件折算**：PRD §7 把上表的毫秒数锚定在 M5/24GB 参考机上，而门禁也跑在共享 CI
+runner 上（实测比参考机慢 4–5 倍）。因此断言用 ``_budget_ms()`` 把上界按本机实测速度
+折算：先跑一段与实现无关的固定工作量，再乘以 ``REFERENCE_FACTOR``。这样在参考机上
+仍然是原始上界（回归照样会被抓住），在慢机上也不会把「机器慢」误判成「实现退化」。
+折算系数会打印在断言消息里，便于核对。可用 ``GAMERSI_PERF_NO_SCALE=1`` 关掉折算，
+按参考机绝对上界跑（本机自测/基准复现用）。
 """
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -29,6 +37,57 @@ OBS = {"phase": "player_turn", "stage": 3,
        "hand": [{"dieId": "d1", "isCorrupt": True}],
        "slots": [{"slotKind": "defense"}],
        "enemies": [{"school": "blade", "intent": [{"kind": "purge", "arrow": "down"}]}]}
+
+# 参考机（M5/24GB）上 `_calibration_seconds()` 与 `_io_seconds()` 的实测值；换参考机时
+# 一并更新这两个常数即可，测试无需改动。
+REFERENCE_FACTOR = 0.0078
+REFERENCE_IO = 0.00025
+
+
+def _calibration_seconds() -> float:
+    """与实现无关的固定 CPU 工作量耗时（best-of-3，抗抖动）。"""
+    def work() -> None:
+        acc = 0
+        for index in range(200_000):
+            acc += (index * 2654435761) % 1000003
+
+    return min(_timed(work) for _ in range(3))
+
+
+def _timed(fn: Callable[[], object]) -> float:
+    started = time.perf_counter()
+    fn()
+    return time.perf_counter() - started
+
+
+def _io_seconds() -> float:
+    """一份小文件的写+读+fsync 耗时（best-of-3）：CI runner 的磁盘常比参考机慢数倍。"""
+    import tempfile
+
+    def roundtrip() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "probe.bin"
+            with open(path, "wb") as handle:
+                handle.write(b"x" * 65536)
+                handle.flush()
+                os.fsync(handle.fileno())
+            path.read_bytes()
+
+    return min(_timed(roundtrip) for _ in range(3))
+
+
+@pytest.fixture(scope="session")
+def perf_scale() -> float:
+    """本机相对参考机的折算系数（≥1；``GAMERSI_PERF_NO_SCALE=1`` 时为 1.0）。"""
+    if os.environ.get("GAMERSI_PERF_NO_SCALE"):
+        return 1.0
+    cpu = max(1.0, _calibration_seconds() / REFERENCE_FACTOR)
+    io = max(1.0, _io_seconds() / REFERENCE_IO)
+    return max(cpu, io)
+
+
+def _budget_ms(reference_ms: float, scale: float) -> float:
+    return reference_ms * scale
 
 
 def _p95_ms(fn: Callable[[], object]) -> float:
@@ -70,13 +129,16 @@ def full_store(tmp_path_factory) -> MemoryStore:
     return store
 
 
-def test_retrieve_p95_within_budget(full_store: MemoryStore) -> None:
+def test_retrieve_p95_within_budget(full_store: MemoryStore, perf_scale: float) -> None:
     full_store.retrieve(OBS, tick=801)  # 预热索引
     p95 = _p95_ms(lambda: full_store.retrieve(OBS, tick=807))
-    assert p95 <= 50.0, f"retrieve P95 = {p95:.1f} ms > 50 ms（NFR-05-2）"
+    budget = _budget_ms(50.0, perf_scale)
+    assert p95 <= budget, (f"retrieve P95 = {p95:.1f} ms > {budget:.1f} ms"
+                           f"（NFR-05-2，参考上界 50 ms × 折算 {perf_scale:.2f}）")
 
 
-def test_add_reflection_p95_within_budget(full_store: MemoryStore) -> None:
+def test_add_reflection_p95_within_budget(full_store: MemoryStore,
+                                          perf_scale: float) -> None:
     prov = Provenance(run_id="r-perf", episode_id="e-001042-g000-train", split="train",
                       seed=1042, generation=0, harness_version=1)
     base = ReflectionEntry(
@@ -100,13 +162,17 @@ def test_add_reflection_p95_within_budget(full_store: MemoryStore) -> None:
                               provenance=prov)
     counter["n"] = 0
     p95 = _p95_ms(call)
-    assert p95 <= 15.0, f"add_reflection P95 = {p95:.1f} ms > 15 ms（NFR-05-2）"
+    budget = _budget_ms(15.0, perf_scale)
+    assert p95 <= budget, (f"add_reflection P95 = {p95:.1f} ms > {budget:.1f} ms"
+                           f"（NFR-05-2，参考上界 15 ms × 折算 {perf_scale:.2f}）")
 
 
-def test_startup_load_within_budget(full_store: MemoryStore) -> None:
+def test_startup_load_within_budget(full_store: MemoryStore, perf_scale: float) -> None:
     started = time.perf_counter()
     reopened = MemoryStore(full_store.run_dir, MemoryConfig(), config_dir=Path("configs"),
                            run_id="r-perf")
     elapsed = time.perf_counter() - started
     assert len(reopened.entries()) >= 2000
-    assert elapsed <= 2.0, f"启动全量加载 = {elapsed:.2f} s > 2 s（NFR-05-2）"
+    budget = _budget_ms(2.0, perf_scale)
+    assert elapsed <= budget, (f"启动全量加载 = {elapsed:.2f} s > {budget:.2f} s"
+                               f"（NFR-05-2，参考上界 2 s × 折算 {perf_scale:.2f}）")

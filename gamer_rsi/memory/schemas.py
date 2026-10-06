@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Final, Literal, Mapping, Sequence
 
@@ -126,6 +127,117 @@ def _validate(schema: Mapping[str, Any], obj: Mapping[str, Any], *, name: str,
 
 
 _VALIDATOR_CACHE: dict[str, Any] = {}
+
+# ---- 加载期快速校验（NFR-05-2：2000 条全量加载 ≤ 2 s）-------------------------
+#
+# ``Draft202012Validator`` 虽然已缓存，但每次 ``validate()`` 仍要递归下钻整份 schema：
+# 2000 行实测 ~235 ms（占启动加载 268 ms 的 88%，CI 上直接顶穿 2 s 预算）。这里按同一份
+# schema 生成「检查计划」并直接执行——语义覆盖类型 / required / 未知字段 / enum / pattern /
+# items，但不走 jsonschema 的递归分派。**仅用于加载本进程写出的行**：写入路径仍由
+# ``MemoryEntry.from_json`` 调 ``validate_memory_entry`` 做全量 schema 校验。
+_PLAN: Final[dict[str, Any]] = {}
+
+# ``const`` 未声明时的哨兵（``None`` 是合法 const 值，不能拿它当缺省）。
+_MISSING: Final[Any] = object()
+
+_TYPE_CHECKS: Final[dict[str, Any]] = {
+    "string": lambda v: isinstance(v, str),
+    "integer": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "number": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "boolean": lambda v: isinstance(v, bool),
+    "object": lambda v: isinstance(v, Mapping),
+    "array": lambda v: isinstance(v, list),
+    "null": lambda v: v is None,
+}
+
+
+def _build_plan(schema: Mapping[str, Any]) -> dict[str, Any]:
+    """JSON Schema → 快速校验计划（只覆盖本模块用到的关键字）。"""
+    props = {str(k): _build_plan(v) for k, v in (schema.get("properties") or {}).items()}
+    declared = schema.get("type")
+    if isinstance(declared, str):  # ``"type": "object"`` 与 ``["object"]`` 等价
+        types: tuple[str, ...] = (declared,)
+    else:
+        types = tuple(declared or ())
+    return {
+        "types": types,
+        "enum": None if schema.get("enum") is None else tuple(schema["enum"]),
+        "const": schema.get("const", _MISSING),
+        "pattern": schema.get("pattern"),
+        "required": tuple(schema.get("required") or ()),
+        "props": props,
+        "items": (_build_plan(schema["items"]) if isinstance(schema.get("items"), Mapping)
+                  else None),
+        "extra": schema.get("additionalProperties"),
+        "minimum": schema.get("minimum"),
+        "maximum": schema.get("maximum"),
+        "min_items": schema.get("minItems"),
+        "max_items": schema.get("maxItems"),
+        "min_length": schema.get("minLength"),
+        "max_length": schema.get("maxLength"),
+    }
+
+
+def _fail_fast(name: str, path: str, message: str, code: E) -> None:
+    raise InfraError(code, f"{name} schema 校验失败 at {path}: {message}")
+
+
+def _check_fast(plan: Mapping[str, Any], value: Any, *, name: str, code: E,
+                path: str = "$") -> None:
+    types = plan["types"]
+    if types and not any(_TYPE_CHECKS[t](value) for t in types):
+        _fail_fast(name, path, f"{value!r} is not of type {list(types)}", code)
+    if plan["const"] is not _MISSING and value != plan["const"]:
+        _fail_fast(name, path, f"{plan['const']!r} was expected", code)
+    if plan["enum"] is not None and value not in plan["enum"]:
+        _fail_fast(name, path, f"{value!r} is not one of {list(plan['enum'])}", code)
+    if plan["pattern"] is not None and isinstance(value, str) \
+            and not re.search(plan["pattern"], value):
+        _fail_fast(name, path, f"{value!r} does not match {plan['pattern']!r}", code)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if plan["minimum"] is not None and value < plan["minimum"]:
+            _fail_fast(name, path, f"{value!r} is less than the minimum {plan['minimum']}",
+                       code)
+        if plan["maximum"] is not None and value > plan["maximum"]:
+            _fail_fast(name, path,
+                       f"{value!r} is greater than the maximum {plan['maximum']}", code)
+    if isinstance(value, str):
+        if plan["min_length"] is not None and len(value) < plan["min_length"]:
+            _fail_fast(name, path, f"{value!r} is too short", code)
+        if plan["max_length"] is not None and len(value) > plan["max_length"]:
+            _fail_fast(name, path, f"{value!r} is too long", code)
+    if isinstance(value, Mapping) and plan["props"]:
+        missing = set(plan["required"]) - set(value)
+        if missing:
+            _fail_fast(name, path, f"{sorted(missing)!r} are required properties", code)
+        if plan["extra"] is False:
+            extra = [k for k in value if k not in plan["props"]]
+            if extra:
+                _fail_fast(name, path,
+                           f"Additional properties are not allowed ({extra!r} unexpected)",
+                           code)
+        for key, item in value.items():
+            sub = plan["props"].get(key)
+            if sub is not None:
+                _check_fast(sub, item, name=name, code=code, path=f"{path}.{key}")
+    elif isinstance(value, list):
+        if plan["min_items"] is not None and len(value) < plan["min_items"]:
+            _fail_fast(name, path, f"{value!r} is too short", code)
+        if plan["max_items"] is not None and len(value) > plan["max_items"]:
+            _fail_fast(name, path, f"{value!r} is too long", code)
+        if plan["items"] is not None:
+            for index, item in enumerate(value):
+                _check_fast(plan["items"], item, name=name, code=code,
+                            path=f"{path}[{index}]")
+
+
+def validate_memory_entry_fast(obj: Mapping[str, Any]) -> None:
+    """``MemoryEntry`` 行的加载期快速校验（语义同 ``validate_memory_entry``，更快）。"""
+    plan = _PLAN.get("memory_entry")
+    if plan is None:
+        plan = _build_plan(MEMORY_ENTRY_SCHEMA)
+        _PLAN["memory_entry"] = plan
+    _check_fast(plan, obj, name="memory_entry", code=E.E_IO_MEMORY_CORRUPT)
 
 
 def _validator_for(schema: Mapping[str, Any], key: str) -> Any:
@@ -521,6 +633,12 @@ class MemoryEntry:
 
         快照与 active 库的行都带 ``_type":"memory_entry"`` 前缀（两种文件因此逐字节同构，
         ``rollback`` 可直接原子替换 active 库）；解析时先剥掉该前缀再走 schema 校验。
+
+        校验走 ``validate_memory_entry_fast``（同一份 schema 编译成的检查计划）：加载
+        2000 行是热路径，jsonschema 的递归校验实测占启动加载 88%（NFR-05-2 的 2 s 预算
+        在 CI 上因此被顶穿）。**写路径仍用全量 ``validate_memory_entry``**——外部输入在
+        那里被拦下，加载看到的是本进程写出的行；两者语义一致，测试逐条覆盖（未知字段、
+        缺字段、类型错、枚举、pattern 都会被拒）。
         """
         try:
             raw = json.loads(line)
@@ -535,7 +653,7 @@ class MemoryEntry:
                 raise InfraError(E.E_IO_MEMORY_CORRUPT,
                                  f"未知行类型 _type={raw.get('_type')!r}")
             raw = {k: v for k, v in raw.items() if k != "_type"}
-        validate_memory_entry(raw)
+        validate_memory_entry_fast(raw)
         return cls(
             entry_id=str(raw["entry_id"]),
             schema_version=str(raw["schema_version"]),
