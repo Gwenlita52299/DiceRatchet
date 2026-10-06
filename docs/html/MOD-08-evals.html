@@ -96,7 +96,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
   <h2>评估度量层：把「自我改进」变成可复现、可审计、可证伪的数字</h2>
   <p>GameRSI 的 L3 测量层。它只读轨迹与报告，<b>不参与任何决策</b>——接不接受一个候选，由 MOD-07 的 gate 说了算；MOD-08 只负责把「这一代真的变强了吗」算成一个经得起复核的数字。</p>
   <div class="badges">
-    <span class="badge">版本 v0.3</span>
+    <span class="badge">版本 v0.6（同步 docs/prd/MOD-08-evals-PRD.md）</span>
     <span class="badge">状态：待评审</span>
     <span class="badge">里程碑：M1 基线 → M2 执行器/指标 → M3 完整</span>
     <span class="badge">落地：gamer_rsi/evals/*.py</span>
@@ -205,7 +205,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
     <li><span class="tag nfr">NFR-08-02</span><b>统计严谨</b>：任何「提升」结论必须给点估计 + 区间 + 检验；配对比较用 McNemar，次级指标用 BH-FDR(q=0.10)，消融用 Holm–Bonferroni。</li>
     <li><span class="tag nfr">NFR-08-03</span><b>可复现</b>：<code>config_hash</code> / <code>harness_version</code> / <code>seeds_hash</code> / <code>bootstrap_seed</code> 全部写入报告；§12 的命令可直接复制执行。</li>
     <li><span class="tag nfr">NFR-08-04</span><b>可观测</b>：每次评估 ≥1 行 <code>eval_index.jsonl</code>；埋点走 MOD-09 结构化日志，<b>禁止自建日志格式</b>（Spec §8.2）。</li>
-    <li><span class="tag nfr">NFR-08-05</span><b>成本</b>：由 Spec v1.3 §8.6 成本模型推出——单局 ≈ <code>D·t_d</code> ≈ 5 min（默认局，8B），所以 n=40 的 heldout 评估 ≈ 3.3 h。局级并发共享同一推理队列（P-10），<b>并发数不能缩短推理瓶颈，只能掩盖 env/IO 开销</b>。报告必须写实测 <code>dur_s</code>，不设不可达的 wall-clock 目标。</li>
+    <li><span class="tag nfr">NFR-08-05</span><b>成本</b>：由 Spec v1.3 §8.6 成本模型推出——单局 ≈ <code>D·t_d</code>（默认局，8B）。<b>2026-10-05 真实实测重标定</b>：<code>D</code> 不是常数、<code>t_d</code> 也不是 3 s——8B+MLX 上实测单局模型时间 <b>≈19.6 min</b>（n=10 均值：<code>D</code> 均值 97.1、中位 69、max 245；<code>calls/决策点</code> 1.62；<code>t_d</code> p50 7.46 s），故 <b>n=40 的 heldout 约 13.1 h（按均值）到 29–34 h（按重尾上界）</b>，而非原估 3.3 h。局级并发共享同一推理队列（<code>max_inflight=1</code>，P-10），实测 <code>d_wall / d_model = 1.02</code>，<b><code>n_workers</code> 对总墙钟几乎无贡献</b>（<code>n</code> 局墙钟 ≈ <code>n × 单局模型时间</code>），只能掩盖 env/IO 开销。报告必须写实测 <code>dur_s</code>，不设不可达的 wall-clock 目标。推导与逐局明细见 <a href="../reviews/2026-10-04-M1验收报告.md">M1 验收报告 §14.18/§14.19</a>。</li>
   </ul>
 </section>
 
@@ -412,7 +412,7 @@ eval:
   n_heldout: 40; n_test: 100; n_ablation: 40        # 依次为 H1 / test_full / H2 篮子
   bootstrap_B: 10000; alpha: 0.05; fdr_q: 0.10; gap_threshold: 0.15
   t_max: 120; n_workers: 2;   # 步数/决策上限读 Spec §8.6 的 episode.*，本模块不另设
-  seed_timeout_s: 300; min_support: 3; drop_rate_max: 0.10
+  seed_timeout_s: 14400; min_support: 3; drop_rate_max: 0.10   # 墙钟预算；2026-10-05 实测标定（见 NFR-08-05：n_workers 不放大单局墙钟）
   budget_seconds: null; entropy: {base: 2.0, kind_space: 16}
   collapse: {c1_slope_threshold: -0.010, c2_ratio_threshold: 0.60, c3_jsd_freeze: 0.010,
              c3_winrate_jump: 0.05, c4_seq_ratio: 0.50, confirm_generations: 2}
@@ -559,7 +559,8 @@ bootstrap_seed,config_hash,git_commit,ts</code></pre>
     <tr><td>横切</td><td>INV-5 三重护栏 + 蜜罐用例 + golden 指标快照 + README 命令</td><td>3</td></tr>
     <tr><td><b>合计</b></td><td></td><td><b>18</b></td></tr>
   </table>
-  <p><b>实际交付（M1）</b>：<code>gamer_rsi/evals/</code>（<code>seeds.py</code> / <code>metrics.py</code> / <code>harness.py</code> / <code>baselines.py</code>）于 <b>2026-10-04</b> 交付（提交 <code>bff9982</code>），并<b>提前</b>交付了原属 M3 的 <code>diversity.py</code> / <code>ablation.py</code> 与 test 单次解锁存证。本项目<b>未单独记工</b>；按提交时间窗折算 ≤ 2 人日（计划 M1 部分 4 人日），偏差 ≥ 50%。M1 验收的 <b>F1（三基线之一假入档）</b>、<b>F3（评估 run 上 <code>audit leak</code> 误判 critical）</b> 已在本模块修复；真实 8B 跑批后三条 held-out 分数已入档（<code>runs/m1-real-h1/baselines/</code>），<code>format_robustness.json</code> 首次以 <code>m1_evidence=true</code> 通过。</p>
+  <p><b>实际交付（M1）</b>：<code>gamer_rsi/evals/</code>（<code>seeds.py</code> / <code>metrics.py</code> / <code>harness.py</code> / <code>baselines.py</code>）于 <b>2026-10-04</b> 交付（提交 <code>bff9982</code>），并<b>提前</b>交付了原属 M3 的 <code>diversity.py</code> / <code>ablation.py</code> 与 test 单次解锁存证。本项目<b>未单独记工</b>；按提交时间窗折算 ≤ 2 人日（计划 M1 部分 4 人日），偏差 ≥ 50%。M1 验收的 <b>F1（三基线之一假入档）</b>、<b>F3（评估 run 上 <code>audit leak</code> 误判 critical）</b> 已在本模块修复；真实 8B 跑批后三条 held-out 分数已入档（<b>最终口径 run <code>runs/m1-real-h1n10b/</code></b>，seed 2000–2009、n=10、三基线同源；旧 <code>runs/m1-real-h1n40/</code> 只有 random/heuristic 的 n=40 与中止在 18% 的 fixed_prompt），<code>format_robustness.json</code> 以 <code>m1_evidence=true</code> 通过（<b>2026-10-06 按 M1 验收复核 M-1 用当前快照重跑 n=200 覆盖归档</b>：首答 0.94 → <b>0.995</b>、<code>schema_fail_rate</code> 0.005 → <b>0.0</b>）。</p>
+  <p><b>n=10 <code>fixed_prompt</code> 归档与实测速率（2026-10-05）</b>：<code>fixed_prompt</code> 基线的 n=40 因实测成本（≈29–34 h）按用户决定缩到 n=10，已在最终契约上跑完并归档于 <code>runs/m1-real-h1n10b/</code>（seed 2000–2009，三基线同 run 同源，<code>--seeds</code> 显式集合、<code>seed_timeout_s=14400</code>、<code>n_workers=2</code>、<code>git_commit=2d6274f</code>）：<code>n=10 / degraded_n=0 / n_dropped=0</code>，<b><code>fixed_prompt</code> 0/10 = 0.0%（Wilson 95% CI [0.000, 0.278]）</b>，同 run 的 <code>random</code> 0/10、<code>heuristic</code> 4/10 = 40.0%。<b>实测速率</b>：n=10 <b>墙钟 3.32 h</b>、模型时间 3.26 h、1,551 次后端调用（<code>calls/决策点 = 1.62</code>）、<code>t_d</code> p50 <b>7.46 s</b> / p95 10.13 s、schema 全失败率 5.8%、<code>fallback</code> 122 次、<code>D</code> 均值 97.1（中位 69、max 245）。<b>口径 caveat</b>：这条基线含 <b>18% 启发式兜底</b>、<b>76% 的 LLM 尝试引用当时非法动作</b>，M3 引用时必须同时报告 <code>fallback_rate</code>/<code>illegal_rate</code>。详见 <a href="../reviews/2026-10-04-M1验收报告.md#1419-n10-子集的实测耗时与预测-vs-实际对照132-第-6-项收口">M1 验收报告 §14.19</a>。</p>
   <p><b>§13.2 前置项收口（2026-10-05，<code>&lt;本轮提交&gt;</code>）</b>：本模块的 5 项全部闭环——<b>F5</b>（<code>load_episode_results</code> 的 <code>arm</code>/<code>exclude_arms</code> 真过滤，基线臂不再进入代际分母，T-21）、<b>F6</b>（归档与 <code>registry.csv</code> 的溯源字段真实化，T-23）、<b>F18</b>（<code>on_result</code> 逐局增量落盘 + <code>baseline --resume</code>，T-20）、<b>F20</b>（<code>E_EVAL_TIMEOUT</code> + 协同预算 + 硬看门狗，T-19）、<b>F22</b>（<code>fixed_prompt</code> 改走 MOD-04 <code>PolicyAgent(mode="baseline_fixed_prompt")</code>，推理粒度回到决策点，T-22）。新增 <code>tests/unit/evals/test_evals_longrun_guards.py</code>（9 条）与 <code>tests/integration/evals/test_m1_blocker_guards.py</code> 的 F22 用例；<code>tests/fixtures/evals/episodes/heldout/*.jsonl</code> 的 <code>arm</code> 由 <code>baseline-heuristic</code> 更正为 <code>parent</code>（它们充当的是「某一代的 held-out 局」），<b>golden 指标快照逐字节不变</b>。</p>
 </section>
 
@@ -583,11 +584,13 @@ bootstrap_seed,config_hash,git_commit,ts</code></pre>
     <tr><td>v0.2</td><td>2026-09-30 17:21</td><td>按 Spec v1.3 与 MOD PRD 评审修订：指标改为 INV-7 新口径（outcome/stages_cleared/hearts_left/battles_won），新增 fallback/truncation/degraded（P0-1）；步数上限改读 Spec §8.6，删除 <code>max_steps=60</code>（P0-2）；NFR-08-05 改由成本模型推出（P0-3）；<code>KIND_SPACE</code> 改为 16 个 GAME kind，熵曲线横轴改为决策点；修正 T-02 手算值；dropped 计为 lose（防幸存者偏差）；新增 FR-08-25 MOD-07 门面（P1-3/4）；report schema 改为引用唯一文件（P1-5/6）；heuristic 改为委托 <code>heuristic_policy</code>（P1-16）；事件改名为 <code>eval.*</code></td></tr>
     <tr><td>v0.3</td><td>2026-09-30 17:49</td><td>报告精度回填为 Spec B-34；CLI 标注改为已回填 §4.6</td></tr>
     <tr><td>v0.4</td><td>2026-10-05</td><td>M1 验收 §13.2 收口：FR-08-07…10 增加「单局超时真的执行（F20）」与「逐局增量落盘 + 续跑（F18）」；FR-08-11/12 增加溯源字段要求（F6）；FR-08-13/14 明确 <code>fixed_prompt</code> 走 MOD-04 <code>PolicyAgent(mode="baseline_fixed_prompt")</code>、每决策点一次推理（F22）；§6 签名表更新（<code>fixed_prompt_policy_config</code>/<code>build_agent</code>/<code>run_baseline</code>/<code>archive_baseline</code>/<code>load_episode_results</code> 的 <code>arm</code> 过滤）；§10 增加 <code>E_EVAL_TIMEOUT</code>；§11 新增 T-19（超时）/T-20（续跑）/T-21（臂过滤）/T-22（推理粒度）/T-23（归档溯源）与 T-18（PRD 路径守门，F9）；§15 更新实际交付说明</td></tr>
+    <tr><td>v0.5</td><td>2026-10-05</td><td><b>n=10 <code>fixed_prompt</code> 归档回填</b>：§15 补归档事实与实测速率（run <code>m1-real-h1n10b</code>，seed 2000–2009，<code>n=10 / degraded_n=0 / n_dropped=0</code>、<code>fixed_prompt</code> 0/10 = 0.0%、墙钟 <b>3.32 h</b>、<code>t_d</code> p50 <b>7.46 s</b>、<code>calls/决策点</code> 1.62、<code>D</code> 均值 97.1）</td></tr>
+    <tr><td>v0.6</td><td>2026-10-06</td><td><b>按 M1 验收复核更正陈旧口径与示例值</b>：① §15 的「已入档 <code>runs/m1-real-h1</code>」更正为最终口径 <code>runs/m1-real-h1n10b</code>；② §15 补 <code>format_robustness.json</code> 的工件新鲜度要求（重跑覆盖：首答 0.94 → <b>0.995</b>、<code>schema_fail_rate</code> 0.005 → <b>0.0</b>）；③ <b>NFR-08-05</b> 由「单局 ≈5 min、n=40 ≈3.3 h」改为实测口径（单局模型时间 <b>≈19.6 min</b>、<code>D</code> 均值 97.1 / 中位 69 / max 245、<code>calls/决策点</code> 1.62、<code>t_d</code> p50 7.46 s → n=40 约 <b>13.1 h（均值）～29–34 h（上界）</b>），并写明 <code>d_wall / d_model = 1.02</code>（<code>n_workers</code> 不缩短总墙钟）；④ 示例配置 <code>seed_timeout_s</code> 5400 → <b>14400</b></td></tr>
   </table>
 </section>
 
 </div>
 </main>
-<footer>来源：docs/prd/MOD-08-evals-PRD.md · GameRSI 模块讲解系列 · 2026-10-04 · 同步 2026-10-05</footer>
+<footer>来源：docs/prd/MOD-08-evals-PRD.md · GameRSI 模块讲解系列 · 2026-10-04 · 同步 2026-10-06</footer>
 </body>
 </html>

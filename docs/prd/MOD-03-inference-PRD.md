@@ -1,6 +1,6 @@
 # MOD-03 inference 技术 PRD
 
-> 版本：v1.3（2026-10-06 按 M1 验收复核对齐 §11 测试登记，见 §17）· 状态：草案（待复核）· 所属里程碑：M1
+> 版本：v1.4（2026-10-06 补记 2026-10-04 真实模型实测回填与 §11 测试登记，见 §17）· 状态：草案（待复核）· 所属里程碑：M1
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（**唯一事实来源**；冲突以 Spec 为准）
 > 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md) §4 技术栈（Mac M5 24GB / MLX 或 llama.cpp / Qwen3-8B → 27B Q4）、§8 风险（LLM 输出非 JSON）
 > 作者：GameRSI 技术文档（MOD-03 负责模块）· 依赖：MOD-09 infra（配置、日志、run_id、CLI）
@@ -48,7 +48,7 @@ MOD-03 是 L1 层唯一的"模型出口"：把 `Mac M5 24GB + 全程离线` 的�
 | FR-03-02 | `unload()` 释放权重与 KV（MLX 释放引用 + `mx.clear_cache()`；server 模式 `SIGTERM` 子进程），其后 `health().state == "unloaded"`；未加载时 `unload` 不报错；`async with manager.session(model_id)` 退出自动卸载。 |
 | FR-03-03 | `generate()` 支持 `max_tokens`/`stop`/`seed`/`temperature`/`top_p`/`top_k`/`repetition_penalty`/`timeout_ms`；`Usage` 必须含 `prompt_tokens`/`completion_tokens`/`latency_ms`/`ttft_ms`。 |
 | FR-03-04 | `generate_json()` 三级策略按序执行：① 约束解码（后端 GBNF 或 JSON mode）→ ② `jsonschema.validate` → ③ 带校验错误的修复重试。任一级成功即返回，`attempts` 记录真实尝试次数（1..`max_attempts`）。 |
-| FR-03-05 | 重试上限 `max_attempts` 默认 3（首答 + 2 修复）；退避 = `retry_backoff_ms × 2^(attempt-1)`（默认 200/400 ms）；全程受 `total_timeout_ms`（默认 8000）约束，超时抛 `E_LLM_TIMEOUT` 且**不留半截结果**。 |
+| FR-03-05 | 重试上限 `max_attempts` 默认 3（首答 + 2 修复）；退避 = `retry_backoff_ms × 2^(attempt-1)`（默认 200/400 ms）；全程受 `total_timeout_ms`（默认 120000，2026-10-04 实测由 8000 回填：8 s < 实测 p50 会把正常决策判成 `E_LLM_TIMEOUT`）约束，超时抛 `E_LLM_TIMEOUT` 且**不留半截结果**。 |
 | FR-03-06 | 每次尝试产出一条 `InferenceCallRecord`（§13），由 MOD-09 写 `runs/<run_id>/metrics/llm_calls.jsonl`，并内嵌进 `episodes/<split>/<episode_key>.jsonl` 步记录（对齐 Spec §4.5）。 |
 | FR-03-07 | 采样白名单：`temperature ∈ [0,1.5]`、`top_p ∈ (0,1]`、`top_k ∈ [0,200]`、`repetition_penalty ∈ [1.0,1.5]`；越界抛 `E_LLM_BACKEND_ERROR`（不静默裁剪）。`mode="eval"` 额外要求 `temperature == 0.0` 且 `seed is not None`（Spec v1.3 §8.1 B-14：评估温度统一为 0，harness 不可覆盖；v1.0 的「≤0.3」上限与 MOD-04 的 0.7 冲突，已废弃）。 |
 | FR-03-08 | 并发限流与预算前置：`BackendManager` 持 `asyncio.Semaphore(max_inflight)`（默认 MLX=1、server=4）；acquire **之前**做内存预算检查，预计超预算抛 `E_LLM_OOM` 且**不提交**推理请求。 |
@@ -210,7 +210,7 @@ models:
     context_length: 8192; kv_cache_bits: 8; resident_gb_est: 18.8; kv_gb_per_1k_tokens: 0.05
     max_inflight: 1; supports_grammar: true; supports_json_mode: true
     server_args: ["--parallel", "1", "--host", "127.0.0.1"]   # port 由 manager 分配
-    perf_budget: {p95_latency_ms: 8000, min_tok_per_s: 12}
+    perf_budget: {p50_latency_ms: 5000, p95_latency_ms: 6000, min_tok_per_s: 10}   # 阶段一 qwen3-8b-q4 实测回填后的值
 ```
 
 **内存预算公式**：`required_gb = resident_gb_est + kv_gb_per_1k_tokens × (context_length/1000) × max_inflight + 1.0`（1.0 = 临时缓冲）。`required_gb > ram_budget_gb` → 在 acquire 前拒绝并抛 `E_LLM_OOM`。代入 30B：`32768/4` → `18.8 + 0.05×32×4 + 1.0 = 26.2 > 20.0`（拒绝）；`16384/2` → `21.4`（拒绝）；`8192/1` → `20.2`（临界，需实测调 `kv_cache_bits=4` 或修正 `resident_gb_est`）。**已裁决（Spec v1.3 P-10 → §8.6）**：30B-A3B 在 24GB 机器上默认 `context_length=8192, max_inflight=1`；"评估要并发跑多局"通过**局级并发（`loop.eval_concurrency` 个 episode，默认 2，共享一个串行推理队列）**实现，而非模型级批处理——与 Spec §8.6 成本可控一致，并避免 OOM 抖动。
@@ -225,7 +225,7 @@ async def generate_json(self, model_id, messages, schema, **kw) -> GenerationRes
     spec = self._spec(model_id)                                     # 未知 → E_LLM_UNAVAILABLE
     sampling = validate_sampling(kw, mode=self.mode, spec=spec)      # FR-03-07，越界即抛
     grammar = compile_grammar(schema) if spec.supports_grammar else None   # None → 降级 JSON mode
-    deadline = now_ms() + kw.get("total_timeout_ms", 8000)
+    deadline = now_ms() + kw.get("total_timeout_ms", 120000)
     async with self._inflight(spec, messages, sampling):             # FR-03-08，超预算 E_LLM_OOM
         result = await self._attempt_loop(spec, messages, schema, grammar, sampling, deadline)
     log_call(result)                                                 # NFR-03-05
@@ -264,7 +264,7 @@ async def _attempt_loop(spec, messages, schema, grammar, sampling, deadline) -> 
 | `registry_path` / `model_id` | str | `configs/models.yaml` / `qwen3-8b-q4` | 注册表路径 / 默认模型（阶段二切 `qwen3-30b-a3b-q4`） |
 | `mode` | enum | `train` | `train`/`eval`；`eval` 收紧采样并强制 seed（FR-03-07） |
 | `ram_budget_gb` | float | `20.0` | 内存预算上限；注册表可覆盖 |
-| `max_attempts` / `retry_backoff_ms` / `total_timeout_ms` | int | `3` / `200` / `8000` | 尝试次数（含首答）/ 退避基数（指数倍增）/ 全程墙钟预算 |
+| `max_attempts` / `retry_backoff_ms` / `total_timeout_ms` | int | `3` / `200` / `120000` | 尝试次数（含首答）/ 退避基数（指数倍增）/ 全程墙钟预算（2026-10-04 实测由 8000 回填） |
 | `generate_timeout_ms` / `max_tokens` / `reasoning_max_tokens` | int | `30000` / `256` / `160` | 单次 `generate` 超时 / 决策 tok 上限（Spec §8.6）/ 分两次生成时 `reasoning` 预算 |
 | `context_overflow_policy` | enum | `reject` | `reject` → `E_LLM_CONTEXT_OVERFLOW`；`truncate` → 截断最早的 user 消息 |
 | `eval_temperature` / `train_temperature_min` | float | `0.0`（固定）/ `0.7` | 评估温度（B-14，不可配置为其他值）/ 训练温度下限（计划 §3.3） |
@@ -425,3 +425,4 @@ Qwen3 思考模式烧光 token 预算、probe prompt 欠约束（详见 [M1 验�
 | v1.1 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：评估温度固定为 0.0（P0-4）；`ACTION_SCHEMA` 改为扁平的 `DECISION_SCHEMA`（动作计划，GBNF 可编译，与 MOD-04 共用同一文件，P1-19）；L0 修复失败计为一次尝试（P0-5）；评估并发默认 2 局、共享推理队列；删除误写的父类 `BuildManagerFacade` |
 | v1.2 | 2026-09-30 17:49 | P-11、P-24 裁决回填为 Spec B-28/B-31；Q-1 结案 |
 | v1.3 | 2026-10-06 | **按 M1 验收复核（M-1/M-5）对齐 §11 测试登记**：① 新增单测 `test_cli_smoke.py` 条目——补集成套件观测不到的 `robustness` **未达阈值退出码 1** 分支（集成 `test_inference_cli.py` 已覆盖成功路径；此前单测口径下 `cli.py` 显示 0%，是"不收集 `tests/integration/`"造成的假象，补后 0% → 42%）；并注明「`init_run_dir` 预建 `metrics/`，失败判据是报告文件不存在」这一易错点。② 集成 `test_inference_robustness.py` 条目补「工件必须与当前快照/模板同批产出」——旧工件早于 F13/F23/F25 模板改动，已用当前快照重跑 n=200 覆盖（首答 0.94 → 0.995、`schema_fail_rate` 0.005 → 0.0）。依据 [M1 验收复核 §M-1/§M-5](../reviews/2026-10-05-M1验收复核.md) |
+| v1.4 | 2026-10-06 | **补记 2026-10-04 的真实模型实测回填**（此前只在 §16 Q-2/Q-6 与配置注释里，变更记录缺一条）：权重 `mlx-community/Qwen3-8B-4bit` 落盘（`weights_sha256=20303070…`）、`resident_gb_est` 5.6 → **4.6077**、`perf_budget` 1500/3000/25 → **5000/6000/10**（原目标实测未达成，按实测重设）、`total_timeout_ms` 8000 ms → **120000 ms**（8 s < 实测 p50，正常决策会被判 `E_LLM_TIMEOUT`）；主快照 n=200 实测 `m1_evidence=true`、首答 0.94、`schema_fail_rate` 0.005、`t_d` p50 5.687 s / p95 11.70 s；并登记只有真实权重能暴露的 **F14**（mlx-lm API 漂移：`load(tokenizer_path=)` / `stream_generate(seed=)` / `mx.metal.*` 改名）、**F15**（Qwen3 思考模式烧光 token 预算 → 显式 `enable_thinking=False`）、**F16**（probe/bench 固定 prompt 欠约束）、**F17**（权重摘要误把 HF 下载缓存算进去）。依据 [M1 验收报告 §12](../reviews/2026-10-04-M1验收报告.md) |

@@ -96,7 +96,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
   <h2>模型推理层 —— L1 层唯一的「模型出口」</h2>
   <p>把「Mac M5 24GB + 全程离线」的本地大模型推理，收敛成一组<b>可测、可复现、可降级</b>的接口：MOD-04 每回合决策调它要 JSON，MOD-06 / MOD-08 评估时并发调它要确定性。它只负责把 prompt 安全地变成模型输出，绝不为失败偷偷兜底。</p>
   <div class="badges">
-    <span class="badge">版本 v1.2（2026-09-30 17:49，按 Spec v1.4 回填裁决，见 §17）</span>
+    <span class="badge">版本 v1.4（同步 docs/prd/MOD-03-inference-PRD.md）</span>
     <span class="badge">状态：草案（待复核）</span>
     <span class="badge">所属里程碑：M1</span>
     <span class="badge">上游 Spec：模块拆分Spec-GameRSI.md（唯一事实来源）</span>
@@ -179,7 +179,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
   <p><span class="tag">FR-03-02</span><b>卸载要真卸干净</b>：释放权重与 KV（MLX 释放引用 + <code>mx.clear_cache()</code>；server 模式 <code>SIGTERM</code> 子进程），其后 <code>health().state == "unloaded"</code>；未加载时 <code>unload</code> 不报错；<code>async with manager.session(model_id)</code> 退出自动卸载。</p>
   <p><span class="tag">FR-03-03</span><b>生成参数与计量</b>：<code>generate()</code> 支持 <code>max_tokens</code> / <code>stop</code> / <code>seed</code> / <code>temperature</code> / <code>top_p</code> / <code>top_k</code> / <code>repetition_penalty</code> / <code>timeout_ms</code>；<code>Usage</code> 必须含 <code>prompt_tokens</code> / <code>completion_tokens</code> / <code>latency_ms</code> / <code>ttft_ms</code>。</p>
   <p><span class="tag">FR-03-04</span><b>JSON 三级策略按序执行</b>：① 约束解码（后端 GBNF 或 JSON mode）→ ② <code>jsonschema.validate</code> → ③ 带校验错误的修复重试。任一级成功即返回，<code>attempts</code> 记录真实尝试次数（1..<code>max_attempts</code>）。</p>
-  <p><span class="tag">FR-03-05</span><b>重试与超时预算</b>：<code>max_attempts</code> 默认 3（首答 + 2 修复）；退避 = <code>retry_backoff_ms × 2^(attempt-1)</code>（默认 200 / 400 ms）；全程受 <code>total_timeout_ms</code>（默认 8000）约束，超时抛 <code>E_LLM_TIMEOUT</code> 且<b>不留半截结果</b>。</p>
+  <p><span class="tag">FR-03-05</span><b>重试与超时预算</b>：<code>max_attempts</code> 默认 3（首答 + 2 修复）；退避 = <code>retry_backoff_ms × 2^(attempt-1)</code>（默认 200 / 400 ms）；全程受 <code>total_timeout_ms</code>（默认 <b>120000</b>（2026-10-04 实测由 8000 回填：8 s &lt; 实测 p50 会把正常决策判成 <code>E_LLM_TIMEOUT</code>））约束，超时抛 <code>E_LLM_TIMEOUT</code> 且<b>不留半截结果</b>。</p>
   <p><span class="tag">FR-03-06</span><b>每次尝试一条埋点</b>：产出 <code>InferenceCallRecord</code>（§13），由 MOD-09 写 <code>runs/&lt;run_id&gt;/metrics/llm_calls.jsonl</code>，并内嵌进 <code>episodes/&lt;split&gt;/&lt;episode_key&gt;.jsonl</code> 步记录（对齐 Spec §4.5）。</p>
   <p><span class="tag">FR-03-07</span><b>采样白名单 + 评估模式收紧</b>：<code>temperature ∈ [0,1.5]</code>、<code>top_p ∈ (0,1]</code>、<code>top_k ∈ [0,200]</code>、<code>repetition_penalty ∈ [1.0,1.5]</code>；越界抛 <code>E_LLM_BACKEND_ERROR</code>（<b>不静默裁剪</b>）。<code>mode="eval"</code> 额外要求 <code>temperature == 0.0</code> 且 <code>seed is not None</code>（B-14：评估温度统一为 0，harness 不可覆盖；v1.0 的「≤0.3」上限因与 MOD-04 的 0.7 冲突已废弃）。</p>
   <p><span class="tag">FR-03-08</span><b>并发限流 + 预算前置</b>：<code>BackendManager</code> 持 <code>asyncio.Semaphore(max_inflight)</code>（默认 MLX=1、server=4）；acquire <b>之前</b>做内存预算检查，预计超预算抛 <code>E_LLM_OOM</code> 且<b>不提交</b>推理请求。</p>
@@ -336,7 +336,7 @@ models:
     context_length: 8192; kv_cache_bits: 8; resident_gb_est: 18.8; kv_gb_per_1k_tokens: 0.05
     max_inflight: 1; supports_grammar: true; supports_json_mode: true
     server_args: ["--parallel", "1", "--host", "127.0.0.1"]   # port 由 manager 分配
-    perf_budget: {p95_latency_ms: 8000, min_tok_per_s: 12}</code></pre>
+    perf_budget: {p50_latency_ms: 5000, p95_latency_ms: 6000, min_tok_per_s: 10}   # 阶段一 qwen3-8b-q4 实测回填后的值</code></pre>
 
   <h4>内存预算公式</h4>
   <p><code>required_gb = resident_gb_est + kv_gb_per_1k_tokens × (context_length/1000) × max_inflight + 1.0</code>（1.0 = 临时缓冲）。<code>required_gb &gt; ram_budget_gb</code> → 在 acquire 前<b>直接拒绝</b>并抛 <code>E_LLM_OOM</code>。代入 30B 模型：</p>
@@ -392,7 +392,7 @@ async def generate_json(self, model_id, messages, schema, **kw) -> GenerationRes
     spec = self._spec(model_id)                                     # 未知 → E_LLM_UNAVAILABLE
     sampling = validate_sampling(kw, mode=self.mode, spec=spec)      # FR-03-07，越界即抛
     grammar = compile_grammar(schema) if spec.supports_grammar else None   # None → 降级 JSON mode
-    deadline = now_ms() + kw.get("total_timeout_ms", 8000)
+    deadline = now_ms() + kw.get("total_timeout_ms", 120000)
     async with self._inflight(spec, messages, sampling):             # FR-03-08，超预算 E_LLM_OOM
         result = await self._attempt_loop(spec, messages, schema, grammar, sampling, deadline)
     log_call(result)                                                 # NFR-03-05
@@ -434,7 +434,7 @@ async def _attempt_loop(spec, messages, schema, grammar, sampling, deadline) -> 
     <tr><td><code>registry_path</code> / <code>model_id</code></td><td>str</td><td><code>configs/models.yaml</code> / <code>qwen3-8b-q4</code></td><td>注册表路径 / 默认模型（阶段二切 <code>qwen3-30b-a3b-q4</code>）</td></tr>
     <tr><td><code>mode</code></td><td>enum</td><td><code>train</code></td><td><code>train</code>/<code>eval</code>；<code>eval</code> 收紧采样并强制 seed（FR-03-07）</td></tr>
     <tr><td><code>ram_budget_gb</code></td><td>float</td><td><code>20.0</code></td><td>内存预算上限；注册表可覆盖</td></tr>
-    <tr><td><code>max_attempts</code> / <code>retry_backoff_ms</code> / <code>total_timeout_ms</code></td><td>int</td><td><code>3</code> / <code>200</code> / <code>8000</code></td><td>尝试次数（含首答）/ 退避基数（指数倍增）/ 全程墙钟预算</td></tr>
+    <tr><td><code>max_attempts</code> / <code>retry_backoff_ms</code> / <code>total_timeout_ms</code></td><td>int</td><td><code>3</code> / <code>200</code> / <code>120000</code></td><td>尝试次数（含首答）/ 退避基数（指数倍增）/ 全程墙钟预算。<b>2026-10-04 实测回填</b>：原 <code>8000</code> ms 按「预估 <code>t_d</code> ≈ 3 s」定；真实 8B 实测 <code>t_d</code> p50 5.69 s / p95 11.70 s，8 s 会把正常决策判成 <code>E_LLM_TIMEOUT</code>（首次实测即触发），故改为 120 s ≈ p95 × 3 次尝试 × 3.4 倍余量</td></tr>
     <tr><td><code>generate_timeout_ms</code> / <code>max_tokens</code> / <code>reasoning_max_tokens</code></td><td>int</td><td><code>30000</code> / <code>256</code> / <code>160</code></td><td>单次 <code>generate</code> 超时 / 决策 tok 上限（Spec §8.6）/ 分两次生成时 <code>reasoning</code> 预算</td></tr>
     <tr><td><code>context_overflow_policy</code></td><td>enum</td><td><code>reject</code></td><td><code>reject</code> → <code>E_LLM_CONTEXT_OVERFLOW</code>；<code>truncate</code> → 截断最早的 user 消息</td></tr>
     <tr><td><code>eval_temperature</code> / <code>train_temperature_min</code></td><td>float</td><td><code>0.0</code>（固定）/ <code>0.7</code></td><td>评估温度（B-14，不可配置为其他值）/ 训练温度下限（计划 §3.3）</td></tr>
@@ -483,8 +483,9 @@ class InferenceError(RuntimeError):
     <tr><td>单测 <code>test_memory_budget.py</code></td><td>给定 <code>qwen3-30b-a3b-q4, context_length=32768, max_inflight=4</code>，当 <code>estimate_required_gb</code>，则 &gt; 20.0，且 <code>generate_json</code> 抛 <code>E_LLM_OOM</code> 而零提交。</td></tr>
     <tr><td>单测 <code>test_retry_backoff.py</code></td><td>给定 <code>MockBackend</code> 前两次坏 JSON、第三次合法，当 <code>generate_json</code>，则 <code>attempts==3</code>、<code>len(retry_reasons)==2</code>、假时钟观测退避 <code>[200, 400] ms</code>。</td></tr>
     <tr><td>单测 <code>test_timeout.py</code></td><td>给定 <code>total_timeout_ms=1000</code>、每次 <code>sleep(800ms)</code>，当 <code>generate_json</code>，则抛 <code>E_LLM_TIMEOUT</code> 且 <code>raw_texts</code> 不含半截输出。</td></tr>
+    <tr><td>单测 <code>test_cli_smoke.py</code></td><td>给定 <code>_robustness</code> 返回 <code>passed=false</code>（未达 M1 阈值），当 <code>inference robustness</code>，则<b>退出码 1</b>（领域失败，非 2/3 的配置/模型错误）且报告仍落盘；给定 <code>passed=true</code> 带 <code>--out</code>，则退出码 0 且写到指定路径；给定未知模型，当 <code>inference probe</code>，则退出码 3 且<b>不产出报告文件</b>（<code>metrics/</code> 目录由 <code>init_run_dir</code> 预建，故判据是文件不存在而非目录不存在）。<b>2026-10-06 复核 M-5 补</b>：集成套件 <code>test_inference_cli.py</code> 覆盖成功路径，本文件补它观测不到的阈值失败分支；此前单测口径下 <code>cli.py</code> 显示 0% 是「不收集 <code>tests/integration/</code>」的假象，补后 0% → 42%</td></tr>
     <tr><td>单测 <code>test_repair_prompt.py</code></td><td>给定坏 JSON + <code>ValidationError</code>，当 <code>repair_messages</code>，则追加的 user 消息同时含原始输出、错误消息、<code>json_path</code>、schema JSON，且<b>不修改</b>原 <code>messages</code>（不可变契约）。</td></tr>
-    <tr><td>集成 <code>test_inference_robustness.py</code></td><td>给定 200 条真实固定 prompt（MOD-04 决策模板快照），当对 <code>qwen3-8b-q4</code> 跑 <code>generate_json</code>，则首答通过率 ≥ 90%、三级全失败率 ≤ 1%，产出 <code>runs/&lt;run_id&gt;/metrics/format_robustness.json</code>（M1 交付物）。</td></tr>
+    <tr><td>集成 <code>test_inference_robustness.py</code></td><td>给定 200 条真实固定 prompt（MOD-04 决策模板快照），当对 <code>qwen3-8b-q4</code> 跑 <code>generate_json</code>，则首答通过率 ≥ 90%、三级全失败率 ≤ 1%，产出 <code>runs/&lt;run_id&gt;/metrics/format_robustness.json</code>（M1 交付物）。<b>2026-10-06 复核 M-1</b>：该工件必须与<b>当前快照/模板</b>同批产出——旧工件（2026-10-04）早于 F13/F23/F25 的模板改动，已用当前快照重跑 n=200 覆盖（首答 0.94 → <b>0.995</b>、<code>schema_fail_rate</code> 0.005 → <b>0.0</b>）；换快照/模板后重跑并覆盖属 G2 要求的显式变更。</td></tr>
     <tr><td>集成 <code>test_determinism.py</code></td><td>给定 <code>mode="eval", temperature=0, seed=1042</code>，当同 prompt 连跑 3 次，则 <code>text</code> 逐字节相同且 <code>prompt_digest</code> 相同；换 seed 后允许不同（G3/INV-6）。</td></tr>
     <tr><td>集成 <code>test_concurrency.py</code></td><td>给定 <code>max_inflight=1</code> 与 4 个并发 <code>generate_json</code>，当 <code>asyncio.gather</code>，则观测最大 <code>inflight==1</code>、全部成功、总墙钟 ≈ 4 × 单次延迟（验证局级并发的排队语义）。</td></tr>
     <tr><td>集成 <code>test_backend_swap.py</code></td><td>给定同 prompt 分别打到 <code>MLXBackend</code> 与 <code>LlamaCppBackend</code>，当比较 <code>parsed</code>，则两者都通过 <code>DECISION_SCHEMA</code>（<b>不</b>断言文本相同，见 NFR-03-01 L2）。</td></tr>
@@ -599,10 +600,12 @@ class InferenceError(RuntimeError):
     <tr><td>v1.0</td><td>2026-09-30</td><td>首版</td></tr>
     <tr><td>v1.1</td><td>2026-09-30 17:21</td><td>按 Spec v1.3 与 MOD PRD 评审修订：评估温度固定为 0.0（P0-4）；<code>ACTION_SCHEMA</code> 改为扁平的 <code>DECISION_SCHEMA</code>（动作计划，GBNF 可编译，与 MOD-04 共用同一文件，P1-19）；L0 修复失败计为一次尝试（P0-5）；评估并发默认 2 局、共享推理队列；删除误写的父类 <code>BuildManagerFacade</code></td></tr>
     <tr><td>v1.2</td><td>2026-09-30 17:49</td><td>P-11、P-24 裁决回填为 Spec B-28/B-31；Q-1 结案</td></tr>
+    <tr><td>v1.3</td><td>2026-10-06</td><td><b>按 M1 验收复核（M-1/M-5）对齐 §11 测试登记</b>：新增单测 <code>test_cli_smoke.py</code> 条目（补集成套件观测不到的 <code>robustness</code> <b>未达阈值退出码 1</b> 分支；此前单测口径下 <code>cli.py</code> 显示 0% 是「不收集 <code>tests/integration/</code>」的假象，补后 0% → 42%）；集成 <code>test_inference_robustness.py</code> 条目补「工件必须与当前快照/模板同批产出」——旧工件早于 F13/F23/F25 模板改动，已用当前快照重跑 n=200 覆盖（首答 0.94 → <b>0.995</b>、<code>schema_fail_rate</code> 0.005 → <b>0.0</b>）。依据 <a href="../reviews/2026-10-05-M1验收复核.md">M1 验收复核</a></td></tr>
+    <tr><td>v1.4</td><td>2026-10-06</td><td><b>补记 2026-10-04 的真实模型实测回填</b>（此前只在 §16 Q-2/Q-6 与配置注释里）：权重 <code>mlx-community/Qwen3-8B-4bit</code> 落盘（<code>weights_sha256=20303070…</code>）、<code>resident_gb_est</code> 5.6 → <b>4.6077</b>、<code>perf_budget</code> 1500/3000/25 → <b>5000/6000/10</b>（原目标实测未达成）、<code>total_timeout_ms</code> 8000 ms → <b>120000 ms</b>（8 s &lt; 实测 p50，正常决策会被判 <code>E_LLM_TIMEOUT</code>）；主快照 n=200 实测 <code>m1_evidence=true</code>、首答 0.94、<code>schema_fail_rate</code> 0.005、<code>t_d</code> p50 5.687 s / p95 11.70 s。并登记只有真实权重能暴露的 <b>F14</b>（mlx-lm API 漂移）、<b>F15</b>（Qwen3 思考模式烧光预算 → <code>enable_thinking=False</code>）、<b>F16</b>（probe/bench 固定 prompt 欠约束）、<b>F17</b>（权重摘要误把 HF 下载缓存算进去）</td></tr>
   </table>
 </section>
 
-<footer>来源：docs/prd/MOD-03-inference-PRD.md · GameRSI 模块讲解系列 · 2026-10-04 · 同步 2026-10-05</footer>
+<footer>来源：docs/prd/MOD-03-inference-PRD.md · GameRSI 模块讲解系列 · 2026-10-04 · 同步 2026-10-06</footer>
 
 </div>
 </main>

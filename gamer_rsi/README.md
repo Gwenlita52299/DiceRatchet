@@ -6,7 +6,7 @@
 **MOD-04 policy**（prompt 组装 / 三级校验 / 重试与轻罚 / harness 工具受限加载 /
 启发式 fallback）与 **MOD-08 evals**（seed 协议与 INV-5 护栏 / 三基线 / INV-7 主指标 /
 坍缩监控 / 消融 / 报告与 test 存证），对齐
-[模块拆分 Spec v1.4](../docs/模块拆分Spec-GameRSI.md)、
+[模块拆分 Spec v1.4](../../docs/模块拆分Spec-GameRSI.md)、
 [MOD-01 PRD](../docs/prd/MOD-01-env-rules-PRD.md)、
 [MOD-02 PRD](../docs/prd/MOD-02-env-sandbox-PRD.md)、
 [MOD-03 PRD](../docs/prd/MOD-03-inference-PRD.md)、
@@ -127,18 +127,27 @@ python -m gamer_rsi inference probe      --model qwen3-8b-q4 --mode eval --seed 
 python -m gamer_rsi inference bench      --model qwen3-8b-q4 --mode eval --seed 7 --n 30 --run-id real-0001
 python -m gamer_rsi inference robustness --model qwen3-8b-q4 --mode eval --seed 1042 --n 200 --run-id real-0002
 
-# 三基线（H1 = seed 2000–2039；fixed_prompt 需要真实客户端，40 局约 8 h）
+# 三基线（H1 = seed 2000–2039）
 # random / heuristic 不带覆盖，可共用 real-0003；fixed_prompt 带 --model，属另一族 → real-0004
+# ⚠️ n=40 的 fixed_prompt 实测需 ≈29–34 h（§14.18），M1 归档口径是前 10 个 seed（n=10，≈3.3 h）
 python -m gamer_rsi baseline --kind random       --split heldout --basket H1 --run-id real-0003
 python -m gamer_rsi baseline --kind heuristic    --split heldout --basket H1 --run-id real-0003
-python -m gamer_rsi baseline --kind fixed_prompt --split heldout --basket H1 \
+python -m gamer_rsi baseline --kind fixed_prompt --split heldout --seeds heldout:2000-2009 \
     --model qwen3-8b-q4 --run-id real-0004
+# 中断后接着跑（逐局增量落盘，跳过已完成 seed；--resume 只对已存在的 run 有效，首次跑不要加）：
+#   python -m gamer_rsi baseline --kind fixed_prompt --split heldout --seeds heldout:2000-2009 \
+#       --model qwen3-8b-q4 --run-id real-0004 --resume
 ```
 
-实测（Apple Silicon，2026-10-04，详见 [M1 验收报告 §12](../../docs/reviews/2026-10-04-M1验收报告.md)）：
-常驻显存 **4.6077 GB**；`t_d` p50 **5.687 s**（真实决策 prompt，n=200；p95 11.70 s）；`tok_per_s` 12.0；
-首答通过率 **0.94**（`schema_fail_rate` 0.005）。因此 `inference.total_timeout_ms` 已回填 120 s、
-`evals.seed_timeout_s` 已回填 1800 s——**这两个默认值必须随实测更新**，否则正常决策会被判成超时/dropped。
+实测（Apple Silicon；n=10 基线见 [M1 验收报告 §14.19](../../docs/reviews/2026-10-04-M1验收报告.md)，
+真实决策 prompt 的推理实测见 §12）：常驻显存 **4.6077 GB**；`t_d` p50 **7.46 s**（n=10 基线口径；
+§12 的 200 条快照口径为 5.687 s，实际局内 prompt 更长故更慢）；`tok_per_s` ≈12；
+当前快照上 `inference robustness --n 200` 首答通过率 **0.995**（`schema_fail_rate` **0.0**）。
+因此 `inference.total_timeout_ms` 已回填 120 s；`evals.seed_timeout_s` 已按实测标定为 **14400 s**
+（F24：该预算是**墙钟**且与 `n_workers` 耦合，早期 1800 s 会把整批判成 `E_EVAL_TIMEOUT`/dropped；
+且它**真的被执行**——协同 deadline + 硬看门狗两道闸，超预算记 `dropped` 并按 lose 计）——
+**这些默认值必须随实测更新**，否则正常决策会被判成超时/dropped。
+长跑前先 `caffeinate -i`，否则 macOS 空闲休眠会静默挂起进程（F19）。
 
 > MLX 后端会自动关掉 Qwen3 的思考模式（`enable_thinking=False`）并按安装版本的签名适配
 > `mlx_lm.load` / 显式 seed；这类 API 漂移只有真实权重才能暴露，改动 `mlx_backend.py` 后请务必跑一次上面的

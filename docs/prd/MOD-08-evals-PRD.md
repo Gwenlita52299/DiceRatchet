@@ -1,6 +1,6 @@
 # MOD-08 evals 技术 PRD
 
-> 版本：v0.3（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：待评审 · 所属里程碑：M1（基线）→ M2（执行器/指标）→ M3（完整：坍缩 + 消融 + test 终检）
+> 版本：v0.6（2026-10-06 按 M1 验收复核更正 §15 口径引用，见 §17）· 状态：待评审 · 所属里程碑：M1（基线）→ M2（执行器/指标）→ M3（完整：坍缩 + 消融 + test 终检）
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（**唯一事实来源**，冲突以 Spec 为准）· 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md)（§5 防坍缩、§6 三项验收、§8 沙箱泄漏）
 > 作者：MOD-08 owner · 落地：`gamer_rsi/evals/{harness,metrics,diversity,ablation,baselines}.py`
 
@@ -76,7 +76,7 @@ MOD-08 是 L3 测量层，**只读轨迹与报告，不参与决策**（Spec §1
 - **NFR-08-02（统计严谨）** 任何"提升"结论必须给点估计 + 区间 + 检验；配对比较用 McNemar，次级指标用 BH-FDR(q=0.10)，消融用 Holm–Bonferroni。
 - **NFR-08-03（可复现）** `config_hash`/`harness_version`/`seeds_hash`/`bootstrap_seed` 全部写入报告；§12 命令可直接复制执行（G6）。
 - **NFR-08-04（可观测）** 每次评估 ≥1 行 `eval_index.jsonl`；埋点走 MOD-09 结构化日志，**禁止自建日志格式**（Spec §8.2）。
-- **NFR-08-05（成本）** 耗时由 Spec v1.3 §8.6 成本模型推出：单局 ≈ `D·t_d` ≈ 5 min（默认局，8B），所以 n=40 的 heldout 评估 ≈ 3.3 h。局级并发共享同一推理队列（P-10），并发数不能缩短推理瓶颈，只能掩盖 env/IO 的开销。报告必须写实测 `dur_s`，不设不可达的 wall-clock 目标。**2026-10-05 实测修正**（n=10 `fixed_prompt`，`runs/m1-real-h1n10b/`）：`t_d` 实测 p50 **7.46 s**（不是 3 s）、`D` 均值 **97.1**（`decisions_llm` 口径，中位 69、max 245）、`calls/决策点 1.62`，故单局模型时间 **19.6 min**、n=10 墙钟 **3.32 h**；且 `d_wall / d_model = 1.02`，**`n_workers` 对总墙钟几乎无贡献**（`max_inflight=1`），`n` 局墙钟 ≈ `n × 单局模型时间`——本条的「并发掩盖 env/IO 开销」只在模型不是瓶颈时才成立，实测里模型就是瓶颈。
+- **NFR-08-05（成本）** 耗时由 Spec v1.3 §8.6 成本模型推出：单局 ≈ `D·t_d`（默认局，8B）。**2026-10-05 真实实测重标定**：`D` 不是常数、`t_d` 也不是 3 s——8B+MLX 上实测单局模型时间 **≈19.6 min**（n=10 均值：`D` 均值 97.1、中位 69、max 245；`calls/决策点` 1.62；`t_d` p50 7.46 s），故 **n=40 的 heldout 约 13.1 h（按均值）到 29–34 h（按重尾上界）**，而非原估 3.3 h。局级并发共享同一推理队列（`max_inflight=1`，P-10），实测 `d_wall / d_model = 1.02`，**`n_workers` 对总墙钟几乎无贡献**（`n` 局墙钟 ≈ `n × 单局模型时间`），只能掩盖 env/IO 开销。报告必须写实测 `dur_s`，不设不可达的 wall-clock 目标。推导与逐局明细见 [M1 验收报告 §14.18/§14.19](../reviews/2026-10-04-M1验收报告.md)。。**2026-10-05 实测修正**（n=10 `fixed_prompt`，`runs/m1-real-h1n10b/`）：`t_d` 实测 p50 **7.46 s**（不是 3 s）、`D` 均值 **97.1**（`decisions_llm` 口径，中位 69、max 245）、`calls/决策点 1.62`，故单局模型时间 **19.6 min**、n=10 墙钟 **3.32 h**；且 `d_wall / d_model = 1.02`，**`n_workers` 对总墙钟几乎无贡献**（`max_inflight=1`），`n` 局墙钟 ≈ `n × 单局模型时间`——本条的「并发掩盖 env/IO 开销」只在模型不是瓶颈时才成立，实测里模型就是瓶颈。
 
 ## 6. 接口契约（真实 Python 签名 + JSON Schema）
 
@@ -269,7 +269,7 @@ eval:
   n_heldout: 40; n_test: 100; n_ablation: 40        # 依次为 H1 / test_full / H2 篮子
   bootstrap_B: 10000; alpha: 0.05; fdr_q: 0.10; gap_threshold: 0.15
   t_max: 120; n_workers: 2;   # 步数/决策上限读 Spec §8.6 的 episode.*，本模块不另设
-  seed_timeout_s: 5400; min_support: 3; drop_rate_max: 0.10   # 墙钟预算，按 F24 的公式定
+  seed_timeout_s: 14400; min_support: 3; drop_rate_max: 0.10   # 墙钟预算；2026-10-05 实测标定（见 NFR-08-05：n_workers 不放大单局墙钟）
   budget_seconds: null; entropy: {base: 2.0, kind_space: 16}
   collapse: {c1_slope_threshold: -0.010, c2_ratio_threshold: 0.60, c3_jsd_freeze: 0.010,
              c3_winrate_jump: 0.05, c4_seq_ratio: 0.50, confirm_generations: 2}
@@ -379,7 +379,7 @@ python -m gamer_rsi eval test --run-id <run_id> --unlock-once --attestation runs
 **2026-10-04** 交付（提交 `bff9982`），并**提前**交付了原属 M3 的 `diversity.py` / `ablation.py` 与 test 单次解锁存证。
 本项目**未单独记工**；按提交时间窗折算 ≤ 2 人日（计划 M1 部分 4 人日），偏差 ≥ 50%。
 M1 验收的 **F1（三基线之一假入档）**、**F3（评估 run 上 `audit leak` 误判 critical）** 已在本模块修复；
-真实 8B 跑批后三条 held-out 分数已入档（`runs/m1-real-h1/baselines/`），`format_robustness.json` 首次以 `m1_evidence=true` 通过。
+真实 8B 跑批后三条 held-out 分数已入档（**最终口径 run `runs/m1-real-h1n10b/`**，seed 2000–2009、n=10、三基线同源；旧 `runs/m1-real-h1n40/` 只有 random/heuristic 的 n=40 与中止在 18% 的 fixed_prompt），`format_robustness.json` 以 `m1_evidence=true` 通过（**2026-10-06 按 M1 验收复核 M-1 用当前快照重跑 n=200 覆盖归档**：首答 0.94 → **0.995**、`schema_fail_rate` 0.005 → **0.0**）。
 
 **§13.2 前置项收口（2026-10-05，`<本轮提交>`）**：本模块的 5 项全部闭环 ——
 **F5**（`load_episode_results` 的 `arm`/`exclude_arms` 真过滤，基线臂不再进入代际分母，T-21）、
@@ -423,3 +423,4 @@ n_dropped=0`、10 局 `protocol` 完全一致、`audit leak` clean / 退出码 0
 | v0.3 | 2026-09-30 17:49 | 报告精度回填为 Spec B-34；CLI 标注改为已回填 §4.6 |
 | v0.4 | 2026-10-05 | M1 验收 §13.2 收口：FR-08-07…10 增加「单局超时真的执行（F20）」与「逐局增量落盘 + 续跑（F18）」；FR-08-11/12 增加溯源字段要求（F6）；FR-08-13/14 明确 `fixed_prompt` 走 MOD-04 `PolicyAgent(mode="baseline_fixed_prompt")`、每决策点一次推理（F22）；§6 签名表更新（`fixed_prompt_policy_config`/`build_agent`/`run_baseline`/`archive_baseline`/`load_episode_results` 的 `arm` 过滤）；§10 增加 `E_EVAL_TIMEOUT`；§11 新增 T-19（超时）/T-20（续跑）/T-21（臂过滤）/T-22（推理粒度）/T-23（归档溯源）与 subagent 登记的 T-18（PRD 路径守门，F9）；§15 更新实际交付说明 |
 | v0.5 | 2026-10-05 | **n=10 `fixed_prompt` 归档回填**：§15 补归档事实与实测速率（run `m1-real-h1n10b`，seed 2000–2009，`n=10 / degraded_n=0 / n_dropped=0`、`fixed_prompt` 0/10 = 0.0%、墙钟 3.32 h、`t_d` p50 7.46 s、`calls/决策点` 1.62、schema 全失败率 5.8%、`D` 均值 97.1）；NFR-08-05 与 FR-08-10 的 `seed_timeout_s` 推导补上实测值，并写明 **`d_wall / d_model = 1.02`：`n_workers` 对总墙钟几乎无贡献**（`max_inflight=1`，`n` 局墙钟 ≈ `n × 单局模型时间`）。数字来源见 [M1 验收报告 §14.19](../reviews/2026-10-04-M1验收报告.md) |
+| v0.6 | 2026-10-06 | **按 M1 验收复核更正陈旧口径与示例值**（不新增功能）：① §15 那句「三条 held-out 分数已入档（`runs/m1-real-h1/baselines/`）」是 v1.5 之前的旧口径——已改为最终 run `runs/m1-real-h1n10b/`（seed 2000–2009、n=10、三基线同源），并注明旧 `runs/m1-real-h1n40/` 只有 random/heuristic 的 n=40 与中止在 18% 的 fixed_prompt；② §15 补 `format_robustness.json` 的**工件新鲜度**要求（2026-10-06 重跑覆盖：首答 0.94 → **0.995**、`schema_fail_rate` 0.005 → **0.0**）；③ **NFR-08-05** 由「单局 ≈5 min、n=40 ≈3.3 h」改为实测口径（单局模型时间 **≈19.6 min**、`D` 均值 97.1 / 中位 69 / max 245、`calls/决策点` 1.62、`t_d` p50 7.46 s → n=40 约 **13.1 h（均值）～29–34 h（上界）**），并写明 `d_wall / d_model = 1.02`（`n_workers` 不缩短总墙钟）；④ 示例配置 `seed_timeout_s` 5400 → **14400**。依据 [M1 验收复核 §M-1](../reviews/2026-10-05-M1验收复核.md) 与 [M1 验收报告 §14.18/§14.19](../reviews/2026-10-04-M1验收报告.md) |
