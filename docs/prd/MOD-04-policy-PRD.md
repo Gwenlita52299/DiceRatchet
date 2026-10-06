@@ -1,5 +1,5 @@
 # MOD-04 policy 技术 PRD
-> 版本：v0.3（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：待评审 · 所属里程碑：M1（L1 智能体层）
+> 版本：v0.6（2026-10-06 按 M1 验收复核裁定，明确 §1 成功度量的判据范围，见 §17）· 状态：待评审 · 所属里程碑：M1（L1 智能体层）
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源；与本文件冲突时以 Spec 为准）
 > 作者：MOD-04 owner（GameRSI 技术文档）· 日期：2026-09-30
 > v0.3 起本 PRD 的临时决策均已由 Spec v1.4 裁决回填，原「决策（本 PRD 提出，待回填 Spec）」标注已改为「已裁决（Spec B-xx）」。
@@ -10,7 +10,18 @@ M1 交付「8B agent + 三基线」，而计划 §8 已点名最大风险：**LL
 目标：1) **组装可复现**——给定 `obs + memory + harness_version + seed`，prompt 逐字节确定并记录 `prompt_hash`；2) **输出可收敛**——三级校验 + 每步 `R=2` 重试 + 轻罚 `-0.05` + 连续 3 次非法判负，非法率可度量。
 3) **演化面可控**——MOD-07 只能通过 `harness/prompts/decision.md`、`harness/tools/*.py`、`harness/config.json` 影响决策，MOD-04 自身代码不在演化面内；4) **永不空转**——模型不可用、重试耗尽、工具异常、泄漏告警四类故障均退化为可解释的启发式动作。
 
-成功度量：held-out 上 `illegal_rate ≤ 0.02`、`E_ACTION_PARSE` 占比 ≤ 0.01、`fallback_rate ≤ 0.05`、同 seed 重跑 `prompt_hash` 与动作序列逐字节一致。
+成功度量（**判据范围见下**）：held-out 上 `illegal_rate ≤ 0.02`、`E_ACTION_PARSE` 占比 ≤ 0.01、`fallback_rate ≤ 0.05`、同 seed 重跑 `prompt_hash` 与动作序列逐字节一致。
+
+> **判据范围（2026-10-06，M1 验收复核裁定）**：`illegal_rate` / `fallback_rate` 刻画的是**最终演化后的
+> harness agent**（`harness/prompts/decision.md` + 工具/记忆/反思全开），由 **M3** 在 held-out 上判定；
+> **M1 不做该达标判断**。理由：M1 用 full `PolicyAgent` 实跑得到的是**基线**数据（冻结模板、
+> 关工具/记忆/反思、含启发式兜底），它不是被该判据考核的对象。M1 只交付「机制可用 + 基线可归档」，
+> 这两项量化指标随 M3 的 `eval report` 一并给出。
+>
+> **历史注记（勿再引用）**：M1 验收报告 §1 早期那句「`illegal_rate=0.0` 达标」依据的是 F1 修复前
+> **静默降级为启发式**的 `fixed_prompt` 假归档（启发式非法率恒为 0，是构造性的）。该数字已随 F1
+> 作废，替换为基线口径实测 `illegal_rate=0.3021` / `fallback_rate=0.181`（[M1 验收报告 §14.19](../reviews/2026-10-04-M1验收报告.md)）。
+> 这两个基线数字只用于**描述基线**，不作为 §1 成功度量的达标证据。
 
 ## 2. 范围
 ### 2.1 范围内
@@ -271,7 +282,11 @@ play_decision(env, obs, ctx):
 - **G4**：自测 run 上 `audit leak` 0 告警；蜜罐注入被抓到且被 `E_ACTION_LEAK_BLOCK` 拦下。
 - **G5**：`llm_decision.json` Schema 有 round-trip 测试（合法样例 → 解析 → 再序列化等价）。
 - **G6**：命令可复制执行：`python -m gamer_rsi play --agent llm --seeds train:1000-1004`、`python -m gamer_rsi baseline --kind heuristic`、`python -m gamer_rsi baseline --kind fixed_prompt`。
-- **M1 专项**：格式鲁棒性矩阵 13 行全部按期望落档；held-out 上 `illegal_rate ≤ 0.02`；断言 MOD-04 无 `gamer_rsi.env.*` 导入（INV-1 门禁）。
+- **M1 专项**：格式鲁棒性矩阵 13 行全部按期望落档；断言 MOD-04 无 `gamer_rsi.env.*` 导入（INV-1 门禁）。
+  - **`illegal_rate ≤ 0.02` 的范围澄清（2026-10-06，M1 验收复核裁定）**：该条针对**最终演化后的
+    harness agent**，由 **M3** 判定，**M1 不判**（理由与历史注记见 §1）。M1 只保证该指标**可度量、
+    可入档、可复算**（`illegal` / `fallback` 逐局字段 + `aggregate()` 的 `illegal_rate` / `fallback_rate`）。
+  - `fallback_rate ≤ 0.05` 同属 M3 判定的那组指标，范围与上条一致。
 
 ## 13. 指标与埋点
 | 指标 | 来源字段 | 口径 |
@@ -344,6 +359,8 @@ schema 三级全失败率 **5.8%**、`policy.reject` **739 次**（`illegal_rate
 `fallback_decisions` **122 次**（`fallback_rate=0.181`）、`D` 均值 **97.1**（中位 69、max 245）、
 单局模型时间 **19.6 min**。**口径提示**：`E_LLM_SCHEMA_INVALID` 的语义重试与 `fallback` 仍占决策点的
 约 1/5，是基线偏弱（0/10）的直接成本来源；M2 若要用中等难度局或更小模型压成本，先看这两项是否随之下降。
+**注（2026-10-06）**：这里的 `illegal_rate=0.3021` / `fallback_rate=0.181` 是**基线**读数，用来描述
+基线纯度与成本来源；它们**不是** §1 成功度量的达标证据——那两项指标考核的是演化后的 harness agent（见 §1/§12）。
 
 ## 16. 开放问题
 1. `legal_actions()` 的"噪声提示"具体指什么（错误候选占比？隐藏信息模糊化？）——影响 FR-04-8 误判率与 `E_ACTION_LEGAL_NOISE` 阈值，需 MOD-01/02 定稿。
@@ -363,3 +380,4 @@ schema 三级全失败率 **5.8%**、`policy.reject` **739 次**（`illegal_rate
 | v0.3 | 2026-09-30 17:49 | P-01/P-03/P-05 裁决回填为 Spec B-23/B-26/B-27；其余临时决策标注改为已裁决的出处 |
 | v0.4 | 2026-10-05 | M1 验收 §13.2 收口：FR-04-3 增加「`{{legal_actions}}` 超预算时的压缩」（F13，观测段仍永不裁剪）；**FR-04-7 增加「模板必须写清逐动作校验的配对/不重复约束」（F23）**；§11 增加 U11；§15 补实际交付与 F12/F13/F21/F22 的收口说明 |
 | v0.5 | 2026-10-05 | **n=10 `fixed_prompt` 归档回填**：§15 补 `PolicyAgent(mode="baseline_fixed_prompt")` 在最终契约上的 n=10 结果（`runs/m1-real-h1n10b/`，seed 2000–2009，10 局 `protocol` 一致、`n=10 / degraded_n=0 / n_dropped=0`、**0/10 = 0.0%，CI [0.000, 0.278]**）与推理成本/质量实测（`t_d` p50 7.46 s、`calls/决策点` 1.62、schema 全失败率 5.8%、`policy.reject` 739、`fallback` 122、`D` 均值 97.1、单局模型时间 19.6 min）；数字来源 [M1 验收报告 §14.19](../reviews/2026-10-04-M1验收报告.md) |
+| v0.6 | 2026-10-06 | **§1 成功度量的判据范围澄清（M1 验收复核裁定 M-2）**：`illegal_rate ≤ 0.02` 与 `fallback_rate ≤ 0.05` 明确为**最终演化后 harness agent** 的指标、由 **M3** 在 held-out 上判定，**M1 不判**——M1 用 full `PolicyAgent` 实跑得到的是基线数据，不是被考核对象；M1 只需保证该指标可度量/可入档/可复算。同步：① §1 增加历史注记，声明早期「`illegal_rate=0.0` 达标」依据的是 F1 修复前静默降级的假 `fixed_prompt` 归档（启发式非法率构造性为 0），已被基线实测 `0.3021 / 0.181` 取代，**不得再作为达标证据**；② §12 的 M1 专项去掉该项、改为显式范围说明；③ §15 的基线读数补「非 §1 达标证据」注记。依据 [M1 验收复核 §M-2](../reviews/2026-10-05-M1验收复核.md) |

@@ -1,6 +1,6 @@
 # MOD-03 inference 技术 PRD
 
-> 版本：v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：草案（待复核）· 所属里程碑：M1
+> 版本：v1.3（2026-10-06 按 M1 验收复核对齐 §11 测试登记，见 §17）· 状态：草案（待复核）· 所属里程碑：M1
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（**唯一事实来源**；冲突以 Spec 为准）
 > 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md) §4 技术栈（Mac M5 24GB / MLX 或 llama.cpp / Qwen3-8B → 27B Q4）、§8 风险（LLM 输出非 JSON）
 > 作者：GameRSI 技术文档（MOD-03 负责模块）· 依赖：MOD-09 infra（配置、日志、run_id、CLI）
@@ -306,8 +306,9 @@ class InferenceError(RuntimeError):
 | 单测 `test_memory_budget.py` | 给定 `qwen3-30b-a3b-q4, context_length=32768, max_inflight=4`，当 `estimate_required_gb`，则 > 20.0，且 `generate_json` 抛 `E_LLM_OOM` 而零提交。 |
 | 单测 `test_retry_backoff.py` | 给定 `MockBackend` 前两次坏 JSON、第三次合法，当 `generate_json`，则 `attempts==3`、`len(retry_reasons)==2`、假时钟观测退避 `[200, 400] ms`。 |
 | 单测 `test_timeout.py` | 给定 `total_timeout_ms=1000`、每次 `sleep(800ms)`，当 `generate_json`，则抛 `E_LLM_TIMEOUT` 且 `raw_texts` 不含半截输出。 |
+| 单测 `test_cli_smoke.py` | 给定 `_robustness` 返回 `passed=false`（未达 M1 阈值），当 `inference robustness`，则**退出码 1**（领域失败，非 2/3 的配置/模型错误）且报告仍落盘；给定 `passed=true`，当带 `--out` 跑，则退出码 0 且写到指定路径；给定未知模型，当 `inference probe`，则退出码 3 且**不产出报告文件**（`metrics/` 目录由 `init_run_dir` 预建，故判据是文件不存在而非目录不存在）。（2026-10-06 复核 M-5 补：集成套件 `test_inference_cli.py` 覆盖成功路径，本文件补它观测不到的阈值失败分支。） |
 | 单测 `test_repair_prompt.py` | 给定坏 JSON + `ValidationError`，当 `repair_messages`，则追加的 user 消息同时含原始输出、错误消息、`json_path`、schema JSON，且**不修改**原 `messages`（不可变契约）。 |
-| 集成 `test_inference_robustness.py` | 给定 200 条真实固定 prompt（MOD-04 决策模板快照），当对 `qwen3-8b-q4` 跑 `generate_json`，则首答通过率 ≥ 90%、三级全失败率 ≤ 1%，产出 `runs/<run_id>/metrics/format_robustness.json`（M1 交付物）。 |
+| 集成 `test_inference_robustness.py` | 给定 200 条真实固定 prompt（MOD-04 决策模板快照），当对 `qwen3-8b-q4` 跑 `generate_json`，则首答通过率 ≥ 90%、三级全失败率 ≤ 1%，产出 `runs/<run_id>/metrics/format_robustness.json`（M1 交付物）。**2026-10-06 复核 M-1**：该工件必须与**当前快照/模板**同批产出——旧工件（2026-10-04）早于 F13/F23/F25 的模板改动，已用当前快照重跑 n=200 覆盖（首答 0.94 → **0.995**、`schema_fail_rate` 0.005 → **0.0**）；换快照/模板后重跑并覆盖属 G2 要求的显式变更。 |
 | 集成 `test_determinism.py` | 给定 `mode="eval", temperature=0, seed=1042`，当同 prompt 连跑 3 次，则 `text` 逐字节相同且 `prompt_digest` 相同；换 seed 后允许不同（G3/INV-6）。 |
 | 集成 `test_concurrency.py` | 给定 `max_inflight=1` 与 4 个并发 `generate_json`，当 `asyncio.gather`，则观测最大 `inflight==1`、全部成功、总墙钟 ≈ 4 × 单次延迟（验证局级并发的排队语义）。 |
 | 集成 `test_backend_swap.py` | 给定同 prompt 分别打到 `MLXBackend` 与 `LlamaCppBackend`，当比较 `parsed`，则两者都通过 `DECISION_SCHEMA`（**不**断言文本相同，见 NFR-03-01 L2）。 |
@@ -423,3 +424,4 @@ Qwen3 思考模式烧光 token 预算、probe prompt 欠约束（详见 [M1 验�
 | v1.0 | 2026-09-30 | 首版 |
 | v1.1 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：评估温度固定为 0.0（P0-4）；`ACTION_SCHEMA` 改为扁平的 `DECISION_SCHEMA`（动作计划，GBNF 可编译，与 MOD-04 共用同一文件，P1-19）；L0 修复失败计为一次尝试（P0-5）；评估并发默认 2 局、共享推理队列；删除误写的父类 `BuildManagerFacade` |
 | v1.2 | 2026-09-30 17:49 | P-11、P-24 裁决回填为 Spec B-28/B-31；Q-1 结案 |
+| v1.3 | 2026-10-06 | **按 M1 验收复核（M-1/M-5）对齐 §11 测试登记**：① 新增单测 `test_cli_smoke.py` 条目——补集成套件观测不到的 `robustness` **未达阈值退出码 1** 分支（集成 `test_inference_cli.py` 已覆盖成功路径；此前单测口径下 `cli.py` 显示 0%，是"不收集 `tests/integration/`"造成的假象，补后 0% → 42%）；并注明「`init_run_dir` 预建 `metrics/`，失败判据是报告文件不存在」这一易错点。② 集成 `test_inference_robustness.py` 条目补「工件必须与当前快照/模板同批产出」——旧工件早于 F13/F23/F25 模板改动，已用当前快照重跑 n=200 覆盖（首答 0.94 → 0.995、`schema_fail_rate` 0.005 → 0.0）。依据 [M1 验收复核 §M-1/§M-5](../reviews/2026-10-05-M1验收复核.md) |
