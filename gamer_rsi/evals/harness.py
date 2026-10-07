@@ -1003,6 +1003,17 @@ class SandboxRunner:
         from gamer_rsi.sandbox.api import EpisodeConfig, make_default_env
 
         cfg = episode_config or self.episode_config
+        if cfg is None:
+            # 配置回落（Spec §5 的优先级：configs/default.yaml > 代码默认值）。
+            # ``baseline`` / ``play`` 等 MOD-08 入口**不显式传** ``episode_config``，此前会
+            # 静默落到 ``EpisodeConfig()`` 的代码默认（hard × 6、toggles 全开），于是
+            # ``env.episode.*``（difficulty / stage_count / toggles / character）对这些路径
+            # **完全失效**。2026-10-07 补 D-2 的 medium × 6 基线时暴露：带
+            # ``GAMERSI_ENV__EPISODE__DIFFICULTY=medium`` 的局与 hard × 6 逐位相同。
+            # M1 的归档未受影响纯属巧合——代码默认恰等于当时的配置默认。
+            # MOD-06 的 ``EpisodeRunner`` 不受影响：``loop/cli.py`` 显式传了 ``cfg.env.episode``。
+            env_cfg = getattr(self.config, "env", None) if self.config is not None else None
+            cfg = getattr(env_cfg, "episode", None)
         if cfg is not None and not isinstance(cfg, EpisodeConfig):
             cfg = EpisodeConfig.from_any(cfg)
         episode_id = f"e-{int(seed):06d}-g{int(generation):03d}-{arm}"

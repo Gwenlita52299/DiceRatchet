@@ -131,3 +131,64 @@ def test_evaluate_generation_reads_train_window(tmp_path):
     assert report["gain_realism"]["verdict"] in {"real_gain", "null", "overfit_suspect",
                                                  "regress", "insufficient"}
     assert report["power_note"]
+
+
+# ---- env.episode 必须真的进 env（F26 回归）-----------------------------------------
+
+class _StopBeforeEnv(Exception):
+    """哨兵：在 ``make_default_env`` 处中断，只取它收到的 ``episode_config``。"""
+
+
+def _capture_make_default_env(monkeypatch, seen):
+    def _fake_make_default_env(**kwargs):
+        seen.update(kwargs)
+        raise _StopBeforeEnv
+
+    monkeypatch.setattr("gamer_rsi.sandbox.api.make_default_env", _fake_make_default_env)
+
+
+def test_sandbox_runner_honours_config_episode(monkeypatch):
+    """``config.env.episode`` 必须传进 ``make_default_env``（F26 回归）。
+
+    回归背景（2026-10-07，M2 补 medium × 6 基线时暴露）：``SandboxRunner`` 在
+    ``episode_config=None`` 时曾直接落到 ``EpisodeConfig()`` 的**代码默认**（hard × 6、
+    toggles 全开），而 ``baseline`` / ``play`` 这两个 MOD-08 入口都不显式传该参数 ——
+    于是 ``env.episode.*``（difficulty / stage_count / toggles / character）对它们**完全失效**：
+    带 ``GAMERSI_ENV__EPISODE__DIFFICULTY=medium`` 的局与 hard × 6 逐位相同。
+    """
+    from types import SimpleNamespace
+
+    from gamer_rsi.evals import harness as H
+
+    seen: dict = {}
+    _capture_make_default_env(monkeypatch, seen)
+    config = SimpleNamespace(env=SimpleNamespace(
+        episode=SimpleNamespace(difficulty="medium", stage_count=6)))
+    runner = H.SandboxRunner(agent_factory=lambda seed, arm: None, run_id="t-f26",
+                             config=config)
+    with pytest.raises(_StopBeforeEnv):
+        runner.run_episode(2000, split="heldout", arm="baseline-heuristic",
+                           generation=0, harness_version=0)
+    cfg = seen["episode_config"]
+    assert cfg.difficulty == "medium", "config.env.episode.difficulty 没进 env（F26 复发）"
+    assert cfg.stage_count == 6
+
+
+def test_sandbox_runner_explicit_episode_wins(monkeypatch):
+    """显式传入的 ``episode_config`` 优先于 ``config.env.episode``（Spec §5 的优先级）。"""
+    from types import SimpleNamespace
+
+    from gamer_rsi.evals import harness as H
+
+    seen: dict = {}
+    _capture_make_default_env(monkeypatch, seen)
+    config = SimpleNamespace(env=SimpleNamespace(
+        episode=SimpleNamespace(difficulty="medium", stage_count=6)))
+    runner = H.SandboxRunner(agent_factory=lambda seed, arm: None, run_id="t-f26",
+                             config=config)
+    explicit = SimpleNamespace(difficulty="easy", stage_count=3)
+    with pytest.raises(_StopBeforeEnv):
+        runner.run_episode(2000, split="heldout", arm="baseline-heuristic",
+                           generation=0, harness_version=0, episode_config=explicit)
+    assert seen["episode_config"].difficulty == "easy"
+    assert seen["episode_config"].stage_count == 3
