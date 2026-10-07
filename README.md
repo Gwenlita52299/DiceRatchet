@@ -40,7 +40,7 @@ RSI（Recursive Self-Improvement，递归自我改进）的公开讨论大多停
 | L2 进化 | MOD-06 loop · MOD-07 evolve | 闭环编排、断点续跑与成本闸门；harness 候选生成、held-out 裁判、版本化与回滚 |
 | L3 测量与工程 | MOD-08 evals · MOD-09 infra | 基线、指标、坍缩监控与消融；配置、事件、CLI、守卫、git |
 
-一局游戏的默认设定是 hard 难度 × 6 关：启发式 bot 的通关率 45.5%，中位数 232 env 步 / 96 个决策点（n=200，seed 1–200；复现命令见 Spec §8.6）。每代共 165 局（训练 30 局 + parent 与 2 个候选的冒烟和 held-out），约 14 小时。详见 [Spec §8.6](docs/模块拆分Spec-GameRSI.md)。
+一局游戏的默认设定是 hard 难度 × 6 关：启发式 bot 的通关率 45.5%，中位数 232 env 步 / 96 个决策点（n=200，seed 1–200；复现命令见 Spec §8.6）。每代共 **114 局**（训练 30 局 + parent 与 1 个候选的冒烟 2 局与 held-out 40 局；2026-10-06 D-1 定稿），按真实 8B 实测单价 19.6 min/局约 **37 小时/代**。详见 [Spec §8.6](docs/模块拆分Spec-GameRSI.md)。
 
 ### 七条不变量
 
