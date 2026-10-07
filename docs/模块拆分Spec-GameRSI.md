@@ -1,6 +1,6 @@
 # GameRSI 模块拆分 Spec
 
-> 版本：v1.7（2026-10-06，M2 开工 D-1/D-2/D-3 裁决回填 §8.6 与 §11.1d，见 §12/changelog）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
+> 版本：v1.8（2026-10-07，§3.1 实测 → C5 标定回填 §8.6 与 §11.1e，见 §12/changelog）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
 > 上游：[项目计划-GameRSI.md](../项目计划-GameRSI.md) · [RSI调研纪要.md](../RSI调研纪要.md)
 > 游戏本体：`docs/prd/GAME-00/01/02`（规则、观测、动作的游戏侧事实来源，B-09）
 > 下游：`docs/prd/MOD-*.md`（每个模块的技术 PRD 必须与本文件一致；冲突时以本文件为准）
@@ -513,6 +513,7 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 > 原「预估约 3 s」**低估 1.9×** —— 这正是 [排期 §6](项目排期-GameRSI.md) 的首要风险，实跑耗时应按下表放大。
 
 - 单局耗时 `t_ep ≈ D·t_d + t_reflect`：按实测 `t_d = 5.687 s` → 96 × 5.687 ≈ **546 s ≈ 9.1 分钟**（含重试 ≈ 9.7 分钟）；原估 5 分钟是 t_d=3 s 的产物。
+- ⚠️ **本条的示例数值（C=2、S=5、165 局、25.0 h/代）是历史口径，已被下方「2026-10-06 M2 开工定价」与「2026-10-07 §3.1 实测回填」取代**：现行口径为 `C=1 / S=2 / H=40 / K=30 → E_gen=114 局 ≈37 h/代`。保留本行只为记录公式与推导来源。
 - 每代局数 `E_gen = K + (H + S) + C·(S + H)`：训练 K=30；parent 的 heldout H=40 与冒烟 S=5（与候选使用同一个冻结的记忆快照，所以每代都要重跑）；候选数 C=**2**（上限 3），每个候选也跑冒烟 S 与 heldout H。默认值下 E_gen = 30 + 45 + 2×45 = **165 局**；按实测 → 165 × 546 s ≈ **25.0 小时/代**（原估 14 h）。
 - M3 全程为 3 代，加上 gen-000 基线 40 局、fixed_prompt 基线 40 局、消融 2 臂 × 40 局、test 100 局：按实测线性放大 **≈ 114 小时（4.7 天）连续推理**（原估 60 h ≈ 2.5 天），含重试约 **121 小时（5.0 天）**。
 - **衍生硬约束**：`inference.total_timeout_ms` 由 8000 ms 回填为 **120000 ms**（原值 < 实测 p50，正常决策会被判 `E_LLM_TIMEOUT`）。`evals.seed_timeout_s` 同时按实测单局 ≈546 s 把默认值由 300 s 调到 **1800 s**。**（2026-10-05 更新，M1 验收 F20 已修）** 该超时现在**真正被执行**，两道闸：① `SandboxRunner.run_episode()` 把 `timeout_s` 作为 deadline 传给决策循环，超预算的局收尾为 `dropped=true` + `E_EVAL_TIMEOUT`（计 n、按 lose 计）；② `run_eval` 以 `seed_timeout_s + 60 s` 为上限巡检，超限即放弃该 worker、记 dropped，并**换新线程池**继续跑剩余 seed（否则 `n_workers=1` 时一个卡死的 worker 会让其余 seed 永远排不上队）。残余风险：Python 无法杀死已运行的线程，被放弃的 worker 由 MOD-03 的调用级超时（`generate_timeout_ms`/`total_timeout_ms`）收尾。
@@ -533,6 +534,12 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 - **D-2 难度口径：混合裁决**。默认局保持 hard × 6（M3 主口径），M2 用 medium × 6 做 bring-up（见上方「bring-up 口径」）。由此**遗留一项必须在 MOD-06 联调前写进判据**：hard × 6 上 `fixed_prompt` 基线 win_rate = 0.0%，M3 的「相对基线提升」不能建在 win_rate 上，须改用 `mean_stages_cleared` / `mean_battles_won`（与下方 D-3 同一条结论，对齐 MOD-07 C2 已有的 `metric ∈ {win_rate, mean_stages_cleared, mean_hearts_left}`）。
 - **D-3 功效口径（H 与 n_rep 不变，改两处判据）**：① **H 保持 40**、`n_rep` 保持 1（B-14 已定 `eval_temperature=0.0` + `decode_seed=0`；全面 `n_rep=3` 在 heldout 臂上是 **+52 h/代**，代价高于整代预算），另在 M3 前做**一次性确定性验证**（H1 前 5 个 seed 重跑对 sha256，≈1.6 h），失败走既有的 `E_EVAL_NONDETERMINISTIC → n_rep=3` 升级路径；② `evolve.win_rate_tol: 0.0 → 0.05`，`evolve.gap_threshold` 保持 0.15（H 未变，不随 H 重标；等 §3.2 冒烟产出第一批 train/heldout 配对后再定）。
 - **D-3 的统计依据（n=40 下 win_rate 无法坐实 4–5pp，连续指标可以）**：精确配对 McNemar 在 `p01 − p10 = 0.05` 时的功效——每 seed 不一致率 q=0.10 时 n=40→**0.03**、n=80→0.17、n=160→0.43、n=320→0.78；q=0.05 时 n=40→0.01、n=160→0.82。即 MOD-08 §8.2 的「n=40 最小可判不一致对数 k=6」等价于 **n=40 只能判 ≥15pp 的净跳变**（Δ=15pp→power 0.57、20pp→0.84）。而连续指标 `mean_stages_cleared`（0–6）在 n=40、配对 sd 0.5 / 0.8 下：Δ=0.30 关（= 6 关制的 **5.0pp**）→ power **0.97 / 0.66**。故 **M3 的「4–5pp 量级增益」以 `mean_stages_cleared` 的配对 bootstrap 为准，`win_rate` 降为报告项 + 粗门（<15pp 不用它下结论）**，并保留 MOD-08 报告里的 `power_note`。
+
+**✅ 2026-10-07 §3.1 实测回填与 C5 标定（裁决 A+C，见 [§3.1 实测报告](reviews/2026-10-07-M2-S31-full-agent基线实测.md)）**：
+- **实测（full `PolicyAgent`，H1 子集 seed 2000–2009，n=10，eval 模式，`runs/m2-s31-full-baseline/`）**：`illegal_rate` **0.3016**、`fallback_rate` **0.2146**、`truncation_rate` **0.10**、`win_rate` 0.0（CI [0.000, 0.2775]）、`mean_stages_cleared` 3.00、`mean_battles_won` 7.50、`mean_decisions` 89.0（决策点 121.7）；**n=10 / degraded_n=0 / n_dropped=0**，墙钟 3.51 h。对照 `fixed_prompt` 基线（0.3021 / 0.1810 / 0.0）——**full agent 在同一量级，且 fallback 与 truncation 更差**。
+- **裁定 A（现在先松开）**：`evolve.max_illegal_rate` 0.05→**0.35**、`max_fallback_rate` 0.10→**0.25**、`max_truncation_rate` 0.05→**0.15**（实测上界 + 余量）。原阈值下超限 **6.03× / 2.15× / 2.00×**，C5 会 reject 每一个候选（parent 也是如此），M2 验收判据「闭环跑通 ≥1 轮可判定的演化」不可能达成。**副作用已知**：C5 由此成为非约束门（任何候选都能过），诊断价值临时让位于 M2 判据。
+- **裁定 C（M3 收紧路径）**：C5 由**绝对门**改为**相对门** `candidate.<metric> ≤ parent.<metric> + tol`（illegal / fallback / truncation 同构），保留「抓退化」的诊断力；`tol` 待 §3.2 冒烟产出第一批 train/heldout 配对后标定。**不得**用「把 A 的新值改回 0.05」的方式收紧。
+- **根因判定（排除渲染/契约缺陷）**：离线复现 2,220 个决策点的提示词组装，**F13 压缩渲染 0 次触发**（最大 `token_estimate` 2,694 < 预算 3,072，最大 36 条合法动作）→ 模型看到的是**完整** `legal_actions`（含真实 `dieId`×`slotId` 配对）；非法尝试 **65.2% 是 `play_face`**（模板第 6 条已明确警告的配对问题）；`llm.call` 的 `grammar_used` **1,892/1,892 = false**（MLX 无语法约束）。故 0.30 是 8B 的能力/遵从问题；要压到门内需**语法约束解码**（MOD-03 工程）或提示词改造，**不作为 M2 的前置**。
 
 ---
 
@@ -620,7 +627,7 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 | P-21 | 被 GAME-01 §7 P-8 取代：规范化 JSON 以 JS `stableStringify` 为准（`ensure_ascii=True`） |
 | P-22 | 被 GAME-01 §3 取代：派生算法为 xmur3 + SplitMix64（禁 hashlib），流名以 GAME `STREAM_NAMES` 为准 |
 | P-23 | 被 GAME 取代：DSL 同 GAME-00 §4.3；不建 `configs/enemies.yaml`，配表读 `src/game/content` |
-| P-25 | 采纳；C5 改为 `illegal_rate ≤ 0.05`、`fallback_rate ≤ 0.10`、`truncation_rate ≤ 0.05`（不再用回合数）；M3 另需 ≥1 次 accept |
+| P-25 | 采纳；C5 改为 `illegal_rate ≤ 0.05`、`fallback_rate ≤ 0.10`、`truncation_rate ≤ 0.05`（不再用回合数）；M3 另需 ≥1 次 accept —— **⚠️ 三个数值已于 v1.8/B-40 按 §3.1 实测重标定为 0.35 / 0.25 / 0.15（先松开），M3 由 B-41 的相对门收紧；本行的 0.05/0.10/0.05 是历史裁决，不再是现行口径** |
 | P-28 | 采纳，即 B-09 |
 | P-29 | 采纳，即 B-10/B-12 |
 | P-30 | 采纳，即 B-11 |
@@ -652,6 +659,13 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 | B-38 | M2 开工 D-2 | 难度**混合裁决**：默认局保持 hard × 6（M3 主口径），M2 联调/冒烟用 medium × 6 bring-up（run 级 override）；hard × 6 的 `fixed_prompt` 基线 win_rate=0.0% ⇒ M3 判据改用 `mean_stages_cleared`/`mean_battles_won`；medium × 6 的基线率与 `D` 待实测 | §8.6 |
 | B-39 | M2 开工 D-3 | 功效口径：`H` 保持 40、`n_rep` 保持 1（一次性确定性验证 + `E_EVAL_NONDETERMINISTIC → n_rep=3` 升级）、`evolve.win_rate_tol` 0.0→0.05、`gap_threshold` 保持 0.15 暂不重标；**M3 的 4–5pp 结论以 `mean_stages_cleared` 配对 bootstrap 为准**（n=40 的 win_rate 只能判 ≥15pp） | §8.6、MOD-08 §8.2/§13、MOD-07 §8.2 |
 
+### 11.1e v1.8 已回填（2026-10-07，§3.1 实测 → C5 标定）
+
+| # | 来源 | 决策 | 回填位置 |
+|---|---|---|---|
+| B-40 | [§3.1 实测](reviews/2026-10-07-M2-S31-full-agent基线实测.md) | **C5 三阈值按实测先松开**：`max_illegal_rate` 0.05→**0.35**、`max_fallback_rate` 0.10→**0.25**、`max_truncation_rate` 0.05→**0.15**。依据：full `PolicyAgent` 实测 0.3016 / 0.2146 / 0.10（原门超限 6.03× / 2.15× / 2.00×，会 reject 每个候选）。**写明「先松开、M3 再收紧」**，并声明副作用（C5 临时成为非约束门） | §8.6、MOD-07 §8.2/§9、`configs/default.yaml`、`config.py` |
+| B-41 | [§3.1 实测](reviews/2026-10-07-M2-S31-full-agent基线实测.md) | **C5 的 M3 收紧路径 = 绝对门改相对门**：`candidate.<metric> ≤ parent.<metric> + tol`（illegal/fallback/truncation 同构），保留抓退化的诊断力；`tol` 待 §3.2 冒烟产出第一批 train/heldout 配对后标定。**禁止用「把 B-40 的值改回 0.05」来收紧** | §8.6、MOD-07 §8.2 |
+
 ### 11.2 待裁决
 
 （无。v1.4 起，新的 PRD 临时决策登记到这里，编号从 P-31 开始。）
@@ -672,3 +686,4 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 | v1.5 | 2026-10-05 | M1 验收 §13.2 的接口面回填（不改架构与模块边界）：§4.4 明确**冻结基线模板是包内工件**（`gamer_rsi/agent/prompts/fixed_v1.md` / `task.md`，不进 `harness/`、不进 `artifact_hash`；基线由 MOD-04 `PolicyAgent(mode="baseline_fixed_prompt")` 承担，F12/F22）；§4.6 补 `baseline --resume` 与「两类续跑语义」、并把「覆盖并入 `config_hash` → 同 run-id 只能同族」写成命令面约定（F10/F18）；§8.6 把 F20 的「`seed_timeout_s` 未被消费」改为「两道闸真被执行」，把 F22 的「基线成本 ×3.1」口径警告改为「已修，按 `D·t_d` 计算」 |
 | v1.6 | 2026-10-05 | **§8.6 成本模型按 n=10 实测回填**（用真实 8B 跑完 `fixed_prompt` n=10 子集并归档于 `runs/m1-real-h1n10b/`，seed 2000–2009）：新增一条实测条目——n=10 **墙钟 3.32 h**、模型时间 3.26 h、1,551 次调用、`t_d` p50 7.46 s / p95 10.13 s、schema 全失败率 5.8%、`fallback` 122 次、`illegal_rate=0.3021`、**`win_rate` 0/10 = 0.0%（CI [0.000, 0.278]）**、`D` 均值 **97.1**（中位 69、min 33、max 245）；并把 §14.18 的「单局 43 min / n=40 29–34 h」标注为**按重尾高端 2 局外推的上界**（按本次均值外推 n=40 模型独占下限 ≈13.1 h）。同时修正「单局墙钟 × `n_workers`」的表述：实测 `d_wall / d_model = 1.02`，**`n_workers` 不放大单局墙钟**，`n` 局墙钟 ≈ `n × 单局模型时间`。明细见 [M1 验收报告 §14.19](reviews/2026-10-04-M1验收报告.md) |
 | v1.7 | 2026-10-06 | **M2 开工 D-1/D-2/D-3 裁决回填**（依据 [M2 开工检查单](tasks/2026-10-06-M2开工检查单.md) §2，登记 B-37..B-39）：§8.6 新增「2026-10-06 M2 开工定价」条目与「bring-up 口径」段。① **D-1**：`loop.max_episodes_per_generation` 170→**120**、`C`（`loop.n_candidates`=`evolve.n_candidates`）2→**1**、`S`（`smoke_n` 两处）5→**2**、`H` 保持 **40** → `E_gen=114` 局（≈37 h/代）；写明 `smoke_n` 无自动校验、`H` 的 `(1+C)` 支臂边际成本为 +10 H = +6.5 h/代（纠正检查单的 +3.3 h）。② **D-2**：难度**混合裁决**——默认局保持 hard × 6，M2 联调/冒烟用 medium × 6 bring-up（run 级 override，`configs/default.yaml` 默认值不动）；hard × 6 的 `fixed_prompt` 基线 win_rate=0.0% ⇒ M3 判据改用 `mean_stages_cleared`/`mean_battles_won`；medium × 6 的基线率与 `D` 列为待实测。③ **D-3**：`H=40`、`n_rep=1` 保持不变（改为 M3 前一次性确定性验证 + 既有的 `n_rep=3` 升级路径），`evolve.win_rate_tol` 0.0→**0.05**、`gap_threshold` 保持 0.15；并以精确配对 McNemar / 配对 bootstrap 的功效计算证明 **n=40 的 win_rate 只能判 ≥15pp**，4–5pp 量级增益改由 `mean_stages_cleared`（Δ=0.30 关 = 6 关制的 5.0pp，power 0.66–0.97）承担。同步改 `configs/default.yaml` 与 `gamer_rsi/infra/config.py` 的对应默认值 |
+| v1.8 | 2026-10-07 | **M2 开工检查单 §3.1 实测回填与 C5 标定（裁决 A+C，登记 B-40/B-41；明细见 [§3.1 实测报告](reviews/2026-10-07-M2-S31-full-agent基线实测.md)）**。① **实测**：full `PolicyAgent` 在 H1 子集（seed 2000–2009，n=10，eval 模式，`runs/m2-s31-full-baseline/`）测得 `illegal_rate` **0.3016**、`fallback_rate` **0.2146**、`truncation_rate` **0.10**、`win_rate` 0.0（CI [0.000, 0.2775]）、`mean_stages_cleared` 3.00，`n=10 / degraded_n=0 / n_dropped=0`，墙钟 3.51 h——与 `fixed_prompt` 基线（0.3021 / 0.1810 / 0.0）同量级且 fallback/truncation 更差。② **裁定 A（先松开）**：`evolve.max_illegal_rate` 0.05→**0.35**、`max_fallback_rate` 0.10→**0.25**、`max_truncation_rate` 0.05→**0.15**（原门超限 6.03×/2.15×/2.00×，会 reject 每个候选 → M2 判据不可能达成）；副作用（C5 临时成为非约束门）已在正文写明。③ **裁定 C（M3 收紧）**：绝对门改**相对门** `candidate.<metric> ≤ parent.<metric> + tol`（登记的 B-41），`tol` 待 §3.2 冒烟产出配对后标定；禁止用「改回 0.05」收紧。④ **根因判定**：离线复现 2,220 个决策点的提示词组装——F13 压缩渲染 **0 次触发**（最大 `token_estimate` 2,694 < 3,072）、非法尝试 **65.2% 是 `play_face`** 配对问题、`grammar_used` **1,892/1,892 = false**（MLX 无语法约束）⇒ 0.30 属 8B 能力/遵从问题，不是渲染或契约缺陷；压到门内需语法约束解码（MOD-03）或提示词改造，**不作为 M2 前置**。⑤ §11 新增 11.1e，并给 P-25 行加「数值已被 B-40 取代」注记 |

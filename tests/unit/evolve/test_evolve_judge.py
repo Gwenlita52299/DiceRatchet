@@ -214,6 +214,13 @@ def test_c4_short_circuits_before_c5():
 # C5 合法性与健壮性
 # =====================================================================
 
+#: C5 的边界口径用**显式 cfg** 钉住，不与 `configs/default.yaml` 的默认值耦合。
+#: 默认值已于 2026-10-07 按 Spec §3.1 实测标定为 0.35/0.25/0.15（B-40），且 M3 还会改成
+#: 相对门（B-41）——本组用例只验「阈值比较」这一层逻辑，另外用
+#: ``test_c5_defaults_match_calibration`` 单独守默认值。
+_C5_BOUNDS = {"max_illegal_rate": 0.05, "max_fallback_rate": 0.10,
+              "max_truncation_rate": 0.05}
+
 @pytest.mark.parametrize("field,value,ok", [
     ("illegal_rate", 0.05, True),      # 恰好等于上限
     ("illegal_rate", 0.11, False),     # PRD §11-5 的示例
@@ -223,12 +230,14 @@ def test_c4_short_circuits_before_c5():
     ("truncation_rate", 0.06, False),
 ])
 def test_c5_thresholds(field, value, ok):
-    verdict = _verdict(heldout=heldout_dict(**{field: value}))
+    verdict = _verdict(heldout=heldout_dict(**{field: value}),
+                       cfg=make_config(**_C5_BOUNDS))
     assert _trace_of(verdict)["C5"]["passed"] is ok, verdict.reason
 
 
 def test_c5_failure_code():
-    verdict = _verdict(heldout=heldout_dict(illegal_rate=0.11))
+    verdict = _verdict(heldout=heldout_dict(illegal_rate=0.11),
+                       cfg=make_config(**_C5_BOUNDS))
     assert verdict.error_code == str(E.E_EVOLVE_ILLEGAL_RATE)
     assert verdict.reason.startswith("C5:illegal/fallback/truncation")
 
@@ -237,6 +246,17 @@ def test_c5_thresholds_are_configurable():
     verdict = _verdict(heldout=heldout_dict(illegal_rate=0.11),
                        cfg=make_config(max_illegal_rate=0.35))
     assert _trace_of(verdict)["C5"]["passed"] is True
+
+
+def test_c5_defaults_match_calibration():
+    """C5 默认值 = 2026-10-07 §3.1 实测标定（Spec v1.8 B-40：「先松开」）。
+
+    改这三个默认值必须同步 Spec §8.6 / MOD-07 PRD §8.2+§9 / `configs/default.yaml`
+    （后者另有 `tests/unit/infra/test_config.py` 的「dataclass 默认 == default.yaml」守门）。
+    """
+    cfg = make_config()
+    assert (cfg.max_illegal_rate, cfg.max_fallback_rate,
+            cfg.max_truncation_rate) == (0.35, 0.25, 0.15)
 
 
 # =====================================================================

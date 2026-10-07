@@ -200,9 +200,21 @@ evolve:
   # train/heldout 配对后，再按实测 win_rate_gap 分布决定是否重标。
   gap_threshold: 0.15
   min_entropy_slope: -0.01
-  max_illegal_rate: 0.05
-  max_fallback_rate: 0.10
-  max_truncation_rate: 0.05
+  # 2026-10-07（M2 开工检查单 §3.1 实测标定，裁决 A+C）：C5 三阈值 0.05/0.10/0.05 → 0.35/0.25/0.15。
+  # 依据：full PolicyAgent 在 H1 子集（seed 2000–2009，n=10，eval 模式）实测
+  #   illegal_rate 0.3016 / fallback_rate 0.2146 / truncation_rate 0.10，
+  # 与 fixed_prompt 基线（0.3021 / 0.1810 / 0.0）同量级 → 原阈值分别超限 6.0× / 2.15× / 2.0×，
+  # 会使 MOD-07 的每一次演化都被 C5 reject（闭环形式上跑通、实则 0 候选留下）。
+  # 新值是「按实测上界 + 余量」的**先松开**口径：0.3016→0.35、0.2146→0.25、0.10→0.15。
+  # ⚠️ 副作用：C5 由此变成非约束门（任何候选都能过），诊断价值临时让位于 M2 的
+  #   「闭环跑通 ≥1 轮可判定演化」判据。M3 收紧路径见 Spec §8.6 / MOD-07 PRD §8.2：
+  #   改为相对门 `candidate ≤ parent + tol`（登记 Spec B-41），tol 待 §3.2 冒烟产出
+  #   第一批 train/heldout 配对后标定。
+  # 实测证据：runs/m2-s31-full-baseline/（generations.csv + gen-000/report.json），
+  #   记录见 docs/reviews/2026-10-07-M2-S31-full-agent基线实测.md。
+  max_illegal_rate: 0.35
+  max_fallback_rate: 0.25
+  max_truncation_rate: 0.15
   hitl: true
   gate_timeout_hours: 24
   propose_max_retries: 2

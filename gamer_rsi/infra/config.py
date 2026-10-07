@@ -416,9 +416,13 @@ class EvolveConfig:
     alpha: float = 0.05 # C2 显著性水平
     gap_threshold: float = 0.15 # C3 win_rate_gap 阈值
     min_entropy_slope: float = -0.01 # C4 熵斜率下限
-    max_illegal_rate: float = 0.05 # C5
-    max_fallback_rate: float = 0.10
-    max_truncation_rate: float = 0.05
+    max_illegal_rate: float = 0.35 # C5（2026-10-07 §3.1 实测标定：0.05 → 0.35，先松开）
+    max_fallback_rate: float = 0.25 # C5（0.10 → 0.25：实测 0.2146）
+    max_truncation_rate: float = 0.15 # C5（0.05 → 0.15：实测 0.10）
+    # 标定依据：full PolicyAgent 在 H1 子集（seed 2000–2009，n=10，eval）实测
+    # illegal 0.3016 / fallback 0.2146 / truncation 0.10，与 fixed_prompt 基线同量级，
+    # 原阈值下 C5 会 reject 每一个候选（见 docs/reviews/2026-10-07-M2-S31-full-agent基线实测.md）。
+    # M3 的收紧路径是相对门 `candidate ≤ parent + tol`（Spec B-41），不是把本值改回去。
     hitl: bool = True
     gate_timeout_hours: int = 24
     propose_max_retries: int = 2

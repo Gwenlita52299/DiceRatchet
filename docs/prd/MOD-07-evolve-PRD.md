@@ -1,7 +1,7 @@
 # MOD-07 evolve 技术 PRD
 
-> **版本**：v0.3（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· **状态**：待评审 · **所属里程碑**：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）· **作者**：GameRSI 技术文档 · 日期：2026-09-30
-> **上游 Spec**：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（v1.3，**唯一事实来源**；冲突以 Spec 为准）· **关联不变量**：INV-3/INV-4/INV-5/INV-7
+> **版本**：v0.4（2026-10-07 按 Spec v1.8 回填 C5 实测标定与 M3 相对门设计，见 §8.2.1/§17）· **状态**：待评审 · **所属里程碑**：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）· **作者**：GameRSI 技术文档 · 日期：2026-10-07
+> **上游 Spec**：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（v1.8，**唯一事实来源**；冲突以 Spec 为准）· **关联不变量**：INV-3/INV-4/INV-5/INV-7
 > **代码位置**：`gamer_rsi/evolve/{proposer,judge,versioning,gate}.py`、`harness/`、`runs/<run_id>/generations/`
 
 ---
@@ -75,7 +75,7 @@ MOD-06 每 K 局（默认 30）触发演化周期，把「策略记忆 + 最近�
 - **NFR-07-4 可观测**：只用 MOD-09 结构化事件（`evolve.propose|validate|scan|smoke|evaluate|decision|version|gate|cost`），一次调用 = 一行 JSONL，不自建日志格式。
 - **NFR-07-5 成本**：
   - 候选共享同一 seed 集合只是**配对设计**，并不减少局数：单代评估局数 = `H + S + C·(S + H)`（parent 的 heldout 与冒烟 + 每个候选的冒烟与 heldout）。
-  - 默认 C=2、S=5、H=40 时为 135 局；再加训练 K=30，每代约 165 局，与 Spec §8.6 的 `E_gen` 一致（MOD-06 计算，parent 冒烟 5 局计入 S）。
+  - **现行默认 C=1、S=2、H=40**（2026-10-06 D-1）时为 84 局评估；再加训练 K=30，每代 **114 局**（`E_gen = 30 + 2×42`），与 Spec §8.6 的 `E_gen` 一致（MOD-06 计算，parent 冒烟 2 局计入 S）。历史口径 C=2、S=5 时的 135 局 / 165 局已失效。
   - 本模块**不再单独设成本上限**。超出 `loop.max_episodes_per_generation` 时由 MOD-06 拒绝启动；本模块只按优先级截断候选数。
 - **NFR-07-6 幂等可续跑**：`accept()`/`rollback()` 以 `(run_id, generation)` 为幂等键，重复调用返回首次结果，不产生第二个版本号。
 - **NFR-07-7 失败保守**：裁判链路任何异常（MOD-08 抛错/报告缺字段/超时）→ 一律 reject 并保留 `parent_version`，记 `E_EVOLVE_JUDGE_FAILED`；演化失败不得中断 `play`。
@@ -223,9 +223,30 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
 | C2 | 至少一指标显著提升 | `paired.significant == True and paired.direction == "up"`，`metric ∈ {win_rate, mean_stages_cleared, mean_hearts_left}`，方法与口径全部由 MOD-08 `compare_paired` 决定（胜率用 McNemar，连续量用配对 bootstrap B=10000）。**2026-10-06 D-3：H=40 下 `win_rate` 只能判 ≥15pp（见 MOD-08 §8.2），M3 的 4–5pp 结论必须由 `mean_stages_cleared` 承担** | `C2:no_significant_gain` / `E_EVOLVE_NO_GAIN` |
 | C3 | 增益真实性 | `train.win_rate - heldout.win_rate <= cfg.evolve.gap_threshold`（0.15，对齐 Spec §4.5 `gap_threshold`） | `C3:gap {gap}>{thr}` / `E_EVOLVE_OVERFIT_SUSPECT` |
 | C4 | 无坍缩 | `diversity.collapse_flag == False and diversity.entropy_slope >= cfg.evolve.min_entropy_slope`（−0.01；Spec 示例 −0.004 属通过区间） | `C4:collapse` / `E_EVOLVE_COLLAPSE` |
-| C5 | 合法性与健壮性 | `illegal_rate ≤ 0.05` 且 `fallback_rate ≤ 0.10` 且 `truncation_rate ≤ 0.05`（Spec v1.3 P-25 结案；不再用回合数，因为 GAME 的回合上限针对单场战斗而非整局） | `C5:illegal/fallback/truncation` / `E_EVOLVE_ILLEGAL_RATE` |
+| C5 | 合法性与健壮性 | `illegal_rate ≤ cfg.evolve.max_illegal_rate`（**0.35**）且 `fallback_rate ≤ cfg.evolve.max_fallback_rate`（**0.25**）且 `truncation_rate ≤ cfg.evolve.max_truncation_rate`（**0.15**）（Spec v1.3 P-25 结案；不再用回合数，因为 GAME 的回合上限针对单场战斗而非整局。**三个数值于 2026-10-07 按 Spec §3.1 实测由 0.05/0.10/0.05 重标定**，见下方 §8.2.1） | `C5:illegal/fallback/truncation` / `E_EVOLVE_ILLEGAL_RATE` |
 
 `accept ⟺ C0∧C1∧C2∧C3∧C4∧C5`。多候选全通过时取 `(C2 delta 最大, candidate_id 最小)` 为 winner，其余记 `reject/reason="superseded"`（不计失败、无错误码）。
+
+### 8.2.1 C5 的实测标定与 M3 收紧路径（2026-10-07）
+
+**实测依据**（[M2 §3.1 实测报告](../../reviews/2026-10-07-M2-S31-full-agent基线实测.md)，run `runs/m2-s31-full-baseline/`）：full `PolicyAgent` 在 H1 子集 seed 2000–2009（n=10，eval 模式）测得 `illegal_rate` **0.3016**、`fallback_rate` **0.2146**、`truncation_rate` **0.10**，与 `fixed_prompt` 基线（0.3021 / 0.1810 / 0.0）同量级。原阈值 0.05/0.10/0.05 分别被超限 **6.03× / 2.15× / 2.00×**，即 **parent 与候选都会被 C5 reject**，闭环形式上跑通、实则一个候选都留不下。
+
+**① 现行口径（先松开，Spec B-40）**：三项上限取「实测上界 + 余量」= **0.35 / 0.25 / 0.15**。**已知副作用**：C5 由此对 M2/M3 的候选不再构成约束（任何候选都能过）；这是为 M2 判据「闭环跑通 ≥1 轮可判定的演化」做的刻意取舍，诊断价值临时让位于此。
+
+**② M3 收紧路径 = 相对门（Spec B-41），不是把数值改回 0.05**：C5 改为锚定 parent 的残差门——
+
+```
+C5' ⟺ candidate.illegal_rate    ≤ parent.illegal_rate    + evolve.illegal_tol
+   ∧ candidate.fallback_rate    ≤ parent.fallback_rate    + evolve.fallback_tol
+   ∧ candidate.truncation_rate  ≤ parent.truncation_rate  + evolve.truncation_tol
+```
+
+parent 与候选在**同一 held-out 篮子、同一预算**下评估（§8.2 C0/C1 已经这样跑），因此差值是可比的配对量。设计要点：
+
+- **保留诊断力**：绝对门在真实 8B 上不成立（见①），但「候选把非法率/兜底率显著推高」仍必须拦住 —— 这正是残差门能抓的。
+- **`tol` 待标定**：`tol` 不能凭猜。§3.2 冒烟产出第一批 train/heldout 配对后，按 parent 侧 `illegal_rate`/`fallback_rate` 的**同一代内抖动**定 `tol`（起点 0.05），并同步登记 Spec §8.6。
+- **实现归属 M3**：新增 `evolve.illegal_tol` / `evolve.fallback_tol` / `evolve.truncation_tol` 三个键，C5 的求值从「绝对比较」改为「parent + tol」；本 PRD 的 §9 配置表与 Spec §8.6 同时在 M3 落地时更新。
+- **保守兜底**：残差门之外**保留**一个宽松绝对上限（即①的 0.35/0.25/0.15）作为 backstop，避免 parent 自身已经很高时残差门被无限放宽。
 
 ### 8.3 HITL 时序 / 8.4 回滚流程
 
@@ -240,15 +261,15 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 
 | 键（`configs/default.yaml`） | 类型 | 默认值 | 含义 |
 |---|---|---|---|
-| `evolve.n_candidates` | int | 2 | 每代候选数（Spec §8.6：默认 2，上限 3） |
+| `evolve.n_candidates` | int | **1** | 每代候选数（2026-10-06 D-1：2 → 1，上限 3；**必须 == `loop.n_candidates`**，`config.py` 有自动校验。C=1 会削弱「多候选择优」，由 §3.2 冒烟确认仍能产出可判定的演化） |
 | `evolve.n_traj` / `evolve.memory_top_k` | int | 20 / 12 | 证据束最近 train 轨迹摘要条数 / MOD-05 检索条数 |
 | `evolve.max_diff_lines` / `evolve.max_diff_chars` | int | 40 / 4000 | 单候选改动面硬上限 |
-| `evolve.smoke_n` | int | 5 | 冒烟局数，取本代训练块末尾（FR-07-6）。v0.1 的 `train_eval_seeds` 已删除：`train.win_rate` 按 MOD-08 的滚动窗口口径，1030–1069 与第 2～3 代训练块重叠 |
+| `evolve.smoke_n` | int | **2** | 冒烟局数，取本代训练块末尾（FR-07-6）。2026-10-06 D-1：5 → 2；**必须与 `loop.smoke_n` 同步改**（该处无自动校验）。v0.1 的 `train_eval_seeds` 已删除：`train.win_rate` 按 MOD-08 的滚动窗口口径，1030–1069 与第 2～3 代训练块重叠 |
 | `evolve.heldout_seeds` | str | 由 MOD-09 注册表注入 | heldout 评估组（40 局），**不得写入任何 prompt** |
 | `evolve.min_heldout_n` / `evolve.win_rate_tol` | int / float | 20 / **0.05** | C0 门槛 / C1 允许下降幅度（2026-10-06 D-3：0.0 → 0.05） |
 | `evolve.alpha` | float | 0.05 | C2 显著性水平（方法归 MOD-08） |
 | `evolve.gap_threshold` / `evolve.min_entropy_slope` | float | 0.15 / −0.01 | C3 `win_rate_gap` 阈值 / C4 熵斜率下限 |
-| `evolve.max_illegal_rate` / `evolve.max_fallback_rate` / `evolve.max_truncation_rate` | float | 0.05 / 0.10 / 0.05 | C5 上限 |
+| `evolve.max_illegal_rate` / `evolve.max_fallback_rate` / `evolve.max_truncation_rate` | float | **0.35 / 0.25 / 0.15** | C5 上限（2026-10-07 §3.1 实测标定：0.05/0.10/0.05 → 本值，先松开；M3 由 §8.2.1 的相对门收紧） |
 | `evolve.hitl` / `evolve.gate_timeout_hours` | bool / int | true / 24 | 人在环门开关 / 超时 → 保守回滚 |
 | `evolve.propose_max_retries` | int | 2 | JSON-schema 失败重试（在 MOD-03 `generate_json` 之上再包一层）；成本上限改由 MOD-06 `loop.max_episodes_per_generation` 统一控制 |
 | `evolve.evolvable_keys` | list[str] | `["retrieval.top_k","sampling.temperature","prompt.show_intent"]` | `config_patch` 白名单键 |
@@ -352,3 +373,4 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | v0.1 | 2026-09-30 | 首版 |
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：MOD-08/MOD-02 调用改为 Spec §4.7 签名（P1-3/16）；显著性方法归 MOD-08（P1-4）；report 改为引用唯一 schema，本模块只填写决策段（P1-5/6）；删除 `train_eval_seeds`（与训练块重叠，P1-7）；成本算术改正、候选数默认 2（P1-8、Spec §8.6）；parent 与候选共用冻结记忆快照；冒烟 seed 改为本代训练块末尾；补充 `better()` 定义；C5 改为 illegal/fallback/truncation；git 改为只打 tag `harness-v{N}`（P1-15）；M3 追加「≥1 次 accept」防止退化通过 |
 | v0.3 | 2026-09-30 17:49 | P-17/P-26/P-27 裁决回填为 Spec B-29/B-32/B-33；开放问题 2、4 部分结案 |
+| v0.4 | 2026-10-07 | **C5 按实测标定 + M3 相对门设计（Spec v1.8 B-40/B-41；依据 [M2 §3.1 实测报告](../../reviews/2026-10-07-M2-S31-full-agent基线实测.md)）**。① §8.2 C5 行与 §9 配置表：`max_illegal_rate`/`max_fallback_rate`/`max_truncation_rate` 0.05/0.10/0.05 → **0.35/0.25/0.15**（full `PolicyAgent` 实测 0.3016/0.2146/0.10，原门超限 6.03×/2.15×/2.00×，会 reject 每个候选；写明是「先松开、M3 再收紧」并声明副作用）。② 新增 **§8.2.1**：M3 的收紧路径是把 C5 从绝对门改为**相对门** `candidate ≤ parent + tol`，含 `tol` 标定方式、M3 新增的三个配置键、以及保留宽松绝对上限作 backstop。③ 顺带补齐 D-1 的表格滞后：§9 的 `evolve.n_candidates` 2→**1**、`evolve.smoke_n` 5→**2**（与 `configs/default.yaml` 及 `config.py` 对齐）。④ 版本头对齐 Spec v1.8 |
