@@ -1,6 +1,6 @@
 # GameRSI 模块拆分 Spec
 
-> 版本：v1.8（2026-10-07，§3.1 实测 → C5 标定回填 §8.6 与 §11.1e，见 §12/changelog）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
+> 版本：v1.9（2026-10-07，D-2 的 medium × 6 基线实测回填 §8.6 + 登记 F26/F27，见 §12/changelog）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
 > 上游：[项目计划-GameRSI.md](../项目计划-GameRSI.md) · [RSI调研纪要.md](../RSI调研纪要.md)
 > 游戏本体：`docs/prd/GAME-00/01/02`（规则、观测、动作的游戏侧事实来源，B-09）
 > 下游：`docs/prd/MOD-*.md`（每个模块的技术 PRD 必须与本文件一致；冲突时以本文件为准）
@@ -485,11 +485,14 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 
 | 局型 | greedy_counter 通关率 | env 步 p50/p90 | 决策点 p50/p90 |
 |---|---|---|---|
-| hard × 6 关（**默认**） | 45.5% | 232 / 284 | 96 / 116 |
+| hard × 6 关（**默认**、M3 主口径） | 45.5% | 232 / 284 | 96 / 116 |
+| **medium × 6 关（M2 bring-up，2026-10-07 新增实测行）** | **91.0%** | **249 / 301** | **92 / 103** |
 | medium × 10 关（完整局） | 24.0% | 397 / 535 | 146 / 187 |
-| easy × 3 关 | 100.0%（天花板，不用） | 105 / 124 | 38 / 43 |
-| medium × 3 关 | 100.0%（天花板，不用） | 102 / 121 | 37 / 41 |
-| hard × 3 关 | 97.0%（天花板，不用） | 91 / 114 | 38 / 44 |
+| easy × 3 关 | 100.0%（**对启发式**是天花板） | 105 / 124 | 38 / 43 |
+| medium × 3 关 | 100.0%（**对启发式**是天花板） | 102 / 121 | 37 / 41 |
+| hard × 3 关 | 97.0%（**对启发式**是天花板） | 91 / 114 | 38 / 44 |
+
+> ⚠️ 上表的「天花板」只对 **`greedy_counter` 启发式**成立（2026-10-03 口径）。**对 8B agent 不成立**：medium × 6 上启发式 91%（内核）/70%（Python，H1 n=10），而 8B `fixed_prompt` 通关率仍是 **0/10 = 0.0%**（2026-10-07 实测）。选 bring-up 局型时不能把本表的「天花板」当 agent 的天花板。
 
 > 换 seed 集数字会变（n=200 的 95% CI 约 ±6pp）：medium × 10 关在 seed 10000–10199 上是 35.5%（`src/game/docs/BALANCE.md` 的口径，`node scripts/balance.js --n 200 --strategy all --duel`，与 10 关默认局不同源）。引用本表时必须带上 seed 区间。
 
@@ -540,6 +543,14 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 - **裁定 A（现在先松开）**：`evolve.max_illegal_rate` 0.05→**0.35**、`max_fallback_rate` 0.10→**0.25**、`max_truncation_rate` 0.05→**0.15**（实测上界 + 余量）。原阈值下超限 **6.03× / 2.15× / 2.00×**，C5 会 reject 每一个候选（parent 也是如此），M2 验收判据「闭环跑通 ≥1 轮可判定的演化」不可能达成。**副作用已知**：C5 由此成为非约束门（任何候选都能过），诊断价值临时让位于 M2 判据。
 - **裁定 C（M3 收紧路径）**：C5 由**绝对门**改为**相对门** `candidate.<metric> ≤ parent.<metric> + tol`（illegal / fallback / truncation 同构），保留「抓退化」的诊断力；`tol` 待 §3.2 冒烟产出第一批 train/heldout 配对后标定。**不得**用「把 A 的新值改回 0.05」的方式收紧。
 - **根因判定（排除渲染/契约缺陷）**：离线复现 2,220 个决策点的提示词组装，**F13 压缩渲染 0 次触发**（最大 `token_estimate` 2,694 < 预算 3,072，最大 36 条合法动作）→ 模型看到的是**完整** `legal_actions`（含真实 `dieId`×`slotId` 配对）；非法尝试 **65.2% 是 `play_face`**（模板第 6 条已明确警告的配对问题）；`llm.call` 的 `grammar_used` **1,892/1,892 = false**（MLX 无语法约束）。故 0.30 是 8B 的能力/遵从问题；要压到门内需**语法约束解码**（MOD-03 工程）或提示词改造，**不作为 M2 的前置**。
+
+**⚠️ 2026-10-07 D-2 medium × 6 基线实测（bring-up 口径的判据检验，run `runs/m2-d2-medium6-h1n10/`）**：
+- **三臂（H1 子集 seed 2000–2009，n=10，同源）**：`random` **0/10 = 0.0%**；`heuristic` **7/10 = 70.0%**（CI [0.3968, 0.8922]）；`fixed_prompt`（真实 8B）**0/10 = 0.0%**（CI [0.000, 0.2775]）、`mean_stages_cleared` **2.50**、`mean_battles_won` 4.80、`illegal_rate` 0.2829、`fallback_rate` 0.1795、`truncation_rate` 0.10、**n=10 / degraded_n=0 / n_dropped=0**，墙钟 **2.574 h**。内核侧对照（`node src/game/tests/bot-match.js 200 6 medium 1 --stats`）通关率 **91.0%**、env 步 249/301、决策点 92/103（已并入上表）。
+- **对照 hard × 6（同 seed 集，`runs/m1-real-h1n10b/`）**：`fixed_prompt` 0/10、`mean_stages_cleared` 2.40、`mean_battles_won` 6.10、`illegal_rate` 0.3021、`decisions_llm` 均值 97.1、墙钟 3.32 h。
+- **判定：medium × 6 没有达成 D-2 的目的——对 8B 的 `win_rate` 仍是地板。** 检查单 D-2 的检验条款只写了天花板侧（通关率→100% 或 `mean_stages_cleared`→6），而实际失败在**地板侧**：8B 通关率 0.0% 与 hard × 6 逐位相同，`mean_stages_cleared` 只从 2.40 挪到 2.50（0–6 制），`mean_battles_won` 反而 6.10 → 4.80。可用信号只剩连续指标（2.5 落在中段），而这正是 D-3 已指定的 M3 判据轴。
+- **成本口径（若 bring-up 用 medium × 6）**：`D`（`decisions_llm`）均值 **83.7**（hard 97.1，−13.8%）、单局墙钟 **15.44 min**（hard 19.6–19.9 min，−22%）⇒ `E_gen=114` 局 ≈ **29.3 h/代**。**M3 主口径仍是 hard × 6，故 37 h/代 不变**；本行只用于 bring-up 的成本估算。
+- **前置缺陷（F26，已修 `cf934fc`）**：`baseline`/`play` 曾**完全忽略** `env.episode.*`（`SandboxRunner` 落到 `EpisodeConfig()` 的代码默认 hard × 6），使第一次 medium 补测与 hard × 6 逐位相同。**本行的数字是修复后重跑的**；M1 归档未受影响（代码默认恰等于当时配置默认）。溯源缺口另见 F27：逐臂归档 `baselines/*.json` 与 `registry.csv` 不记录 episode 口径。
+- **待裁决（D-2 再调）**：检查单原文给的两条路都需重新评估——**medium × 10 对启发式只有 24.0%（比 hard × 6 更难），大概率让 8B 的胜率地板更深**；若目标是让 8B 的 `win_rate` 离开地板，应测**对启发式已到天花板、但对 8B 可能落在中段的 3 关局型**（`hard × 3` 启发式 97.0%、`medium × 3`/`easy × 3` 100.0%），或按 D-3 的结论直接**放弃 win_rate 轴、全用连续指标**。
 
 ---
 
@@ -687,3 +698,4 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 | v1.6 | 2026-10-05 | **§8.6 成本模型按 n=10 实测回填**（用真实 8B 跑完 `fixed_prompt` n=10 子集并归档于 `runs/m1-real-h1n10b/`，seed 2000–2009）：新增一条实测条目——n=10 **墙钟 3.32 h**、模型时间 3.26 h、1,551 次调用、`t_d` p50 7.46 s / p95 10.13 s、schema 全失败率 5.8%、`fallback` 122 次、`illegal_rate=0.3021`、**`win_rate` 0/10 = 0.0%（CI [0.000, 0.278]）**、`D` 均值 **97.1**（中位 69、min 33、max 245）；并把 §14.18 的「单局 43 min / n=40 29–34 h」标注为**按重尾高端 2 局外推的上界**（按本次均值外推 n=40 模型独占下限 ≈13.1 h）。同时修正「单局墙钟 × `n_workers`」的表述：实测 `d_wall / d_model = 1.02`，**`n_workers` 不放大单局墙钟**，`n` 局墙钟 ≈ `n × 单局模型时间`。明细见 [M1 验收报告 §14.19](reviews/2026-10-04-M1验收报告.md) |
 | v1.7 | 2026-10-06 | **M2 开工 D-1/D-2/D-3 裁决回填**（依据 [M2 开工检查单](tasks/2026-10-06-M2开工检查单.md) §2，登记 B-37..B-39）：§8.6 新增「2026-10-06 M2 开工定价」条目与「bring-up 口径」段。① **D-1**：`loop.max_episodes_per_generation` 170→**120**、`C`（`loop.n_candidates`=`evolve.n_candidates`）2→**1**、`S`（`smoke_n` 两处）5→**2**、`H` 保持 **40** → `E_gen=114` 局（≈37 h/代）；写明 `smoke_n` 无自动校验、`H` 的 `(1+C)` 支臂边际成本为 +10 H = +6.5 h/代（纠正检查单的 +3.3 h）。② **D-2**：难度**混合裁决**——默认局保持 hard × 6，M2 联调/冒烟用 medium × 6 bring-up（run 级 override，`configs/default.yaml` 默认值不动）；hard × 6 的 `fixed_prompt` 基线 win_rate=0.0% ⇒ M3 判据改用 `mean_stages_cleared`/`mean_battles_won`；medium × 6 的基线率与 `D` 列为待实测。③ **D-3**：`H=40`、`n_rep=1` 保持不变（改为 M3 前一次性确定性验证 + 既有的 `n_rep=3` 升级路径），`evolve.win_rate_tol` 0.0→**0.05**、`gap_threshold` 保持 0.15；并以精确配对 McNemar / 配对 bootstrap 的功效计算证明 **n=40 的 win_rate 只能判 ≥15pp**，4–5pp 量级增益改由 `mean_stages_cleared`（Δ=0.30 关 = 6 关制的 5.0pp，power 0.66–0.97）承担。同步改 `configs/default.yaml` 与 `gamer_rsi/infra/config.py` 的对应默认值 |
 | v1.8 | 2026-10-07 | **M2 开工检查单 §3.1 实测回填与 C5 标定（裁决 A+C，登记 B-40/B-41；明细见 [§3.1 实测报告](reviews/2026-10-07-M2-S31-full-agent基线实测.md)）**。① **实测**：full `PolicyAgent` 在 H1 子集（seed 2000–2009，n=10，eval 模式，`runs/m2-s31-full-baseline/`）测得 `illegal_rate` **0.3016**、`fallback_rate` **0.2146**、`truncation_rate` **0.10**、`win_rate` 0.0（CI [0.000, 0.2775]）、`mean_stages_cleared` 3.00，`n=10 / degraded_n=0 / n_dropped=0`，墙钟 3.51 h——与 `fixed_prompt` 基线（0.3021 / 0.1810 / 0.0）同量级且 fallback/truncation 更差。② **裁定 A（先松开）**：`evolve.max_illegal_rate` 0.05→**0.35**、`max_fallback_rate` 0.10→**0.25**、`max_truncation_rate` 0.05→**0.15**（原门超限 6.03×/2.15×/2.00×，会 reject 每个候选 → M2 判据不可能达成）；副作用（C5 临时成为非约束门）已在正文写明。③ **裁定 C（M3 收紧）**：绝对门改**相对门** `candidate.<metric> ≤ parent.<metric> + tol`（登记的 B-41），`tol` 待 §3.2 冒烟产出配对后标定；禁止用「改回 0.05」收紧。④ **根因判定**：离线复现 2,220 个决策点的提示词组装——F13 压缩渲染 **0 次触发**（最大 `token_estimate` 2,694 < 3,072）、非法尝试 **65.2% 是 `play_face`** 配对问题、`grammar_used` **1,892/1,892 = false**（MLX 无语法约束）⇒ 0.30 属 8B 能力/遵从问题，不是渲染或契约缺陷；压到门内需语法约束解码（MOD-03）或提示词改造，**不作为 M2 前置**。⑤ §11 新增 11.1e，并给 P-25 行加「数值已被 B-40 取代」注记 |
+| v1.9 | 2026-10-07 | **D-2 的 medium × 6 基线实测回填（§8.6 新增条目 + 基线表新增 medium × 6 行）**。① **实测**（`runs/m2-d2-medium6-h1n10/`，H1 子集 seed 2000–2009，n=10，同源三臂）：`random` 0/10；`heuristic` **7/10 = 70.0%**；`fixed_prompt` **0/10 = 0.0%**、`mean_stages_cleared` **2.50**、`mean_battles_won` 4.80、`illegal_rate` 0.2829、墙钟 **2.574 h**；内核侧 `medium × 6` 启发式 **91.0%**（env 步 249/301、决策点 92/103）。② **判定：medium × 6 未达成 D-2 的目的**——对 8B 的 `win_rate` 仍是地板（0.0%，与 hard × 6 相同），`mean_stages_cleared` 只 2.40→2.50，`mean_battles_won` 反而 6.10→4.80；检查单的检验条款只写了天花板侧，实际失败在地板侧。可用信号仅剩连续指标（D-3 已指定的轴）。③ **成本**：`D` 均值 83.7（hard 97.1）、单局 15.44 min（hard 19.6–19.9 min）⇒ 若 bring-up 用 medium × 6 则 `E_gen=114` ≈ **29.3 h/代**；**M3 主口径仍 hard × 6，37 h/代不变**。④ **登记两个缺陷**：**F26**（`baseline`/`play` 完全忽略 `env.episode.*`，已修 `cf934fc` + 回归用例）——第一次 medium 补测因此与 hard 逐位相同，本版数字是修复后重跑的；**F27**（逐臂归档 `baselines/*.json` 与 `registry.csv` 不记录 episode 口径，D-2 引入两个局型族后溯源只能靠 run-id 约定，待裁决是否补 `episode_config_hash`）。⑤ **D-2 再调待裁决**：medium × 10 对启发式仅 24.0%（比 hard × 6 更难，大概率加深地板）；备选是测 3 关局型（`hard × 3` 启发式 97.0%）或按其结论放弃 win_rate 轴 |
