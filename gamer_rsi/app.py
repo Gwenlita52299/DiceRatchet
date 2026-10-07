@@ -208,7 +208,17 @@ def _play(args: argparse.Namespace) -> int:
         return build_agent(agent_kind, seed=seed, client=client, config=cfg)
 
     runner = SandboxRunner(agent_factory=factory, run_id=run_id, config=cfg)
-    result = run_eval(spec, runner=runner, protocol=proto)
+
+    def _land(result: Any) -> None:
+        """F18：每完成一局**立刻**落盘（崩溃只丢当前局）。
+
+        ``play`` 常被用来做长跑前的单臂测量（M2 开工检查单 §3.1 的 full ``PolicyAgent``
+        held-out 基线 ≈3.3 h）：只在整批结束后落盘等于把 10 局的结果押在一次进程存活上。
+        """
+        write_episode_summaries(paths.root, [result], split=split, generation=0,
+                                arm=f"play-{agent_kind}")
+
+    result = run_eval(spec, runner=runner, protocol=proto, on_result=_land)
     write_episode_summaries(paths.root, result.results, split=split, generation=0,
                             arm=f"play-{agent_kind}")
     metrics = result.metrics
