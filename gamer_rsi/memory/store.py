@@ -52,6 +52,10 @@ LOCK_STALE_S: Final[float] = 60.0
 MAX_ACTIVE_FILE_BYTES: Final[int] = 16 * 1024 * 1024
 #: 连续写失败达到该次数后本 run 停写（PRD §10 E_IO_MEMORY_WRITE_FAILED）。
 MAX_WRITE_FAILURES: Final[int] = 3
+#: 改写/删除（``_replace``/``_archive``）攒到多少行才整档重写一次 ``active`` 文件。
+#: 改行只能靠整档重写落盘，而合并是高频事件；攒批把每次写入的 2.4 MB 重写摊薄到
+#: 1/32，代价是崩溃时最多丢这 32 行的元数据更新（``snapshot()``/``close()`` 仍强制压实）。
+DIRTY_ROWS_PER_COMPACT: Final[int] = 32
 
 _NUM_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"(?<![0-9A-Za-z_])[0-9]{3,7}(?![0-9A-Za-z_])")
 _SEED_HINT_RE: Final[re.Pattern[str]] = re.compile(r"seed\s*[:=#]?\s*[0-9]{1,7}", re.IGNORECASE)
@@ -118,13 +122,17 @@ class MemoryStore:
         self._write_disabled = False
         self._emitting = False
         self._last_tick = 0
-        # 「已有行的内容被改写、必须整档重写才能落盘」= ``_replace``（合并/效用回填/
-        # 冲突标记）置位，``_compact_locked``/``rollback`` 清零。**淘汰不置位**：
-        # ``_archive`` 只是删行，文件里少一行无需重写（``_load_active`` 会忽略它）。
-        self._lines_dirty = False
-        # 自上次压实以来淘汰的行数（这些行仍留在 ``active`` 文件里，``close()`` 据此决定
-        # 是否补一次压实）。
-        self._removed_rows = 0
+        # 自上次压实以来「行内容被改写（``_replace``）或行被删除（``_archive``）」的行数。
+        # 攒到 ``DIRTY_ROWS_PER_COMPACT`` 才整档重写一次。
+        #
+        # **为什么必须攒**：合并（重复反思不断累加 ``n_ref``/``merged_from``）是高频事件，
+        # 而改行落盘只能整档重写——每次 ``add_reflection()`` 都要写掉整个 ``active`` 文件
+        # （2000 条约 2.4 MB）。实测该路径 84% 的时间在盘上（``_compact`` 3.8 ms +
+        # ``_save_index`` 1.6 ms / 次，带分支覆盖率）；CI 共享 runner 的盘更慢，P95 直接
+        # 冲到 125 ms，击穿 NFR-05-2 的 15 ms 预算（折算后 48 ms）。攒批把写盘量按 32 倍
+        # 摊薄，同时把崩溃时的未落盘窗口限制在这 32 行以内（``snapshot()``/``close()``
+        # 都会强制压实，见 ``_after_write`` 与 ``close``）。
+        self._dirty_rows = 0
 
         self._forbidden_seeds: dict[str, str] = {}
         self._forbidden_tokens: dict[str, str] = {}
@@ -408,8 +416,7 @@ class MemoryStore:
         self._appends = 0
         self._counters["appends"] = 0
         self._counters["compact_count"] = int(self._counters.get("compact_count", 0)) + 1
-        self._lines_dirty = False
-        self._removed_rows = 0
+        self._dirty_rows = 0
         self._save_index()
 
     def _file_order_entries(self) -> list[MemoryEntry]:
@@ -660,8 +667,9 @@ class MemoryStore:
         self._entries[entry.entry_id] = entry
         self._index_add(entry)
         self._line_cache[entry.entry_id] = entry_line(entry)
-        # 行内容变了：必须整档重写才能落盘（``_load_active`` 视重复 entry_id 为损坏）。
-        self._lines_dirty = True
+        # 行内容变了：只能靠整档重写落盘（``_load_active`` 视重复 entry_id 为损坏）。
+        # 攒够 ``DIRTY_ROWS_PER_COMPACT`` 行再重写，避免每次合并都写掉整个 active 文件。
+        self._dirty_rows += 1
 
     # =================================================================
     # 事件与埋点
@@ -1086,18 +1094,20 @@ class MemoryStore:
     def _after_write(self) -> None:
         """写入收尾：需要时压实（FR-05-4），随后查配额并落索引。
 
-        ``_appends`` 由 ``_compact_locked`` 清零，因此 ``>=`` 即「距上次压实已追加
-        ``compact_every`` 次」。
+        ``_appends`` 与 ``_dirty_rows`` 都由 ``_compact_locked`` 清零，因此 ``>=`` 即
+        「距上次压实已追加 / 已改写这么多行」。压实因此只在三种情形发生：
 
-        压实只在两种情形发生：追加到阈值（FR-05-4 的「每 ``compact_every`` 次」），或
-        ``_lines_dirty``（``_replace`` 改写了已有行，必须整档重写才能落盘）。
-        **``_archive`` 淘汰不在此列**：它只删行，文件里少一行无需重写。库满
-        （``active == max_entries``）时每次新增都会淘汰一条，若因淘汰而压实，就会退化成
-        「每个 ``add_reflection()`` 全量重写 2000 行」——实测 P95 由 ~1.2 ms 恶化到
-        ~3.4 ms，叠加 CI 的慢盘即击穿 NFR-05-2 的 15 ms 预算（CI 实测 24.9 ms）。
+        1. 追加到 ``compact_every``（FR-05-4 的「每 ``compact_every`` 次」）；
+        2. 改写/删除攒到 ``DIRTY_ROWS_PER_COMPACT`` 行；
+        3. 配额兜底（``_check_quota`` 超限时强制压实）。
+
+        改写落盘只能整档重写：库满（``active == max_entries``）时每次新增都会淘汰一条，
+        合并又会改写 survivor 行——若每次写入都压实，就等于「每个 ``add_reflection()``
+        重写 2000 行 / 2.4 MB」，CI 慢盘上 P95 实测 125 ms，击穿 NFR-05-2 折算后的 48 ms。
         """
         compact_every = int(getattr(self.cfg, "compact_every", 200))
-        if self._lines_dirty or (compact_every > 0 and self._appends >= compact_every):
+        appended_enough = compact_every > 0 and self._appends >= compact_every
+        if appended_enough or self._dirty_rows >= DIRTY_ROWS_PER_COMPACT:
             self._compact()
         self._check_quota()
         self._save_index()
@@ -1181,18 +1191,18 @@ class MemoryStore:
     def _archive(self, entry: MemoryEntry, *, reason: str) -> None:
         """归档：从 active 库移出 → 追加 ``memory_evicted.jsonl`` → 事件 ``memory.evict``。
 
-        淘汰只**删行**、不改行内容，因此**不置 ``_lines_dirty``**：``active`` 文件里多出的
-        那一行会在下次压实（追加阈值 / ``snapshot()`` / ``close()``）或下次加载时被忽略
-        （``_load_active`` 的重复 id 守卫同样兜底）。库满（``active == max_entries``）时
-        每个新增都会淘汰一条，若在此置位就会退化成「每次写入全量重写 2000 行」——
-        NFR-05-2 的 15 ms 预算即被击穿。
+        淘汰只**删行**、不改行内容，所以只计入 ``_dirty_rows``（与 ``_replace`` 的改写
+        一起攒批），不单独触发整档重写：``active`` 文件里多出的那一行在下次压实
+        （攒批阈值 / ``snapshot()`` / ``close()``）或下次加载时被忽略。库满
+        （``active == max_entries``）时每个新增都会淘汰一条，若每次淘汰都压实，就等于
+        「每次写入全量重写 2000 行」（NFR-05-2 的预算即被击穿，CI 实测 125 ms）。
         """
         archived = entry.with_updates(status="evicted")
         self._entries.pop(entry.entry_id, None)
         self._line_cache.pop(entry.entry_id, None)
         self._evicted[entry.entry_id] = archived
         self._index_remove(entry)
-        self._removed_rows += 1
+        self._dirty_rows += 1
         self._evicted_count += 1
         self._counters["evicted"] = int(self._counters.get("evicted", 0)) + 1
         try:
@@ -1470,8 +1480,7 @@ class MemoryStore:
             write_bytes_atomic(self.active_path, body.encode("utf-8"), fsync=True)
             self._entries = {e.entry_id: e for e in data.entries}
             self._rebuild_index()
-            self._lines_dirty = False
-            self._removed_rows = 0
+            self._dirty_rows = 0
             self._appends = 0
             self._index_state["memory_version"] = new_version
             self._index_state["parent_memory_version"] = target_version
@@ -1625,11 +1634,11 @@ class MemoryStore:
     def close(self) -> None:
         """收尾：把内存态与 ``active`` 文件对齐（需要时压实）并落 index.json（幂等）。
 
-        压实条件：有改写过的行（``_lines_dirty``）或本段有淘汰（``_removed_rows``，
-        active 文件里留着已淘汰的行）。只是追加且未到阈值时无需重写——那些行本来就已经
-        追加落盘了。
+        压实条件：本段有未落盘的改写或淘汰（``_dirty_rows``，它们只能靠整档重写落盘）。
+        ``snapshot()`` 也走压实，所以两个显式收口都会把攒批的改动落盘；只是追加且未到阈值
+        时无需重写——那些行本来就已经追加落盘了。
         """
-        if self._lines_dirty or self._removed_rows:
+        if self._dirty_rows:
             self._compact()
         self._save_index()
 

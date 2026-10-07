@@ -108,6 +108,9 @@ def test_merge_persists_to_disk(store_factory, make_candidate, make_prov) -> Non
     prov = make_prov()
     store.add_memory(make_candidate(lesson=LESSON), provenance=prov)
     store.add_memory(make_candidate(lesson=LESSON, reflection_id="refl-2"), provenance=prov)
+    # 合并改写的是**已有行**（不新增行），落盘只能整档重写，因此按 DIRTY_ROWS_PER_COMPACT
+    # 攒批；close()/snapshot() 是显式收口，这里用 close() 把攒批的改写落盘。
+    store.close()
     rows = [json.loads(line) for line in _lines(store.active_path)]
     assert len(rows) == 1
     assert rows[0]["n_ref"] == 1 and len(rows[0]["merged_from"]) == 1
