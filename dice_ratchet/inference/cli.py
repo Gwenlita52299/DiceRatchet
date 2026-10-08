@@ -45,7 +45,8 @@ def _build_manager(inference: Any, *, run_id: str, runs_root: Path,
                          debug_dump_raw=bool(inference.debug_dump_raw))
     return BackendManager(inference.registry_path, mode=inference.mode,
                           ram_budget_gb=inference.ram_budget_gb, infra=bridge,
-                          config=inference, record_sink=record_sink)
+                          config=inference, record_sink=record_sink,
+                          runs_root=runs_root)
 
 
 def _sampling(spec: ModelSpec, inference: Any, seed: int | None = None) -> dict[str, Any]:

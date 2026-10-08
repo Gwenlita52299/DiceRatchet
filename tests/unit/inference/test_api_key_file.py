@@ -175,7 +175,7 @@ class CaptureTransport:
 
     def __call__(self, request: ApiRequest) -> ApiResponse:
         self.requests.append(request)
-        body = {"model": "deepseek-chat",
+        body = {"model": "deepseek-flash",
                 "choices": [{"message": {"content": self.text}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 5, "completion_tokens": 3}}
         return ApiResponse(200, json.dumps(body))
@@ -312,7 +312,7 @@ def test_provenance_reports_env_file_source(tmp_path, monkeypatch):
     key_file.write_text(f"DEEPSEEK_API_KEY={KEY}\n", encoding="utf-8")
     bindings = resolve_role_bindings(_cfg_with_arm("B1", api_key_file=str(key_file)))
     proposer = bindings["proposer"]
-    assert proposer.model_id == "deepseek-chat"
+    assert proposer.model_id == "deepseek-flash"
     assert proposer.api_key_present is True
     assert proposer.api_key_source == "env_file"
     assert KEY not in json.dumps(proposer.to_json(), ensure_ascii=False)

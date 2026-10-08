@@ -141,9 +141,9 @@ inference:
 models:
   policy: "" # 空 = 用 inference.model_id（默认 qwen3-8b-q4）
   reflection: "" # 空 = 同上
-  proposer: "" # 空 = 同上；B/C 臂经 experiment.arms 钉到 deepseek-chat
+  proposer: "" # 空 = 同上；B/C 臂经 experiment.arms 钉到 deepseek-flash
   # 例：把 proposer 单独钉到 DeepSeek，决策/反思保持本地 8B（等价于臂 B0/B1）：
-  #   proposer: deepseek-chat
+  #   proposer: deepseek-flash
 
 # ============ experiment（实验臂；Issue #1 §1）============
 # 臂是**差分**：只描述相对 models 段的覆盖。优先级（高 → 低）：
@@ -153,14 +153,14 @@ models:
 # arm="" 表示不选臂，只用 models / inference.model_id 绑定（冒烟与自定义对照用）。
 experiment:
   arm: A1
-  roles: {} # 手工覆盖，优先级最高（例：{proposer: deepseek-chat}）
+  roles: {} # 手工覆盖，优先级最高（例：{proposer: deepseek-flash}）
   arms:
     A0: {policy: "", reflection: "", proposer: "", harness: fixed}
     A1: {policy: "", reflection: "", proposer: "", harness: evolve}
-    B0: {policy: "", reflection: "", proposer: deepseek-chat, harness: fixed}
-    B1: {policy: "", reflection: "", proposer: deepseek-chat, harness: evolve}
-    C0: {policy: deepseek-chat, reflection: deepseek-chat, proposer: deepseek-chat, harness: fixed}
-    C1: {policy: deepseek-chat, reflection: deepseek-chat, proposer: deepseek-chat, harness: evolve}
+    B0: {policy: "", reflection: "", proposer: deepseek-flash, harness: fixed}
+    B1: {policy: "", reflection: "", proposer: deepseek-flash, harness: evolve}
+    C0: {policy: deepseek-flash, reflection: deepseek-flash, proposer: deepseek-flash, harness: fixed}
+    C1: {policy: deepseek-flash, reflection: deepseek-flash, proposer: deepseek-flash, harness: evolve}
 
 # ============ memory（MOD-05 反思记忆库）============
 memory:

@@ -166,6 +166,10 @@ def build_request_payload(spec: ModelSpec, messages: Sequence[Message], *,
         payload["seed"] = int(sampling["seed"])
     if json_mode and spec.supports_json_mode:
         payload["response_format"] = {"type": "json_object"}
+    if spec.api_thinking in ("enabled", "disabled"):
+        # 思考模式开关（OpenAI 格式的 thinking.type）。结构化 JSON 流水线要显式 disabled：
+        # 默认开启时思维链会吃掉 max_tokens，content 直接返回空串（实测 deepseek-flash）。
+        payload["thinking"] = {"type": spec.api_thinking}
     if stop:
         payload["stop"] = [str(s) for s in stop][:16] # OpenAI 兼容上限 16 条
     return payload
@@ -333,8 +337,9 @@ class DeepSeekAPIAdapter(LocalBackend):
             "json_mode": bool(json_mode),
             "usage": {"prompt_tokens": usage.prompt_tokens,
                       "completion_tokens": usage.completion_tokens},
-            "cost_usd": spec.cost_usd(prompt_tokens=usage.prompt_tokens,
-                                      completion_tokens=usage.completion_tokens),
+            # 未登记单价时为 null（不拿 0 冒充"免费"）；金额与币种分开记
+            "cost_estimate": spec.estimate_cost(prompt_tokens=usage.prompt_tokens,
+                                               completion_tokens=usage.completion_tokens),
             "latency_ms": latency_ms,
             "attempts": int(parsed["attempts"]),
             "status": int(response.status),
@@ -586,6 +591,13 @@ class DeepSeekAPIAdapter(LocalBackend):
         run_id = self._infra.run_id()
         if not run_id:
             return None
-        root = self._runs_root if self._runs_root is not None else Path("runs")
+        root = self._runs_root
+        if root is None:
+            # 没拿到 runs_root（例如测试直接构造适配器）：如实记一条事件，别静默落到
+            # 仓库根 —— 真跑时 ring 里的审计记录落错地方会让成本/hash 对不上。
+            root = Path("runs")
+            self._infra.emit("llm.api.record_dir_fallback", path=str(root), run_id=str(run_id),
+                             reason="未传入 runs_root：审计工件回落到仓库根 runs/")
+        root = Path(root)
         name = str(getattr(self._config, "api_record_dir", "llm_api") or "llm_api")
         return root / run_id / (f"{name}_replay" if replay else name)

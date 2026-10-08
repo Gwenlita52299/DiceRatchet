@@ -106,14 +106,27 @@ MOD-04/06/07/08 的业务代码不动，也不出现 `from mlx_lm import ...` / 
 | Arm | 决策 / 反思 | Proposer | Harness | 用途 |
 |---|---|---|---|---|
 | A0 / A1 | Qwen3-8B | Qwen3-8B | 固定 / 演化 | Qwen 主线 baseline 与 RSI 主实验臂 |
-| B0 / B1 | Qwen3-8B | DeepSeek API | 固定 / 演化 | 「proposer 能力」对照 |
-| C0 / C1 | DeepSeek API | DeepSeek API | 固定 / 演化 | 全量外部模型对照 |
+| B0 / B1 | Qwen3-8B | `deepseek-flash` | 固定 / 演化 | 「proposer 能力」对照 |
+| C0 / C1 | `deepseek-flash` | `deepseek-flash` | 固定 / 演化 | 全量外部模型对照 |
+
+外部模型是 **`deepseek-flash`**（DeepSeek-V4.1-Flash，1M 上下文）：2026-10-08 实测
+`GET https://api.deepseek.com/v1/models` 只有 `deepseek-flash` 与 `deepseek-v4-pro`，
+原登记名 `deepseek-chat` 已下线（见 [configs/models.yaml](configs/models.yaml)）。
+后者的 `deepseek-v4-pro` 已登记但未被任何臂使用，供后续「proposer 能力 vs 成本」对照直接切。
+成本按官方定价登记为**人民币 + 高峰档上界**，审计里记 `cost_estimate{amount,currency,basis}`；
+未登记单价的模型记 `null`（不拿 0 冒充免费）。
+
+**flash 必须显式关闭思考模式**（`api_thinking: disabled`）：该模型默认开思考模式，思维链会把
+`max_tokens` 吃光、`content` 返回空串，于是每次都靠 MOD-03 的修复重试才拿到 JSON —— 白花一次调用。
+实测（同一 probe）：开思考 895 输入/166 输出 token、墙钟 3459 ms、`attempts=2`；
+关思考 215/109 token、869 ms、`attempts=1`。官方文档也印证：思考模式忽略 `temperature`，
+非思考模式下 `temperature` 才生效，正是 B-14 需要的确定性口径。
 
 ```bash
 # 方式一：改 configs/default.yaml 的 experiment.arm / models.* / experiment.roles
 # 方式二：DICERATCHET_* 环境变量（B-30 的 __ 分层；CLI 目前只有 8 个显式覆盖键，没有通用 --set）
 export DICERATCHET_EXPERIMENT__ARM=B1                    # 等价于 experiment.arm: B1
-export DICERATCHET_MODELS__PROPOSER=deepseek-chat        # 只钉 proposer，其余角色不动
+export DICERATCHET_MODELS__PROPOSER=deepseek-flash        # 只钉 proposer，其余角色不动
 python -m dice_ratchet loop run --agent llm --seeds train:1000-1029 --k 30 --hitl --run-id <loop_run_id>
 ```
 

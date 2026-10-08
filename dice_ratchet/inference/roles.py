@@ -286,7 +286,9 @@ class RoleModelProvider:
                 mode=self._mode, # type: ignore[arg-type]
                 ram_budget_gb=float(getattr(inference, "ram_budget_gb", 20.0)),
                 infra=self._infra, config=inference, registry=self.registry,
-                record_sink=self._record_sink)
+                record_sink=self._record_sink,
+                # API 后端（deepseek）的审计工件必须落在本 run 的目录里
+                runs_root=self.runs_root)
         return self._manager
 
     def binding(self, role: str) -> RoleBinding:

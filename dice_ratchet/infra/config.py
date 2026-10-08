@@ -331,12 +331,12 @@ def _default_arms() -> dict[str, dict[str, str]]:
     return {
         "A0": {**qwen, "harness": "fixed"},
         "A1": {**qwen, "harness": "evolve"},
-        "B0": {**qwen, "proposer": "deepseek-chat", "harness": "fixed"},
-        "B1": {**qwen, "proposer": "deepseek-chat", "harness": "evolve"},
-        "C0": {"policy": "deepseek-chat", "reflection": "deepseek-chat",
-               "proposer": "deepseek-chat", "harness": "fixed"},
-        "C1": {"policy": "deepseek-chat", "reflection": "deepseek-chat",
-               "proposer": "deepseek-chat", "harness": "evolve"},
+        "B0": {**qwen, "proposer": "deepseek-flash", "harness": "fixed"},
+        "B1": {**qwen, "proposer": "deepseek-flash", "harness": "evolve"},
+        "C0": {"policy": "deepseek-flash", "reflection": "deepseek-flash",
+               "proposer": "deepseek-flash", "harness": "fixed"},
+        "C1": {"policy": "deepseek-flash", "reflection": "deepseek-flash",
+               "proposer": "deepseek-flash", "harness": "evolve"},
     }
 
 

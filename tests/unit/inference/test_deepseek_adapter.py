@@ -40,8 +40,8 @@ DEEPSEEK_REGISTRY = load_registry(CONFIGS / "models.yaml")
 
 
 def shipped_deepseek_spec():
-    """``configs/models.yaml`` 里真实的 deepseek-chat 规格（验证出厂配置可用）。"""
-    return DEEPSEEK_REGISTRY.spec("deepseek-chat")
+    """``configs/models.yaml`` 里真实的 deepseek-flash 规格（验证出厂配置可用）。"""
+    return DEEPSEEK_REGISTRY.spec("deepseek-flash")
 
 
 # =====================================================================
@@ -88,7 +88,7 @@ class FakeTransport:
         return item
 
 
-def ok_response(text: str, *, model: str = "deepseek-chat",
+def ok_response(text: str, *, model: str = "deepseek-flash",
                 prompt_tokens: int = 11, completion_tokens: int = 7) -> ApiResponse:
     body = {"id": "x", "model": model, "choices": [{"message": {"role": "assistant",
                                                                 "content": text},
@@ -156,7 +156,7 @@ def test_request_payload_json_mode_merges_instruction_into_system_message():
                                               "top_k": 5, "repetition_penalty": 1.2,
                                               "seed": 42},
                                     json_mode=True)
-    assert payload["model"] == "deepseek-chat"
+    assert payload["model"] == "deepseek-flash"
     assert payload["response_format"] == {"type": "json_object"}
     assert payload["messages"][0]["role"] == "system"
     assert API_JSON_INSTRUCTION in payload["messages"][0]["content"]
@@ -188,8 +188,9 @@ def test_request_hash_is_stable_and_order_independent():
 # =====================================================================
 
 def test_missing_api_key_env_fails_closed(monkeypatch, tmp_path):
+    # 明确关闭本地密钥文件：否则开发者本机的 .env（真 key）会让"缺 key"用例失真
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    adapter = make_adapter(FakeTransport(), config=inference_config())
+    adapter = make_adapter(FakeTransport(), config=inference_config(api_key_file=""))
     with pytest.raises(InferenceError) as exc:
         run(_load(adapter, shipped_deepseek_spec()))
     assert exc.value.code == E.E_LLM_UNAVAILABLE
@@ -239,7 +240,7 @@ def test_generate_success_writes_audit_without_key(tmp_path):
     result = run(_generate(adapter, json_mode=True))
 
     assert result.text == decision_json()
-    assert result.backend == "deepseek" and result.model_id == "deepseek-chat"
+    assert result.backend == "deepseek" and result.model_id == "deepseek-flash"
     assert result.usage.prompt_tokens == 11 and result.usage.completion_tokens == 7
 
     # 审计记录：request/response/prompt hash + sampling + usage + 成本
@@ -254,10 +255,13 @@ def test_generate_success_writes_audit_without_key(tmp_path):
     assert record["response_hash"].startswith("sha256:")
     assert record["prompt_hash"].startswith("sha256:")
     assert record["provider"] == "api" and record["online"] is True
-    assert record["replay"] is False and record["model_revision"] == "deepseek-chat"
+    assert record["replay"] is False
+    # 响应里的 model 字段覆盖登记的 revision（如实记服务方实际返回的版本）
+    assert record["model_revision"] == "deepseek-flash"
     assert record["usage"] == {"prompt_tokens": 11, "completion_tokens": 7}
-    assert record["cost_usd"] == pytest.approx(11 / 1000 * 0.00027 + 7 / 1000 * 0.0011,
-                                              rel=1e-6)
+    # 成本：金额 + 币种 + 档位分开记（登记的是人民币高峰档上界）
+    assert record["cost_estimate"] == {"amount": pytest.approx(
+        11 / 1000 * 0.002 + 7 / 1000 * 0.008, rel=1e-9), "currency": "CNY", "basis": "peak"}
     assert record["json_mode"] is True and record["status"] == 200
     assert record["api_key_env"] == "DEEPSEEK_API_KEY"
     # 绝不落盘 key：记录文件与事件里都不许出现
@@ -271,7 +275,7 @@ def test_generate_success_writes_audit_without_key(tmp_path):
 
 
 def test_usage_falls_back_to_estimate_when_absent(tmp_path):
-    body = {"model": "deepseek-chat",
+    body = {"model": "deepseek-flash",
             "choices": [{"message": {"content": GOOD}, "finish_reason": "stop"}]}
     adapter = DeepSeekAPIAdapter(infra=RecordingInfra(), config=inference_config(),
                                 transport=FakeTransport(ApiResponse(200, json.dumps(body))),
@@ -515,23 +519,24 @@ def test_replay_missing_record_fails_closed(tmp_path):
 # 与本地后端同口径：复用 BackendManager 的三级 JSON 策略
 # =====================================================================
 
-def _manager_with(transport: Any, *, config: InferenceConfig, records: list[Any] | None = None):
+def _manager_with(transport: Any, *, config: InferenceConfig, records: list[Any] | None = None,
+                  runs_root: Path | None = None):
     registry = deepseek_registry()
     sink = records if records is not None else []
     manager = BackendManager(
         registry=registry, mode="eval", config=config,
         backend_factory=lambda spec: DeepSeekAPIAdapter(infra=RecordingInfra("r-mgr"),
                                                         config=config, transport=transport,
-                                                        api_key="k"),
-        record_sink=sink.append)
+                                                        api_key="k", runs_root=runs_root),
+        record_sink=sink.append, runs_root=runs_root)
     return manager, sink
 
 
-def test_manager_schema_validation_and_repair_retry_reused():
+def test_manager_schema_validation_and_repair_retry_reused(tmp_path):
     # 第一次返回坏 JSON，第二次（修复重试）返回合法动作 → 与本地后端同一条三级策略
     transport = FakeTransport(ok_response("{not json"), ok_response(decision_json()))
     manager, records = _manager_with(transport, config=inference_config(
-        mode="eval", seed=1042, api_max_retries=0))
+        mode="eval", seed=1042, api_max_retries=0), runs_root=tmp_path)
     result = run(_wait(manager.generate_json(
         "ds", MESSAGES, {"type": "object", "required": ["reasoning", "plan"]},
         temperature=0.0, seed=1042)))
@@ -540,21 +545,42 @@ def test_manager_schema_validation_and_repair_retry_reused():
     assert len(transport.requests) == 2 and len(records) == 2
 
 
-def test_manager_eval_mode_hardening_applies_to_api_backend():
+def test_manager_eval_mode_hardening_applies_to_api_backend(tmp_path):
     # B-14：eval 模式下 temperature != 0 直接拒绝（API 后端不例外）
     manager, _ = _manager_with(FakeTransport(ok_response(decision_json())),
-                               config=inference_config(mode="eval", seed=1042))
+                               config=inference_config(mode="eval", seed=1042),
+                               runs_root=tmp_path)
     with pytest.raises(InferenceError) as exc:
         run(_wait(manager.generate_json("ds", MESSAGES, {"type": "object"},
                                        temperature=0.7, seed=1042)))
     assert exc.value.code == E.E_LLM_BACKEND_ERROR
 
 
-def test_manager_never_exceeds_budget_for_api_model():
+def test_manager_never_exceeds_budget_for_api_model(tmp_path):
     manager, _ = _manager_with(FakeTransport(ok_response(decision_json())),
-                               config=inference_config(mode="eval", seed=1042))
+                               config=inference_config(mode="eval", seed=1042),
+                               runs_root=tmp_path)
     assert manager.estimate_required_gb("ds") <= manager.ram_budget_gb
 
 
 async def _wait(coro: Any) -> Any:
     return await coro
+
+
+def test_manager_forwards_runs_root_to_api_audit(tmp_path):
+    """回归：``BackendManager(runs_root=...)`` 必须让 API 审计落在该 runs 根下。
+
+    真跑 deepseek-flash 时发现：适配器由 ``_make_backend`` 构造、拿不到 runs_root，
+    审计记录于是落到仓库根的 ``runs/``，与 ``--runs-root`` / run 目录对不上
+    （成本与 response hash 的归档位置都不对）。
+    """
+    manager, _ = _manager_with(FakeTransport(ok_response(decision_json())),
+                               config=inference_config(mode="eval", seed=1042),
+                               runs_root=tmp_path)
+    import asyncio
+
+    schema = {"type": "object", "required": ["reasoning", "plan"]}
+    asyncio.run(manager.generate_json("ds", MESSAGES, schema, temperature=0.0, seed=1042))
+    recorded = list((tmp_path / "r-mgr" / "llm_api").glob("*.json"))
+    assert len(recorded) == 1
+    assert not (Path("runs") / "r-mgr").exists() # 绝不落到仓库根

@@ -98,34 +98,84 @@ models:
 
   # Issue #1：外部 proposer / 全量对照臂（B0/B1/C0/C1）用的 DeepSeek API 模型。
   # - provider=api + online=true：run provenance 必须如实记为在线调用，不许记成本地；
-  # - api_key_env 只登记**变量名**，key 本体绝不进 harness/、run JSON、Git 或 prompt；
+  # - api_key_env 只登记**变量名**，key 本体绝不进 harness/、run JSON、Git 或 prompt
+  #   （真跑时 key 放本地 .env 或环境变量，见 inference/secrets.py）；
   # - api_supports_seed=false：DeepSeek 不承诺跨时间严格确定性，因此 sampling 照记、
   #   响应按 request hash 归档并比对 response hash（变化即标记 llm.nondeterministic）；
-  # - 单价为登记值（USD / 1k tokens），只用于报告里的成本估算，不参与任何判定。
+  # - 单价只用于报告里的成本估算，不参与任何判定；未登记就记 null（不拿 0 冒充免费）。
   # 离线单测/CI 用 mock transport 或 api_mode=replay，不触网（见 MOD-03 deepseek_backend.py）。
-  deepseek-chat:
+  #
+  # 2026-10-08 实测（`GET https://api.deepseek.com/v1/models`，真 key）：本账号/接口版本
+  # **只有** deepseek-flash 与 deepseek-v4-pro 两个模型 —— 原登记的 `deepseek-chat`
+  # 已不在列表内（旧名 `deepseek-v4-flash` 也仍可调用但已下线、由 V4.1-Flash 提供服务）。
+  # 因此六臂的 B/C 臂一律使用 **deepseek-flash**。
+  deepseek-flash:
     backend: deepseek
     provider: api
     online: true
     weights_path: null
     quantization: none
-    context_length: 65536 # DeepSeek 上下文窗口（登记值；API 侧真实上限由服务方裁决）
+    context_length: 1048576 # 实测：context_window = 1,048,576（1M）
     kv_cache_bits: 8
     resident_gb_est: 0.0 # 不占本地内存
     kv_gb_per_1k_tokens: 0.0
     max_inflight: 2 # 评估模式下 BackendManager 仍强制 1
     supports_grammar: false # 无 GBNF；走 response_format=json_object + jsonschema 校验
-    supports_json_mode: true
+    supports_json_mode: true # 官方文档：Json Output 支持
     weights_sha256: null
     api_base: https://api.deepseek.com/v1
-    api_model: deepseek-chat
+    api_model: deepseek-flash
     api_key_env: DEEPSEEK_API_KEY
     api_supports_seed: false
-    model_revision: "" # 服务方未提供显式 revision；实际值取每次响应的 model 字段
-    cost_per_1k_input_usd: 0.00027
-    cost_per_1k_output_usd: 0.0011
+    # 2026-10-08 实测（真 key probe）：flash **默认开启思考模式**，思维链会吃掉 max_tokens，
+    # 导致 content 返回空串 → 每次都靠 MOD-03 的修复重试才拿到 JSON（白花一次调用）。
+    # 结构化 JSON 决策/提案流水线因此显式关闭思考模式；官方文档：思考模式不支持
+    # temperature（被忽略），非思考模式下 temperature 生效 —— 正是 B-14 需要的确定性口径。
+    api_thinking: disabled
+    # 实测：模型名 DeepSeek-V4.1-Flash；响应里的 model 字段会覆盖为实际 revision
+    model_revision: DeepSeek-V4.1-Flash
+    # 官方定价（人民币 / 百万 tokens，2026-10-08 取自 api-docs.deepseek.com/zh-cn/quick_start/pricing）：
+    #   输入(缓存未命中) 空闲 ¥1 / 高峰 ¥2；输出 空闲 ¥4 / 高峰 ¥8。
+    # 这里登记**高峰档**（最坏上界）；空闲档是它的一半。换算成 1k tokens 单价如下。
+    cost_per_1k_input: 0.002
+    cost_per_1k_output: 0.008
+    cost_currency: CNY
+    cost_basis: peak # 高峰时段上界（北京时间工作日 9:00-12:00 / 14:00-18:00）
     default_sampling: { temperature: 0.0, top_p: 1.0, top_k: 0, repetition_penalty: 1.0 }
     perf_budget: { p50_latency_ms: 3000, p95_latency_ms: 12000, min_tok_per_s: 8 }
     family: deepseek
     params_b: 0.0
     notes: 外部 proposer / 全量对照（Issue #1 臂 B0/B1/C0/C1）；需要 DEEPSEEK_API_KEY，Qwen 主线不依赖它
+
+  # 同账号可用的另一个（更强、更贵）模型：登记但**当前不被任何臂使用**，
+  # 供后续「proposer 能力 vs 成本」对照（Issue #1 任务 7 的 capability gate）直接切。
+  # 官方定价（人民币 / 百万 tokens，高峰档）：输入(缓存未命中) ¥9 / 输出 ¥27；空闲减半。
+  deepseek-v4-pro:
+    backend: deepseek
+    provider: api
+    online: true
+    weights_path: null
+    quantization: none
+    context_length: 1048576
+    kv_cache_bits: 8
+    resident_gb_est: 0.0
+    kv_gb_per_1k_tokens: 0.0
+    max_inflight: 2
+    supports_grammar: false
+    supports_json_mode: true
+    weights_sha256: null
+    api_base: https://api.deepseek.com/v1
+    api_model: deepseek-v4-pro
+    api_key_env: DEEPSEEK_API_KEY
+    api_supports_seed: false
+    api_thinking: disabled
+    model_revision: DeepSeek-V4-Pro-0813
+    cost_per_1k_input: 0.009
+    cost_per_1k_output: 0.027
+    cost_currency: CNY
+    cost_basis: peak
+    default_sampling: { temperature: 0.0, top_p: 1.0, top_k: 0, repetition_penalty: 1.0 }
+    perf_budget: { p50_latency_ms: 5000, p95_latency_ms: 20000, min_tok_per_s: 6 }
+    family: deepseek
+    params_b: 0.0
+    notes: 更强的 DeepSeek 对照模型（当前未被任何臂使用）；切法：experiment.roles/arms 里写 deepseek-v4-pro
