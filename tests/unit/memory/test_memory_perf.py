@@ -20,6 +20,7 @@ runner 上（实测比参考机慢 4–5 倍）。因此断言用 ``_budget_ms()
 from __future__ import annotations
 
 import os
+import sys
 import time
 from dataclasses import replace
 from pathlib import Path
@@ -74,6 +75,20 @@ def _io_seconds() -> float:
             path.read_bytes()
 
     return min(_timed(roundtrip) for _ in range(3))
+
+
+@pytest.fixture(autouse=True)
+def _skip_under_tracing() -> None:
+    """覆盖率插桩会让逐行 trace 放大一个量级：此时只报告不断言（NFR-05-2 针对生产模式）。
+
+    与 ``tests/golden/test_perf.py::test_reduce_p95_within_budget`` 同一先例。
+    插桩使实测变慢与实现退化不可区分，而 ``perf_scale`` 的折算只校正「机器慢」，
+    无法校正「被 trace」。CI 的 ``--coverage`` 门（PR 触发）因此会误判性能回归 ——
+    本轮 Issue #1 的 PR 上实测 P95 72.3 ms > 折算上界 47.9 ms 就是这个原因，
+    同一提交在无插桩的 push 门与 parity 门都是通过的。
+    """
+    if sys.gettrace() is not None:
+        pytest.skip("coverage 插桩下不适用性能预算（NFR-05-2 针对生产模式）")
 
 
 @pytest.fixture(scope="session")

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import sys
 import time
 from typing import Callable
 
@@ -20,6 +21,17 @@ from dice_ratchet.agent.prompts.assembler import (DEFAULT_TEMPLATE_PATH, MemoryI
 
 GOOD = '{"reasoning":"a","plan":[{"kind":"end_turn"}]}'
 SAMPLES = 50
+
+
+@pytest.fixture(autouse=True)
+def _skip_under_tracing() -> None:
+    """覆盖率插桩下不判性能（NFR-04-2 针对生产模式；与 tests/golden/test_perf.py 同一先例）。
+
+    这里断言的是绝对毫秒上界且不做机器折算，插桩带来的 2–4 倍放大足以在慢 runner 上
+    造成假失败；无插桩的门（push / parity / 本地）仍照常断言。
+    """
+    if sys.gettrace() is not None:
+        pytest.skip("coverage 插桩下不适用性能预算（NFR-04-2 针对生产模式）")
 
 
 def _p95_ms(fn: Callable[[], object]) -> float:
