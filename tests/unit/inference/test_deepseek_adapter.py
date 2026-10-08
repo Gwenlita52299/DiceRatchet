@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -264,6 +265,12 @@ def test_generate_success_writes_audit_without_key(tmp_path):
         11 / 1000 * 0.002 + 7 / 1000 * 0.008, rel=1e-9), "currency": "CNY", "basis": "peak"}
     assert record["json_mode"] is True and record["status"] == 200
     assert record["api_key_env"] == "DEEPSEEK_API_KEY"
+    # v2：响应正文原样落盘（否则这份记录无法 replay），response_hash 与正文一致
+    assert record["schema_version"] == 2
+    assert record["response_status"] == 200
+    assert record["response_text"] == ok_response(decision_json()).text
+    assert record["response_hash"] == "sha256:" + hashlib.sha256(
+        record["response_text"].encode("utf-8")).hexdigest()
     # 绝不落盘 key：记录文件与事件里都不许出现
     blob = files[0].read_text(encoding="utf-8") + json.dumps(infra.events, ensure_ascii=False)
     assert "sk-secret-xyz" not in blob
@@ -468,6 +475,7 @@ def test_identical_response_is_idempotent(tmp_path):
 # =====================================================================
 
 def test_replay_reproduces_recorded_response_without_network(tmp_path):
+    """录制文件必须自带响应正文：replay 直接拿**原始录制文件**就能逐位复现。"""
     live_dir = tmp_path / "live" / "r-replay" / "llm_api"
     live = DeepSeekAPIAdapter(infra=RecordingInfra(run_id="r-replay"),
                              config=inference_config(), transport=FakeTransport(
@@ -477,14 +485,16 @@ def test_replay_reproduces_recorded_response_without_network(tmp_path):
     expected = run(_generate(live, json_mode=True))
     assert live_dir.is_dir()
 
-    # 把录制文件搬成 replay 目录的 <request_hash>.json 形状
+    # 不做任何"补字段"处理：把录制目录原样当 replay 目录
     replay_dir = tmp_path / "replay"
     replay_dir.mkdir()
-    for path in live_dir.glob("*.json"):
-        record = json.loads(path.read_text(encoding="utf-8"))
-        record["response"] = json.loads(ok_response(decision_json()).text)
-        (replay_dir / path.name).write_text(json.dumps(record, ensure_ascii=False),
-                                           encoding="utf-8")
+    recorded = sorted(live_dir.glob("*.json"))
+    assert len(recorded) == 1
+    original = json.loads(recorded[0].read_text(encoding="utf-8"))
+    assert isinstance(original["response_text"], str) # v2：正文随录制落盘
+    assert original["response_status"] == 200
+    (replay_dir / recorded[0].name).write_text(json.dumps(original, ensure_ascii=False),
+                                              encoding="utf-8")
 
     replay = DeepSeekAPIAdapter(
         infra=RecordingInfra(run_id="r-replay2"),
@@ -494,10 +504,75 @@ def test_replay_reproduces_recorded_response_without_network(tmp_path):
     run(_load(replay, deepseek_spec()))
     result = run(_generate(replay, json_mode=True))
     assert result.text == expected.text
-    # replay 结果单独记档，且标 replay=true（不得冒充新样本）
+    # replay 结果单独记档，且标 replay=true、response_hash 与原始录制逐位相等
     records = list((tmp_path / "replay-runs" / "r-replay2" / "llm_api_replay").glob("*.json"))
     assert len(records) == 1
-    assert json.loads(records[0].read_text(encoding="utf-8"))["replay"] is True
+    replayed = json.loads(records[0].read_text(encoding="utf-8"))
+    assert replayed["replay"] is True
+    assert replayed["response_hash"] == original["response_hash"]
+
+
+def test_replay_accepts_legacy_response_dict(tmp_path):
+    """兼容旧形状：``response`` 为解析后的 JSON 体时仍可回放。"""
+    live_dir = tmp_path / "live" / "r-legacy" / "llm_api"
+    live = DeepSeekAPIAdapter(infra=RecordingInfra(run_id="r-legacy"),
+                             config=inference_config(), transport=FakeTransport(
+                                 ok_response(decision_json())), api_key="k",
+                             runs_root=tmp_path / "live")
+    run(_load(live, deepseek_spec()))
+    expected = run(_generate(live, json_mode=True))
+
+    replay_dir = tmp_path / "replay-legacy"
+    replay_dir.mkdir()
+    for path in live_dir.glob("*.json"):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record.pop("response_text", None)
+        record.pop("response_status", None)
+        record["response"] = json.loads(ok_response(decision_json()).text)
+        (replay_dir / path.name).write_text(json.dumps(record, ensure_ascii=False),
+                                           encoding="utf-8")
+
+    replay = DeepSeekAPIAdapter(
+        infra=RecordingInfra(run_id="r-legacy2"),
+        config=inference_config(api_mode="replay", api_replay_dir=str(replay_dir)),
+        transport=FakeTransport(error_response(500, "network must not be used")),
+        runs_root=tmp_path / "replay-runs")
+    run(_load(replay, deepseek_spec()))
+    assert run(_generate(replay, json_mode=True)).text == expected.text
+
+
+def test_replay_without_response_body_fails_closed(tmp_path):
+    """v1 记录只有哈希：必须 fail-closed，绝不能把审计 JSON 当模型输出喂回去。"""
+    live_dir = tmp_path / "live" / "r-v1" / "llm_api"
+    live = DeepSeekAPIAdapter(infra=RecordingInfra(run_id="r-v1"),
+                             config=inference_config(), transport=FakeTransport(
+                                 ok_response(decision_json())), api_key="k",
+                             runs_root=tmp_path / "live")
+    run(_load(live, deepseek_spec()))
+    run(_generate(live, json_mode=True))
+
+    replay_dir = tmp_path / "replay-v1"
+    replay_dir.mkdir()
+    for path in live_dir.glob("*.json"):
+        record = json.loads(path.read_text(encoding="utf-8"))
+        record.pop("response_text", None)
+        record.pop("response_status", None)
+        record["schema_version"] = 1
+        (replay_dir / path.name).write_text(json.dumps(record, ensure_ascii=False),
+                                           encoding="utf-8")
+
+    adapter = DeepSeekAPIAdapter(
+        infra=RecordingInfra(run_id="r-v1b"),
+        config=inference_config(api_mode="replay", api_replay_dir=str(replay_dir)),
+        transport=FakeTransport(error_response(500, "network must not be used")),
+        runs_root=tmp_path / "replay-runs")
+    run(_load(adapter, deepseek_spec()))
+    with pytest.raises(InferenceError) as exc:
+        run(_generate(adapter, json_mode=True))
+    assert exc.value.code == E.E_LLM_UNAVAILABLE
+    assert exc.value.retryable is False
+    assert "响应正文" in exc.value.message
+    assert "response_text" in (exc.value.hint or "")
 
 
 def test_replay_missing_record_fails_closed(tmp_path):

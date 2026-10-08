@@ -14,10 +14,10 @@
 - 错误映射：401/403 → ``E_LLM_UNAVAILABLE``（不可重试）；400/404/422 → 不可重试；
   408/429/5xx/连接失败 → 可重试（适配器内部做**有限**重试，退避封顶）。
 - 可复现性：记 provider/model_id/实际 model_revision/request hash/prompt hash/
-  sampling/response hash/usage/成本；同一 request hash 而 response hash 变化时，
+  sampling/response hash/usage/成本/响应正文；同一 request hash 而 response hash 变化时，
   **不覆盖旧证据**，另存变体并记 ``llm.nondeterministic``（``E_LLM_NONDETERMINISTIC``）。
-- ``replay``：只从历史响应目录读，缺记录即 fail-closed；replay 结果单独记档，
-  不得冒充新的独立实验样本。
+- ``replay``：只从历史响应目录读，缺记录即 fail-closed；记录缺响应正文同样 fail-closed
+  （不能拿审计 JSON 冒充模型输出）；replay 结果单独记档，不得冒充新的独立实验样本。
 """
 
 from __future__ import annotations
@@ -320,7 +320,8 @@ class DeepSeekAPIAdapter(LocalBackend):
         latency_ms = int(round((time.perf_counter() - started) * 1000.0))
         usage = self._usage_of(parsed["usage"], messages, latency_ms=latency_ms)
         audit = {
-            "schema_version": 1,
+            # v2：新增 ``response_text`` / ``response_status``（录制响应正文，replay 才能回放）
+            "schema_version": 2,
             "provider": "api",
             "backend": self.name,
             "model_id": spec.model_id,
@@ -348,7 +349,8 @@ class DeepSeekAPIAdapter(LocalBackend):
             "api_key_source": self._api_key_source,
         }
         self._record(audit, request_hash=request_hash, response_hash=audit["response_hash"],
-                     replay=replay)
+                     replay=replay, response_text=response.text,
+                     response_status=int(response.status))
         self._infra.emit("llm.api.call", **{k: v for k, v in audit.items()
                                            if k not in ("sampling", "usage")},
                          temperature=sampling["temperature"], top_p=sampling["top_p"])
@@ -548,12 +550,24 @@ class DeepSeekAPIAdapter(LocalBackend):
                                  f"replay 记录不可读：{path.name}（{exc}）",
                                  retryable=False) from exc
         raw = record.get("response") if isinstance(record, Mapping) else None
-        text = json.dumps(raw, ensure_ascii=False) if raw is not None else \
-            json.dumps(record, ensure_ascii=False)
-        return ApiResponse(status=200, text=text)
+        text = record.get("response_text") if isinstance(record, Mapping) else None
+        if not isinstance(text, str):
+            if raw is None:
+                # v1 记录只存了哈希，回放不出正文：宁可 fail-closed，也不能把审计 JSON
+                # 当成模型输出（那会静默产生一份"看起来成功"的假样本）。
+                raise InferenceError(
+                    E.E_LLM_UNAVAILABLE,
+                    f"replay 记录缺少响应正文：{path.name}",
+                    retryable=False,
+                    hint="schema_version=1 的旧记录只存了哈希、无法回放；"
+                         "请用 api_mode=live 重录（v2 会写入 response_text）")
+            text = json.dumps(raw, ensure_ascii=False)
+        status = record.get("response_status") if isinstance(record, Mapping) else None
+        return ApiResponse(status=int(status) if isinstance(status, int) else 200, text=text)
 
     def _record(self, audit: Mapping[str, Any], *, request_hash: str, response_hash: str,
-                replay: bool) -> None:
+                replay: bool, response_text: str | None = None,
+                response_status: int | None = None) -> None:
         if not bool(getattr(self._config, "api_record_enabled", True)):
             return
         directory = self._record_dir(replay=replay)
@@ -561,6 +575,12 @@ class DeepSeekAPIAdapter(LocalBackend):
             return
         directory.mkdir(parents=True, exist_ok=True)
         payload = dict(audit)
+        # 录制必须带响应正文，否则这份记录不能回放（只存哈希的 v1 就是这样）。
+        # 正文**原样**落盘、不重新序列化：replay 的 response_hash 才能与原始记录逐位相等。
+        if response_text is not None:
+            payload["response_text"] = response_text
+        if response_status is not None:
+            payload["response_status"] = int(response_status)
         base = directory / f"{request_hash.replace(':', '_')}.json"
         try:
             if not base.exists():

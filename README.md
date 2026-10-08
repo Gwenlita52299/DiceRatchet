@@ -159,9 +159,14 @@ cp .env.example .env && chmod 600 .env    # 然后把 key 粘到 DEEPSEEK_API_KE
 每个 run 落 `runs/<run_id>/models_provenance.json`：三角色各自的 model_id / provider / backend /
 model_revision / online / `api_key_present` / `api_key_source`，加上臂、harness 模式与 `config_hash`。
 DeepSeek 侧另有审计：`runs/<run_id>/llm_api/` 按 request hash 存 prompt hash / sampling /
-response hash / usage / 成本估算；同一请求而响应变化时**不覆盖旧证据**，另存变体并记
-`llm.nondeterministic`（`E_LLM_NONDETERMINISTIC`）。离线复现用 `inference.api_mode=replay`
-（只读历史响应，缺记录即报错，不冒充新样本）。
+response hash / usage / 成本估算 / **响应正文**（`response_text`，记录 v2）；同一请求而响应变化时
+**不覆盖旧证据**，另存变体（`.v<n>.json`）并记 `llm.nondeterministic`（`E_LLM_NONDETERMINISTIC`）。
+离线复现用 `inference.api_mode=replay`（只读历史响应，缺记录**或缺响应正文**即 fail-closed，
+绝不把审计元数据当模型输出，也不冒充新样本）。**实测提醒**（报告 §11）：`deepseek-flash` 在
+`temperature=0.0` 下也不保证跨时间确定 —— 两次同配置真跑之间 9 个逐字节相同的请求拿到
+9 个不同响应，
+所以 A/B/C 对照必须 `n≫1`、按 episode seed 配对，逐位复现只能靠 replay。
+跨 run 比对用只读脚本：`.venv/bin/python scripts/compare_api_runs.py <run_a> <run_b>`。
 
 ## CI 门禁
 
