@@ -20,6 +20,7 @@ model_id / provider / backend / model_revision / online，以及臂与 config_ha
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Literal, Mapping
@@ -49,6 +50,19 @@ def _clean(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _arm_spec(arms: Mapping[str, Any], arm: str) -> dict[str, Any]:
+    """取该臂的角色差分；臂存在但不是对象 → 显式报配置错误（不静默当成空差分）。"""
+    if not arm:
+        return {}
+    spec = arms.get(arm)
+    if spec is None:
+        return {}
+    if not isinstance(spec, Mapping):
+        raise InfraError(E.E_IO_CONFIG_INVALID,
+                         f"experiment.arms.{arm} 必须是对象，实际是 {type(spec).__name__}")
+    return dict(spec)
+
+
 # =====================================================================
 # 角色 → model_id 解析（纯配置，不需要注册表）
 # =====================================================================
@@ -70,7 +84,7 @@ def role_model_ids(cfg: Any) -> dict[str, str]:
             f"experiment.arm={arm!r} 不在 experiment.arms 内",
             hint=f"合法臂：{', '.join(sorted(arms))}（空字符串 = 不选臂）")
     overrides = dict(getattr(exp, "roles", {}) or {}) if exp is not None else {}
-    arm_roles = dict(arms.get(arm) or {}) if arm else {}
+    arm_roles = _arm_spec(arms, arm)
     out: dict[str, str] = {}
     for role in ROLE_NAMES:
         for candidate in (overrides.get(role), arm_roles.get(role),
@@ -90,7 +104,7 @@ def _binding_source(cfg: Any, role: str) -> str:
     overrides = dict(getattr(exp, "roles", {}) or {}) if exp is not None else {}
     arm = _clean(getattr(exp, "arm", ""))
     arms = dict(getattr(exp, "arms", {}) or {}) if exp is not None else {}
-    arm_roles = dict(arms.get(arm) or {}) if arm else {}
+    arm_roles = _arm_spec(arms, arm)
     if _clean(overrides.get(role)):
         return "experiment.roles"
     if _clean(arm_roles.get(role)):
@@ -159,8 +173,6 @@ def resolve_role_bindings(cfg: Any, *, registry: ModelRegistry | None = None,
         path = str(getattr(getattr(cfg, "inference", None), "registry_path",
                            "configs/models.yaml"))
     reg = registry if registry is not None else load_registry(path)
-    import os
-
     out: dict[str, RoleBinding] = {}
     for role in ROLE_NAMES:
         model_id = ids[role]
