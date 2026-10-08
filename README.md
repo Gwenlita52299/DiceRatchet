@@ -114,15 +114,37 @@ MOD-04/06/07/08 的业务代码不动，也不出现 `from mlx_lm import ...` / 
 # 方式二：DICERATCHET_* 环境变量（B-30 的 __ 分层；CLI 目前只有 8 个显式覆盖键，没有通用 --set）
 export DICERATCHET_EXPERIMENT__ARM=B1                    # 等价于 experiment.arm: B1
 export DICERATCHET_MODELS__PROPOSER=deepseek-chat        # 只钉 proposer，其余角色不动
-export DEEPSEEK_API_KEY=...        # 只从环境变量读；key 绝不进 harness/、run JSON 或 Git
 python -m dice_ratchet loop run --agent llm --seeds train:1000-1029 --k 30 --hitl --run-id <loop_run_id>
 ```
+
+### API key：本地密钥文件（不入库）
+
+真跑 B/C 臂需要 `DEEPSEEK_API_KEY`。除了 `export`，也可以放在仓库根一个**被 .gitignore 忽略**的
+`.env` 里（省得每次 export）：
+
+```bash
+cp .env.example .env && chmod 600 .env    # 然后把 key 粘到 DEEPSEEK_API_KEY= 后面
+```
+
+语义（实现在 [dice_ratchet/inference/secrets.py](dice_ratchet/inference/secrets.py)）：
+
+- **真实环境变量优先**：已经 `export` 时以环境变量为准，文件不覆盖；
+- **只读注册表声明的那个名字**（`configs/models.yaml` 的 `api_key_env`，当前是 `DEEPSEEK_API_KEY`）——
+  文件里其它行一律无效，包括 `DICERATCHET_*`，所以这个文件**不能用来偷改配置**；
+- **不改进程环境**：只做查找，绝不 `os.environ.update(...)`，受限子进程与 `config.json` 的环境快照都看不到它；
+- key 只进内存：不写 `harness/`、run JSON、事件或日志；审计与 provenance 只记来源
+  （`api_key_source: environment | env_file | missing`）与「是否可用」的布尔值；
+- 文件对同组/其他用户可读时记一条 `llm.api.key_file_permissions` 告警（建议 `chmod 600`）；
+- 想只用环境变量：把 `inference.api_key_file` 设为空字符串。
+
+`.gitignore` 里必须有 `.env` 这条：`infra.git_ops` 把 `git status --porcelain` 的任何输出都算
+「worktree 不干净」（未跟踪文件也在内），否则 MOD-07 会直接拒绝演化。
 
 臂与角色绑定都是**静态实验决定**：它们不进 `harness/config.json` 白名单（MOD-07 不能自己改实验臂），
 但会进 `config_hash`，所以换臂后必须换 run-id。
 
 每个 run 落 `runs/<run_id>/models_provenance.json`：三角色各自的 model_id / provider / backend /
-model_revision / online / `api_key_present`（只记布尔），加上臂、harness 模式与 `config_hash`。
+model_revision / online / `api_key_present` / `api_key_source`，加上臂、harness 模式与 `config_hash`。
 DeepSeek 侧另有审计：`runs/<run_id>/llm_api/` 按 request hash 存 prompt hash / sampling /
 response hash / usage / 成本估算；同一请求而响应变化时**不覆盖旧证据**，另存变体并记
 `llm.nondeterministic`（`E_LLM_NONDETERMINISTIC`）。离线复现用 `inference.api_mode=replay`

@@ -275,6 +275,10 @@ class InferenceConfig:
     api_record_enabled: bool = True # 关掉只影响审计工件，不影响调用
     api_connect_timeout_ms: int = 10000 # 单次 HTTP 连接/读取超时
     api_max_retries: int = 2 # 传输层有限重试（429/5xx/超时）；schema 修复重试仍归 MOD-03 三级策略
+    #: API key 的**本地便利文件**（默认仓库根的 ``.env``，已在 .gitignore 内）。
+    #: 只用于「不想每次 export」：真实环境变量优先；文件里除注册表声明的 key 名以外
+    #: 的行一律不生效（不会改进程环境）。``""`` = 关闭该文件。
+    api_key_file: str = ".env"
 
     def validate(self) -> None:
         _check("inference.model_id", self.model_id, str)
@@ -291,6 +295,7 @@ class InferenceConfig:
         _check("inference.api_max_retries", self.api_max_retries, int, minv=0, maxv=5)
         _check("inference.api_connect_timeout_ms", self.api_connect_timeout_ms, int, minv=100)
         _check("inference.api_record_dir", self.api_record_dir, str)
+        _check("inference.api_key_file", self.api_key_file, str)
         if self.api_mode == "replay" and not self.api_replay_dir:
             raise InfraError(E.E_IO_CONFIG_INVALID,
                              "inference.api_mode=replay 时 inference.api_replay_dir 必须非空",

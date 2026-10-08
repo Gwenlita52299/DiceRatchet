@@ -126,6 +126,10 @@ inference:
   api_record_enabled: true
   api_connect_timeout_ms: 10000
   api_max_retries: 2 # 传输层有限重试（429/5xx/超时）；schema 修复重试仍归 MOD-03 三级策略
+  # API key 的本地便利文件（默认仓库根的 .env，已被 .gitignore 忽略，绝不入库）。
+  # 真实环境变量优先；文件里除注册表声明的 key 名（如 DEEPSEEK_API_KEY）以外的行不生效。
+  # 用法：cp .env.example .env && chmod 600 .env，然后把 key 粘进去。空字符串 = 关闭。
+  api_key_file: .env
 
 # ============ models（MOD-03 模型角色绑定；Issue #1 §2）============
 # 角色：policy（游戏决策）/ reflection（局末反思）/ proposer（harness 修改提案）。
