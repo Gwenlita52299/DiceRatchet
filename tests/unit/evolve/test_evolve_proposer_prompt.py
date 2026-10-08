@@ -223,7 +223,9 @@ def test_llm_receives_deterministic_seed():
     llm = _two_candidate_llm()
     P.propose(_bundle(), cfg=make_config(), rng_seed=99, client=llm)
     assert llm.calls[0]["kwargs"]["seed"] == 99
-    assert llm.calls[0]["kwargs"]["temperature"] == 0.0
+    # Issue #1：提案走 MOD-03 统一同步契约（mode/sampling/seed），温度在 sampling 里
+    assert llm.calls[0]["kwargs"]["mode"] == "eval"
+    assert llm.calls[0]["kwargs"]["sampling"]["temperature"] == 0.0
 
 
 def test_attempt_seed_is_deterministic_and_changes():

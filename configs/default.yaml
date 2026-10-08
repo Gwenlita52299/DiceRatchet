@@ -117,6 +117,46 @@ inference:
   skip_hash_check: false
   llama_server_startup_timeout_ms: 60000
   llama_server_port: 0
+  # ---- API provider（deepseek 等在线后端；Issue #1「DeepSeek API 适配要求」）--------
+  # live 真调 API；replay 只从 api_replay_dir 读历史响应（复现/调试，不得冒充新样本）。
+  # Qwen 主线与这两项无关，始终可完全离线运行。
+  api_mode: live
+  api_replay_dir: "" # api_mode=replay 时必须非空
+  api_record_dir: llm_api # 相对 run 目录：请求/响应 hash、usage、成本（不含 key）
+  api_record_enabled: true
+  api_connect_timeout_ms: 10000
+  api_max_retries: 2 # 传输层有限重试（429/5xx/超时）；schema 修复重试仍归 MOD-03 三级策略
+
+# ============ models（MOD-03 模型角色绑定；Issue #1 §2）============
+# 角色：policy（游戏决策）/ reflection（局末反思）/ proposer（harness 修改提案）。
+# 空字符串 = 继承 inference.model_id。这条继承规则让 CLI `--model`（写的是
+# inference.model_id）仍然一次覆盖全部角色（`--model mock` 的离线冒烟语义不变）；
+# 显式写了角色键就是明确的绑定意图，优先于 `--model`。
+# 三个角色都必须经 MOD-03 的统一 InferenceClient 取模型；MOD-04/06/07/08 不得直接
+# import MLX / llama.cpp / DeepSeek SDK / HTTP 客户端（guards check 静态强制）。
+models:
+  policy: "" # 空 = 用 inference.model_id（默认 qwen3-8b-q4）
+  reflection: "" # 空 = 同上
+  proposer: "" # 空 = 同上；B/C 臂经 experiment.arms 钉到 deepseek-chat
+  # 例：把 proposer 单独钉到 DeepSeek，决策/反思保持本地 8B（等价于臂 B0/B1）：
+  #   proposer: deepseek-chat
+
+# ============ experiment（实验臂；Issue #1 §1）============
+# 臂是**差分**：只描述相对 models 段的覆盖。优先级（高 → 低）：
+#   experiment.roles.<role> > experiment.arms[arm].<role> > models.<role> > inference.model_id
+# harness 只做登记（fixed / evolve），本轮不改 MOD-06 的演化开关（Issue #1 任务 6）。
+# 臂定义计入 config_hash → 换臂即换 run-id 族（F10），六个臂的产物不会互相污染。
+# arm="" 表示不选臂，只用 models / inference.model_id 绑定（冒烟与自定义对照用）。
+experiment:
+  arm: A1
+  roles: {} # 手工覆盖，优先级最高（例：{proposer: deepseek-chat}）
+  arms:
+    A0: {policy: "", reflection: "", proposer: "", harness: fixed}
+    A1: {policy: "", reflection: "", proposer: "", harness: evolve}
+    B0: {policy: "", reflection: "", proposer: deepseek-chat, harness: fixed}
+    B1: {policy: "", reflection: "", proposer: deepseek-chat, harness: evolve}
+    C0: {policy: deepseek-chat, reflection: deepseek-chat, proposer: deepseek-chat, harness: fixed}
+    C1: {policy: deepseek-chat, reflection: deepseek-chat, proposer: deepseek-chat, harness: evolve}
 
 # ============ memory（MOD-05 反思记忆库）============
 memory:

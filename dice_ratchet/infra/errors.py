@@ -79,6 +79,9 @@ class E(StrEnum):
     E_LLM_BACKEND_ERROR = "E_LLM_BACKEND_ERROR"
     E_LLM_UNSUPPORTED = "E_LLM_UNSUPPORTED" # B-01：可选辅助接口（count_tokens/embed）未实现
     E_LLM_EXTRACT_FAILED = "E_LLM_EXTRACT_FAILED"
+    # Issue #1：同一 request hash 的 API 响应与既有证据不一致（API 不承诺跨时间严格确定性）。
+    # 绝不静默覆盖旧证据；等价事件名为 llm.nondeterministic。
+    E_LLM_NONDETERMINISTIC = "E_LLM_NONDETERMINISTIC"
 
     # ---- E_EVOLVE_*（MOD-07，harness 自进化）----------------------------------------
     E_EVOLVE_PROPOSE_FAILED = "E_EVOLVE_PROPOSE_FAILED"
@@ -182,6 +185,7 @@ EXIT_CODE: Final[Mapping[E, int]] = {
     E.E_LLM_LOAD_FAILED: EXIT_MODEL,
     E.E_LLM_OOM: EXIT_MODEL,
     E.E_LLM_UNSUPPORTED: EXIT_MODEL,
+    E.E_LLM_NONDETERMINISTIC: EXIT_MODEL,
     E.E_IO_MODULE_PENDING: EXIT_CONFIG,
     # MOD-06 闭环编排（PRD §10）：并发配置非法 → 2；信号中断 → 130
     E.E_IO_CONCURRENCY: EXIT_CONFIG,
@@ -239,6 +243,7 @@ ERROR_MESSAGE: Final[Mapping[E, str]] = {
     E.E_LLM_BACKEND_ERROR: "后端错误：采样参数越界 / server 5xx / grammar 不可用且无 JSON mode",
     E.E_LLM_UNSUPPORTED: "可选辅助接口未实现（B-01）",
     E.E_LLM_EXTRACT_FAILED: "LLM 抽取失败（MOD-05 降级为规则抽取）",
+    E.E_LLM_NONDETERMINISTIC: "API 响应与既有证据不一致（同一 request hash 的 response hash 变化）",
     # MOD-08 评估（Spec §8.5 的降级契约）
     E.E_EVAL_TIMEOUT: "单局超过 evals.seed_timeout_s：该局记 dropped，计 n 并按 lose 计",
     # MOD-05 记忆库（Spec §8.3 已登记码；处置见 PRD §10）

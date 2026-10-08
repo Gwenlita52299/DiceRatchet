@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://diceratchet.local/schemas/models.schema.json",
   "title": "ModelRegistry",
-  "description": "MOD-03 `configs/models.yaml` 模型注册表（PRD §7）。静态注册表：M1–M3 不参与 harness 演化，只允许人工变更并记 CHANGELOG（NFR-03-04）。",
+  "description": "MOD-03 `configs/models.yaml` 模型注册表（PRD §7）。静态注册表：M1–M3 不参与 harness 演化，只允许人工变更并记 CHANGELOG（NFR-03-04）。Issue #1：新增 provider/api_* 描述字段，供角色绑定与 run provenance 使用。",
   "type": "object",
   "additionalProperties": false,
   "required": ["registry_version", "models"],
@@ -10,7 +10,7 @@
     "registry_version": { "const": 1 },
     "ram_budget_gb": { "type": "number", "exclusiveMinimum": 0 },
     "fallback_backend": {
-      "enum": ["mlx", "llama_cpp", "llama_server", "mock"],
+      "enum": ["mlx", "llama_cpp", "llama_server", "mock", "deepseek"],
       "description": "加载失败换后端重试 1 次的目标（PRD §10）"
     },
     "defaults": { "$ref": "#/$defs/defaults" },
@@ -33,7 +33,16 @@
         "supports_grammar": { "type": "boolean" },
         "supports_json_mode": { "type": "boolean" },
         "kv_gb_per_1k_tokens": { "type": "number", "minimum": 0 },
-        "perf_budget": { "$ref": "#/$defs/perf_budget" }
+        "perf_budget": { "$ref": "#/$defs/perf_budget" },
+        "provider": { "enum": ["local", "api"] },
+        "online": { "type": "boolean" },
+        "family": { "type": "string" },
+        "params_b": { "type": "number", "minimum": 0 },
+        "api_base": { "type": "string" },
+        "api_key_env": { "type": "string" },
+        "api_supports_seed": { "type": "boolean" },
+        "cost_per_1k_input_usd": { "type": "number", "minimum": 0 },
+        "cost_per_1k_output_usd": { "type": "number", "minimum": 0 }
       }
     },
     "perf_budget": {
@@ -50,7 +59,7 @@
       "additionalProperties": false,
       "required": ["backend", "context_length"],
       "properties": {
-        "backend": { "enum": ["mlx", "llama_cpp", "llama_server", "mock"] },
+        "backend": { "enum": ["mlx", "llama_cpp", "llama_server", "mock", "deepseek"] },
         "weights_path": { "type": ["string", "null"] },
         "weights_sha256": {
           "type": ["string", "null"],
@@ -66,7 +75,7 @@
         "max_inflight": { "type": "integer", "minimum": 1, "maximum": 64 },
         "supports_grammar": { "type": "boolean" },
         "supports_json_mode": { "type": "boolean" },
-        "fallback_backend": { "enum": ["mlx", "llama_cpp", "llama_server", "mock", null] },
+        "fallback_backend": { "enum": ["mlx", "llama_cpp", "llama_server", "mock", "deepseek", null] },
         "server_args": { "type": "array", "items": { "type": "string" } },
         "default_sampling": {
           "type": "object",
@@ -81,7 +90,31 @@
         "perf_budget": { "$ref": "#/$defs/perf_budget" },
         "family": { "type": "string" },
         "params_b": { "type": "number", "minimum": 0 },
-        "notes": { "type": "string" }
+        "notes": { "type": "string" },
+        "provider": {
+          "enum": ["local", "api"],
+          "description": "模型提供方：local（本地权重/进程）/ api（远程 API）。缺省由 backend 推导"
+        },
+        "online": {
+          "type": "boolean",
+          "description": "显式在线标记；API 模式必须为 true（不许把远程调用记成本地）"
+        },
+        "model_revision": {
+          "type": ["string", "null"],
+          "description": "服务方发布的版本号（若提供）；API 响应的 model 字段会覆盖为实际 revision"
+        },
+        "api_base": { "type": ["string", "null"], "description": "OpenAI 兼容 base URL" },
+        "api_model": { "type": ["string", "null"], "description": "请求体里的 model 名" },
+        "api_key_env": {
+          "type": ["string", "null"],
+          "description": "API key 所在的环境变量名。key 本身绝不落盘（run JSON / Git / prompt）"
+        },
+        "api_supports_seed": {
+          "type": "boolean",
+          "description": "服务方是否接受 seed 参数（不承诺跨时间严格确定性，见 Issue #1「可复现性」）"
+        },
+        "cost_per_1k_input_usd": { "type": "number", "minimum": 0 },
+        "cost_per_1k_output_usd": { "type": "number", "minimum": 0 }
       }
     }
   }

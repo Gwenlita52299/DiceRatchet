@@ -424,7 +424,8 @@ def run_baseline(kind: str, *, split: Split, basket: BasketId | Sequence[int],
             f"{kind} 基线全部 {result.metrics.degraded_n} 局降级为启发式，无可采信样本",
             hint="检查模型权重/后端是否可用（inference probe --model <id>）；"
                  "离线冒烟可用 --model mock，或改用 --kind heuristic")
-    resolved_model = ((model_hash or getattr(client, "model_id", "") or "")
+    # Issue #1：client 可能是角色提供者（没有 ``model_id`` 属性）→ 按 policy 角色取真实 id。
+    resolved_model = ((model_hash or _client_model_id(client) or "")
                       if client is not None else NO_MODEL)
     resolved_backend = _resolve_backend(client, model_backend)
     archived: Path | None = None
@@ -449,6 +450,21 @@ def run_baseline(kind: str, *, split: Split, basket: BasketId | Sequence[int],
                    model_backend=resolved_backend,
                    seed_timeout_s=timeout_s,
                    archive_path=str(archived) if archived is not None else "")
+
+
+def _client_model_id(client: Any) -> str:
+    """客户端实际使用的 model_id（Issue #1）。
+
+    ``client`` 可能是角色提供者（有 ``model_id_for(role)``，没有 ``model_id`` 属性）；
+    这时取 **policy** 角色的绑定 —— 基线 agent 决策用的就是它。拿不到就返回空串。
+    """
+    getter = getattr(client, "model_id_for", None)
+    if callable(getter):
+        try:
+            return str(getter("policy") or "")
+        except Exception: # noqa: BLE001 - 归档不该因角色解析失败而中断
+            return ""
+    return str(getattr(client, "model_id", "") or "")
 
 
 def _resolve_backend(client: Any, model_backend: str) -> str:

@@ -155,7 +155,9 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     proto = _protocol(cfg, args.config_dir)
     client = (build_inference_client(cfg, run_id=run_id, runs_root=paths.root.parent)
               if kind == "fixed_prompt" else None)
-    model_id = str(cfg.inference.model_id)
+    # Issue #1：固定 prompt 基线用的就是 **policy** 角色的模型（不再是"全系统唯一的
+    # inference.model_id"）。归档必须记真实绑定的 id，否则换臂后 model_hash 会对不上。
+    model_id = policy_model_id(cfg)
     arm = run_baseline(kind, split=split, basket=basket, run_id=run_id,  # type: ignore[arg-type]
                        run_dir=paths.root, config=cfg, protocol=proto, client=client,
                        model_hash=model_id,
@@ -186,6 +188,16 @@ def _registry_backend(cfg: Any, model_id: str) -> str:
         return str(load_registry(str(cfg.inference.registry_path)).spec(model_id).backend)
     except Exception: # 注册表不可用不该阻断测量；如实记 unknown
         return "unknown"
+
+
+def policy_model_id(cfg: Any) -> str:
+    """policy 角色最终生效的 model_id（Issue #1：基线归档与埋点的权威来源）。"""
+    try:
+        from dice_ratchet.inference.roles import role_model_ids
+
+        return str(role_model_ids(cfg).get("policy") or cfg.inference.model_id)
+    except Exception: # 配置形状异常时退回旧口径，不阻断测量
+        return str(getattr(cfg.inference, "model_id", "") or "")
 
 
 #: ``eval report`` / ``eval diversity`` 必须排除的臂（F5：基线局不得混进代际分母）

@@ -126,20 +126,29 @@ def get_client_provider() -> Callable[..., Any] | None:
 
 
 def _resolve_client(cfg: Any, *, run_id: str, client: Any, runs_root: Any = None) -> Any:
-    if client is not None:
-        return client
-    if _CLIENT_PROVIDER is None:
-        return None
-    kwargs: dict[str, Any] = {"run_id": run_id}
-    if runs_root is not None:
-        kwargs["runs_root"] = Path(runs_root)
-    try:
-        return _CLIENT_PROVIDER(cfg, **kwargs)
-    except TypeError:
+    """取 proposer 角色的 MOD-03 客户端（Issue #1）。
+
+    组合根注入的通常是 ``RoleModelProvider``（有 ``client_for``）：这里按 **proposer**
+    角色解析，于是「决策/反思用本地 8B、提案用 DeepSeek」只是配置差异。注入的是普通
+    客户端（测试假件）时原样返回 —— 鸭子类型，不 import MOD-03 的提供者类型。
+    """
+    resolved = client
+    if resolved is None:
+        if _CLIENT_PROVIDER is None:
+            return None
+        kwargs: dict[str, Any] = {"run_id": run_id}
+        if runs_root is not None:
+            kwargs["runs_root"] = Path(runs_root)
         try:
-            return _CLIENT_PROVIDER(cfg)
+            resolved = _CLIENT_PROVIDER(cfg, **kwargs)
         except TypeError:
-            return _CLIENT_PROVIDER()
+            try:
+                resolved = _CLIENT_PROVIDER(cfg)
+            except TypeError:
+                resolved = _CLIENT_PROVIDER()
+    # 鸭子类型解析（与 loop 的 ``client_for_role`` 同一约定）：MOD-07 不 import MOD-03。
+    getter = getattr(resolved, "client_for", None)
+    return getter("proposer") if callable(getter) else resolved
 
 
 # =====================================================================
@@ -1153,14 +1162,26 @@ def _attempt_seed(rng_seed: int, attempt: int) -> int:
 
 def _call_generate_json(client: Any, *, system: str, user: str,
                         schema: Mapping[str, Any], seed: int) -> Any:
-    """调用 MOD-03 ``generate_json``（同步客户端 / 异步后端两种形态都接受）。"""
+    """按 MOD-03 的**统一同步契约**调用 ``generate_json``（Issue #1 §2）。
+
+    契约形参是 ``generate_json(messages, schema, *, mode, sampling, seed)``
+    （``inference/client.py::InferenceClient``）。此前这里用的是
+    ``generate_json(messages, schema, seed=…, temperature=0.0)`` —— 组合根注入的真实
+    ``BackendInferenceClient`` 不接受该形状（缺 ``mode``/``sampling``、多 ``temperature``），
+    于是 MOD-07 的提案路径在**真实客户端**下必然 ``TypeError`` → ``E_EVOLVE_PROPOSE_FAILED``；
+    单测用的宽松 ``**kwargs`` 假件掩盖了它。现在按契约调用（假件因接受 ``**kwargs`` 同样可用），
+    异步实现仍由 ``inspect.isawaitable`` 兜住。
+
+    ``sampling`` 只给 ``temperature=0.0``：提案是**结构化判定输入**，必须走评估口径
+    （B-14），token 上限沿用配置里的 ``inference.max_tokens``。
+    """
     import asyncio
     import inspect
 
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": user}]
-    result = client.generate_json(messages, schema, seed=int(seed),
-                                  temperature=0.0)
+    result = client.generate_json(messages, schema, mode="eval",
+                                  sampling={"temperature": 0.0}, seed=int(seed))
     if inspect.isawaitable(result):
         result = asyncio.run(result)
     return _extract_json(result)

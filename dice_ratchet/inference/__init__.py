@@ -1,11 +1,16 @@
-"""MOD-03 inference：本地推理后端抽象 + 结构化输出（PRD 见 docs/prd/MOD-03-inference-PRD.md）。
+"""MOD-03 inference：本地/API 推理后端抽象 + 结构化输出 + 模型角色装配
+（PRD 见 docs/prd/MOD-03-inference-PRD.md；角色解耦见 GitHub Issue #1）。
 
-对外唯一入口面（MOD-04/06/08 只用这里导出的名字）::
+对外唯一入口面（MOD-04/06/07/08 只用这里导出的名字）::
 
     from dice_ratchet.inference import BackendManager, Message, DECISION_SCHEMA
+    from dice_ratchet.inference import RoleModelProvider, ROLE_NAMES  # Issue #1
 
 - ``BackendManager`` / ``Backend``：加载生命周期、并发限流、内存预算、三级 JSON 重试；
 - ``Message`` / ``Usage`` / ``GenerationResult`` 等数据模型；
+- ``RoleModelProvider``：按 policy/reflection/proposer 三角色返回统一 ``InferenceClient``；
+- ``InferenceClient`` / ``BackendInferenceClient``：统一同步契约与实现（MOD-04/06/07 共用）；
+- ``DeepSeekAPIAdapter``：``backend: deepseek`` 的 API 适配器（认证/HTTP/限流/审计）；
 - ``DECISION_SCHEMA`` / ``compile_grammar`` / ``repair_messages``（``schema.py`` 独占拥有）；
 - ``InferenceError``（``E_LLM_*`` 错误码，Spec §8.3）。
 """
@@ -16,10 +21,16 @@ from .backend import (Backend, BackendHealth, BackendManager, GenerationResult, 
                       InfraFacade, LocalBackend, Message, MockBackend, NullInfra, Usage,
                       estimate_prompt_tokens, execute_json_call, make_result,
                       validate_sampling)
+from .client import (BackendInferenceClient, InferenceClient, client_for_role, coerce_client,
+                     role_model_id)
+from .deepseek_backend import (API_JSON_INSTRUCTION, DeepSeekAPIAdapter,
+                               make_urllib_transport)
 from .errors import InferenceError
 from .records import CallContext, InferenceCallRecord, prompt_digest
-from .registry import (BackendName, ModelRegistry, ModelSpec, estimate_required_gb,
-                       load_registry)
+from .registry import (BackendName, ModelProviderName, ModelRegistry, ModelSpec,
+                       estimate_required_gb, load_registry)
+from .roles import (PROVENANCE_FILENAME, ROLE_NAMES, ModelRole, RoleBinding,
+                    RoleModelProvider, resolve_role_bindings, role_model_ids, run_provenance)
 from .schema import (DECISION_SCHEMA_ID, compile_grammar, decision_schema,
                      load_decision_schema, repair_messages, validate)
 
@@ -28,11 +39,17 @@ __all__ = [
     "Backend", "BackendManager", "LocalBackend", "MockBackend",
     # 数据模型
     "Message", "Usage", "BackendHealth", "GenerationResult", "ModelSpec", "ModelRegistry",
-    "BackendName", "InferenceCallRecord", "CallContext",
+    "BackendName", "ModelProviderName", "InferenceCallRecord", "CallContext",
     # 基础设施与工具
     "InfraFacade", "InfraBridge", "NullInfra", "InferenceError", "estimate_required_gb",
     "estimate_prompt_tokens", "prompt_digest", "validate_sampling", "make_result",
     "execute_json_call", "load_registry",
+    # 角色装配（Issue #1）
+    "InferenceClient", "BackendInferenceClient", "coerce_client", "client_for_role",
+    "role_model_id", "ModelRole", "ROLE_NAMES", "RoleBinding", "RoleModelProvider",
+    "role_model_ids", "resolve_role_bindings", "run_provenance", "PROVENANCE_FILENAME",
+    # API 后端（Issue #1）
+    "DeepSeekAPIAdapter", "API_JSON_INSTRUCTION", "make_urllib_transport",
     # schema（独占拥有）
     "DECISION_SCHEMA", "DECISION_SCHEMA_ID", "decision_schema", "load_decision_schema",
     "compile_grammar", "repair_messages", "validate",

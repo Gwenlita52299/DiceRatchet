@@ -66,10 +66,15 @@ def wire() -> None:
     # MOD-04 → MOD-03：fixed_prompt 基线 / play --agent llm / loop run --agent llm 需要的
     # 客户端由组合根装配（各模块都不自己 import 组合根；与 register_content_hash_provider
     # 同一模式）。
-    _set_eval_client_provider(_inference_client)
-    _set_loop_client_provider(_inference_client)
+    #
+    # Issue #1：注入的是**角色提供者**（``RoleModelProvider``，有 ``client_for(role)``），
+    # 而不是单一客户端 —— policy / reflection / proposer 各自的模型绑定全部来自配置。
+    # MOD-04/06/07 只做鸭子类型解析（``coerce_client`` / ``client_for_role``），不 import
+    # 提供者类型；拿不到角色时自动退回单客户端语义（测试与旧装配不受影响）。
+    _set_eval_client_provider(_role_provider_for("policy"))
+    _set_loop_client_provider(_role_provider)
     # MOD-07 → MOD-03：proposer 的结构化生成同样经组合根装配（INV-1：evolve 不 import inference）。
-    _set_propose_client_provider(_inference_client)
+    _set_propose_client_provider(_role_provider)
     # MOD-07 → MOD-06：演化函数由组合根注入；MOD-07 未落地时返回 None，编排走 stub 路径。
     # 已有显式注册（测试 hook / 未来的 MOD-07 自注册）时不覆盖——组合根只提供默认值。
     if _evolve_provider_registered() is None:
@@ -239,29 +244,74 @@ def _play(args: argparse.Namespace) -> int:
 
 
 # =====================================================================
-# MOD-03 客户端装配（供 MOD-04 / MOD-08 复用）
+# MOD-03 客户端装配（供 MOD-04 / MOD-08 / MOD-06 / MOD-07 复用）
 # =====================================================================
 
-def _inference_client(cfg: Any, *, run_id: str, runs_root: Path) -> Any:
-    """装配 MOD-03 ``BackendManager`` 并适配为同步 ``InferenceClient``。
+#: 每个 run 只装配一个 ``RoleModelProvider``（注册表 + 共享 BackendManager + 三角色客户端）。
+#: 键含 config_hash → 换臂/换模型必然是新的装配（不会复用上一个 run 的绑定）。
+_ROLE_PROVIDERS: dict[tuple[str, str, str], Any] = {}
 
-    ``mode`` 一律用 ``eval``：基线/play 都是评估场景，B-14 要求 ``temperature=0`` 且
-    seed 显式（``validate_sampling`` 会在越界时抛错）。权重缺失等加载问题在首次调用时
-    由 MOD-03 抛 ``E_LLM_*``，调用方据此 fail-closed。
+
+def _role_provider(cfg: Any, *, run_id: str = "", runs_root: Path | str = "runs") -> Any:
+    """装配 MOD-03 ``RoleModelProvider``（Issue #1 §2 的统一模型提供者）。
+
+    一次性做三件事，且都 fail-closed（缺模型 / 缺 provider 配置绝不静默降级）：
+
+    1. 解析 policy / reflection / proposer 三个角色的 model_id（配置层优先级见
+       ``inference/roles.py``），注册表里查不到该 id 即抛 ``E_LLM_UNAVAILABLE``；
+    2. 共用**一个** ``BackendManager``（加载生命周期 / 并发 / 内存预算不被角色拆分绕过）；
+    3. 落 ``runs/<run_id>/models_provenance.json``：三角色各自的
+       model_id / provider / backend / model_revision / online / api_key_present +
+       臂 + harness 模式 + config_hash（验收标准 A 第 3 条）。
     """
-    from .agent.policy import BackendInferenceClient
-    from .inference.backend import BackendManager, InfraBridge
+    from .inference.roles import RoleModelProvider
 
-    inference = cfg.inference
-    bridge = InfraBridge(run_id=run_id, runs_root=Path(runs_root),
-                         debug_dump_raw=bool(getattr(inference, "debug_dump_raw", False)))
-    manager = BackendManager(
-        str(inference.registry_path), mode="eval",
-        ram_budget_gb=float(inference.ram_budget_gb), infra=bridge, config=inference)
-    return BackendInferenceClient(
-        manager, model_id=str(inference.model_id),
-        total_timeout_ms=int(inference.total_timeout_ms),
-        max_attempts=int(inference.max_attempts))
+    key = (str(run_id), str(runs_root), _role_cache_key(cfg))
+    provider = _ROLE_PROVIDERS.get(key)
+    if provider is None:
+        inference = cfg.inference
+        from .inference.backend import InfraBridge
+
+        bridge = InfraBridge(run_id=str(run_id) or None, runs_root=Path(runs_root),
+                             debug_dump_raw=bool(getattr(inference, "debug_dump_raw", False)))
+        provider = RoleModelProvider(
+            cfg, run_id=str(run_id), runs_root=Path(runs_root), infra=bridge,
+            # mode 一律 "eval"：与本次重构前的 ``_inference_client`` 完全一致 —— 基线/play/
+            # 闭环都是测量场景，B-14 要求 temperature=0 且 seed 显式（越界即抛，不静默裁剪）。
+            mode="eval")
+        if str(run_id):
+            provider.write_provenance()
+        _ROLE_PROVIDERS[key] = provider
+    return provider
+
+
+def _role_cache_key(cfg: Any) -> str:
+    """装配缓存键：config_hash + 臂（非 AppConfig 形状时退化为 repr 摘要）。"""
+    try:
+        from .infra.config import config_hash
+
+        return config_hash(cfg)
+    except Exception: # noqa: BLE001 - 测试用的轻量 cfg 对象
+        return repr(getattr(cfg, "experiment", "")) + repr(getattr(cfg, "models", ""))
+
+
+def _role_provider_for(role: str) -> Any:
+    """把角色提供者收窄成「单角色客户端工厂」（MOD-08 的 ``build_inference_client`` 形状）。"""
+
+    def factory(cfg: Any, *, run_id: str = "", runs_root: Path | str = "runs") -> Any:
+        return _role_provider(cfg, run_id=run_id, runs_root=runs_root).client_for(role)
+
+    factory.role = role # type: ignore[attr-defined] - 供调用方/测试辨认
+    return factory
+
+
+def _inference_client(cfg: Any, *, run_id: str, runs_root: Path, role: str = "policy") -> Any:
+    """按角色装配同步客户端（兼容入口；``role`` 缺省 ``policy``）。
+
+    保留这个名字是因为 MOD-04 的 ``play`` 与若干测试直接调用它；语义已升级为
+    「角色 → 客户端」，不再假定全系统只有一个模型。
+    """
+    return _role_provider(cfg, run_id=run_id, runs_root=runs_root).client_for(role)
 
 
 # =====================================================================
