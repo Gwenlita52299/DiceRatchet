@@ -1,6 +1,6 @@
-# GameRSI 文档中心
+# DiceRatchet 文档中心
 
-> 本目录承载 GameRSI 项目的**规格层文档**：从项目计划 → 模块拆分 Spec → 各模块技术 PRD。
+> 本目录承载 DiceRatchet 项目的**规格层文档**：从项目计划 → 模块拆分 Spec → 各模块技术 PRD。
 
 ## 阅读顺序
 

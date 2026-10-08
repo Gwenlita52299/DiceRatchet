@@ -1,4 +1,4 @@
-# GameRSI：本地小模型在自建骰子 roguelike 里递归自我改进
+# DiceRatchet：本地小模型在自建骰子 roguelike 里递归自我改进
 
 > 让一个跑在 Mac 上的 8B 级本地模型，在自己搭建的防作弊沙箱里反复玩一款骰子 roguelike。每一局它都经历"玩 → 验证 → 反思 → 改进自己"（策略记忆、prompt、harness 代码），并用**不可作弊的 held-out 测量**回答一个问题：它真的在变强吗？
 >

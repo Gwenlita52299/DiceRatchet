@@ -3,7 +3,7 @@
 > 版本：v1.5（2026-10-06 对齐超时默认值的三层漂移，见 §17）· 状态：草案（待复核）· 所属里程碑：M1
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（**唯一事实来源**；冲突以 Spec 为准）
 > 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md) §4 技术栈（Mac M5 24GB / MLX 或 llama.cpp / Qwen3-8B → 27B Q4）、§8 风险（LLM 输出非 JSON）
-> 作者：GameRSI 技术文档（MOD-03 负责模块）· 依赖：MOD-09 infra（配置、日志、run_id、CLI）
+> 作者：DiceRatchet 技术文档（MOD-03 负责模块）· 依赖：MOD-09 infra（配置、日志、run_id、CLI）
 
 ## 1. 背景与目标
 

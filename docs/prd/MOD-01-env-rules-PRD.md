@@ -6,7 +6,7 @@
 
 ## 1. 背景与目标
 
-GameRSI 的智能体侧（MOD-02～08）全部用 Python，而游戏本体已经用 JS 实现并验收（`src/game`，零依赖）。训练若经 HTTP 调用 JS 会引入进程边界和延迟，也会让确定性审计依赖网络栈；因此需要一份**逐位等价**的 Python 内核，供 `SandboxEnv` 在进程内调用。
+DiceRatchet 的智能体侧（MOD-02～08）全部用 Python，而游戏本体已经用 JS 实现并验收（`src/game`，零依赖）。训练若经 HTTP 调用 JS 会引入进程边界和延迟，也会让确定性审计依赖网络栈；因此需要一份**逐位等价**的 Python 内核，供 `SandboxEnv` 在进程内调用。
 
 **唯一目标**：给定同一份配表、同一个 config 和同一个动作序列，Python 内核每一步的 `obsDigest`、`rngDigest`、`stateDigest` 都与 JS 内核**逐字节相等**。
 

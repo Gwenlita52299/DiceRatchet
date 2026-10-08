@@ -1,4 +1,4 @@
-# GameRSI 项目启动计划：小模型自进化打《Dicey Dungeons》
+# DiceRatchet 项目启动计划：小模型自进化打《Dicey Dungeons》
 
 > 状态：计划定稿（2026-09-30）· 定位：学习 + 作品集
 > 上游调研：见 [RSI调研纪要.md](RSI调研纪要.md)

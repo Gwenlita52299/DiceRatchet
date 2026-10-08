@@ -1,7 +1,7 @@
 # MOD-04 policy 技术 PRD
 > 版本：v0.6（2026-10-06 按 M1 验收复核裁定，明确 §1 成功度量的判据范围，见 §17）· 状态：待评审 · 所属里程碑：M1（L1 智能体层）
 > 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源；与本文件冲突时以 Spec 为准）
-> 作者：MOD-04 owner（GameRSI 技术文档）· 日期：2026-09-30
+> 作者：MOD-04 owner（DiceRatchet 技术文档）· 日期：2026-09-30
 > v0.3 起本 PRD 的临时决策均已由 Spec v1.4 裁决回填，原「决策（本 PRD 提出，待回填 Spec）」标注已改为「已裁决（Spec B-xx）」。
 
 ## 1. 背景与目标

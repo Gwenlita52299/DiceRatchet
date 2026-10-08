@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MOD-03 · inference 模型推理层 — GameRSI 模块讲解</title>
+<title>MOD-03 · inference 模型推理层 — DiceRatchet 模块讲解</title>
 <style>
 :root{--accent:#7c3aed;--accent-2:#8b5cf6;--accent-soft:rgba(124,58,237,.09);--bg:#f5f6fa;--card:#fff;--ink:#1c2333;--muted:#64708a;--line:#e5e8f0;--code-bg:#101725;--code-ink:#e8ecf5;--ok:#0f9d58;--bad:#dc2626}
 *{box-sizing:border-box}html{scroll-behavior:smooth}
@@ -56,7 +56,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
 </head>
 <body>
 <aside>
-  <h1>GameRSI</h1><div class="sub">模块讲解 · MOD 系列</div>
+  <h1>DiceRatchet</h1><div class="sub">模块讲解 · MOD 系列</div>
   <a href="MOD-01-env-rules.html">MOD-01 env-rules</a>
   <a href="MOD-02-env-sandbox.html">MOD-02 env-sandbox</a>
   <a class="cur" href="MOD-03-inference.html">MOD-03 inference</a>
@@ -113,7 +113,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
 
 <section id="sec-1">
   <h3><span class="n">1</span>背景与目标</h3>
-  <p>GameRSI 的决策全部来自本地大模型，而本地推理本身又脆又慢又难复现。MOD-03 就是为了把这件事管起来，它要解决五个具体问题：</p>
+  <p>DiceRatchet 的决策全部来自本地大模型，而本地推理本身又脆又慢又难复现。MOD-03 就是为了把这件事管起来，它要解决五个具体问题：</p>
   <ol>
     <li><b>JSON 语法错误率不可接受</b>——8B 模型自由生成 JSON 的失败率是计划 §8 的头号风险，必须用约束解码 + 校验 + 修复组合拳压下去。</li>
     <li><b>两条推理路线的差异上层不得感知</b>——MLX 与 llama.cpp 的能力不同（比如 GBNF 只有 llama.cpp 有），但 MOD-04 不该关心这些。</li>
@@ -606,7 +606,7 @@ class InferenceError(RuntimeError):
   </table>
 </section>
 
-<footer>来源：docs/prd/MOD-03-inference-PRD.md · GameRSI 模块讲解系列 · 2026-10-04 · 同步 2026-10-06</footer>
+<footer>来源：docs/prd/MOD-03-inference-PRD.md · DiceRatchet 模块讲解系列 · 2026-10-04 · 同步 2026-10-06</footer>
 
 </div>
 </main>

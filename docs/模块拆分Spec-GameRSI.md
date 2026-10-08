@@ -1,4 +1,4 @@
-# GameRSI 模块拆分 Spec
+# DiceRatchet 模块拆分 Spec
 
 > 版本：v1.8（2026-10-07，§3.1 实测 → C5 标定回填 §8.6 与 §11.1e，见 §12/changelog）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
 > 上游：[项目计划-GameRSI.md](../项目计划-GameRSI.md) · [RSI调研纪要.md](../RSI调研纪要.md)

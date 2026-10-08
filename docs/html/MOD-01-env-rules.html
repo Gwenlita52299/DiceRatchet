@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MOD-01 env-rules · GameRSI 模块讲解</title>
+<title>MOD-01 env-rules · DiceRatchet 模块讲解</title>
 <style>
 :root{--accent:#4f46e5;--accent-2:#6366f1;--accent-soft:rgba(79,70,229,.09);--bg:#f5f6fa;--card:#fff;--ink:#1c2333;--muted:#64708a;--line:#e5e8f0;--code-bg:#101725;--code-ink:#e8ecf5;--ok:#0f9d58;--bad:#dc2626}
 *{box-sizing:border-box}html{scroll-behavior:smooth}
@@ -56,7 +56,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
 </head>
 <body>
 <aside>
-  <h1>GameRSI</h1><div class="sub">模块讲解 · MOD 系列</div>
+  <h1>DiceRatchet</h1><div class="sub">模块讲解 · MOD 系列</div>
   <a class="cur" href="MOD-01-env-rules.html">MOD-01 env-rules</a>
   <a href="MOD-02-env-sandbox.html">MOD-02 env-sandbox</a>
   <a href="MOD-03-inference.html">MOD-03 inference</a>
@@ -112,7 +112,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
 
 <section id="sec-1">
   <h3><span class="n">1</span>背景与目标</h3>
-  <p>GameRSI 的智能体侧（MOD-02～08）全部用 Python，而游戏本体已经用 JS 实现并验收（<code>src/game</code>，零依赖）。训练若经 HTTP 调用 JS，会引入进程边界和延迟，也会让确定性审计依赖网络栈——因此需要一份供 <code>SandboxEnv</code> 在进程内调用的 Python 内核。</p>
+  <p>DiceRatchet 的智能体侧（MOD-02～08）全部用 Python，而游戏本体已经用 JS 实现并验收（<code>src/game</code>，零依赖）。训练若经 HTTP 调用 JS，会引入进程边界和延迟，也会让确定性审计依赖网络栈——因此需要一份供 <code>SandboxEnv</code> 在进程内调用的 Python 内核。</p>
   <blockquote><b>唯一目标</b>：给定同一份配表、同一个 config 和同一个动作序列，Python 内核每一步的 <code>obsDigest</code>、<code>rngDigest</code>、<code>stateDigest</code> 都与 JS 内核<b>逐字节相等</b>。</blockquote>
   <p>这句话是整个模块的北极星：所有 FR、NFR、测试、验收标准，全都在为「逐字节相等」服务。</p>
   <h4>成功度量</h4>
@@ -395,7 +395,7 @@ pytest tests/golden/test_random_walk.py</code></pre>
 </section>
 
 </div>
-<footer>来源：docs/prd/MOD-01-env-rules-PRD.md · GameRSI 模块讲解系列 · 2026-10-04 · 同步 2026-10-06</footer>
+<footer>来源：docs/prd/MOD-01-env-rules-PRD.md · DiceRatchet 模块讲解系列 · 2026-10-04 · 同步 2026-10-06</footer>
 </main>
 </body>
 </html>

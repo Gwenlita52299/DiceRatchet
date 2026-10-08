@@ -1,4 +1,4 @@
-# GameRSI 项目排期
+# DiceRatchet 项目排期
 
 > 版本：v1.6（2026-10-07，§3.1 实测 → C5 标定回写 §4/§8，见 §8）· 状态：基线排期 · 依据：[模块拆分 Spec v1.8](模块拆分Spec-GameRSI.md) §6/§7/§8.6 与各 MOD PRD §15 的工作量估算
 > 图表由 [`docs/tools/gen_diagrams.py`](tools/gen_diagrams.py) 生成（零依赖）。修改排期时只改脚本中的 `TASKS`、`START`、`HOLIDAYS`，重跑后把明细表粘回 §4。

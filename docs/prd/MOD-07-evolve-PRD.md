@@ -1,6 +1,6 @@
 # MOD-07 evolve 技术 PRD
 
-> **版本**：v0.4（2026-10-07 按 Spec v1.8 回填 C5 实测标定与 M3 相对门设计，见 §8.2.1/§17）· **状态**：待评审 · **所属里程碑**：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）· **作者**：GameRSI 技术文档 · 日期：2026-10-07
+> **版本**：v0.4（2026-10-07 按 Spec v1.8 回填 C5 实测标定与 M3 相对门设计，见 §8.2.1/§17）· **状态**：待评审 · **所属里程碑**：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）· **作者**：DiceRatchet 技术文档 · 日期：2026-10-07
 > **上游 Spec**：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（v1.8，**唯一事实来源**；冲突以 Spec 为准）· **关联不变量**：INV-3/INV-4/INV-5/INV-7
 > **代码位置**：`gamer_rsi/evolve/{proposer,judge,versioning,gate}.py`、`harness/`、`runs/<run_id>/generations/`
 

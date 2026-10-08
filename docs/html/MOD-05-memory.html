@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MOD-05 · memory 策略记忆与反思库 — GameRSI 模块讲解</title>
+<title>MOD-05 · memory 策略记忆与反思库 — DiceRatchet 模块讲解</title>
 <style>
 :root{--accent:#d97706;--accent-2:#f59e0b;--accent-soft:rgba(217,119,6,.10);--bg:#f5f6fa;--card:#fff;--ink:#1c2333;--muted:#64708a;--line:#e5e8f0;--code-bg:#101725;--code-ink:#e8ecf5;--ok:#0f9d58;--bad:#dc2626}
 *{box-sizing:border-box}html{scroll-behavior:smooth}
@@ -56,7 +56,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
 </head>
 <body>
 <aside>
-  <h1>GameRSI</h1><div class="sub">模块讲解 · MOD 系列</div>
+  <h1>DiceRatchet</h1><div class="sub">模块讲解 · MOD 系列</div>
   <a href="MOD-01-env-rules.html">MOD-01 env-rules</a>
   <a href="MOD-02-env-sandbox.html">MOD-02 env-sandbox</a>
   <a href="MOD-03-inference.html">MOD-03 inference</a>
@@ -112,7 +112,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
 
 <section id="sec-1">
   <h3><span class="n">1</span>背景与目标</h3>
-  <p>MOD-05 处于 GameRSI 的 <b>L1 层</b>，扮演「策略记忆与反思库」的角色。训练时，MOD-06 在每局结束后产出一段反思文本；如果只是把文本原样存下来，既没法按当前局面检索，也没法度量哪条记忆真的有用，更没法在演化走偏时回滚。MOD-05 的工作就是把这段文本转成结构化的 <code>MemoryEntry</code>——带上情境键、标签、正反极性、行动提示——再让它走过一条完整生命周期：</p>
+  <p>MOD-05 处于 DiceRatchet 的 <b>L1 层</b>，扮演「策略记忆与反思库」的角色。训练时，MOD-06 在每局结束后产出一段反思文本；如果只是把文本原样存下来，既没法按当前局面检索，也没法度量哪条记忆真的有用，更没法在演化走偏时回滚。MOD-05 的工作就是把这段文本转成结构化的 <code>MemoryEntry</code>——带上情境键、标签、正反极性、行动提示——再让它走过一条完整生命周期：</p>
   <div class="flow">
     <span class="step">写入</span><span class="arrow">→</span>
     <span class="step">去重 / 冲突裁决</span><span class="arrow">→</span>
@@ -534,7 +534,7 @@ rollback(target, dry_run): 文件不存在 → E_IO_SNAPSHOT_MISSING（退出码
   <blockquote>当前版本 v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见本节）。上游 Spec <code>../模块拆分Spec-GameRSI.md</code> 是唯一事实来源，冲突以 Spec 为准。</blockquote>
 </section>
 
-<footer>来源：docs/prd/MOD-05-memory-PRD.md · GameRSI 模块讲解系列 · 2026-10-04</footer>
+<footer>来源：docs/prd/MOD-05-memory-PRD.md · DiceRatchet 模块讲解系列 · 2026-10-04</footer>
 
 </div>
 </main>
