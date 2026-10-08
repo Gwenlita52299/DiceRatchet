@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gamersi.local/schemas/run_state.schema.json",
+  "$id": "https://diceratchet.local/schemas/run_state.schema.json",
   "title": "run_state",
   "description": "runs/<run_id>/state.json —— run 级状态机（MOD-06 PRD §6/§7.1，FR-06-8）。语义归 MOD-06，原子写原语归 MOD-09（infra.run.write_state）。state.json 必须能独立重建「下一步做什么」，不依赖内存态（NFR-06-2）。",
   "type": "object",

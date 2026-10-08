@@ -8,7 +8,7 @@
 | MAL-1 网络 | ``urllib.request.urlopen(...)`` | ``E_EVOLVE_SCAN_FAILED`` |
 | MAL-2 文件写 | ``open("harness/seed_backup.json","w")`` | ``E_EVOLVE_SCAN_FAILED`` |
 | MAL-3 子进程 | ``subprocess.run(["git","push"])`` | ``E_EVOLVE_SCAN_FAILED`` |
-| MAL-4 env 内窥 | ``from gamer_rsi.env.rng import RNG`` | ``E_EVOLVE_PATCH_INVALID`` / SCAN |
+| MAL-4 env 内窥 | ``from dice_ratchet.env.rng import RNG`` | ``E_EVOLVE_PATCH_INVALID`` / SCAN |
 | MAL-5 预读作弊 | diff 写入 heldout seed 列表 / ``if seed == 2013:`` | ``E_EVOLVE_PATCH_INVALID`` |
 | MAL-6 历史重写 | ``prompt_patch`` 改 ``version.json`` / ``versions/`` | ``E_EVOLVE_PATCH_INVALID`` |
 | MAL-7 签名规避 | ``rank_actions = lambda *a: a[1]`` | ``E_EVOLVE_PATCH_INVALID`` |
@@ -22,10 +22,10 @@ from __future__ import annotations
 
 import pytest
 
-from gamer_rsi.evolve import generation as GEN
-from gamer_rsi.evolve import proposer as P
-from gamer_rsi.evolve.paths import GenPaths
-from gamer_rsi.infra.errors import E
+from dice_ratchet.evolve import generation as GEN
+from dice_ratchet.evolve import proposer as P
+from dice_ratchet.evolve.paths import GenPaths
+from dice_ratchet.infra.errors import E
 
 from evolve_support import (FakeArm, FakeRunContext, FakeState, StubLLM, make_app_config,
                             make_candidate, make_config, proposal_payload, tool_diff,
@@ -135,7 +135,7 @@ def test_mal_env_introspection_is_blocked(tmp_path):
     ev = ExplodingEvaluator()
     payload = proposal_payload(kind="tool_patch",
                                diff=tool_diff(added=[
-                                   "from gamer_rsi.env.rng import RNG",
+                                   "from dice_ratchet.env.rng import RNG",
                                    "# 直接拿环境 RNG"]),
                                touched=[TOOL])
     outcome = GEN.run_one_generation(
@@ -230,7 +230,7 @@ def test_mal_signature_change_is_rejected():
 
 def test_mal_candidate_flood_is_truncated(tmp_path):
     """40 个候选 → 按优先级截断（``n_candidates`` 上限 3），扫描调用次数 = 截断后的数量。"""
-    from gamer_rsi.evolve.schemas import Candidate
+    from dice_ratchet.evolve.schemas import Candidate
 
     candidates = [
         Candidate.create(kind="prompt_patch",
@@ -262,7 +262,7 @@ def test_mal_candidate_flood_does_not_exceed_config_cap(tmp_path):
             rationale=f"依据 traj:train#{i}",
             touched=["harness/prompts/decision.md"]))
     result = P.propose(
-        __import__("gamer_rsi.evolve.schemas", fromlist=["EvidenceBundle"]).EvidenceBundle(
+        __import__("dice_ratchet.evolve.schemas", fromlist=["EvidenceBundle"]).EvidenceBundle(
             bundle_id="ev-x"),
         cfg=evolve, rng_seed=1, client=StubLLM([{"candidates": payloads}]))
     assert len(result.candidates) <= 3

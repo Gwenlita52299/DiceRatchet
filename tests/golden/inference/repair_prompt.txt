@@ -5,7 +5,7 @@
 'teleport' is not one of ['play_face', 'discard_die', 'purify', 'use_ability', 'end_turn', 'map_choose', 'shop_buy', 'shop_refresh', 'shop_remove', 'shop_leave', 'event_choose', 'treasure_pick', 'forge_pick', 'shrine_choose', 'rest_choose', 'relic_swap'] (validator=enum) @ $.plan[0].kind
 --- 目标 Schema ---
 {
-  "$id": "https://gamersi.local/schemas/decision.schema.json",
+  "$id": "https://diceratchet.local/schemas/decision.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {

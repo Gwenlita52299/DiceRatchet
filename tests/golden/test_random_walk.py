@@ -5,7 +5,7 @@
 ``stateDigest`` 与 ``illegal``。golden（①）覆盖固定脚本，本测试覆盖随机路径。
 
 需要 ``node``；无 node 时跳过。默认 200 局（PRD 度量②），可用
-``GAMERSI_PARITY_WALKS`` 覆盖；``@pytest.mark.slow``。
+``DICERATCHET_PARITY_WALKS`` 覆盖；``@pytest.mark.slow``。
 """
 
 from __future__ import annotations
@@ -17,11 +17,11 @@ import subprocess
 
 import pytest
 
-from gamer_rsi.env import GameEngine, digest, load_tables
+from dice_ratchet.env import GameEngine, digest, load_tables
 
-_REPO_ROOT = os.environ.get("GAMERSI_REPO_ROOT") or str(__import__("pathlib").Path(__file__).resolve().parents[2])
+_REPO_ROOT = os.environ.get("DICERATCHET_REPO_ROOT") or str(__import__("pathlib").Path(__file__).resolve().parents[2])
 GEN = os.path.join(_REPO_ROOT, "src/game/scripts/golden-gen.js")
-WALKS = int(os.environ.get("GAMERSI_PARITY_WALKS", "200"))
+WALKS = int(os.environ.get("DICERATCHET_PARITY_WALKS", "200"))
 
 
 def _node_available() -> bool:

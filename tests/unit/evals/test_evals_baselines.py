@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.agent.heuristic import heuristic_policy
-from gamer_rsi.evals.baselines import (HeuristicAgent, RandomAgent, archive_baseline,
+from dice_ratchet.agent.heuristic import heuristic_policy
+from dice_ratchet.evals.baselines import (HeuristicAgent, RandomAgent, archive_baseline,
                                        baseline_arm, build_agent,
                                        fixed_prompt_policy_config)
-from gamer_rsi.evals.metrics import aggregate
-from gamer_rsi.infra.errors import E, InfraError
+from dice_ratchet.evals.metrics import aggregate
+from dice_ratchet.infra.errors import E, InfraError
 
 from evals_support import make_result
 
@@ -65,7 +65,7 @@ def test_fixed_prompt_agent_is_the_mod04_policy_agent():
     修复前 MOD-08 另有一份逐 env 步的 ``FixedPromptAgent``：一次推理只推进一个 env 步，
     实测比决策点口径多花 **3.1×** 调用（M1 验收报告 F22）。
     """
-    from gamer_rsi.agent.policy import PolicyAgent
+    from dice_ratchet.agent.policy import PolicyAgent
 
     agent = build_agent("fixed_prompt", seed=1, client=_StubClient(), harness_version=9)
     assert isinstance(agent, PolicyAgent)
@@ -79,7 +79,7 @@ def test_fixed_prompt_agent_is_the_mod04_policy_agent():
 
 def test_fixed_prompt_policy_config_keeps_the_rest_of_the_config():
     class _Inner:
-        from gamer_rsi.infra.config import PolicyConfig
+        from dice_ratchet.infra.config import PolicyConfig
 
         policy = PolicyConfig(retry_max=2, max_plan_len=8,
                               fixed_prompt_path="custom/frozen.md")
@@ -136,7 +136,7 @@ def test_archive_reproduce_command_is_actually_reproducible(tmp_path):
     """G6：归档里的 ``reproduce`` 必须能复制执行。
 
     显式 seed 集合的 ``basket`` 是占位值 ``"explicit"``，**不是**合法篮子 id；早先把它拼进
-    ``--basket`` 会得到 `python -m gamer_rsi baseline ... --basket explicit`（跑不通，
+    ``--basket`` 会得到 `python -m dice_ratchet baseline ... --basket explicit`（跑不通，
     M1 的 n=10 归档就是这样）。现在显式集合改写成 ``--seeds a,b,c``。
     """
     metrics = aggregate([make_result(2000, outcome="win")], basket="explicit")
@@ -144,7 +144,7 @@ def test_archive_reproduce_command_is_actually_reproducible(tmp_path):
                             model_hash="none", git_commit="abc", run_dir=tmp_path,
                             seeds=[2000, 2001], ts="20260101T000000Z")
     command = json.loads(path.read_text(encoding="utf-8"))["reproduce"]
-    assert command == ("python -m gamer_rsi baseline --kind heuristic --split heldout "
+    assert command == ("python -m dice_ratchet baseline --kind heuristic --split heldout "
                        "--seeds 2000,2001 --run-id r-rep")
     assert "--basket explicit" not in command
 

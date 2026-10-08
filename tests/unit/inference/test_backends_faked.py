@@ -19,15 +19,15 @@ from dataclasses import replace
 
 import pytest
 
-from gamer_rsi.infra.config import InferenceConfig
-from gamer_rsi.infra.errors import E
-from gamer_rsi.inference import llama_backend as llama_mod
-from gamer_rsi.inference.backend import Message, Usage, make_result
-from gamer_rsi.inference.errors import InferenceError
-from gamer_rsi.inference.llama_backend import (LlamaCppBackend, LlamaServerBackend, _get_ok,
+from dice_ratchet.infra.config import InferenceConfig
+from dice_ratchet.infra.errors import E
+from dice_ratchet.inference import llama_backend as llama_mod
+from dice_ratchet.inference.backend import Message, Usage, make_result
+from dice_ratchet.inference.errors import InferenceError
+from dice_ratchet.inference.llama_backend import (LlamaCppBackend, LlamaServerBackend, _get_ok,
                                                _post_json)
-from gamer_rsi.inference.mlx_backend import MLXBackend
-from gamer_rsi.inference.registry import ModelSpec
+from dice_ratchet.inference.mlx_backend import MLXBackend
+from dice_ratchet.inference.registry import ModelSpec
 
 MESSAGES = [Message(role="system", content="s"), Message(role="user", content="u")]
 

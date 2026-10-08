@@ -2,8 +2,8 @@
 
 命令面（G6 可直接复制执行）::
 
-    python -m gamer_rsi evolve approve  --run-id <run_id> --generation 1
-    python -m gamer_rsi evolve rollback --run-id <run_id> --generation 1 --reason "..."
+    python -m dice_ratchet evolve approve  --run-id <run_id> --generation 1
+    python -m dice_ratchet evolve rollback --run-id <run_id> --generation 1 --reason "..."
 
 退出码：``0`` 成功 / ``2`` 配置错误（缺 ``--run-id``、run 目录不存在、无 ``gate.json``）。
 """
@@ -16,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.evolve import cli as EV
-from gamer_rsi.evolve.paths import GenPaths
-from gamer_rsi.infra.errors import E, InfraError
+from dice_ratchet.evolve import cli as EV
+from dice_ratchet.evolve.paths import GenPaths
+from dice_ratchet.infra.errors import E, InfraError
 
 from evolve_support import make_candidate, make_config
 
@@ -33,7 +33,7 @@ def _args(run_id: str, *, generation: int = 1, reason: str = "",
 
 def _pending_gate(tmp_path, *, run_id: str, generation: int = 1) -> Path:
     """在 ``runs/<run_id>/generations/gen-{N}/gate.json`` 造一个 pending gate。"""
-    from gamer_rsi.evolve import gate as G
+    from dice_ratchet.evolve import gate as G
 
     root = tmp_path / "runs" / run_id
     cand = make_candidate()
@@ -49,7 +49,7 @@ def _pending_gate(tmp_path, *, run_id: str, generation: int = 1) -> Path:
 @pytest.fixture
 def runs_root(tmp_path, monkeypatch):
     """把 ``infra.runs_root`` 指向 tmp（默认 ``runs`` 相对 cwd）。"""
-    from gamer_rsi.infra import config as cfg_mod
+    from dice_ratchet.infra import config as cfg_mod
 
     real_load = cfg_mod.load_config
 
@@ -64,7 +64,7 @@ def _patch_runs_root(monkeypatch, tmp_path):
     """让 ``evolve.cli`` 读到的 ``cfg.infra.runs_root`` 指向 ``tmp_path/runs``。"""
     from dataclasses import replace
 
-    from gamer_rsi.infra import config as cfg_mod
+    from dice_ratchet.infra import config as cfg_mod
 
     real_load = cfg_mod.load_config
 

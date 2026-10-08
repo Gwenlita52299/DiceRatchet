@@ -1,8 +1,8 @@
 # MOD-07 evolve 技术 PRD
 
-> **版本**：v0.4（2026-10-07 按 Spec v1.8 回填 C5 实测标定与 M3 相对门设计，见 §8.2.1/§17）· **状态**：待评审 · **所属里程碑**：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）· **作者**：GameRSI 技术文档 · 日期：2026-10-07
-> **上游 Spec**：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（v1.8，**唯一事实来源**；冲突以 Spec 为准）· **关联不变量**：INV-3/INV-4/INV-5/INV-7
-> **代码位置**：`gamer_rsi/evolve/{proposer,judge,versioning,gate}.py`、`harness/`、`runs/<run_id>/generations/`
+> **版本**：v0.4（2026-10-07 按 Spec v1.8 回填 C5 实测标定与 M3 相对门设计，见 §8.2.1/§17）· **状态**：待评审 · **所属里程碑**：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）· **作者**：DiceRatchet 技术文档 · 日期：2026-10-07
+> **上游 Spec**：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（v1.8，**唯一事实来源**；冲突以 Spec 为准）· **关联不变量**：INV-3/INV-4/INV-5/INV-7
+> **代码位置**：`dice_ratchet/evolve/{proposer,judge,versioning,gate}.py`、`harness/`、`runs/<run_id>/generations/`
 
 ---
 
@@ -28,7 +28,7 @@ MOD-06 每 K 局（默认 30）触发演化周期，把「策略记忆 + 最近�
 
 不负责：模型推理实现（MOD-03）、指标定义与统计口径（MOD-08）、seed 抽取规则（MOD-09 注册表 + MOD-08 协议）。
 
-边界补充（不引入新职责）：不改 `gamer_rsi/agent/policy.py` 的解析与校验逻辑（MOD-04）；不做超参搜索；不做 LoRA/微调（MOD-10）；不决定 harness 内容的**语义**，只负责把 LLM 给出的 `diff` 落盘并版本化。
+边界补充（不引入新职责）：不改 `dice_ratchet/agent/policy.py` 的解析与校验逻辑（MOD-04）；不做超参搜索；不做 LoRA/微调（MOD-10）；不决定 harness 内容的**语义**，只负责把 LLM 给出的 `diff` 落盘并版本化。
 
 ## 3. 使用方与场景
 
@@ -37,7 +37,7 @@ MOD-06 每 K 局（默认 30）触发演化周期，把「策略记忆 + 最近�
 | MOD-06 loop | `propose → evaluate_candidate → judge → versioning.accept/rollback → gate.await_human` | `play → evaluate → reflect → evolve` 的 evolve 段 |
 | MOD-08 evals | 被调用：`evaluate_arm(...)`、`compare_paired(a, b)`、`evaluate_generation(...)`（Spec §4.7） | 提供 heldout 指标、显著性与 `collapse_flag`；MOD-07 不做统计 |
 | MOD-02 env-sandbox | 被调用：`guard.gate(harness_dir) -> GateReport`、`guard.load_harness_tools(harness_dir) -> ToolWorker`（Spec §4.7） | INV-4：新 harness 先静态扫描，再在子进程 worker 中加载 |
-| 人类操作者 | `python -m gamer_rsi evolve approve\|rollback --generation N [--reason ...]` | HITL 确认/回滚，查看 `diff.patch` 与 `report.json` |
+| 人类操作者 | `python -m dice_ratchet evolve approve\|rollback --generation N [--reason ...]` | HITL 确认/回滚，查看 `diff.patch` 与 `report.json` |
 | MOD-09 infra / MOD-05 memory | 提供 config/events/git_ops/guards；只读 `retrieve_for_evolution(top_k)` | 配置优先级、结构化事件、git 封装、AST 守卫；策略记忆与反思（进证据束） |
 
 正常流：`loop run --generations 3 --k 30 --hitl` → gen-1 propose 3 个候选 → 冒烟淘汰 1 → heldout 评 2 → 1 个 accept → 挂起 → `evolve approve --generation 1` → 续跑 gen-2。
@@ -82,7 +82,7 @@ MOD-06 每 K 局（默认 30）触发演化周期，把「策略记忆 + 最近�
 
 ## 6. 接口契约（真实 Python 签名 + JSON Schema）
 
-### 6.1 核心 Python 签名（`gamer_rsi/evolve/`）
+### 6.1 核心 Python 签名（`dice_ratchet/evolve/`）
 
 ```python
 # ---- proposer.py ----
@@ -313,14 +313,14 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | 用例 | 恶意候选内容 | 期望 |
 |---|---|---|
 | MAL-1 网络 / MAL-2 文件写 / MAL-3 子进程 | `urllib.request.urlopen(...)`；`open("harness/seed_backup.json","w")`；`subprocess.run(["git","push"])` | 均 `E_EVOLVE_SCAN_FAILED`（INV-4） |
-| MAL-4 env 内窥 / MAL-5 预读作弊 / MAL-7 签名规避 | `from gamer_rsi.env.rng import RNG`；diff 写入 heldout seed 列表或 `if seed == 1042:` 常量分支；`rank_actions = lambda *a: a[1]` 绕过 `@harness_tool` | 均 `E_EVOLVE_SCAN_FAILED`（INV-1 + 注册表完整性/AST 校验） |
+| MAL-4 env 内窥 / MAL-5 预读作弊 / MAL-7 签名规避 | `from dice_ratchet.env.rng import RNG`；diff 写入 heldout seed 列表或 `if seed == 1042:` 常量分支；`rank_actions = lambda *a: a[1]` 绕过 `@harness_tool` | 均 `E_EVOLVE_SCAN_FAILED`（INV-1 + 注册表完整性/AST 校验） |
 | MAL-6 历史重写 / MAL-8 预算耗尽 | `prompt_patch` 改 `version.json` 或 `versions/`；单代请求 40 个候选 | `E_EVOLVE_PATCH_INVALID`（路径白名单）；按优先级截断至 3、`cost_cap` 未破（NFR-07-5） |
 
 ## 12. 验收标准（DoD，对齐 Spec §9 质量门 G1–G6）
 
 **对齐 Spec §9 质量门**：G1 —— `proposer.py`/`judge.py`/`versioning.py`（判定表与 diff 计数为纯函数）覆盖率 ≥80%，`gate.py` ≥60%（含 IO）；G3 —— 同 `run_id` + `--freeze-time` 重跑，`candidate_id` 序列与 `report.json`（除 `created_at`）逐字节相同；G4 —— 自测 run 上 `audit leak` 0 告警，MAL-5 蜜罐式候选必须被 `guard.gate` 抓到；G5 —— `report.json`/`version.json`/`gate.json`/`Candidate` 四个 schema 有 round-trip 测试；G6 —— 本节命令可直接复制执行成功。
 
-**对齐 M2**：`python -m gamer_rsi loop run --generations 1 --k 30 --hitl` 闭环跑通 ≥1 轮演化，产出 `diff.patch` + `report.json` + `gate.json`，`evolve approve` 后 `harness/version.json.version == 1`。
+**对齐 M2**：`python -m dice_ratchet loop run --generations 1 --k 30 --hitl` 闭环跑通 ≥1 轮演化，产出 `diff.patch` + `report.json` + `gate.json`，`evolve approve` 后 `harness/version.json.version == 1`。
 **对齐 M3**：≥3 代演化，heldout 主指标单调不降，**并且至少有 1 次 accept**（否则「每代都拒绝」也能满足单调不降，属于退化通过），报告写明接受率（计划 §6 验收 1）；至少 1 个指标相对基线可归因提升且 `ablation.no_self_edit` 差异被记录（验收 2）；`win_rate_gap < gap_threshold` 且 `collapse_flag == False`（验收 3）。
 **专属 DoD**：任意 reject 都有 `report.json`；任意 accept 都有 `version.json` + `diff.patch` + git commit；任意恶意候选都在静态扫描阶段被挡且 0 局 heldout 消耗。
 

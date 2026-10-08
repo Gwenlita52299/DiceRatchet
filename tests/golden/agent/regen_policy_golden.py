@@ -27,7 +27,7 @@ for entry in (str(HERE), str(REPO_ROOT)):
 
 from policy_case import (HERE as OUT, golden_context, golden_filename,  # noqa: E402
                          golden_spec)
-from gamer_rsi.agent.prompts.assembler import assemble_prompt  # noqa: E402
+from dice_ratchet.agent.prompts.assembler import assemble_prompt  # noqa: E402
 
 
 def main() -> int:

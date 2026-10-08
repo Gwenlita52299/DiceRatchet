@@ -10,12 +10,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from gamer_rsi.agent.prompts.assembler import (DEFAULT_TEMPLATE_PATH, MemoryItem,
+from dice_ratchet.agent.prompts.assembler import (DEFAULT_TEMPLATE_PATH, MemoryItem,
                                                PromptContext, PromptSpec, ReflectionItem,
                                                load_task_text, load_template)
-from gamer_rsi.env import GameEngine, load_tables
-from gamer_rsi.sandbox.api import EpisodeConfig, SandboxEnv
-from gamer_rsi.sandbox.projection import render_compact
+from dice_ratchet.env import GameEngine, load_tables
+from dice_ratchet.sandbox.api import EpisodeConfig, SandboxEnv
+from dice_ratchet.sandbox.projection import render_compact
 
 __all__ = ["REPO", "HERE", "golden_spec", "golden_context", "golden_observation",
            "golden_filename"]

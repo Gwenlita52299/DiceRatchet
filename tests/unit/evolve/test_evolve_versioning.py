@@ -18,10 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.evolve import versioning as V
-from gamer_rsi.evolve.errors import VersionConflictError
-from gamer_rsi.evolve.schemas import Candidate, Verdict
-from gamer_rsi.infra.errors import E
+from dice_ratchet.evolve import versioning as V
+from dice_ratchet.evolve.errors import VersionConflictError
+from dice_ratchet.evolve.schemas import Candidate, Verdict
+from dice_ratchet.infra.errors import E
 
 from evolve_support import context_for, make_candidate, prompt_diff, write_harness
 
@@ -29,7 +29,7 @@ from evolve_support import context_for, make_candidate, prompt_diff, write_harne
 @pytest.fixture(autouse=True)
 def _no_git(monkeypatch):
     """本文件全部用例离线：git 视为不可用（降级为不提交，Spec §8.5）。"""
-    from gamer_rsi.infra import git_ops
+    from dice_ratchet.infra import git_ops
 
     monkeypatch.setattr(git_ops, "git_available", lambda repo=Path("."): False)
 
@@ -98,7 +98,7 @@ def test_accept_increments_version_for_a_new_generation(tmp_path):
 def test_accept_rejects_patch_that_does_not_apply(tmp_path):
     harness = write_harness(tmp_path)
     ctx = context_for(tmp_path, harness=harness)
-    from gamer_rsi.evolve.errors import PatchInvalidError
+    from dice_ratchet.evolve.errors import PatchInvalidError
 
     bad = Candidate.create(kind="prompt_patch",
                            diff=("--- a/harness/prompts/decision.md\n"
@@ -291,7 +291,7 @@ def test_build_decision_sections_no_candidate():
 
 
 def test_build_decision_sections_accepts_winner(tmp_path):
-    from gamer_rsi.evolve.judge import judge
+    from dice_ratchet.evolve.judge import judge
     from evolve_support import FakeArm, make_config, make_report
 
     report = make_report()
@@ -304,7 +304,7 @@ def test_build_decision_sections_accepts_winner(tmp_path):
 
 
 def test_build_decision_sections_pending_gate(tmp_path):
-    from gamer_rsi.evolve.schemas import GateState
+    from dice_ratchet.evolve.schemas import GateState
 
     gate = GateState(generation=1, status="pending", harness_version=0,
                      parent_version=0, expires_at="2026-10-01T00:00:00Z",
@@ -314,7 +314,7 @@ def test_build_decision_sections_pending_gate(tmp_path):
 
 
 def test_build_decision_sections_timeout_gate():
-    from gamer_rsi.evolve.schemas import GateState
+    from dice_ratchet.evolve.schemas import GateState
 
     gate = GateState(generation=1, status="timeout", harness_version=0,
                      parent_version=0, expires_at="2026-10-01T00:00:00Z",
@@ -325,7 +325,7 @@ def test_build_decision_sections_timeout_gate():
 
 
 def test_build_decision_sections_rejected_gate():
-    from gamer_rsi.evolve.schemas import GateState
+    from dice_ratchet.evolve.schemas import GateState
 
     gate = GateState(generation=1, status="rejected", harness_version=0,
                      parent_version=0, expires_at="2026-10-01T00:00:00Z",
@@ -343,13 +343,13 @@ def test_build_decision_sections_rejected_gate():
 def test_git_failure_restores_harness(tmp_path, monkeypatch):
     harness = write_harness(tmp_path)
     ctx = context_for(tmp_path, harness=harness)
-    from gamer_rsi.infra import git_ops
-    from gamer_rsi.evolve.errors import GitFailedError
+    from dice_ratchet.infra import git_ops
+    from dice_ratchet.evolve.errors import GitFailedError
 
     monkeypatch.setattr(git_ops, "git_available", lambda repo=Path("."): True)
 
     def _boom(repo, version, message):
-        raise __import__("gamer_rsi.infra.errors", fromlist=["InfraError"]).InfraError(
+        raise __import__("dice_ratchet.infra.errors", fromlist=["InfraError"]).InfraError(
             E.E_IO_GIT_FAILED, "git commit 失败")
 
     monkeypatch.setattr(git_ops, "commit_harness", _boom)
@@ -363,7 +363,7 @@ def test_git_failure_restores_harness(tmp_path, monkeypatch):
 def test_git_commit_message_format(tmp_path, monkeypatch):
     harness = write_harness(tmp_path)
     ctx = context_for(tmp_path, harness=harness)
-    from gamer_rsi.infra import git_ops
+    from dice_ratchet.infra import git_ops
 
     seen: list[tuple[int, str]] = []
     monkeypatch.setattr(git_ops, "git_available", lambda repo=Path("."): True)

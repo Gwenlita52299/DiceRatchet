@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gamersi.local/schemas/generation_report.schema.json",
+  "$id": "https://diceratchet.local/schemas/generation_report.schema.json",
   "title": "generation_report",
   "description": "runs/<run_id>/generations/gen-{NNN}/report.json（Spec §4.5 / B-16）。字段由 Spec §4.5 定义：MOD-08 产出 heldout/train/gain_realism/diversity/ablation，MOD-07 填 candidates/decision/decided_by/reason，MOD-09 原子写入并算 sha256。数值一律 round(x,4)（B-34）。",
   "type": "object",

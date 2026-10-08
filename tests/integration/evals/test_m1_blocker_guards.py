@@ -21,19 +21,19 @@ from types import SimpleNamespace
 
 import pytest
 
-from gamer_rsi.evals.baselines import run_baseline
-from gamer_rsi.evals.harness import SandboxRunner
-from gamer_rsi.evals.metrics import aggregate
-from gamer_rsi.infra.config import load_config
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.sandbox.api import EpisodeConfig, make_default_env
+from dice_ratchet.evals.baselines import run_baseline
+from dice_ratchet.evals.harness import SandboxRunner
+from dice_ratchet.evals.metrics import aggregate
+from dice_ratchet.infra.config import load_config
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.sandbox.api import EpisodeConfig, make_default_env
 
 _REPO = Path(__file__).resolve().parents[3]
 _CONFIG_DIR = _REPO / "configs"
 
 
 def _run_cli(*argv: str, timeout: int = 900) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, "-m", "gamer_rsi", *argv],
+    return subprocess.run([sys.executable, "-m", "dice_ratchet", *argv],
                           cwd=_REPO, capture_output=True, text=True, timeout=timeout)
 
 
@@ -258,7 +258,7 @@ def test_play_llm_without_weights_fails_closed(run_id):
     `load()` 会在路径校验处立刻抛 `E_LLM_UNAVAILABLE`，因此本用例不受「8B 权重是否已落盘」
     影响——8B 一旦落盘，用 8B 反而会真的跑起来并 900 s 超时（2026-10-04 实测踩到）。
     """
-    from gamer_rsi.inference.registry import load_registry
+    from dice_ratchet.inference.registry import load_registry
 
     registry = load_registry(str(_REPO / "configs" / "models.yaml"))
     spec = registry.spec("qwen3-30b-a3b-q4")

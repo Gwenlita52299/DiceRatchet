@@ -4,7 +4,7 @@
 零依赖：纯标准库手工布局。数据来源：
 - 依赖关系：Spec §6 依赖矩阵
 - 工作量：各 MOD PRD §15（人日）
-- 排期假设：见 docs/项目排期-GameRSI.md §1
+- 排期假设：见 docs/项目排期-DiceRatchet.md §1
 
 用法：python3 docs/tools/gen_diagrams.py            # 写 SVG 并打印排期表
 """
@@ -101,7 +101,7 @@ def module_deps_svg() -> str:
         '<g transform="translate(0,90)">',
     ]
     # 标题
-    o.append(f'<text x="40" y="-52" font-size="22" font-weight="700" fill="#263238">GameRSI 模块依赖与关键路径</text>')
+    o.append(f'<text x="40" y="-52" font-size="22" font-weight="700" fill="#263238">DiceRatchet 模块依赖与关键路径</text>')
     o.append(f'<text x="40" y="-28" font-size="13" fill="#607d8b">箭头：上游 → 下游（下游依赖上游）。数据源：Spec v1.4 §6 依赖矩阵、各 PRD §15 工作量（人日）</text>')
     # 边（先画，节点盖在上面）
     for a, b, st, *anc in EDGES:
@@ -227,7 +227,7 @@ def gantt_svg(rows) -> str:
     o = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" font-family="{FONT}">',
         f'<rect width="{width}" height="{height}" fill="#fff"/>',
-        f'<text x="20" y="30" font-size="20" font-weight="700" fill="#263238">GameRSI 项目排期（单人 · 起始 {START} · 生成自 docs/tools/gen_diagrams.py）</text>',
+        f'<text x="20" y="30" font-size="20" font-weight="700" fill="#263238">DiceRatchet 项目排期（单人 · 起始 {START} · 生成自 docs/tools/gen_diagrams.py）</text>',
     ]
 
     def xof(d: dt.date) -> float:

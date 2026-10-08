@@ -11,13 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.io import write_json_atomic
-from gamer_rsi.inference.backend import Message
-from gamer_rsi.inference.errors import InferenceError
-from gamer_rsi.inference.metrics import robustness_report
-from gamer_rsi.inference.prompts import load_robustness_prompts, probe_messages
-from gamer_rsi.inference.records import CallContext
-from gamer_rsi.inference.schema import DECISION_SCHEMA
+from dice_ratchet.infra.io import write_json_atomic
+from dice_ratchet.inference.backend import Message
+from dice_ratchet.inference.errors import InferenceError
+from dice_ratchet.inference.metrics import robustness_report
+from dice_ratchet.inference.prompts import load_robustness_prompts, probe_messages
+from dice_ratchet.inference.records import CallContext
+from dice_ratchet.inference.schema import DECISION_SCHEMA
 
 from inference_support import BAD_KIND, GOOD, MODEL_ID, mock_factory, registry_of
 
@@ -132,7 +132,7 @@ def test_real_model_robustness_when_weights_present():
     if not model_dir.exists():
         pytest.skip("未落盘 models/Qwen3-8B-4bit（离线权重），跳过真实模型跑批")
     pytest.importorskip("mlx_lm")
-    from gamer_rsi.inference.backend import BackendManager
+    from dice_ratchet.inference.backend import BackendManager
 
     manager = BackendManager("configs/models.yaml", mode="eval",
                              config=None) # 真实跑批由 `inference robustness` 承担

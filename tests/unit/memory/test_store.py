@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.memory import (MemoryEntry, MemoryStore, MemoryWriteFailedError,
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.memory import (MemoryEntry, MemoryStore, MemoryWriteFailedError,
                               ReflectionEntry, extract_candidates, utility_score)
 
 LESSON = "净化值低于 25% 时先把光盾骰放进防御槽，再考虑输出。"
@@ -252,7 +252,7 @@ def test_stats_reports_versions_and_rates(store_factory, make_candidate, make_pr
 
 def test_same_inputs_produce_identical_active_file(tmp_path, config_dir, make_candidate,
                                                    make_prov) -> None:
-    from gamer_rsi.infra.config import MemoryConfig
+    from dice_ratchet.infra.config import MemoryConfig
 
     def build(name: str) -> str:
         run_dir = tmp_path / name
@@ -406,7 +406,7 @@ def _llm_cfg(cfg):
 
 def test_llm_extract_used_when_enabled(tmp_path, config_dir, make_reflection,
                                        make_prov, cfg) -> None:
-    from gamer_rsi.memory import MemoryStore
+    from dice_ratchet.memory import MemoryStore
 
     seen: dict[str, object] = {}
 
@@ -429,7 +429,7 @@ def test_llm_extract_used_when_enabled(tmp_path, config_dir, make_reflection,
 
 def test_llm_extract_failure_falls_back_to_rules(tmp_path, config_dir, make_reflection,
                                                  make_prov, cfg) -> None:
-    from gamer_rsi.memory import MemoryStore
+    from dice_ratchet.memory import MemoryStore
 
     def boom(_reflection):
         raise TimeoutError("E_LLM_TIMEOUT")
@@ -445,7 +445,7 @@ def test_llm_extract_failure_falls_back_to_rules(tmp_path, config_dir, make_refl
 
 def test_llm_extract_garbage_falls_back_to_rules(tmp_path, config_dir, make_reflection,
                                                  make_prov, cfg) -> None:
-    from gamer_rsi.memory import MemoryStore
+    from dice_ratchet.memory import MemoryStore
 
     store = MemoryStore(tmp_path / "llm-garbage", _llm_cfg(cfg), config_dir=config_dir,
                         run_id="r-test", on_extract=lambda _r: [{"nonsense": 1}])
@@ -458,7 +458,7 @@ def test_llm_extract_garbage_falls_back_to_rules(tmp_path, config_dir, make_refl
 
 def test_llm_extract_not_used_when_disabled(tmp_path, config_dir, make_reflection,
                                             make_prov, cfg) -> None:
-    from gamer_rsi.memory import MemoryStore
+    from dice_ratchet.memory import MemoryStore
 
     calls = {"n": 0}
 

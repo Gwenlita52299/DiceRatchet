@@ -6,10 +6,10 @@ import asyncio
 
 import pytest
 
-from gamer_rsi.infra.errors import E
-from gamer_rsi.inference.backend import Message
-from gamer_rsi.inference.errors import InferenceError
-from gamer_rsi.inference.schema import DECISION_SCHEMA
+from dice_ratchet.infra.errors import E
+from dice_ratchet.inference.backend import Message
+from dice_ratchet.inference.errors import InferenceError
+from dice_ratchet.inference.schema import DECISION_SCHEMA
 
 BAD_JSON = '{"reasoning": "ok", "plan": ['
 MESSAGES = [Message(role="user", content="phase=player_turn")]

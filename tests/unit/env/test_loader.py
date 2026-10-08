@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.env.error import KernelError
-from gamer_rsi.env.loader import (DEFAULT_CONTENT_DIR, TABLE_FILES, build_tables,
+from dice_ratchet.env.error import KernelError
+from dice_ratchet.env.loader import (DEFAULT_CONTENT_DIR, TABLE_FILES, build_tables,
                                  filter_by_toggles, load_tables)
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -341,7 +341,7 @@ def test_filter_by_toggles(tables):
 
 
 def test_compute_risk_tier_exported(tables):
-    from gamer_rsi.env.loader import compute_risk_tier
+    from dice_ratchet.env.loader import compute_risk_tier
 
     did = next(iter(tables["dice"]))
     assert compute_risk_tier(tables["dice"][did]) in ("safe", "balanced", "risky", "cursed")

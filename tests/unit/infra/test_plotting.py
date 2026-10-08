@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra import plotting
-from gamer_rsi.infra.plotting import GENERATIONS_CSV_COLUMNS, plot_generations
+from dice_ratchet.infra import plotting
+from dice_ratchet.infra.plotting import GENERATIONS_CSV_COLUMNS, plot_generations
 
 # 列定义归 MOD-08；本模块只冻结读取
 
@@ -47,14 +47,14 @@ def test_plot_generations_produces_five_pngs(tmp_path):
 
 
 def test_plot_generations_missing_csv_raises(tmp_path):
-    from gamer_rsi.infra.errors import E, InfraError
+    from dice_ratchet.infra.errors import E, InfraError
     with pytest.raises(InfraError) as exc:
         plot_generations(tmp_path / "nope.csv", tmp_path / "plots")
     assert exc.value.code == E.E_IO_STATE_MISSING
 
 
 def test_plot_generations_empty_csv_raises(tmp_path):
-    from gamer_rsi.infra.errors import InfraError
+    from dice_ratchet.infra.errors import InfraError
     csv_path = tmp_path / "empty.csv"
     csv_path.write_text("generation\n", encoding="utf-8")
     with pytest.raises(InfraError):

@@ -8,12 +8,12 @@ from typing import Any, Mapping
 
 import pytest
 
-from gamer_rsi.infra.config import InferenceConfig
-from gamer_rsi.infra.errors import E
-from gamer_rsi.inference.backend import BackendManager, Message
-from gamer_rsi.inference.errors import InferenceError
-from gamer_rsi.inference.registry import build_registry
-from gamer_rsi.inference.schema import DECISION_SCHEMA
+from dice_ratchet.infra.config import InferenceConfig
+from dice_ratchet.infra.errors import E
+from dice_ratchet.inference.backend import BackendManager, Message
+from dice_ratchet.inference.errors import InferenceError
+from dice_ratchet.inference.registry import build_registry
+from dice_ratchet.inference.schema import DECISION_SCHEMA
 
 GOOD = '{"reasoning": "ok", "plan": [{"kind": "end_turn"}]}'
 MESSAGES = [Message(role="user", content="phase=player_turn")]

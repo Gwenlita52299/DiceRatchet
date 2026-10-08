@@ -1,23 +1,23 @@
-# GameRSI 文档中心
+# DiceRatchet 文档中心
 
-> 本目录承载 GameRSI 项目的**规格层文档**：从项目计划 → 模块拆分 Spec → 各模块技术 PRD。
+> 本目录承载 DiceRatchet 项目的**规格层文档**：从项目计划 → 模块拆分 Spec → 各模块技术 PRD。
 
 ## 阅读顺序
 
 | 顺序 | 文档 | 作用 |
 |---|---|---|
 | 0 | [RSI调研纪要.md](../RSI调研纪要.md) | 为什么做（理论/实证/失败模式/治理） |
-| 1 | [项目计划-GameRSI.md](../项目计划-GameRSI.md) | 做什么（目标、沙箱纪律、里程碑、验收） |
-| 2 | [模块拆分Spec-GameRSI.md](模块拆分Spec-GameRSI.md) | **切成几块、怎么接起来**——唯一事实来源 |
+| 1 | [项目计划-DiceRatchet.md](../项目计划-DiceRatchet.md) | 做什么（目标、沙箱纪律、里程碑、验收） |
+| 2 | [模块拆分Spec-DiceRatchet.md](模块拆分Spec-DiceRatchet.md) | **切成几块、怎么接起来**——唯一事实来源 |
 | 2.5 | `prd/GAME-*.md` | **游戏本体怎么做**（先做出可玩的网页游戏，再据此写模拟器） |
 | 3 | `prd/MOD-*.md` | 每块怎么实现（本文档集） |
-| 4 | [项目排期-GameRSI.md](项目排期-GameRSI.md) | 什么时候做完（甘特图、关键路径、风险）；模块依赖图见 [assets/module-deps.svg](assets/module-deps.svg) |
+| 4 | [项目排期-DiceRatchet.md](项目排期-DiceRatchet.md) | 什么时候做完（甘特图、关键路径、风险）；模块依赖图见 [assets/module-deps.svg](assets/module-deps.svg) |
 
 > **游戏本体与模拟器的关系**：先用 [GAME-00](prd/GAME-00-webgame-PRD.md) 做出**人类可玩的网页版游戏**；
 > 游戏跑通后，按同一套规则实现**纯 Python 模拟器**（MOD-01）供 RSI 训练；未来可接视觉模型直接对游戏本体训练。
 > GAME 系列是**游戏规则**的唯一事实来源，MOD-01 是该规则的 Python 等价移植（对拍契约见 [GAME-01](prd/GAME-01-kernel-contract.md) §7）。
 
-**冲突处理**：PRD 与 Spec 冲突时以 Spec 为准；Spec 未覆盖处由 PRD 决策并以「决策（本 PRD 提出，待回填 Spec）」标注，汇总登记在 [模块拆分Spec-GameRSI.md](模块拆分Spec-GameRSI.md) **§11 待回填决策登记表**（v1.4：36 项已回填、0 项待裁决）。
+**冲突处理**：PRD 与 Spec 冲突时以 Spec 为准；Spec 未覆盖处由 PRD 决策并以「决策（本 PRD 提出，待回填 Spec）」标注，汇总登记在 [模块拆分Spec-DiceRatchet.md](模块拆分Spec-DiceRatchet.md) **§11 待回填决策登记表**（v1.4：36 项已回填、0 项待裁决）。
 
 > 🔎 **评审入口**：Spec §11。v1.3（2026-09-30 17:21）已按 [MOD PRD 评审](reviews/2026-09-30-MOD-PRD评审.md) 修订；v1.4（2026-09-30 17:49）已确认全部裁决，§11.2 待裁决清零。新的临时决策从 P-31 起登记。跨模块签名以 Spec §4.7 为唯一登记处，「一局」的定义与成本模型见 Spec §8.6。
 >
@@ -53,7 +53,7 @@ L0 环境        MOD-01 env-rules    MOD-02 env-sandbox
 | MOD-04 | policy（prompt/解析/工具契约） | L1 | M1 | [PRD](prd/MOD-04-policy-PRD.md) v0.6 |
 | MOD-05 | memory（策略记忆与反思库） | L1 | M2 | [PRD](prd/MOD-05-memory-PRD.md) v1.2 |
 | MOD-06 | loop（闭环编排） | L2 | M2 | [PRD](prd/MOD-06-loop-PRD.md) v1.2 |
-| MOD-07 | evolve（harness 自进化） | L2 | M2–M3 | [PRD](prd/MOD-07-evolve-PRD.md) v0.4 ✅ 代码落地（[README](../gamer_rsi/evolve/README.md)）；C5 标定见 [2026-10-07 §3.1 实测](reviews/2026-10-07-M2-S31-full-agent基线实测.md) |
+| MOD-07 | evolve（harness 自进化） | L2 | M2–M3 | [PRD](prd/MOD-07-evolve-PRD.md) v0.4 ✅ 代码落地（[README](../dice_ratchet/evolve/README.md)）；C5 标定见 [2026-10-07 §3.1 实测](reviews/2026-10-07-M2-S31-full-agent基线实测.md) |
 | MOD-08 | evals（评估与测量） | L3 | M1–M3 | [PRD](prd/MOD-08-evals-PRD.md) v0.6 |
 | MOD-09 | infra（配置/日志/CLI/守卫） | L3 | M0–M3 | [PRD](prd/MOD-09-infra-PRD.md) v0.3.1 |
 
@@ -71,4 +71,4 @@ INV-1 agent 不得触达 Env 内部 · INV-2 观测必须白名单投影 · INV-
 INV-4 harness 代码受限执行 · INV-5 train/heldout/test 三方隔离 · INV-6 随机性只来自显式 seed ·
 INV-7 主指标只用环境原生结果（outcome 为第一主指标，stages_cleared/hearts_left/battles_won 为次指标；shaped reward 不得用于结论）。
 
-详见 [模块拆分Spec-GameRSI.md](模块拆分Spec-GameRSI.md) §1。
+详见 [模块拆分Spec-DiceRatchet.md](模块拆分Spec-DiceRatchet.md) §1。

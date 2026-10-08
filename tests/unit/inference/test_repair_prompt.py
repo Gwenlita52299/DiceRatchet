@@ -7,8 +7,8 @@ import json
 import pytest
 from jsonschema import ValidationError
 
-from gamer_rsi.inference.backend import Message
-from gamer_rsi.inference.schema import (DECISION_SCHEMA, REPAIR_SYSTEM, json_path_of,
+from dice_ratchet.inference.backend import Message
+from dice_ratchet.inference.schema import (DECISION_SCHEMA, REPAIR_SYSTEM, json_path_of,
                                         render_error, repair_messages, repair_prompt_text,
                                         validate)
 

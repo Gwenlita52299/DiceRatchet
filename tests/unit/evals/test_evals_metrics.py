@@ -6,8 +6,8 @@ import math
 
 import pytest
 
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.evals.metrics import (EpisodeResult, aggregate, illegal_rate,
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.evals.metrics import (EpisodeResult, aggregate, illegal_rate,
                                      judge_gain, mcnemar_exact_p, mean_hearts_left,
                                      mean_stages_cleared, normalized_entropy,
                                      verdict_rules, wilson_ci, win_rate)

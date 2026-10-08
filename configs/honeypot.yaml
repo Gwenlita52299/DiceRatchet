@@ -1,5 +1,5 @@
 # configs/honeypot.yaml —— MOD-02 蜜罐注入计划（sandbox.honeypot.plan_path）
-# 用途：声明 canary 生成方式与注入点；gamer_rsi/sandbox/honeypot.py::load_plan() 读取。
+# 用途：声明 canary 生成方式与注入点；dice_ratchet/sandbox/honeypot.py::load_plan() 读取。
 # 4 个注入点固定对齐 PRD FR-02-20；改动必须同步实现与测试（否则 E_ENV_HONEYPOT，fail-closed）。
 
 version: 1

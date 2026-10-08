@@ -16,14 +16,14 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.env import GameEngine, load_tables
+from dice_ratchet.env import GameEngine, load_tables
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from greedy_bot import run_game  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BOT_MATCH = _REPO_ROOT / "src/game/tests/bot-match.js"
-_N = int(os.environ.get("GAMERSI_BOT_MATCH_N", "200"))
+_N = int(os.environ.get("DICERATCHET_BOT_MATCH_N", "200"))
 _STAGE_COUNT = 6
 _DIFFICULTY = "hard"
 
@@ -123,7 +123,7 @@ def test_js_decisions_match_sandboxenv_decision_index(engine, tmp_path) -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
     js = {int(k): v for k, v in json.loads(proc.stdout).items()}
 
-    from gamer_rsi.sandbox.api import EpisodeConfig, SandboxEnv
+    from dice_ratchet.sandbox.api import EpisodeConfig, SandboxEnv
 
     for seed, rec in js.items():
         env = SandboxEnv(engine=engine, episode_config=EpisodeConfig(

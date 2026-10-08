@@ -1,6 +1,6 @@
 # configs/default.yaml —— MOD-09 配置合并的基座（Spec §5 / B-26）
-# 优先级：CLI 参数 > GAMERSI_* 环境变量 > harness/config.json > 本文件 > 代码默认值
-# 键路径与 gamer_rsi/infra/config.py 的 AppConfig 一一对应（见该文件 docstring 的映射表）。
+# 优先级：CLI 参数 > DICERATCHET_* 环境变量 > harness/config.json > 本文件 > 代码默认值
+# 键路径与 dice_ratchet/infra/config.py 的 AppConfig 一一对应（见该文件 docstring 的映射表）。
 # 浮点精度：report.json / metrics 一律 round(x,4)（Spec §4.5 B-34）。
 
 # ============ env（MOD-01 环境规则 + MOD-02 沙箱 + 局配置）============
@@ -11,7 +11,7 @@ env:
   episode: # 默认局（Spec §8.6）：hard × 6 关，greedy_counter 通关率 45.5%（n=200，seed 1–200；复现命令见 Spec §8.6）
     # 2026-10-06（M2 开工 D-2 裁决）：默认局**保持 hard × 6**（M3 主口径），本值不动。
     # M2 的闭环联调与 §3.2 冒烟改用 run 级 override 的 medium × 6 bring-up 口径：
-    #   GAMERSI_ENV__EPISODE__DIFFICULTY=medium <cmd>      # B-30：__ 分层，等价于 env.episode.difficulty
+    #   DICERATCHET_ENV__EPISODE__DIFFICULTY=medium <cmd>      # B-30：__ 分层，等价于 env.episode.difficulty
     # （stage_count 保持 6、toggles 全开；M1 的 CLI 没有通用 --set，只有 --k/--generations/--hitl/
     #   --model/--mode/--seed/--timeout-ms/--log-level 这 8 个显式覆盖键。）
     # hard × 6 的 fixed_prompt 基线 win_rate = 0.0%，win_rate 无方差、无法判定演化，
@@ -36,12 +36,12 @@ env:
     guard:
       enforce: enforce
       scan_roots:
-        - gamer_rsi/agent
-        - gamer_rsi/memory
-        - gamer_rsi/loop
-        - gamer_rsi/evolve
-        - gamer_rsi/evals
-        - gamer_rsi/inference
+        - dice_ratchet/agent
+        - dice_ratchet/memory
+        - dice_ratchet/loop
+        - dice_ratchet/evolve
+        - dice_ratchet/evals
+        - dice_ratchet/inference
       process_boundary: false
     exec:
       timeout_s: 2.0
@@ -68,8 +68,8 @@ agent:
     # 2026-10-05（M1 验收 F12）：原值指向 harness/prompts/{fixed_v1,task}.md，那两个文件
     # 不存在——`policy.py` 靠包内回落兜住并静默，于是「改配置」根本不影响实际 prompt。
     # 二者都是随包冻结件（R-6：基线模板不随 harness 演化），所以直接指向真实位置。
-    fixed_prompt_path: gamer_rsi/agent/prompts/fixed_v1.md
-    task_path: gamer_rsi/agent/prompts/task.md
+    fixed_prompt_path: dice_ratchet/agent/prompts/fixed_v1.md
+    task_path: dice_ratchet/agent/prompts/task.md
     prompt_token_budget: 3072
     token_estimator: chars_div_3
     memory_top_k: 5

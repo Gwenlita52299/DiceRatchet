@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Callable, Mapping, Sequence
 
-from gamer_rsi.infra.config import InferenceConfig
-from gamer_rsi.inference.backend import Backend, BackendManager, MockBackend
-from gamer_rsi.inference.records import InferenceCallRecord
-from gamer_rsi.inference.registry import ModelRegistry, build_registry
+from dice_ratchet.infra.config import InferenceConfig
+from dice_ratchet.inference.backend import Backend, BackendManager, MockBackend
+from dice_ratchet.inference.records import InferenceCallRecord
+from dice_ratchet.inference.registry import ModelRegistry, build_registry
 
 GOOD = '{"reasoning": "ok", "plan": [{"kind": "end_turn"}]}'
 GOOD2 = '{"reasoning": "alt", "plan": [{"kind": "play_face", "dieId": "d1", "slotId": "s1"}]}'

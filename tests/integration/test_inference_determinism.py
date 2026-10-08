@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import asyncio
 
-from gamer_rsi.inference.backend import Message
-from gamer_rsi.inference.records import prompt_digest
-from gamer_rsi.inference.schema import DECISION_SCHEMA
+from dice_ratchet.inference.backend import Message
+from dice_ratchet.inference.records import prompt_digest
+from dice_ratchet.inference.schema import DECISION_SCHEMA
 
 from inference_support import GOOD, GOOD2, MODEL_ID, mock_factory, registry_of
 

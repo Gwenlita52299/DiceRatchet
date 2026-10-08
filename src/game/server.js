@@ -79,6 +79,6 @@ if (isMain) {
   const host = arg('host', '127.0.0.1');
   const { server } = createServer();
   server.listen(port, host, () => {
-    console.log(`GameRSI 骰子 roguelike 已启动 → http://${host}:${port}`);
+    console.log(`DiceRatchet 骰子 roguelike 已启动 → http://${host}:${port}`);
   });
 }

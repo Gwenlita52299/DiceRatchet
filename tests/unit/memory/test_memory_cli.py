@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.config import load_config
-from gamer_rsi.infra.errors import E, InfraError, error_code_of
-from gamer_rsi.infra.run import RunPaths
-from gamer_rsi.memory import MemoryStore
-from gamer_rsi.memory import cli as mem_cli
+from dice_ratchet.infra.config import load_config
+from dice_ratchet.infra.errors import E, InfraError, error_code_of
+from dice_ratchet.infra.run import RunPaths
+from dice_ratchet.memory import MemoryStore
+from dice_ratchet.memory import cli as mem_cli
 
 LESSON = "净化值低于 25% 时先把光盾骰放进防御槽，再考虑输出。"
 OBS = {"phase": "player_turn", "stage": 3,
@@ -189,9 +189,9 @@ def test_cmd_retrieve_rejects_bad_obs(seeded) -> None:
 # ---- 端到端：五条命令在空 run 上可直接执行（G6）---------------------------------------
 
 def test_five_commands_end_to_end_on_empty_run(tmp_path, monkeypatch, config_dir) -> None:
-    from gamer_rsi import app
+    from dice_ratchet import app
 
-    monkeypatch.setenv("GAMERSI_INFRA__RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("DICERATCHET_INFRA__RUNS_ROOT", str(tmp_path / "runs"))
     run_id = "r-e2e"
     common = ["--run-id", run_id, "--config-dir", str(config_dir)]
 
@@ -222,8 +222,8 @@ def test_five_commands_end_to_end_on_empty_run(tmp_path, monkeypatch, config_dir
 
 
 def test_memory_subcommands_registered_after_wire() -> None:
-    from gamer_rsi import app
-    from gamer_rsi.infra import cli
+    from dice_ratchet import app
+    from dice_ratchet.infra import cli
 
     app.wire()
     for name in ("stats", "snapshot", "rollback", "verify", "retrieve"):

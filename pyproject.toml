@@ -3,10 +3,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "gamer-rsi"
+name = "dice-ratchet"
 version = "0.1.0"
-description = "GameRSI 训练链路：本地小模型在自建骰子 roguelike 里递归自我改进"
-readme = "gamer_rsi/README.md"
+description = "DiceRatchet 训练链路：本地小模型在自建骰子 roguelike 里递归自我改进"
+readme = "dice_ratchet/README.md"
 requires-python = ">=3.11"
 license = { text = "All rights reserved" }
 dependencies = [
@@ -21,7 +21,7 @@ llama = ["llama-cpp-python>=0.2"] # MOD-03 阶段二后端（GBNF / server）
 dev = ["pytest>=8.0", "pytest-cov>=5.0"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["gamer_rsi"]
+packages = ["dice_ratchet"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -33,7 +33,7 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-source = ["gamer_rsi"]
+source = ["dice_ratchet"]
 
 [tool.coverage.report]
 exclude_lines = ["pragma: no cover", "raise NotImplementedError", "if TYPE_CHECKING:"]

@@ -7,10 +7,10 @@ from typing import Any, Callable
 
 import pytest
 
-from gamer_rsi.agent import EpisodeContext
-from gamer_rsi.env import GameEngine, load_tables
-from gamer_rsi.infra.config import PolicyConfig
-from gamer_rsi.sandbox.api import EpisodeConfig, SandboxEnv
+from dice_ratchet.agent import EpisodeContext
+from dice_ratchet.env import GameEngine, load_tables
+from dice_ratchet.infra.config import PolicyConfig
+from dice_ratchet.sandbox.api import EpisodeConfig, SandboxEnv
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 

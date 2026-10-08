@@ -13,7 +13,7 @@ retrieve ≈ 20 ms、add ≈ 2 ms、加载 ≈ 0.26 s），断言留足余量以
 runner 上（实测比参考机慢 4–5 倍）。因此断言用 ``_budget_ms()`` 把上界按本机实测速度
 折算：先跑一段与实现无关的固定工作量，再乘以 ``REFERENCE_FACTOR``。这样在参考机上
 仍然是原始上界（回归照样会被抓住），在慢机上也不会把「机器慢」误判成「实现退化」。
-折算系数会打印在断言消息里，便于核对。可用 ``GAMERSI_PERF_NO_SCALE=1`` 关掉折算，
+折算系数会打印在断言消息里，便于核对。可用 ``DICERATCHET_PERF_NO_SCALE=1`` 关掉折算，
 按参考机绝对上界跑（本机自测/基准复现用）。
 """
 
@@ -27,8 +27,8 @@ from typing import Callable
 
 import pytest
 
-from gamer_rsi.infra.config import MemoryConfig
-from gamer_rsi.memory import (MemoryCandidate, MemoryStore, Provenance, ReflectionEntry,
+from dice_ratchet.infra.config import MemoryConfig
+from dice_ratchet.memory import (MemoryCandidate, MemoryStore, Provenance, ReflectionEntry,
                               SituationKey)
 
 SAMPLES = 60
@@ -78,8 +78,8 @@ def _io_seconds() -> float:
 
 @pytest.fixture(scope="session")
 def perf_scale() -> float:
-    """本机相对参考机的折算系数（≥1；``GAMERSI_PERF_NO_SCALE=1`` 时为 1.0）。"""
-    if os.environ.get("GAMERSI_PERF_NO_SCALE"):
+    """本机相对参考机的折算系数（≥1；``DICERATCHET_PERF_NO_SCALE=1`` 时为 1.0）。"""
+    if os.environ.get("DICERATCHET_PERF_NO_SCALE"):
         return 1.0
     cpu = max(1.0, _calibration_seconds() / REFERENCE_FACTOR)
     io = max(1.0, _io_seconds() / REFERENCE_IO)

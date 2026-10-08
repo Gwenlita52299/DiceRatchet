@@ -1,8 +1,8 @@
-# GameRSI：本地小模型在自建骰子 roguelike 里递归自我改进
+# DiceRatchet：本地小模型在自建骰子 roguelike 里递归自我改进
 
 > 让一个跑在 Mac 上的 8B 级本地模型，在自己搭建的防作弊沙箱里反复玩一款骰子 roguelike。每一局它都经历"玩 → 验证 → 反思 → 改进自己"（策略记忆、prompt、harness 代码），并用**不可作弊的 held-out 测量**回答一个问题：它真的在变强吗？
 >
-> 定位：学习 + 作品集 · 状态：**G0 游戏本体已完成；M0 环境已完成并通过验收（2026-10-03），下一步 M1 基线**（排期见 [项目排期](docs/项目排期-GameRSI.md)，验收见 [M0 验收报告](docs/reviews/2026-10-03-M0验收报告.md)）
+> 定位：学习 + 作品集 · 状态：**G0 游戏本体已完成；M0 环境已完成并通过验收（2026-10-03），下一步 M1 基线**（排期见 [项目排期](docs/项目排期-DiceRatchet.md)，验收见 [M0 验收报告](docs/reviews/2026-10-03-M0验收报告.md)）
 
 ## 为什么做这个
 
@@ -40,7 +40,7 @@ RSI（Recursive Self-Improvement，递归自我改进）的公开讨论大多停
 | L2 进化 | MOD-06 loop · MOD-07 evolve | 闭环编排、断点续跑与成本闸门；harness 候选生成、held-out 裁判、版本化与回滚 |
 | L3 测量与工程 | MOD-08 evals · MOD-09 infra | 基线、指标、坍缩监控与消融；配置、事件、CLI、守卫、git |
 
-一局游戏的默认设定是 hard 难度 × 6 关：启发式 bot 的通关率 45.5%，中位数 232 env 步 / 96 个决策点（n=200，seed 1–200；复现命令见 Spec §8.6）。每代共 **114 局**（训练 30 局 + parent 与 1 个候选的冒烟 2 局与 held-out 40 局；2026-10-06 D-1 定稿），按真实 8B 实测单价 19.6 min/局约 **37 小时/代**。详见 [Spec §8.6](docs/模块拆分Spec-GameRSI.md)。
+一局游戏的默认设定是 hard 难度 × 6 关：启发式 bot 的通关率 45.5%，中位数 232 env 步 / 96 个决策点（n=200，seed 1–200；复现命令见 Spec §8.6）。每代共 **114 局**（训练 30 局 + parent 与 1 个候选的冒烟 2 局与 held-out 40 局；2026-10-06 D-1 定稿），按真实 8B 实测单价 19.6 min/局约 **37 小时/代**。详见 [Spec §8.6](docs/模块拆分Spec-DiceRatchet.md)。
 
 ### 七条不变量
 
@@ -70,26 +70,26 @@ node scripts/golden-gen.js                               # 重新生成 golden �
 
 玩法、架构和内核 API 见 [src/game/README.md](src/game/README.md)。
 
-RSI 训练链路（Python，`gamer_rsi/`）已落地 MOD-01…09（含 MOD-07 evolve 的初版），
-命令面对齐 [Spec §4.6](docs/模块拆分Spec-GameRSI.md)：
+RSI 训练链路（Python，`dice_ratchet/`）已落地 MOD-01…09（含 MOD-07 evolve 的初版），
+命令面对齐 [Spec §4.6](docs/模块拆分Spec-DiceRatchet.md)：
 
 ```bash
-python -m gamer_rsi env selftest --seed 1                                       # 期望退出码 0
+python -m dice_ratchet env selftest --seed 1                                       # 期望退出码 0
 # 注意（F10）：--model/--mode/--seed 会并入 config_hash——同一 run-id 只能跑覆盖集合相同的命令
 # 下面三条 inference 覆盖相同（--model mock --mode eval --seed 7），可共用 <inf_run_id>
-python -m gamer_rsi inference probe      --model mock --mode eval --seed 7         --run-id <inf_run_id>   # 期望退出码 0
-python -m gamer_rsi inference bench      --model mock --mode eval --seed 7 --n 50  --run-id <inf_run_id>   # 期望退出码 0
-python -m gamer_rsi inference robustness --model mock --mode eval --seed 7 --n 200 --run-id <inf_run_id>   # 期望退出码 0
+python -m dice_ratchet inference probe      --model mock --mode eval --seed 7         --run-id <inf_run_id>   # 期望退出码 0
+python -m dice_ratchet inference bench      --model mock --mode eval --seed 7 --n 50  --run-id <inf_run_id>   # 期望退出码 0
+python -m dice_ratchet inference robustness --model mock --mode eval --seed 7 --n 200 --run-id <inf_run_id>   # 期望退出码 0
 # MOD-06 闭环 + MOD-07 自进化：冒烟不触网（--no-reflect 免模型），真实演化需要 MOD-03 客户端
-python -m gamer_rsi loop smoke --seeds train:1000-1002 --k 3 --no-reflect           # 期望退出码 0
-python -m gamer_rsi loop run --agent llm --seeds train:1000-1029 --k 30 --hitl --run-id <loop_run_id>
-python -m gamer_rsi loop status --run-id <loop_run_id>                              # 期望退出码 0
+python -m dice_ratchet loop smoke --seeds train:1000-1002 --k 3 --no-reflect           # 期望退出码 0
+python -m dice_ratchet loop run --agent llm --seeds train:1000-1029 --k 30 --hitl --run-id <loop_run_id>
+python -m dice_ratchet loop status --run-id <loop_run_id>                              # 期望退出码 0
 # HITL 挂起（退出码 0）→ 人工裁决 → 续跑执行 accept/rollback
-python -m gamer_rsi evolve approve  --run-id <loop_run_id> --generation 1           # 期望退出码 0
-python -m gamer_rsi evolve rollback --run-id <loop_run_id> --generation 1 --reason "效果可疑"
-python -m gamer_rsi loop run --run-id <loop_run_id> --resume                        # 期望退出码 0
+python -m dice_ratchet evolve approve  --run-id <loop_run_id> --generation 1           # 期望退出码 0
+python -m dice_ratchet evolve rollback --run-id <loop_run_id> --generation 1 --reason "效果可疑"
+python -m dice_ratchet loop run --run-id <loop_run_id> --resume                        # 期望退出码 0
 # eval report 不带 --model/--mode/--seed（与 inference 族覆盖不同）→ 必须换一个 run-id
-python -m gamer_rsi eval report --run-id <eval_run_id> --split heldout --baseline all   # 期望退出码 0
+python -m dice_ratchet eval report --run-id <eval_run_id> --split heldout --baseline all   # 期望退出码 0
 ```
 
 ## CI 门禁
@@ -133,12 +133,12 @@ gh workflow run ci.yml -F slow=true    # 需要时手动补一次慢门（push �
 ├── README.md                     # 本文件
 ├── RSI调研纪要.md                 # 为什么做：理论 / 实证 / 失败模式 / 治理
 ├── 文献综述-RSI-2024-2026.md
-├── 项目计划-GameRSI.md            # 做什么：目标、沙箱纪律、里程碑、验收
-├── 项目指导建议-GameRSI.md
+├── 项目计划-DiceRatchet.md            # 做什么：目标、沙箱纪律、里程碑、验收
+├── 项目指导建议-DiceRatchet.md
 ├── docs/
 │   ├── README.md                 # 文档中心（阅读顺序、PRD 索引）
-│   ├── 模块拆分Spec-GameRSI.md    # 模块边界与接口的唯一事实来源（v1.4）
-│   ├── 项目排期-GameRSI.md        # 排期与甘特图
+│   ├── 模块拆分Spec-DiceRatchet.md    # 模块边界与接口的唯一事实来源（v1.4）
+│   ├── 项目排期-DiceRatchet.md        # 排期与甘特图
 │   ├── prd/                      # GAME-00～02、MOD-01～09 技术 PRD
 │   ├── reviews/                  # 评审记录
 │   ├── assets/                   # 生成的 SVG（模块依赖图、甘特图）
@@ -147,7 +147,7 @@ gh workflow run ci.yml -F slow=true    # 需要时手动补一次慢门（push �
 ├── harness/                      # harness 工件（Spec §4.4）：config.json（可演化层，v1 = {} 无覆盖）
 │                                 #   + prompts/（MOD-04 读）+ tools/（MOD-07 写）+ versions/v{N}/（MOD-07 不可变快照）
 ├── tests/                        # unit / integration / golden（Python 训练链路）
-├── gamer_rsi/                    # RSI 训练链路：env / sandbox / inference / infra
+├── dice_ratchet/                    # RSI 训练链路：env / sandbox / inference / infra
 ├── scripts/ci_gate.sh            # CI 门禁入口（本地与 CI 同一份）
 ├── .github/workflows/ci.yml      # CI：gate（快速）+ parity（golden / 差分对拍）
 ├── src/game/                     # G0 游戏本体：kernel / backend / frontend / content / tests
@@ -156,11 +156,11 @@ gh workflow run ci.yml -F slow=true    # 需要时手动补一次慢门（push �
 
 ## 文档导航
 
-1. [项目计划](项目计划-GameRSI.md)：目标与验收。
-2. [模块拆分 Spec](docs/模块拆分Spec-GameRSI.md)：切成几块、怎么接起来。
+1. [项目计划](项目计划-DiceRatchet.md)：目标与验收。
+2. [模块拆分 Spec](docs/模块拆分Spec-DiceRatchet.md)：切成几块、怎么接起来。
 3. [GAME PRD](docs/prd/)：游戏规则的唯一真相。
 4. [MOD PRD](docs/prd/)：每个模块怎么实现。
-5. [项目排期](docs/项目排期-GameRSI.md)：什么时候完成。
+5. [项目排期](docs/项目排期-DiceRatchet.md)：什么时候完成。
 6. [评审记录](docs/reviews/)：改了什么、为什么改。
 
 文档与代码冲突时，以 Spec 为准。新增的临时决策登记到 Spec §11.2（从 P-31 起编号）。

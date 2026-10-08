@@ -1,9 +1,9 @@
 # MOD-03 inference 技术 PRD
 
 > 版本：v1.5（2026-10-06 对齐超时默认值的三层漂移，见 §17）· 状态：草案（待复核）· 所属里程碑：M1
-> 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（**唯一事实来源**；冲突以 Spec 为准）
-> 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md) §4 技术栈（Mac M5 24GB / MLX 或 llama.cpp / Qwen3-8B → 27B Q4）、§8 风险（LLM 输出非 JSON）
-> 作者：GameRSI 技术文档（MOD-03 负责模块）· 依赖：MOD-09 infra（配置、日志、run_id、CLI）
+> 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（**唯一事实来源**；冲突以 Spec 为准）
+> 上游计划：[../../项目计划-DiceRatchet.md](../../项目计划-DiceRatchet.md) §4 技术栈（Mac M5 24GB / MLX 或 llama.cpp / Qwen3-8B → 27B Q4）、§8 风险（LLM 输出非 JSON）
+> 作者：DiceRatchet 技术文档（MOD-03 负责模块）· 依赖：MOD-09 infra（配置、日志、run_id、CLI）
 
 ## 1. 背景与目标
 
@@ -14,10 +14,10 @@ MOD-03 是 L1 层唯一的"模型出口"：把 `Mac M5 24GB + 全程离线` 的�
 ## 2. 范围
 
 ### 2.1 范围内
-- `gamer_rsi/inference/backend.py`：`Backend` Protocol、`Message`/`Usage`/`GenerationResult`/`BackendHealth`/`ModelSpec`、`MockBackend`、`BackendManager`。
-- `gamer_rsi/inference/mlx_backend.py`：`MLXBackend`（`mlx-lm` 进程内；LoRA 挂载点预留给 MOD-10）。
-- `gamer_rsi/inference/llama_backend.py`：`LlamaCppBackend`（`llama-cpp-python` 进程内）与 `LlamaServerBackend`（`llama-server` 子进程 + HTTP + GBNF）。
-- `gamer_rsi/inference/schema.py`：JSON Schema 子集 → GBNF 编译器、`validate()`、修复 prompt 渲染（独占拥有，MOD-04 与 harness 都不得覆盖，Spec v1.4 B-28）；加载 `schemas/decision.schema.json`（Spec v1.3 §4.3 的唯一决策 schema，本模块与 MOD-04 共用，不再各自维护）。
+- `dice_ratchet/inference/backend.py`：`Backend` Protocol、`Message`/`Usage`/`GenerationResult`/`BackendHealth`/`ModelSpec`、`MockBackend`、`BackendManager`。
+- `dice_ratchet/inference/mlx_backend.py`：`MLXBackend`（`mlx-lm` 进程内；LoRA 挂载点预留给 MOD-10）。
+- `dice_ratchet/inference/llama_backend.py`：`LlamaCppBackend`（`llama-cpp-python` 进程内）与 `LlamaServerBackend`（`llama-server` 子进程 + HTTP + GBNF）。
+- `dice_ratchet/inference/schema.py`：JSON Schema 子集 → GBNF 编译器、`validate()`、修复 prompt 渲染（独占拥有，MOD-04 与 harness 都不得覆盖，Spec v1.4 B-28）；加载 `schemas/decision.schema.json`（Spec v1.3 §4.3 的唯一决策 schema，本模块与 MOD-04 共用，不再各自维护）。
 - `configs/models.yaml` 模型注册表；采样参数管控、超时/取消、重试退避、token/延迟埋点、`E_LLM_*` 错误码与降级信号。
 
 ### 2.2 范围外（非目标）
@@ -38,7 +38,7 @@ MOD-03 是 L1 层唯一的"模型出口"：把 `Mac M5 24GB + 全程离线` 的�
 | MOD-08 evals | held-out 局级并发评估（默认 2 局，共享推理队列，P-10）、三基线归档、格式鲁棒性报告 | `asyncio.gather` 共享 manager，信号量限流 |
 | MOD-09 infra | 采集埋点、写 `metrics/llm_calls.jsonl`、算 `config_hash` | 消费 `InferenceCallRecord` |
 
-关键约束：L1 及以上**禁止 import `gamer_rsi.env.*`**（INV-1），由 MOD-09 `guards.py` AST 扫描纳入 CI 门禁（FR-03-11）。
+关键约束：L1 及以上**禁止 import `dice_ratchet.env.*`**（INV-1），由 MOD-09 `guards.py` AST 扫描纳入 CI 门禁（FR-03-11）。
 
 ## 4. 功能需求（FR-03-x）
 
@@ -54,7 +54,7 @@ MOD-03 是 L1 层唯一的"模型出口"：把 `Mac M5 24GB + 全程离线` 的�
 | FR-03-08 | 并发限流与预算前置：`BackendManager` 持 `asyncio.Semaphore(max_inflight)`（默认 MLX=1、server=4）；acquire **之前**做内存预算检查，预计超预算抛 `E_LLM_OOM` 且**不提交**推理请求。 |
 | FR-03-09 | 失败一律以 `E_LLM_*` 异常暴露，`GenerationResult.outcome_kind ∈ {"action","degraded","error"}`；本模块不自行 fallback，由上层决定。 |
 | FR-03-10 | 上下文守卫：`prompt_tokens + max_tokens > context_length` 时，`context_overflow_policy="reject"`（默认）抛 `E_LLM_CONTEXT_OVERFLOW`；`"truncate"` 则从最早的非 system 消息截断并记 `truncated=true`。 |
-| FR-03-11 | 不得 `import gamer_rsi.env.*`（INV-1），CI 静态扫描强制。 |
+| FR-03-11 | 不得 `import dice_ratchet.env.*`（INV-1），CI 静态扫描强制。 |
 | FR-03-12 | 确定性：同 `model_id + prompt + 采样参数 + seed` 在同一后端、同一模型文件下，评估模式（`temperature=0`）生成文本逐字节一致（口径见 NFR-03-01）。 |
 
 ## 5. 非功能需求（NFR-03-x）
@@ -72,7 +72,7 @@ MOD-03 是 L1 层唯一的"模型出口"：把 `Mac M5 24GB + 全程离线` 的�
 ## 6. 接口契约
 
 ```python
-# gamer_rsi/inference/backend.py
+# dice_ratchet/inference/backend.py
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 OutcomeKind = Literal["action", "degraded", "error"]
@@ -220,7 +220,7 @@ models:
 ## 8. 关键流程
 
 ```python
-# gamer_rsi/inference/backend.py::BackendManager.generate_json（伪代码，真实控制流）
+# dice_ratchet/inference/backend.py::BackendManager.generate_json（伪代码，真实控制流）
 async def generate_json(self, model_id, messages, schema, **kw) -> GenerationResult:
     spec = self._spec(model_id)                                     # 未知 → E_LLM_UNAVAILABLE
     sampling = validate_sampling(kw, mode=self.mode, spec=spec)      # FR-03-07，越界即抛
@@ -257,7 +257,7 @@ async def _attempt_loop(spec, messages, schema, grammar, sampling, deadline) -> 
 
 ## 9. 配置项
 
-优先级（Spec §5）：CLI 参数 > 环境变量 `GAMERSI_INFERENCE_*` > `configs/default.yaml#inference` > 代码默认值。
+优先级（Spec §5）：CLI 参数 > 环境变量 `DICERATCHET_INFERENCE_*` > `configs/default.yaml#inference` > 代码默认值。
 
 | 键（`inference.` 前缀） | 类型 | 默认 | 含义 |
 |---|---|---|---|
@@ -272,13 +272,13 @@ async def _attempt_loop(spec, messages, schema, grammar, sampling, deadline) -> 
 | `cache_prompt` | bool | `true` | 复用前缀 KV（system + few-shot 不变时显著降延迟） |
 | `kv_cache_bits` / `max_inflight` | int | 注册表值 | 覆盖注册表；`kv_cache_bits=4` 可救 30B 预算（Q-4）；评估模式强制 `max_inflight=1` |
 | `debug_dump_raw` | bool | `false` | 落 `runs/<run_id>/raw/llm/<call_id>.txt`；默认只存 digest |
-| `skip_hash_check` | bool | `false` | 对应 `GAMERSI_INFERENCE_SKIP_HASH=1`；CI 必须为 false（Q-6） |
+| `skip_hash_check` | bool | `false` | 对应 `DICERATCHET_INFERENCE_SKIP_HASH=1`；CI 必须为 false（Q-6） |
 | `llama_server_startup_timeout_ms` / `llama_server_port` | int | `60000` / `0` | 等 server `/health` 就绪（超时 `E_LLM_LOAD_FAILED`）/ `0` = 自动分配空闲端口 |
 
 ## 10. 错误处理与降级
 
 ```python
-# gamer_rsi/inference/errors.py
+# dice_ratchet/inference/errors.py
 class InferenceError(RuntimeError):
     code: str; attempts: int; retryable: bool; detail: dict[str, Any]
 ```
@@ -320,12 +320,12 @@ class InferenceError(RuntimeError):
 
 | 门 | MOD-03 具体要求 | 证据 |
 |---|---|---|
-| G1 单测 | §11 单测全绿；`gamer_rsi/inference` 行覆盖率 ≥ 80%（`schema.py` ≥ 90%）；后端一致性套件 100% 通过 | `pytest tests/unit/inference -q --cov=gamer_rsi.inference` |
+| G1 单测 | §11 单测全绿；`dice_ratchet/inference` 行覆盖率 ≥ 80%（`schema.py` ≥ 90%）；后端一致性套件 100% 通过 | `pytest tests/unit/inference -q --cov=dice_ratchet.inference` |
 | G2 Golden | `DECISION_SCHEMA`、其 GBNF 产物、修复 prompt 快照入 `tests/golden/inference/`（`decision_schema.json` / `.gbnf` / `repair_prompt.txt`），变更必须显式更新并在 PR 说明 | golden diff 为空 |
 | G3 确定性 | `test_determinism.py` 通过；评估模式 3 次重跑 `llm_raw` 逐字节一致 | CI 日志 |
-| G4 泄漏审计 | 输出只含模型文本与埋点，不含 `seed`/`full_state`/未公开信息；`audit leak` 在本模块自测 run 上 0 告警 | `python -m gamer_rsi audit leak --run-id <run_id>` |
+| G4 泄漏审计 | 输出只含模型文本与埋点，不含 `seed`/`full_state`/未公开信息；`audit leak` 在本模块自测 run 上 0 告警 | `python -m dice_ratchet audit leak --run-id <run_id>` |
 | G5 Schema 校验 | `DECISION_SCHEMA`、`InferenceCallRecord`、`models.yaml` 三者均有 schema 定义 + round-trip 测试 | `test_validate_roundtrip.py`、`test_registry_schema.py` |
-| G6 可复现命令 | 可复制执行成功：`python -m gamer_rsi inference probe --model qwen3-8b-q4`；`... inference bench --model qwen3-8b-q4 --n 50`；`... inference robustness --model qwen3-8b-q4 --n 200` | 退出码 0 + 报告落盘 |
+| G6 可复现命令 | 可复制执行成功：`python -m dice_ratchet inference probe --model qwen3-8b-q4`；`... inference bench --model qwen3-8b-q4 --n 50`；`... inference robustness --model qwen3-8b-q4 --n 200` | 退出码 0 + 报告落盘 |
 | M1 对齐 | 8B agent 与 MOD-04 联调跑通；**JSON 格式鲁棒性报告**入档（Spec §7 M1）；random / heuristic / fixed-prompt 三基线不被本模块阻塞 | `runs/<run_id>/metrics/format_robustness.json` |
 
 ## 13. 指标与埋点

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MOD-08 evals · 评估度量层 · GameRSI 模块讲解</title>
+<title>MOD-08 evals · 评估度量层 · DiceRatchet 模块讲解</title>
 <style>
 :root{--accent:#ea580c;--accent-2:#f97316;--accent-soft:rgba(234,88,12,.09);--bg:#f5f6fa;--card:#fff;--ink:#1c2333;--muted:#64708a;--line:#e5e8f0;--code-bg:#101725;--code-ink:#e8ecf5;--ok:#0f9d58;--bad:#dc2626}
 *{box-sizing:border-box}html{scroll-behavior:smooth}
@@ -56,7 +56,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
 </head>
 <body>
 <aside>
-  <h1>GameRSI</h1><div class="sub">模块讲解 · MOD 系列</div>
+  <h1>DiceRatchet</h1><div class="sub">模块讲解 · MOD 系列</div>
   <a href="MOD-01-env-rules.html">MOD-01 env-rules</a>
   <a href="MOD-02-env-sandbox.html">MOD-02 env-sandbox</a>
   <a href="MOD-03-inference.html">MOD-03 inference</a>
@@ -94,12 +94,12 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
 <header class="hero">
   <div class="kid">MOD-08 · evals</div>
   <h2>评估度量层：把「自我改进」变成可复现、可审计、可证伪的数字</h2>
-  <p>GameRSI 的 L3 测量层。它只读轨迹与报告，<b>不参与任何决策</b>——接不接受一个候选，由 MOD-07 的 gate 说了算；MOD-08 只负责把「这一代真的变强了吗」算成一个经得起复核的数字。</p>
+  <p>DiceRatchet 的 L3 测量层。它只读轨迹与报告，<b>不参与任何决策</b>——接不接受一个候选，由 MOD-07 的 gate 说了算；MOD-08 只负责把「这一代真的变强了吗」算成一个经得起复核的数字。</p>
   <div class="badges">
     <span class="badge">版本 v0.6（同步 docs/prd/MOD-08-evals-PRD.md）</span>
     <span class="badge">状态：待评审</span>
     <span class="badge">里程碑：M1 基线 → M2 执行器/指标 → M3 完整</span>
-    <span class="badge">落地：gamer_rsi/evals/*.py</span>
+    <span class="badge">落地：dice_ratchet/evals/*.py</span>
   </div>
 </header>
 
@@ -212,7 +212,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
 <section id="sec-6">
   <h3><span class="n">6</span>接口契约</h3>
   <p>下面是 PRD 中的真实 Python 签名，分布在 <code>harness.py</code> / <code>seeds.py</code> / <code>metrics.py</code> / <code>diversity.py</code> / <code>ablation.py</code> / <code>baselines.py</code>。新成员先抓三条主线：<code>take()</code> 是 seed 的唯一出口、<code>run_eval()</code> 跑局、<code>evaluate_generation()</code> 是代际入口。</p>
-<pre><code># gamer_rsi/evals/harness.py
+<pre><code># dice_ratchet/evals/harness.py
 Split = Literal["train","heldout","test"]; BasketId = Literal["H1","H2","H3","test_full","train_window"]
 @dataclass(frozen=True)
 class EvalSpec:   # run_id, generation, harness_version, split, basket, seeds, agent_kind, max_steps, n_rep, n_workers, seed_timeout_s, budget_seconds
@@ -220,13 +220,13 @@ class EvalSpec:   # run_id, generation, harness_version, split, basket, seeds, a
 def assert_split_isolation(split: Split, seeds: Sequence[int]) -> None: ...
 def guard_prompt_context(*, split: Split, seed: int, text: str, destination: Literal["prompt","memory","reflection"]) -> None: ...
 def resolve_basket(basket: BasketId, *, generation: int, protocol: SeedProtocol) -> tuple[int, ...]: ...
-# gamer_rsi/evals/seeds.py —— Spec §4.7 规定的 seed 唯一出口（INV-5）；MOD-06/07 不得自行切分
+# dice_ratchet/evals/seeds.py —— Spec §4.7 规定的 seed 唯一出口（INV-5）；MOD-06/07 不得自行切分
 def take(split: Split, *, generation: int | None = None, basket: BasketId | None = None) -> list[int]: ...   # train 需 generation，heldout 需 basket
 def run_eval(spec: EvalSpec, *, runner: EpisodeRunner, writer: TraceWriter, protocol: SeedProtocol) -> EvalResult: ...
 def evaluate_arm(harness_dir: Path, *, split: Split, basket: BasketId, memory_version: int, arm: str, run_id: str) -> ArmResult: ...   # Spec §4.7
 def compare_paired(a: ArmResult, b: ArmResult) -> PairedTest: ...                                                            # Spec §4.7
 def evaluate_generation(generation: int, parent: ArmResult, winner: ArmResult | None, *, run_id: str) -> dict: ...            # Spec §4.7，返回 report 指标段
-# gamer_rsi/evals/metrics.py
+# dice_ratchet/evals/metrics.py
 KIND_SPACE = ("play_face","discard_die","purify","use_ability","end_turn","map_choose","shop_buy","shop_refresh",
               "shop_remove","shop_leave","event_choose","treasure_pick","forge_pick","shrine_choose","rest_choose","relic_swap")  # 16，= Spec §4.3 agent 可用 kind
 MAIN_METRIC_SOURCES = ("info.outcome","info.truncation_reason","info.stages_cleared","info.hearts_left","info.battles_won")   # INV-7 白名单
@@ -239,16 +239,16 @@ def mcnemar_exact_p(a: Sequence[bool], b: Sequence[bool], alternative: Literal["
 def aggregate(results: Sequence[EpisodeResult], *, t_max: int = 120) -> SplitMetrics: ...
 def render_report_sections(*, generation: int, harness_version: int, parent_version: int, heldout: SplitMetrics, train: SplitMetrics, gain: GainVerdict, diversity: CollapseVerdict, ablation: Mapping[str,float], decision: str, decided_by: Literal["auto","human"], reason: str) -> dict: ...
 # 便捷访问器（签名同形，(results: Sequence[EpisodeResult]) -> float）：win_rate / mean_stages_cleared / mean_hearts_left / mean_battles_won / mean_decisions / illegal_rate / fallback_rate / truncation_rate
-# gamer_rsi/evals/diversity.py
+# dice_ratchet/evals/diversity.py
 def js_divergence(p: Mapping[str,float], q: Mapping[str,float], *, base: float = 2.0) -> float: ...
 def entropy_slope(curve: Sequence[float|None]) -> float: ...   # 非 null 点上的 OLS 斜率
 def collapse_check(*, curves: Sequence[Sequence[float|None]], jsd_kind: Sequence[float], win_rates: Sequence[float], cfg: CollapseConfig) -> CollapseVerdict: ...
 # 便捷函数（签名同形）：kind_distribution / slot_distribution(results) -> dict[str,float]；distinct_sequence_ratio(results) -> float
-# gamer_rsi/evals/ablation.py
+# dice_ratchet/evals/ablation.py
 AblationArm = Literal["full","no_reflection","no_self_edit"]
 def run_ablation(generation: int, *, arms: Sequence[AblationArm], run_id: str, split_basket: BasketId = "H2", alpha: float = 0.05) -> AblationReport: ...
 def attribution(full: Sequence[bool], arm: Sequence[bool], *, alpha: float = 0.05) -> str: ...
-# gamer_rsi/evals/baselines.py
+# dice_ratchet/evals/baselines.py
 class BaselineAgent(Protocol):   # name: str; reset(seed) -> None; act(obs, legal) -> Action
 # RandomAgent: rng = np.random.default_rng(seed ^ 0x5EED) 在 legal_actions 上均匀采样；HeuristicAgent: 委托 MOD-04 agent.heuristic.heuristic_policy(obs, legal)
 # fixed_prompt **没有**自己的 agent 类：build_agent 返回 MOD-04 PolicyAgent(mode="baseline_fixed_prompt")
@@ -486,18 +486,18 @@ eval:
   <h3><span class="n">12</span>验收标准（DoD）</h3>
   <p>对齐 Spec §9 质量门 G1–G6 与计划 §6 三项验收。前六条是质量门，后三条是项目级验收。</p>
   <ul class="check">
-    <li><b>G1</b>：<code>pytest tests/unit/evals --cov=gamer_rsi.evals --cov-fail-under=80</code> 通过（MOD-08 属纯函数模块）。</li>
+    <li><b>G1</b>：<code>pytest tests/unit/evals --cov=dice_ratchet.evals --cov-fail-under=80</code> 通过（MOD-08 属纯函数模块）。</li>
     <li><b>G2</b>：指标 golden 快照存在（T-13）；改动需显式更新并在 PR 说明。</li>
     <li><b>G3</b>：同 <code>(run_id, generation, split, seeds)</code> 重跑 <code>report.sha256</code> 一致（T-09/T-15）。</li>
     <li><b>G4</b>：<code>audit leak --run-id &lt;run_id&gt;</code> 在 eval run 上 0 告警，蜜罐注入必被抓到（T-16）。</li>
     <li><b>G5</b>：<code>report.json</code> / <code>metrics/*.json</code> / <code>seeds.yaml</code> 均有 schema + round-trip 测试（T-14）。</li>
     <li><b>G6</b>：下列命令可直接复制执行成功：</li>
   </ul>
-<pre><code>python -m gamer_rsi baseline --kind random|heuristic|fixed_prompt --split heldout --basket H1
-python -m gamer_rsi eval report --split heldout --baseline all --run-id &lt;run_id&gt;
-python -m gamer_rsi eval diversity --run-id &lt;run_id&gt; --generation 3
-python -m gamer_rsi eval ablation --run-id &lt;run_id&gt; --generation 3 --arms no_reflection,no_self_edit
-python -m gamer_rsi eval test --run-id &lt;run_id&gt; --unlock-once --attestation runs/&lt;run_id&gt;/generations/gen-003/test_attestation.json</code></pre>
+<pre><code>python -m dice_ratchet baseline --kind random|heuristic|fixed_prompt --split heldout --basket H1
+python -m dice_ratchet eval report --split heldout --baseline all --run-id &lt;run_id&gt;
+python -m dice_ratchet eval diversity --run-id &lt;run_id&gt; --generation 3
+python -m dice_ratchet eval ablation --run-id &lt;run_id&gt; --generation 3 --arms no_reflection,no_self_edit
+python -m dice_ratchet eval test --run-id &lt;run_id&gt; --unlock-once --attestation runs/&lt;run_id&gt;/generations/gen-003/test_attestation.json</code></pre>
   <blockquote><b>已回填 Spec v1.3 §4.6</b>：<code>--basket</code> 选项、<code>eval ablation</code>、<code>eval test</code> 子命令。</blockquote>
   <table>
     <tr><th>计划 §6 验收</th><th>判定指标</th><th>判定命令</th><th>通过条件</th></tr>
@@ -559,7 +559,7 @@ bootstrap_seed,config_hash,git_commit,ts</code></pre>
     <tr><td>横切</td><td>INV-5 三重护栏 + 蜜罐用例 + golden 指标快照 + README 命令</td><td>3</td></tr>
     <tr><td><b>合计</b></td><td></td><td><b>18</b></td></tr>
   </table>
-  <p><b>实际交付（M1）</b>：<code>gamer_rsi/evals/</code>（<code>seeds.py</code> / <code>metrics.py</code> / <code>harness.py</code> / <code>baselines.py</code>）于 <b>2026-10-04</b> 交付（提交 <code>bff9982</code>），并<b>提前</b>交付了原属 M3 的 <code>diversity.py</code> / <code>ablation.py</code> 与 test 单次解锁存证。本项目<b>未单独记工</b>；按提交时间窗折算 ≤ 2 人日（计划 M1 部分 4 人日），偏差 ≥ 50%。M1 验收的 <b>F1（三基线之一假入档）</b>、<b>F3（评估 run 上 <code>audit leak</code> 误判 critical）</b> 已在本模块修复；真实 8B 跑批后三条 held-out 分数已入档（<b>最终口径 run <code>runs/m1-real-h1n10b/</code></b>，seed 2000–2009、n=10、三基线同源；旧 <code>runs/m1-real-h1n40/</code> 只有 random/heuristic 的 n=40 与中止在 18% 的 fixed_prompt），<code>format_robustness.json</code> 以 <code>m1_evidence=true</code> 通过（<b>2026-10-06 按 M1 验收复核 M-1 用当前快照重跑 n=200 覆盖归档</b>：首答 0.94 → <b>0.995</b>、<code>schema_fail_rate</code> 0.005 → <b>0.0</b>）。</p>
+  <p><b>实际交付（M1）</b>：<code>dice_ratchet/evals/</code>（<code>seeds.py</code> / <code>metrics.py</code> / <code>harness.py</code> / <code>baselines.py</code>）于 <b>2026-10-04</b> 交付（提交 <code>bff9982</code>），并<b>提前</b>交付了原属 M3 的 <code>diversity.py</code> / <code>ablation.py</code> 与 test 单次解锁存证。本项目<b>未单独记工</b>；按提交时间窗折算 ≤ 2 人日（计划 M1 部分 4 人日），偏差 ≥ 50%。M1 验收的 <b>F1（三基线之一假入档）</b>、<b>F3（评估 run 上 <code>audit leak</code> 误判 critical）</b> 已在本模块修复；真实 8B 跑批后三条 held-out 分数已入档（<b>最终口径 run <code>runs/m1-real-h1n10b/</code></b>，seed 2000–2009、n=10、三基线同源；旧 <code>runs/m1-real-h1n40/</code> 只有 random/heuristic 的 n=40 与中止在 18% 的 fixed_prompt），<code>format_robustness.json</code> 以 <code>m1_evidence=true</code> 通过（<b>2026-10-06 按 M1 验收复核 M-1 用当前快照重跑 n=200 覆盖归档</b>：首答 0.94 → <b>0.995</b>、<code>schema_fail_rate</code> 0.005 → <b>0.0</b>）。</p>
   <p><b>n=10 <code>fixed_prompt</code> 归档与实测速率（2026-10-05）</b>：<code>fixed_prompt</code> 基线的 n=40 因实测成本（≈29–34 h）按用户决定缩到 n=10，已在最终契约上跑完并归档于 <code>runs/m1-real-h1n10b/</code>（seed 2000–2009，三基线同 run 同源，<code>--seeds</code> 显式集合、<code>seed_timeout_s=14400</code>、<code>n_workers=2</code>、<code>git_commit=2d6274f</code>）：<code>n=10 / degraded_n=0 / n_dropped=0</code>，<b><code>fixed_prompt</code> 0/10 = 0.0%（Wilson 95% CI [0.000, 0.278]）</b>，同 run 的 <code>random</code> 0/10、<code>heuristic</code> 4/10 = 40.0%。<b>实测速率</b>：n=10 <b>墙钟 3.32 h</b>、模型时间 3.26 h、1,551 次后端调用（<code>calls/决策点 = 1.62</code>）、<code>t_d</code> p50 <b>7.46 s</b> / p95 10.13 s、schema 全失败率 5.8%、<code>fallback</code> 122 次、<code>D</code> 均值 97.1（中位 69、max 245）。<b>口径 caveat</b>：这条基线含 <b>18% 启发式兜底</b>、<b>76% 的 LLM 尝试引用当时非法动作</b>，M3 引用时必须同时报告 <code>fallback_rate</code>/<code>illegal_rate</code>。详见 <a href="../reviews/2026-10-04-M1验收报告.md#1419-n10-子集的实测耗时与预测-vs-实际对照132-第-6-项收口">M1 验收报告 §14.19</a>。</p>
   <p><b>§13.2 前置项收口（2026-10-05，<code>&lt;本轮提交&gt;</code>）</b>：本模块的 5 项全部闭环——<b>F5</b>（<code>load_episode_results</code> 的 <code>arm</code>/<code>exclude_arms</code> 真过滤，基线臂不再进入代际分母，T-21）、<b>F6</b>（归档与 <code>registry.csv</code> 的溯源字段真实化，T-23）、<b>F18</b>（<code>on_result</code> 逐局增量落盘 + <code>baseline --resume</code>，T-20）、<b>F20</b>（<code>E_EVAL_TIMEOUT</code> + 协同预算 + 硬看门狗，T-19）、<b>F22</b>（<code>fixed_prompt</code> 改走 MOD-04 <code>PolicyAgent(mode="baseline_fixed_prompt")</code>，推理粒度回到决策点，T-22）。新增 <code>tests/unit/evals/test_evals_longrun_guards.py</code>（9 条）与 <code>tests/integration/evals/test_m1_blocker_guards.py</code> 的 F22 用例；<code>tests/fixtures/evals/episodes/heldout/*.jsonl</code> 的 <code>arm</code> 由 <code>baseline-heuristic</code> 更正为 <code>parent</code>（它们充当的是「某一代的 held-out 局」），<b>golden 指标快照逐字节不变</b>。</p>
 </section>
@@ -591,6 +591,6 @@ bootstrap_seed,config_hash,git_commit,ts</code></pre>
 
 </div>
 </main>
-<footer>来源：docs/prd/MOD-08-evals-PRD.md · GameRSI 模块讲解系列 · 2026-10-04 · 同步 2026-10-06</footer>
+<footer>来源：docs/prd/MOD-08-evals-PRD.md · DiceRatchet 模块讲解系列 · 2026-10-04 · 同步 2026-10-06</footer>
 </body>
 </html>

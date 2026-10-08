@@ -6,8 +6,8 @@ import copy
 
 import pytest
 
-from gamer_rsi.env import GameEngine, load_tables
-from gamer_rsi.env import event as EV
+from dice_ratchet.env import GameEngine, load_tables
+from dice_ratchet.env import event as EV
 
 
 @pytest.fixture
@@ -152,7 +152,7 @@ def tables_ref(ctx):
 
 def test_op_gain_die_counter_boss(ctx):
     nxt, ev, _ = _op(ctx, op="gain_die_counter_boss")
-    from gamer_rsi.env.counter import counter_of
+    from dice_ratchet.env.counter import counter_of
     assert tables_ref(ctx)["skills"][ev[0]["defId"]]["school"] == \
         counter_of(EV.chapter_boss_school(ctx["state"], ctx["tables"]))
 
@@ -216,7 +216,7 @@ def test_op_add_curse(ctx):
 
 
 def test_op_remove_curses(ctx):
-    from gamer_rsi.env.state import add_die_to_deck
+    from dice_ratchet.env.state import add_die_to_deck
     add_die_to_deck(ctx["state"], "die_curse_static")
     _op(ctx, op="remove_curses")
     for did in ctx["state"]["player"]["deck"]:

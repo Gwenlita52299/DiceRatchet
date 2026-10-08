@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
-from gamer_rsi.inference.schema import DECISION_SCHEMA, validate
+from dice_ratchet.inference.schema import DECISION_SCHEMA, validate
 
 from inference_support import GOOD, GOOD2, MODEL_ID, mock_factory, model_entry, registry_of
 
@@ -16,7 +16,7 @@ MESSAGES_USER = "phase=player_turn；给出计划"
 
 
 def _generate(manager):
-    from gamer_rsi.inference.backend import Message
+    from dice_ratchet.inference.backend import Message
 
     async def run():
         result = await manager.generate_json(
@@ -61,9 +61,9 @@ def test_json_mode_still_repairs_invalid_output(manager_builder):
 
 def test_grammar_unavailable_and_no_json_mode_errors(manager_builder):
     """grammar 编译失败 + 未声明 JSON mode → E_LLM_BACKEND_ERROR（Spec P-09）。"""
-    from gamer_rsi.infra.errors import E
-    from gamer_rsi.inference.backend import Message
-    from gamer_rsi.inference.errors import InferenceError
+    from dice_ratchet.infra.errors import E
+    from dice_ratchet.inference.backend import Message
+    from dice_ratchet.inference.errors import InferenceError
 
     factory, _ = mock_factory([GOOD])
     manager = manager_builder(

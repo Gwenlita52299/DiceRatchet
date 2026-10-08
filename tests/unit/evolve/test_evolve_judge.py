@@ -14,13 +14,13 @@ from __future__ import annotations
 
 import pytest
 
-# 注意：``gamer_rsi.evolve.__init__`` 会把子模块名 ``judge`` 重绑到同名函数上，
-# 因此 ``import gamer_rsi.evolve.judge as J`` 拿到的是函数而不是模块（Python 的
+# 注意：``dice_ratchet.evolve.__init__`` 会把子模块名 ``judge`` 重绑到同名函数上，
+# 因此 ``import dice_ratchet.evolve.judge as J`` 拿到的是函数而不是模块（Python 的
 # ``import ... as`` 会走父包属性）。这里显式从子模块按名导入。
-from gamer_rsi.evolve.judge import (CONDITION_IDS, better, first_failure, judge,
+from dice_ratchet.evolve.judge import (CONDITION_IDS, better, first_failure, judge,
                                     pick_winner, smoke_fast_reject, smoke_seeds_for,
                                     superseded_verdict)
-from gamer_rsi.infra.errors import E
+from dice_ratchet.infra.errors import E
 
 from evolve_support import (FakeArm, heldout_dict, make_candidate, make_config,
                             make_report, paired_dict)

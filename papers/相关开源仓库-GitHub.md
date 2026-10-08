@@ -30,7 +30,7 @@
 | [theseus-labs-rsi/awesome-rsi](https://github.com/theseus-labs-rsi/awesome-rsi) | RSI 论文与资源列表 | 132 |
 | [KaiWU5/Awesome-AI4AI](https://github.com/KaiWU5/Awesome-AI4AI) | 「AI 能否可靠改进 AI」综述，223 篇 | 178 |
 
-## 三、RSI Agent / Harness 级开源项目（与 GameRSI MOD-06/07 最相关）
+## 三、RSI Agent / Harness 级开源项目（与 DiceRatchet MOD-06/07 最相关）
 
 | 仓库 | 说明 | Star |
 |---|---|---|
@@ -53,7 +53,7 @@
 | [ResearAI/DeepScientist](https://github.com/ResearAI/DeepScientist) | 深度科研 agent | 3.3k |
 | [K-Dense-AI/scientific-agent-skills](https://github.com/K-Dense-AI/scientific-agent-skills) | AI 科学家技能库 | 47k |
 
-## 五、与 GameRSI 的对标建议
+## 五、与 DiceRatchet 的对标建议
 
 项目核心是「游戏沙箱 + harness 自进化 + 不可作弊的 held-out 测量」，优先级建议：
 

@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra import config as cfg_mod
-from gamer_rsi.infra.config import (AppConfig, artifact_hash, canonical_json,
+from dice_ratchet.infra import config as cfg_mod
+from dice_ratchet.infra.config import (AppConfig, artifact_hash, canonical_json,
                                     config_hash, derive_seed, env_applied_keys,
                                     harness_overridden_keys, load_config, load_seeds)
-from gamer_rsi.infra.errors import E, InfraError
+from dice_ratchet.infra.errors import E, InfraError
 
 REPO = Path(__file__).resolve().parents[3]
 CONFIGS = REPO / "configs"
@@ -25,8 +25,8 @@ def _repo_configs():
 # ---- T-09-1 环境变量覆盖默认值 ------------------------------------------------------
 
 def test_env_var_overrides_default(tmp_path, monkeypatch):
-    # 给定：default.yaml 的 loop.k=30，环境变量 GAMERSI_LOOP__K=5
-    monkeypatch.setenv("GAMERSI_LOOP__K", "5")
+    # 给定：default.yaml 的 loop.k=30，环境变量 DICERATCHET_LOOP__K=5
+    monkeypatch.setenv("DICERATCHET_LOOP__K", "5")
     # 当：load_config()
     cfg = load_config(config_dir=CONFIGS)
     # 则：cfg.loop.k == 5
@@ -35,21 +35,21 @@ def test_env_var_overrides_default(tmp_path, monkeypatch):
 
 def test_cli_beats_env_var(monkeypatch):
     # T-09-2：同上且 CLI 传 --k 7 → CLI 胜出
-    monkeypatch.setenv("GAMERSI_LOOP__K", "5")
+    monkeypatch.setenv("DICERATCHET_LOOP__K", "5")
     cfg = load_config(cli_overrides={"loop.k": 7}, config_dir=CONFIGS)
     assert cfg.loop.k == 7
 
 
 def test_env_var_nested_key(monkeypatch):
-    # B-30：GAMERSI_MEMORY__RETRIEVE__TOP_K=8 → memory.retrieve.top_k
-    monkeypatch.setenv("GAMERSI_MEMORY__RETRIEVE__TOP_K", "8")
+    # B-30：DICERATCHET_MEMORY__RETRIEVE__TOP_K=8 → memory.retrieve.top_k
+    monkeypatch.setenv("DICERATCHET_MEMORY__RETRIEVE__TOP_K", "8")
     cfg = load_config(config_dir=CONFIGS)
     assert cfg.memory.retrieve.top_k == 8
 
 
 def test_env_var_bool_and_int_inference(monkeypatch):
-    monkeypatch.setenv("GAMERSI_INFRA__UTC", "false")
-    monkeypatch.setenv("GAMERSI_LOOP__MAX_GENERATIONS", "9")
+    monkeypatch.setenv("DICERATCHET_INFRA__UTC", "false")
+    monkeypatch.setenv("DICERATCHET_LOOP__MAX_GENERATIONS", "9")
     cfg = load_config(config_dir=CONFIGS)
     assert cfg.infra.utc is False
     assert cfg.loop.max_generations == 9
@@ -57,7 +57,7 @@ def test_env_var_bool_and_int_inference(monkeypatch):
 
 def test_unknown_env_key_ignored(monkeypatch):
     # FR-09-1：未知键 → 记 E_IO_CONFIG_UNKNOWN 并忽略（不中断）
-    monkeypatch.setenv("GAMERSI_LOOP__NOPE", "1")
+    monkeypatch.setenv("DICERATCHET_LOOP__NOPE", "1")
     cfg = load_config(config_dir=CONFIGS)
     assert cfg.loop.k == 30
     assert "loop.nope" in load_config.unknown_keys
@@ -275,19 +275,19 @@ def test_unknown_flat_key_ignored_and_recorded():
 # ---- 回归（2026-10-03 审计 P1-4/P1-6）：未知段记录 + 注解级类型校验 --------------------
 
 def test_unknown_env_section_recorded(monkeypatch):
-    """未知段（如 Spec §5 的 GAMERSI_MEMORY_RETRIEVE__TOP_K 写法）必须被记录而非静默丢弃。"""
-    monkeypatch.setenv("GAMERSI_FOO__BAR", "1")
+    """未知段（如 Spec §5 的 DICERATCHET_MEMORY_RETRIEVE__TOP_K 写法）必须被记录而非静默丢弃。"""
+    monkeypatch.setenv("DICERATCHET_FOO__BAR", "1")
     load_config(config_dir=CONFIGS)
     assert "foo.bar" in load_config.unknown_keys
-    assert "GAMERSI_FOO__BAR" in load_config.unknown_keys
+    assert "DICERATCHET_FOO__BAR" in load_config.unknown_keys
 
 
 def test_env_applied_keys_lists_only_accepted(monkeypatch):
-    monkeypatch.setenv("GAMERSI_LOOP__K", "9")
-    monkeypatch.setenv("GAMERSI_LOOP__NOPE", "1")
+    monkeypatch.setenv("DICERATCHET_LOOP__K", "9")
+    monkeypatch.setenv("DICERATCHET_LOOP__NOPE", "1")
     cfg = load_config(config_dir=CONFIGS)
     assert cfg.loop.k == 9
-    assert env_applied_keys(cfg) == ("GAMERSI_LOOP__K",)
+    assert env_applied_keys(cfg) == ("DICERATCHET_LOOP__K",)
 
 
 @pytest.mark.parametrize("key,value", [
@@ -437,8 +437,8 @@ def test_policy_template_paths_are_consumed_by_the_agent(tmp_path):
     """F12 的另一半：改配置必须**真的**改变 agent 读到的模板（不再被包内回落静默覆盖）。"""
     from dataclasses import replace
 
-    from gamer_rsi.agent.policy import PolicyAgent
-    from gamer_rsi.agent.prompts.assembler import FIXED_TEMPLATE_PATH
+    from dice_ratchet.agent.policy import PolicyAgent
+    from dice_ratchet.agent.prompts.assembler import FIXED_TEMPLATE_PATH
 
     frozen = tmp_path / "my_fixed.md"
     frozen.write_text("# 自定义冻结模板\n\n观测:\n{{observation}}\n\n记忆:\n{{memory}}\n",
@@ -458,7 +458,7 @@ def test_policy_template_paths_are_consumed_by_the_agent(tmp_path):
 
 
 def test_schema_ids_are_uniform():
-    """F12②：所有 ``schemas/*.json`` 都要有 ``$id``，且都用 ``gamersi.local`` 前缀。"""
+    """F12②：所有 ``schemas/*.json`` 都要有 ``$id``，且都用 ``diceratchet.local`` 前缀。"""
     ids = {}
     for path in sorted((REPO / "schemas").glob("*.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -480,7 +480,7 @@ def test_schema_ids_are_uniform():
         "evolve_candidate.schema.json", "evolve_candidate_report.schema.json",
     }
     assert set(ids) == expected, sorted(set(ids) ^ expected)
-    assert all(value.startswith("https://gamersi.local/schemas/") for value in ids.values()), ids
+    assert all(value.startswith("https://diceratchet.local/schemas/") for value in ids.values()), ids
 
 
 # ---- 推理/评估关键默认值的三层一致性（M1 验收复核发现的默认值漂移） ----------------
@@ -500,7 +500,7 @@ def test_inference_defaults_match_yaml(key, expected):
     ``InferenceConfig()``」的路径（库式调用/测试夹具）都会拿到把正常决策判成
     ``E_LLM_TIMEOUT`` 的旧值；且 ``_default_dict()`` 取自 dataclass，会让 YAML 缺失该键时静默回落。
     """
-    from gamer_rsi.infra.config import InferenceConfig
+    from dice_ratchet.infra.config import InferenceConfig
 
     assert getattr(InferenceConfig(), key) == expected
     assert getattr(load_config(config_dir=CONFIGS, harness_config=REPO / "harness/config.json").inference,
@@ -509,8 +509,8 @@ def test_inference_defaults_match_yaml(key, expected):
 
 def test_seed_timeout_defaults_agree_across_layers():
     """``EvalConfig`` / ``EvalSpec`` / YAML 的 ``seed_timeout_s`` 必须同为 14400（F24 实测标定值）。"""
-    from gamer_rsi.evals.harness import EvalSpec
-    from gamer_rsi.infra.config import EvalConfig
+    from dice_ratchet.evals.harness import EvalSpec
+    from dice_ratchet.infra.config import EvalConfig
 
     yaml_value = load_config(config_dir=CONFIGS,
                              harness_config=REPO / "harness/config.json").evals.seed_timeout_s
@@ -530,9 +530,9 @@ def test_numeric_getattr_fallbacks_for_timeouts_are_canonical():
     """
     import inspect
 
-    from gamer_rsi import app as app_mod
-    from gamer_rsi.evals import cli as evals_cli
-    from gamer_rsi.inference import backend as backend_mod
+    from dice_ratchet import app as app_mod
+    from dice_ratchet.evals import cli as evals_cli
+    from dice_ratchet.inference import backend as backend_mod
 
     cases = [
         (app_mod, "seed_timeout_s", "14400"),

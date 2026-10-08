@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from gamer_rsi.agent.policy import (_LEGAL_COMPACT_SAMPLES, _render_legal,
+from dice_ratchet.agent.policy import (_LEGAL_COMPACT_SAMPLES, _render_legal,
                                     _render_legal_compact, _spread)
-from gamer_rsi.agent.prompts.assembler import (DEFAULT_TEMPLATE_PATH, load_template,
+from dice_ratchet.agent.prompts.assembler import (DEFAULT_TEMPLATE_PATH, load_template,
                                                PromptContext, assemble_prompt,
                                                estimate_tokens)
 
@@ -86,7 +86,7 @@ def test_oversize_legal_actions_are_compressed_instead_of_overflowing():
 
 def test_observation_only_overflow_still_fails_closed():
     """压缩 legal 也装不下（观测单独超限）→ 仍然 ``E_ACTION_BUDGET``（保守，不静默丢观测）。"""
-    from gamer_rsi.infra.errors import E
+    from dice_ratchet.infra.errors import E
 
     spec = load_template(DEFAULT_TEMPLATE_PATH)
     ctx = _ctx(observation="x" * 100_000, legal_actions="", legal_actions_compact="")
@@ -96,7 +96,7 @@ def test_observation_only_overflow_still_fails_closed():
 
 
 def test_no_compact_form_keeps_the_old_behaviour():
-    from gamer_rsi.infra.errors import E
+    from dice_ratchet.infra.errors import E
 
     spec = load_template(DEFAULT_TEMPLATE_PATH)
     ctx = _ctx(legal_actions_compact="")
@@ -106,7 +106,7 @@ def test_no_compact_form_keeps_the_old_behaviour():
 
 def test_memory_and_reflections_are_dropped_before_compressing_legal_actions():
     """优先级不变：先用完整 legal 丢 memory/reflections；只有仍超预算才压缩 legal。"""
-    from gamer_rsi.agent.prompts.assembler import MemoryItem
+    from dice_ratchet.agent.prompts.assembler import MemoryItem
 
     spec = load_template(DEFAULT_TEMPLATE_PATH)
     big = MemoryItem("m-1", "y" * 9_000, 0.9)
@@ -128,8 +128,8 @@ def test_memory_and_reflections_are_dropped_before_compressing_legal_actions():
 
 def test_real_episode_prompts_never_exceed_the_budget(make_env, cfg, ctx):
     """真环境上的不变式：任何决策点的 ``token_estimate`` 都不得超过 ``prompt_token_budget``。"""
-    from gamer_rsi.agent import PolicyAgent
-    from gamer_rsi.agent.heuristic import heuristic_policy
+    from dice_ratchet.agent import PolicyAgent
+    from dice_ratchet.agent.heuristic import heuristic_policy
 
     agent = PolicyAgent(cfg, harness_dir=Path("harness"))
     env = make_env(seed=1000)

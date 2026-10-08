@@ -22,9 +22,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
-from gamer_rsi.agent.policy import DecisionResult, EpisodeContext, LLMCallMeta, StepRecord
-from gamer_rsi.memory import Provenance, ReflectionEntry
-from gamer_rsi.sandbox.api import EpisodeConfig, StepResult
+from dice_ratchet.agent.policy import DecisionResult, EpisodeContext, LLMCallMeta, StepRecord
+from dice_ratchet.memory import Provenance, ReflectionEntry
+from dice_ratchet.sandbox.api import EpisodeConfig, StepResult
 
 __all__ = ["FakeEnv", "FakeMemory", "FakeMemoryView", "FakePolicy", "FakeJsonResult",
            "ScriptedClient", "decision", "decision_script", "make_reflection_entry",

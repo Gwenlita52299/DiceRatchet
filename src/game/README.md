@@ -1,4 +1,4 @@
-# 破咒骰 · GameRSI 网页版骰子 roguelike
+# 破咒骰 · DiceRatchet 网页版骰子 roguelike
 
 按 [`docs/prd/GAME-00`](../../docs/prd/GAME-00-webgame-PRD.md) / [`GAME-01`](../../docs/prd/GAME-01-kernel-contract.md) / [`GAME-02`](../../docs/prd/GAME-02-content-tables.md) 实现的浏览器骰子 roguelike：
 掷骰 → 把骰面放进技能槽 → 用**学派克制**压制强敌；10 关 3 章、3 难度、5 个局内系统开关。

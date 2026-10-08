@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.inference.schema import (DECISION_SCHEMA, compile_grammar,
+from dice_ratchet.inference.schema import (DECISION_SCHEMA, compile_grammar,
                                         load_decision_schema, repair_prompt_text, validate)
 
 GOLDEN = Path(__file__).resolve().parent

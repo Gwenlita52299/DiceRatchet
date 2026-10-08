@@ -2,7 +2,7 @@
 
 > 版本：v1.2（2026-09-30 17:21 为 RSI 训练补充局长选项，见 §20）· 状态：待评审（可交付生成）· 定位：**这份 PRD 是「游戏实现」的唯一事实来源（SSoT）**
 > 作者：GAME-00 owner · 日期：2026-09-30
-> 上游：[项目计划-GameRSI.md](../../项目计划-GameRSI.md) · [模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)
+> 上游：[项目计划-DiceRatchet.md](../../项目计划-DiceRatchet.md) · [模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)
 > 下游/平行：[MOD-01-env-rules-PRD.md](MOD-01-env-rules-PRD.md)（**本游戏跑通后**，按本 PRD 规则另行实现一份纯 Python 模拟器供 RSI 训练）
 > 配套子文档：[GAME-01 规则内核契约](GAME-01-kernel-contract.md) · [GAME-02 配表规格](GAME-02-content-tables.md)
 
@@ -30,7 +30,7 @@
 
 ### 1.1 背景
 
-GameRSI 项目的终点是「小模型在自建游戏里自我进化」。项目原计划直接手写纯 Python 模拟器（MOD-01）作为训练环境。经评审，改为**分两步**：
+DiceRatchet 项目的终点是「小模型在自建游戏里自我进化」。项目原计划直接手写纯 Python 模拟器（MOD-01）作为训练环境。经评审，改为**分两步**：
 
 1. **先做出一个人类真正愿意玩、且规则完备的游戏本体**（本 PRD）——有表现层、有美术表现、有完整的局内系统；
 2. **再按同一套规则写纯 Python 模拟器**（MOD-01）供 RSI 闭环训练；未来若条件成熟，**接视觉模型直接对游戏本体做 RSI 训练，跳过模拟器**。
@@ -955,8 +955,8 @@ status → target.status[kind] += value          # 中毒/灼烧在 upkeep 结�
 | 同上（英文新手向） | [Beginner Tips For Astrea: Six-Sided Oracles（TheGamer）](https://www.thegamer.com/astrea-six-sided-oracles-beginner-tips-guide/) |
 | 游戏本体 | [Astrea: Six-Sided Oracles（Steam）](https://store.steampowered.com/app/1755830) |
 | 骰子+技能槽规则的原始设计依据 | [Dicey Dungeons（维基百科）](https://en.wikipedia.org/wiki/Dicey_Dungeons) |
-| 项目定位与沙箱纪律 | [项目计划-GameRSI.md](../../项目计划-GameRSI.md) |
-| 模块边界与不变量 | [模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md) |
+| 项目定位与沙箱纪律 | [项目计划-DiceRatchet.md](../../项目计划-DiceRatchet.md) |
+| 模块边界与不变量 | [模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md) |
 | 未来纯 Python 模拟器规格 | [MOD-01-env-rules-PRD.md](MOD-01-env-rules-PRD.md) |
 
 ---

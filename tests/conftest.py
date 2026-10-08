@@ -15,8 +15,8 @@ from typing import Any, Callable, Mapping
 
 import pytest
 
-from gamer_rsi.env import GameEngine, load_tables
-from gamer_rsi.sandbox.api import EpisodeConfig, SandboxEnv
+from dice_ratchet.env import GameEngine, load_tables
+from dice_ratchet.sandbox.api import EpisodeConfig, SandboxEnv
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXED_TS = "2026-09-30T12:00:00Z"
@@ -80,7 +80,7 @@ def build_sandbox_run(
     honeypot: bool = True, x_obs_keys: bool = True,
 ) -> BuiltRun:
     """在 ``root`` 下合成一个可重放的 run 目录。"""
-    from gamer_rsi.sandbox import obs_field_paths
+    from dice_ratchet.sandbox import obs_field_paths
 
     engine = engine or GameEngine(load_tables())
     episode_key = f"e-{seed:06d}-g{generation:03d}-{arm}"

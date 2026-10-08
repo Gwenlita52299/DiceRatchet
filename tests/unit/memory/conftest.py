@@ -12,8 +12,8 @@ from typing import Any, Callable
 
 import pytest
 
-from gamer_rsi.infra.config import MemoryConfig
-from gamer_rsi.memory import (MemoryCandidate, MemoryEntry, MemoryStore, Provenance,
+from dice_ratchet.infra.config import MemoryConfig
+from dice_ratchet.memory import (MemoryCandidate, MemoryEntry, MemoryStore, Provenance,
                               ReflectionEntry, SituationKey)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]

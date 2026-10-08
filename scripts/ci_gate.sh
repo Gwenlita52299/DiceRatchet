@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/ci_gate.sh —— GameRSI 统一 CI 门禁（M0 验收 F2 的「CI 门禁接线」落点）
+# scripts/ci_gate.sh —— DiceRatchet 统一 CI 门禁（M0 验收 F2 的「CI 门禁接线」落点）
 #
 # 把 Spec §9 的 G1–G6 与 INV-1/INV-6 变成一条**可本地复跑、也可被 CI 调用**的命令：
 #   G1 单测      全量 pytest
@@ -34,7 +34,7 @@ for arg in "$@"; do
     --with-slow) WITH_SLOW=1 ;;
     --coverage) COVERAGE=1 ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
-    *) echo "未知参数：$arg（见 $0 --help）" >&2; exit 2 ;;
+    *) echo "未知参数：${arg}（见 $0 --help）" >&2; exit 2 ;;
   esac
 done
 
@@ -56,21 +56,22 @@ run() {
   if "$@"; then
     echo "✔ $label"
   else
-    echo "✘ $label（退出码 $?）" >&2
+    # bash 3.2（macOS 自带）：多字节字符紧跟 $label 会被并进变量名 → unbound variable
+    echo "✘ ${label}（退出码 $?）" >&2
     FAILED=1
   fi
 }
 
-echo "GameRSI CI 门禁：repo=$REPO_ROOT"
+echo "DiceRatchet CI 门禁：repo=$REPO_ROOT"
 echo "  python = $PY ($($PY -V 2>&1))"
 echo "  node   = $($NODE_BIN -v 2>&1 || echo '不可用')"
 echo "  mode   = with_slow=$WITH_SLOW coverage=$COVERAGE"
 
 # ---- G6 / INV-1 / INV-6：守卫门禁 -------------------------------------------
-run "G6/INV-1/INV-6 guards check" "$PY" -m gamer_rsi guards check --root gamer_rsi
+run "G6/INV-1/INV-6 guards check" "$PY" -m dice_ratchet guards check --root dice_ratchet
 # 反例必须被拦下（fail-closed 自检：门禁不是空转）
 step "门禁反例自检（必须失败）"
-if "$PY" -m gamer_rsi guards check --root tests/fixtures/guards >/dev/null 2>&1; then
+if "$PY" -m dice_ratchet guards check --root tests/fixtures/guards >/dev/null 2>&1; then
   echo "✘ 反例 fixture 竟通过：guards 门禁已失效" >&2
   FAILED=1
 else
@@ -78,12 +79,12 @@ else
 fi
 
 # ---- G4 / G6：环境自检（含确定性双跑与 golden 烟雾对拍）--------------------
-run "G4/G6 env selftest" "$PY" -m gamer_rsi env selftest --seed 1
+run "G4/G6 env selftest" "$PY" -m dice_ratchet env selftest --seed 1
 
 # ---- G1–G5：测试套件 --------------------------------------------------------
 PYTEST_ARGS=(-q)
 if [[ "$COVERAGE" == "1" ]]; then
-  PYTEST_ARGS+=(--cov=gamer_rsi --cov-report=term-missing:skip-covered)
+  PYTEST_ARGS+=(--cov=dice_ratchet --cov-report=term-missing:skip-covered)
 fi
 if [[ "$WITH_SLOW" == "0" ]]; then
   run "G1–G5 pytest（不含 slow）" "$PY" -m pytest "${PYTEST_ARGS[@]}" -m "not slow"

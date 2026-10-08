@@ -8,9 +8,9 @@ import stat
 
 import pytest
 
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.sandbox import honeypot as HP
-from gamer_rsi.sandbox.projection import ProjectionCtx, canonical_json, project_state
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.sandbox import honeypot as HP
+from dice_ratchet.sandbox.projection import ProjectionCtx, canonical_json, project_state
 
 
 def _ctx():
@@ -29,7 +29,7 @@ def test_self_test_catches_all_12():
 
 
 def test_self_test_assert_ok_raises_on_miss(monkeypatch):
-    from gamer_rsi.sandbox.honeypot import HoneypotSelfTestResult
+    from dice_ratchet.sandbox.honeypot import HoneypotSelfTestResult
 
     bad = HoneypotSelfTestResult(cases=12, caught=11, missed=(),
                                  )
@@ -71,7 +71,7 @@ def test_scan_reports_multiple_offsets():
 
 def test_inject_places_all_four_sentinels(engine, player_turn_state, shop_state,
                                           golden_config):
-    from gamer_rsi.env.map import current_stage_map
+    from dice_ratchet.env.map import current_stage_map
 
     # 1) 未揭示地图行：preview.enemyNames 嵌 canary（开局 map 阶段必有未揭示行）
     fresh = engine.create(golden_config)
@@ -106,7 +106,7 @@ def test_inject_does_not_mutate_source(engine, player_turn_state):
 
 
 def test_state_hash_unaffected_by_injection(engine, player_turn_state):
-    from gamer_rsi.env import state_hash
+    from dice_ratchet.env import state_hash
 
     before = state_hash(player_turn_state)
     HP.injected_copy(player_turn_state)
@@ -173,9 +173,9 @@ def test_record_hits_writes_ledger(tmp_path):
 
 
 def test_ledger_path_from_env(monkeypatch, tmp_path):
-    monkeypatch.setenv("GAMERSI_HONEYPOT_LEDGER", str(tmp_path / "env.jsonl"))
+    monkeypatch.setenv("DICERATCHET_HONEYPOT_LEDGER", str(tmp_path / "env.jsonl"))
     assert HP.ledger_path() == tmp_path / "env.jsonl"
-    monkeypatch.delenv("GAMERSI_HONEYPOT_LEDGER")
+    monkeypatch.delenv("DICERATCHET_HONEYPOT_LEDGER")
     assert HP.ledger_path() is None
 
 

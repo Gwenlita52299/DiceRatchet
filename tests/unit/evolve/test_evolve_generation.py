@@ -17,10 +17,10 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.evolve import generation as GEN
-from gamer_rsi.evolve.paths import GenPaths
-from gamer_rsi.evolve.schemas import Candidate
-from gamer_rsi.infra.errors import E
+from dice_ratchet.evolve import generation as GEN
+from dice_ratchet.evolve.paths import GenPaths
+from dice_ratchet.evolve.schemas import Candidate
+from dice_ratchet.infra.errors import E
 
 from evolve_support import (FakeArm, FakeRunContext, FakeState, StubLLM,
                             make_app_config, make_candidate, make_config, prompt_diff,
@@ -76,7 +76,7 @@ def stub_pairing(monkeypatch):
     """C2 的配对检验打桩（真实 ``compare_paired`` 要求真 ``ArmResult``）。"""
     import importlib
 
-    judge_mod = importlib.import_module("gamer_rsi.evolve.judge")
+    judge_mod = importlib.import_module("dice_ratchet.evolve.judge")
 
     def _install(**values):
         result = _paired(**values)
@@ -278,7 +278,7 @@ def test_smoke_failure_skips_heldout(tmp_path, stub_pairing):
 
 
 def test_load_failure_is_rejected(tmp_path, monkeypatch, stub_pairing):
-    from gamer_rsi.evolve.errors import LoadFailedError
+    from dice_ratchet.evolve.errors import LoadFailedError
 
     harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
     stub_pairing()
@@ -300,7 +300,7 @@ def test_load_failure_is_rejected(tmp_path, monkeypatch, stub_pairing):
 # =====================================================================
 
 def test_mod08_failure_conservatively_rejects(tmp_path, stub_pairing):
-    from gamer_rsi.infra.errors import E as _E, InfraError
+    from dice_ratchet.infra.errors import E as _E, InfraError
 
     harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
     stub_pairing()
@@ -319,7 +319,7 @@ def test_mod08_failure_conservatively_rejects(tmp_path, stub_pairing):
 
 
 def test_parent_arm_failure_does_not_crash_generation(tmp_path, stub_pairing):
-    from gamer_rsi.infra.errors import E as _E, InfraError
+    from dice_ratchet.infra.errors import E as _E, InfraError
 
     harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
     stub_pairing()
@@ -351,7 +351,7 @@ def test_hitl_pending_parks_generation(tmp_path, stub_pairing):
 
 
 def test_hitl_approve_then_resume_accepts(tmp_path, stub_pairing):
-    from gamer_rsi.evolve import gate as G
+    from dice_ratchet.evolve import gate as G
 
     harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path, hitl=True)
     stub_pairing(delta=0.10)
@@ -371,7 +371,7 @@ def test_hitl_approve_then_resume_accepts(tmp_path, stub_pairing):
 
 
 def test_hitl_rollback_then_resume_rolls_back(tmp_path, stub_pairing):
-    from gamer_rsi.evolve import gate as G
+    from dice_ratchet.evolve import gate as G
 
     harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path, hitl=True)
     stub_pairing(delta=0.10)

@@ -25,10 +25,10 @@ sys.path.insert(0, str(REPO / "tests"))
 
 from conftest import build_sandbox_run  # noqa: E402
 
-from gamer_rsi.env import GameEngine, load_tables  # noqa: E402
-from gamer_rsi.sandbox.api import EpisodeConfig, SandboxEnv  # noqa: E402
-from gamer_rsi.sandbox.audit import run_audit  # noqa: E402
-from gamer_rsi.sandbox.projection import render_compact  # noqa: E402
+from dice_ratchet.env import GameEngine, load_tables  # noqa: E402
+from dice_ratchet.sandbox.api import EpisodeConfig, SandboxEnv  # noqa: E402
+from dice_ratchet.sandbox.audit import run_audit  # noqa: E402
+from dice_ratchet.sandbox.projection import render_compact  # noqa: E402
 
 OUT = Path(__file__).resolve().parent
 FIXED_TS = "2026-09-30T12:00:00Z"

@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.errors import E
-from gamer_rsi.sandbox import guard as G
+from dice_ratchet.infra.errors import E
+from dice_ratchet.sandbox import guard as G
 
 LEGAL_TOOL = '''
 """合法工具：纯函数 + 运算符/比较/布尔/推导式/sorted/len/range/max/min。"""
@@ -65,7 +65,7 @@ MALICIOUS = [
 def test_check_imports_flags_fake_l1_layer_file(tmp_path):
     fake = tmp_path / "det_fake.py"
     fake.write_text("import json\n"
-                    "from gamer_rsi.env.engine import Engine\n"
+                    "from dice_ratchet.env.engine import Engine\n"
                     "x = Engine\n", encoding="utf-8")
     report = G.check_imports([fake])
     assert report.ok is False
@@ -76,7 +76,7 @@ def test_check_imports_flags_fake_l1_layer_file(tmp_path):
 
 def test_check_imports_accepts_clean_layer(tmp_path):
     good = tmp_path / "det_ok.py"
-    good.write_text("from gamer_rsi.sandbox.api import SandboxEnv\n", encoding="utf-8")
+    good.write_text("from dice_ratchet.sandbox.api import SandboxEnv\n", encoding="utf-8")
     report = G.check_imports([good])
     assert report.ok is True and report.findings == ()
 
@@ -91,7 +91,7 @@ def test_check_imports_reports_syntax_error(tmp_path):
 
 def test_check_imports_scans_repo_layer_packages(repo_root):
     """真实 L1–L3 目录目前不存在或为空 → 0 命中（CI 门禁的调用形态）。"""
-    roots = [repo_root / "gamer_rsi" / name for name in
+    roots = [repo_root / "dice_ratchet" / name for name in
              ("agent", "memory", "loop", "evolve", "evals", "inference")]
     report = G.check_imports([p for p in roots if p.exists()])
     assert report.ok is True
@@ -107,27 +107,27 @@ def _hook_installed():
 
 
 def test_import_hook_denies_agent_layer_frame():
-    namespace = {"__name__": "gamer_rsi.agent.fake_policy"}
+    namespace = {"__name__": "dice_ratchet.agent.fake_policy"}
     with pytest.raises(G.GuardViolation) as exc:
-        exec(compile("import gamer_rsi.env.rng", "<fake>", "exec"), namespace)
+        exec(compile("import dice_ratchet.env.rng", "<fake>", "exec"), namespace)
     assert exc.value.code == E.E_ENV_IMPORT_DENIED
-    assert "gamer_rsi.agent.fake_policy" in str(exc.value)
+    assert "dice_ratchet.agent.fake_policy" in str(exc.value)
 
 
 def test_import_hook_allows_non_agent_frame():
     namespace = {"__name__": "tests.sandbox_probe"}
-    exec(compile("import gamer_rsi.env.rng as r", "<probe>", "exec"), namespace)
+    exec(compile("import dice_ratchet.env.rng as r", "<probe>", "exec"), namespace)
     assert namespace["r"].STREAM_NAMES
 
 
 def test_import_hook_allows_sandbox_own_imports():
-    namespace = {"__name__": "gamer_rsi.sandbox.probe"}
-    exec(compile("from gamer_rsi.env import GameEngine", "<probe>", "exec"), namespace)
+    namespace = {"__name__": "dice_ratchet.sandbox.probe"}
+    exec(compile("from dice_ratchet.env import GameEngine", "<probe>", "exec"), namespace)
     assert namespace["GameEngine"] is not None
 
 
 def test_import_hook_is_installed_and_permanent():
-    assert G.install_agent_import_hook.__module__ == "gamer_rsi.sandbox.guard"
+    assert G.install_agent_import_hook.__module__ == "dice_ratchet.sandbox.guard"
     finders = [f for f in sys.meta_path if isinstance(f, G._AgentImportFinder)]
     assert finders
     sys.meta_path.remove(finders[0]) # 试图卸载
@@ -181,8 +181,8 @@ def test_analyze_code_import_allowlist_override():
                           import_allowlist=("statistics",)).ok is True
 
 
-def test_analyze_code_blocks_gamer_rsi_sandbox_import():
-    assert G.analyze_code("import gamer_rsi.sandbox.guard").ok is False
+def test_analyze_code_blocks_dice_ratchet_sandbox_import():
+    assert G.analyze_code("import dice_ratchet.sandbox.guard").ok is False
 
 
 def test_guard_violation_is_exception_with_code():
@@ -248,7 +248,7 @@ def test_gate_without_run_dir_does_not_write(tmp_path):
 
 def test_gate_env_run_dir(monkeypatch, tmp_path):
     harness = _harness(tmp_path, {"rank.py": LEGAL_TOOL})
-    monkeypatch.setenv("GAMERSI_RUN_DIR", str(tmp_path / "envrun"))
+    monkeypatch.setenv("DICERATCHET_RUN_DIR", str(tmp_path / "envrun"))
     G.gate(harness)
     assert (tmp_path / "envrun" / "audit" / "harness-gate.json").is_file()
 
@@ -457,7 +457,7 @@ def _worker_harness(tmp_path: Path) -> Path:
 
 
 def test_worker_module_load_tools_ignores_sentinels(tmp_path):
-    from gamer_rsi.sandbox import _worker
+    from dice_ratchet.sandbox import _worker
 
     tools = _worker._load_tools(_worker_harness(tmp_path),
                                {"import_allowlist": ["math"], "max_tools": 8})
@@ -466,7 +466,7 @@ def test_worker_module_load_tools_ignores_sentinels(tmp_path):
 
 
 def test_worker_module_max_tools_cap(tmp_path):
-    from gamer_rsi.sandbox import _worker
+    from dice_ratchet.sandbox import _worker
 
     tools = _worker._load_tools(_worker_harness(tmp_path),
                                {"import_allowlist": ["math"], "max_tools": 1})
@@ -476,7 +476,7 @@ def test_worker_module_max_tools_cap(tmp_path):
 def test_worker_main_protocol(tmp_path, monkeypatch, capsys):
     import io
 
-    from gamer_rsi.sandbox import _worker
+    from dice_ratchet.sandbox import _worker
 
     monkeypatch.setattr(_worker, "_set_limits", lambda *a, **kw: None)
     options = {"harness_dir": str(_worker_harness(tmp_path)), "max_tools": 8,
@@ -511,7 +511,7 @@ def test_worker_main_escape_exits_5(tmp_path, monkeypatch, capsys):
     """E_ENV_ESCAPE 是 P0：子进程回应错误后立即退出（父进程重启 + 卸载 harness）。"""
     import io
 
-    from gamer_rsi.sandbox import _worker
+    from dice_ratchet.sandbox import _worker
 
     monkeypatch.setattr(_worker, "_set_limits", lambda *a, **kw: None)
     options = {"harness_dir": str(_worker_harness(tmp_path)), "max_tools": 8,
@@ -526,7 +526,7 @@ def test_worker_main_escape_exits_5(tmp_path, monkeypatch, capsys):
 
 
 def test_worker_main_load_failure_exits_4(tmp_path, monkeypatch, capsys):
-    from gamer_rsi.sandbox import _worker
+    from dice_ratchet.sandbox import _worker
 
     monkeypatch.setattr(_worker, "_set_limits", lambda *a, **kw: None)
     harness = tmp_path / "harness"
@@ -539,7 +539,7 @@ def test_worker_main_load_failure_exits_4(tmp_path, monkeypatch, capsys):
 
 
 def test_worker_module_respond_and_set_limits_are_safe(capsys):
-    from gamer_rsi.sandbox import _worker
+    from dice_ratchet.sandbox import _worker
 
     _worker._respond({"id": 1, "ok": True})
     assert json.loads(capsys.readouterr().out)["ok"] is True

@@ -8,9 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.errors import E, error_code_of
-from gamer_rsi.memory import MemoryLockedError, MemoryStore, SnapshotMissingError
-from gamer_rsi.memory.snapshot import (entries_sha256, entry_line, find_snapshots,
+from dice_ratchet.infra.errors import E, error_code_of
+from dice_ratchet.memory import MemoryLockedError, MemoryStore, SnapshotMissingError
+from dice_ratchet.memory.snapshot import (entries_sha256, entry_line, find_snapshots,
                                        read_snapshot, snapshot_path, verify_snapshot)
 
 LESSON = "净化值低于 25% 时先把光盾骰放进防御槽，再考虑输出。"

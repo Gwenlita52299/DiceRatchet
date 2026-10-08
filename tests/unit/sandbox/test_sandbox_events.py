@@ -12,19 +12,19 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra import events
-from gamer_rsi.sandbox import guard as G
-from gamer_rsi.sandbox.api import EpisodeConfig, SandboxEnv
-from gamer_rsi.sandbox.audit import run_audit
-from gamer_rsi.sandbox.honeypot import HONEYPOT_CANARY
+from dice_ratchet.infra import events
+from dice_ratchet.sandbox import guard as G
+from dice_ratchet.sandbox.api import EpisodeConfig, SandboxEnv
+from dice_ratchet.sandbox.audit import run_audit
+from dice_ratchet.sandbox.honeypot import HONEYPOT_CANARY
 
 
 @pytest.fixture
 def sink(tmp_path, monkeypatch):
     # 精确保存/恢复 dev 模式：``set_dev_mode(None)`` 会重读环境变量，而 monkeypatch
-    # 撤销 GAMERSI_DEV 发生在 fixture teardown 之后，会把 dev 模式泄漏给后续用例。
+    # 撤销 DICERATCHET_DEV 发生在 fixture teardown 之后，会把 dev 模式泄漏给后续用例。
     previous = events.dev_mode()
-    monkeypatch.setenv("GAMERSI_DEV", "1")
+    monkeypatch.setenv("DICERATCHET_DEV", "1")
     events.set_dev_mode(True)
     path = tmp_path / "events.jsonl"
     events.bind(path, "evt-test", append=False)
@@ -51,8 +51,8 @@ def test_failure_paths_emit_registered_events(sink, tmp_path, game_engine, build
 
     # 2) import 拒绝事件
     try:
-        exec(compile("import gamer_rsi.env.rng", "<agent>", "exec"),
-             {"__name__": "gamer_rsi.loop.runner"})
+        exec(compile("import dice_ratchet.env.rng", "<agent>", "exec"),
+             {"__name__": "dice_ratchet.loop.runner"})
     except G.GuardViolation:
         pass
 
@@ -105,7 +105,7 @@ def test_failure_paths_emit_registered_events(sink, tmp_path, game_engine, build
     projection = next(r for r in rows if r["event"] == "env.projection_pruned")
     assert {"fields", "dropped_hidden", "duration_us"} <= set(projection)
     denied = next(r for r in rows if r["event"] == "env.import_denied")
-    assert denied["module"] == "gamer_rsi.env.rng"
-    assert denied["caller"] == "gamer_rsi.loop.runner"
+    assert denied["module"] == "dice_ratchet.env.rng"
+    assert denied["caller"] == "dice_ratchet.loop.runner"
     overflow = next(r for r in rows if r["event"] == "sandbox.exec")
     assert {"tool", "duration_ms", "outcome"} <= set(overflow)

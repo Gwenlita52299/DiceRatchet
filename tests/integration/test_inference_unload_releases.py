@@ -6,9 +6,9 @@ import asyncio
 
 import pytest
 
-from gamer_rsi.infra.errors import E
-from gamer_rsi.inference.backend import Message
-from gamer_rsi.inference.errors import InferenceError
+from dice_ratchet.infra.errors import E
+from dice_ratchet.inference.backend import Message
+from dice_ratchet.inference.errors import InferenceError
 
 from inference_support import GOOD, MODEL_ID, mock_factory, model_entry, registry_of
 
@@ -74,8 +74,8 @@ def test_session_context_manager_auto_unloads(manager_builder):
 
 
 def test_unload_all_releases_every_model():
-    from gamer_rsi.inference.backend import BackendManager
-    from gamer_rsi.inference.registry import build_registry
+    from dice_ratchet.inference.backend import BackendManager
+    from dice_ratchet.inference.registry import build_registry
 
     entries = {
         "m1": model_entry(),
@@ -85,7 +85,7 @@ def test_unload_all_releases_every_model():
     created: dict[str, object] = {}
 
     def factory(spec):
-        from gamer_rsi.inference.backend import MockBackend
+        from dice_ratchet.inference.backend import MockBackend
 
         backend = MockBackend([GOOD], model_id=spec.model_id)
         created[spec.model_id] = backend

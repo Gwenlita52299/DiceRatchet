@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.run import RunPaths
-from gamer_rsi.evals import cli as cli_mod
-from gamer_rsi.evals import seeds as S
-from gamer_rsi.evals.ablation import AblationReport
-from gamer_rsi.evals.harness import ArmResult, load_episode_results
-from gamer_rsi.evals.metrics import EpisodeResult, aggregate
+from dice_ratchet.infra.run import RunPaths
+from dice_ratchet.evals import cli as cli_mod
+from dice_ratchet.evals import seeds as S
+from dice_ratchet.evals.ablation import AblationReport
+from dice_ratchet.evals.harness import ArmResult, load_episode_results
+from dice_ratchet.evals.metrics import EpisodeResult, aggregate
 
 _REPO = Path(__file__).resolve().parents[3]
 _FIXTURES = _REPO / "tests" / "fixtures" / "evals"
@@ -57,7 +57,7 @@ def _json_tail(text: str) -> dict:
 @pytest.fixture
 def wired(tmp_path, monkeypatch):
     """把 ``cli_init_run`` 换成临时 run 目录，避免建真实 runs/ 与事件绑定。"""
-    from gamer_rsi.infra.config import load_config
+    from dice_ratchet.infra.config import load_config
 
     cfg = load_config()
     monkeypatch.setattr(cli_mod.infra_cli, "cli_init_run",
@@ -106,7 +106,7 @@ def test_cmd_baseline_resume_does_not_require_state_json(wired, monkeypatch):
 
 
 def test_cmd_baseline_rejects_unknown_kind(wired):
-    from gamer_rsi.infra.errors import InfraError
+    from dice_ratchet.infra.errors import InfraError
 
     with pytest.raises(InfraError):
         cli_mod.cmd_baseline(_ns(kind="bogus"))
@@ -179,7 +179,7 @@ def test_cmd_eval_ablation_writes_report(wired, monkeypatch, capsys):
 
 
 def test_cmd_eval_test_locked_without_flag(wired):
-    from gamer_rsi.infra.errors import E, InfraError
+    from dice_ratchet.infra.errors import E, InfraError
 
     with pytest.raises(InfraError) as exc:
         cli_mod.cmd_eval_test(_ns(unlock_once=False))

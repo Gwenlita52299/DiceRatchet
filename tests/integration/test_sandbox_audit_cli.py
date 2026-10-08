@@ -1,6 +1,6 @@
 """MOD-02 `audit leak` 端到端集成（PRD §11 集成用例；G4/G6）。
 
-真跑 ``python -m gamer_rsi audit leak --run-id <id>``（子进程 + 临时 cwd），验证
+真跑 ``python -m dice_ratchet audit leak --run-id <id>``（子进程 + 临时 cwd），验证
 退出码 0/2、报告落盘、E_ENV_AUDIT_IO 判 critical。
 """
 
@@ -35,7 +35,7 @@ def cli_workspace(tmp_path, build_run):
 
 def _run_cli(cwd: Path, *argv: str) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "PYTHONPATH": str(REPO)}
-    return subprocess.run([sys.executable, "-m", "gamer_rsi", *argv],
+    return subprocess.run([sys.executable, "-m", "dice_ratchet", *argv],
                           cwd=str(cwd), env=env, capture_output=True, text=True,
                           timeout=300)
 
@@ -56,7 +56,7 @@ def test_cli_audit_leak_clean_run_exits_0(cli_workspace):
 
 def test_cli_audit_leak_canary_run_exits_2(cli_workspace):
     workspace, make = cli_workspace
-    from gamer_rsi.sandbox.honeypot import HONEYPOT_CANARY
+    from dice_ratchet.sandbox.honeypot import HONEYPOT_CANARY
 
     root = make(run_id="it-canary")
     episode = next((root / "episodes" / "train").glob("*.jsonl"))
@@ -112,9 +112,9 @@ def test_cli_audit_machinery_failure_exits_4(cli_workspace, monkeypatch, capsys)
     import io
     from contextlib import redirect_stderr, redirect_stdout
 
-    from gamer_rsi.app import main # 组合根：注册 MOD-02 命令实现后才是完整 CLI
-    from gamer_rsi.sandbox import audit as A
-    from gamer_rsi.sandbox.honeypot import HoneypotSelfTestResult
+    from dice_ratchet.app import main # 组合根：注册 MOD-02 命令实现后才是完整 CLI
+    from dice_ratchet.sandbox import audit as A
+    from dice_ratchet.sandbox.honeypot import HoneypotSelfTestResult
 
     workspace, make = cli_workspace
     root = make(run_id="it-machinery")

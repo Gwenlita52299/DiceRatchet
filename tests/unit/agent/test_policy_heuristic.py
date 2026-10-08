@@ -13,11 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.agent import EpisodeContext, PolicyAgent, semantic_match
-from gamer_rsi.agent.heuristic import heuristic_policy, heuristic_policy_explained
-from gamer_rsi.env import GameEngine, load_tables
-from gamer_rsi.infra.config import PolicyConfig
-from gamer_rsi.sandbox.api import EpisodeConfig, SandboxEnv
+from dice_ratchet.agent import EpisodeContext, PolicyAgent, semantic_match
+from dice_ratchet.agent.heuristic import heuristic_policy, heuristic_policy_explained
+from dice_ratchet.env import GameEngine, load_tables
+from dice_ratchet.infra.config import PolicyConfig
+from dice_ratchet.sandbox.api import EpisodeConfig, SandboxEnv
 
 REPO = Path(__file__).resolve().parents[3]
 G5 = REPO / "src/game/tests/golden/g5_hard_six_stage.jsonl"

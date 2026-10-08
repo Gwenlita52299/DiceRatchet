@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.errors import E
-from gamer_rsi.memory import (MemoryEntry, MemoryIsolationError, MemoryStore,
+from dice_ratchet.infra.errors import E
+from dice_ratchet.memory import (MemoryEntry, MemoryIsolationError, MemoryStore,
                               Provenance, ReflectionEntry, extract_candidates)
-from gamer_rsi.sandbox.honeypot import current_canary
+from dice_ratchet.sandbox.honeypot import current_canary
 
 HELD_OUT_SEED = 2001       # heldout H1 篮子 2000–2039
 TEST_SEED = 9001           # test 池 9000–9099
@@ -219,19 +219,19 @@ def test_i4_does_not_quarantine_by_default(store_factory, make_candidate,
 # ---- 静态确定性（G3）-----------------------------------------------------------------
 
 def test_memory_package_has_no_random_or_wallclock_scoring() -> None:
-    """G3 / MOD-09 AST 守卫：``gamer_rsi/memory`` 无 random、无 ``time.time()`` 采样。"""
-    from gamer_rsi.infra import guards
+    """G3 / MOD-09 AST 守卫：``dice_ratchet/memory`` 无 random、无 ``time.time()`` 采样。"""
+    from dice_ratchet.infra import guards
 
-    root = Path(__file__).resolve().parents[3] / "gamer_rsi" / "memory"
+    root = Path(__file__).resolve().parents[3] / "dice_ratchet" / "memory"
     findings = [f for f in guards.scan_determinism(root) if not f.exempted]
     assert findings == [], [f.message for f in findings]
 
 
 def test_memory_package_passes_layer_guard() -> None:
-    """INV-1：memory 层不得直接 import ``gamer_rsi.env``。"""
-    from gamer_rsi.infra import guards
+    """INV-1：memory 层不得直接 import ``dice_ratchet.env``。"""
+    from dice_ratchet.infra import guards
 
-    root = Path(__file__).resolve().parents[3] / "gamer_rsi" / "memory"
+    root = Path(__file__).resolve().parents[3] / "dice_ratchet" / "memory"
     findings = [f for f in guards.scan_layer_imports(root) if not f.exempted]
     assert findings == [], [f.message for f in findings]
 
@@ -247,7 +247,7 @@ def test_reflection_text_with_heldout_seed_has_no_candidate_leak(
 # ---- G4：与 MOD-02 审计器的端到端一致性 -----------------------------------------------
 
 def _audit_run(root: Path, config_dir: Path):
-    from gamer_rsi.sandbox.audit import run_audit
+    from dice_ratchet.sandbox.audit import run_audit
 
     return run_audit(Path(root), split="train", config_dir=Path(config_dir))
 
@@ -255,8 +255,8 @@ def _audit_run(root: Path, config_dir: Path):
 @pytest.fixture
 def audit_run(tmp_path, config_dir):
     """建一个真实的 run 目录（config.json + 目录树），供 ``run_audit`` 复检。"""
-    from gamer_rsi.infra.config import load_config
-    from gamer_rsi.infra.run import init_run_dir
+    from dice_ratchet.infra.config import load_config
+    from dice_ratchet.infra.run import init_run_dir
 
     cfg = load_config()
     paths = init_run_dir("r-audit", cfg, tmp_path / "runs", git_check=False)

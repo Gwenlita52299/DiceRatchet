@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from gamer_rsi.inference.schema import (DECISION_SCHEMA, compile_grammar, grammar_problems,
+from dice_ratchet.inference.schema import (DECISION_SCHEMA, compile_grammar, grammar_problems,
                                         unsupported_keywords, validate_grammar_syntax)
 
 DECISION_PROPERTIES = ("reasoning", "plan", "kind", "dieId", "slotId", "faceIndex",

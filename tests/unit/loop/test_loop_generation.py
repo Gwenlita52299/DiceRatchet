@@ -8,10 +8,10 @@ import pytest
 
 from fakes import FakeEnv, FakePolicy
 from loop_support import reconfigure
-from gamer_rsi.infra.config import LoopConfig
-from gamer_rsi.infra.errors import EXIT_CONFIG, E, InfraError, error_code_of
-from gamer_rsi.loop import episodes_per_generation
-from gamer_rsi.loop.generation import EvolveOutcome, estimated_hours, maybe_run_generation
+from dice_ratchet.infra.config import LoopConfig
+from dice_ratchet.infra.errors import EXIT_CONFIG, E, InfraError, error_code_of
+from dice_ratchet.loop import episodes_per_generation
+from dice_ratchet.loop.generation import EvolveOutcome, estimated_hours, maybe_run_generation
 
 
 class RecordingEvolve:
@@ -116,7 +116,7 @@ def test_t06_10_e_gen_formula(k, heldout, smoke, candidates, expected):
 
 
 def _state_at_cycle(k: int) -> "object":
-    from gamer_rsi.loop.state import RunState
+    from dice_ratchet.loop.state import RunState
 
     return RunState(run_id="r-budget", phase="playing", k=k,
                     completed_train_seeds=list(range(1000, 1000 + k)))
@@ -179,7 +179,7 @@ def test_t06_10_budget_event_payload(tmp_path, mk_runner, monkeypatch):
     """``loop.budget_exhausted{e_gen, cap}`` 的载荷必须可被 MOD-09 校验。"""
     seen: list[dict] = []
 
-    from gamer_rsi.infra import events
+    from dice_ratchet.infra import events
 
     real_emit = events.emit
 
@@ -201,7 +201,7 @@ def test_t06_10_budget_event_payload(tmp_path, mk_runner, monkeypatch):
 def test_t06_10_cycle_start_event_carries_est_hours(tmp_path, mk_runner, monkeypatch):
     """每代开始写 ``loop.cycle_start{e_gen, est_hours}``（FR-06-13 第三条）。"""
     seen: list[dict] = []
-    from gamer_rsi.infra import events
+    from dice_ratchet.infra import events
 
     real_emit = events.emit
 
@@ -252,7 +252,7 @@ def test_t06_11_train_concurrency_guard_config_layer():
 
 def test_t06_11_train_concurrency_guard_cli_layer():
     """CLI 侧同样拒绝（即使绕过了 dataclass 校验）。"""
-    from gamer_rsi.loop.cli import _guard_concurrency
+    from dice_ratchet.loop.cli import _guard_concurrency
 
     class _Cfg:
         loop = LoopConfig(train_concurrency=2)

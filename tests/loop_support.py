@@ -14,12 +14,12 @@ from typing import Any, Sequence
 import pytest
 
 from fakes import FakeMemory, FakePolicy, ScriptedClient
-from gamer_rsi.infra.config import LoopConfig
-from gamer_rsi.infra.run import RunPaths
-from gamer_rsi.loop.generation import LoopOrchestrator
-from gamer_rsi.loop.runner import EpisodeRunner, RunContext
-from gamer_rsi.loop.state import RunState, Scoreboard, init_state, scoreboard_path
-from gamer_rsi.loop.trajectory import TrajectoryWriter
+from dice_ratchet.infra.config import LoopConfig
+from dice_ratchet.infra.run import RunPaths
+from dice_ratchet.loop.generation import LoopOrchestrator
+from dice_ratchet.loop.runner import EpisodeRunner, RunContext
+from dice_ratchet.loop.state import RunState, Scoreboard, init_state, scoreboard_path
+from dice_ratchet.loop.trajectory import TrajectoryWriter
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUN_ID = "r-loop-test"
@@ -71,7 +71,7 @@ def build_runner(root: Path, *, policy: Any = None, env: Any = None,
                  with_template: bool = True, memory_version: int = 0,
                  app_config: Any = None) -> tuple[EpisodeRunner, RunContext]:
     """装配一个把轨迹写进 ``tmp_path`` 的 ``EpisodeRunner``。"""
-    from gamer_rsi.sandbox.api import EpisodeConfig
+    from dice_ratchet.sandbox.api import EpisodeConfig
 
     paths = build_paths(root, run_id)
     harness = write_harness(root, version=harness_version, template=template,

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from gamer_rsi.env.error import KernelError
-from gamer_rsi.env.slots import (SLOT_ACCEPTS, SLOT_KIND_NAMES, check_constraint,
+from dice_ratchet.env.error import KernelError
+from dice_ratchet.env.slots import (SLOT_ACCEPTS, SLOT_KIND_NAMES, check_constraint,
                                 describe_constraint, parse_constraint, slot_accepts)
 
 

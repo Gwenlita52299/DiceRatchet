@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.errors import E
-from gamer_rsi.inference import schema as schema_mod
-from gamer_rsi.inference.errors import InferenceError
-from gamer_rsi.inference.schema import (DECISION_SCHEMA, _fixed_width, _gbnf_literal,
+from dice_ratchet.infra.errors import E
+from dice_ratchet.inference import schema as schema_mod
+from dice_ratchet.inference.errors import InferenceError
+from dice_ratchet.inference.schema import (DECISION_SCHEMA, _fixed_width, _gbnf_literal,
                                         _int_range_expr, compile_grammar,
                                         decision_schema_path, grammar_problems,
                                         load_decision_schema, render_error,

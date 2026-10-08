@@ -6,13 +6,13 @@ import hashlib
 
 import pytest
 
-from gamer_rsi.infra.errors import E
-from gamer_rsi.infra.io import validate as validate_schema
-from gamer_rsi.inference.backend import Message
-from gamer_rsi.inference.metrics import aggregate, percentile
-from gamer_rsi.inference.records import (CallContext, InferenceCallRecord, make_call_record,
+from dice_ratchet.infra.errors import E
+from dice_ratchet.infra.io import validate as validate_schema
+from dice_ratchet.inference.backend import Message
+from dice_ratchet.inference.metrics import aggregate, percentile
+from dice_ratchet.inference.records import (CallContext, InferenceCallRecord, make_call_record,
                                          prompt_digest, read_call_records)
-from gamer_rsi.inference.schema import DECISION_SCHEMA
+from dice_ratchet.inference.schema import DECISION_SCHEMA
 
 MESSAGES = [Message(role="system", content="sys"), Message(role="user", content="usr")]
 
@@ -72,7 +72,7 @@ def test_call_record_event_payload_has_required_fields():
 
 def test_call_record_step_fields_are_trajectory_safe():
     """FR-03-06：投到轨迹步行的四个可选字段必须都在 MOD-09 的登记集合内。"""
-    from gamer_rsi.infra.logging import _OPTIONAL_LINE_KEYS
+    from dice_ratchet.infra.logging import _OPTIONAL_LINE_KEYS
 
     record = _record(latency=812)
     fields = record.step_fields(text="{\"reasoning\": \"ok\"}")

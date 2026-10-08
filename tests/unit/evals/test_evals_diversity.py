@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from gamer_rsi.evals.diversity import (CollapseConfig, collapse_check,
+from dice_ratchet.evals.diversity import (CollapseConfig, collapse_check,
                                        distinct_sequence_ratio, entropy_mean_norm,
                                        entropy_slope, js_divergence, kind_distribution,
                                        slot_distribution)
-from gamer_rsi.evals.metrics import action_entropy_curve
+from dice_ratchet.evals.metrics import action_entropy_curve
 
 from evals_support import make_result
 

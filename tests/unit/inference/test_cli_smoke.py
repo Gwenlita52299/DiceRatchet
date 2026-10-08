@@ -8,7 +8,7 @@
   run 默认 ``metrics/`` 目录，以及 ``probe`` 的错误路径退出码。
 
 这两条路径此前只存在于 ``--model qwen3-8b-q4`` 的真实跑批里（集成用例的 mock 恒达阈值），
-所以单测覆盖率命令 ``pytest tests/unit/inference --cov=gamer_rsi.inference`` 里
+所以单测覆盖率命令 ``pytest tests/unit/inference --cov=dice_ratchet.inference`` 里
 ``cli.py`` 长期显示 0%——补上本文件后该口径不再有"命令面无人守"的假象。
 
 注意：``mock`` 模型的 ``weights_path`` 为 ``None``，真实路径会命中
@@ -25,15 +25,15 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi import app
-from gamer_rsi.infra import events
-from gamer_rsi.inference import cli as inference_cli
+from dice_ratchet import app
+from dice_ratchet.infra import events
+from dice_ratchet.inference import cli as inference_cli
 
 
 @pytest.fixture(autouse=True)
 def _isolated_run_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """``runs/`` 落到 tmp，避免污染仓库；并解绑事件（与集成套件同款隔离）。"""
-    monkeypatch.setenv("GAMERSI_INFRA__RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("DICERATCHET_INFRA__RUNS_ROOT", str(tmp_path / "runs"))
     events.unbind()
     yield
     events.unbind()

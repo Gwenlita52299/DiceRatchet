@@ -6,10 +6,10 @@ import copy
 
 import pytest
 
-from gamer_rsi.env import combat as C
-from gamer_rsi.env import GameEngine
-from gamer_rsi.env import relic as R
-from gamer_rsi.env.state import current_face
+from dice_ratchet.env import combat as C
+from dice_ratchet.env import GameEngine
+from dice_ratchet.env import relic as R
+from dice_ratchet.env.state import current_face
 
 
 def _hand_die(state, kind=None):
@@ -113,7 +113,7 @@ def test_check_play_face_unneeded_target(engine, tables, find_state):
 
 
 def test_face_needs_target(table=None):
-    from gamer_rsi.env.combat import face_needs_target
+    from dice_ratchet.env.combat import face_needs_target
 
     for kind in ("purge",):
         assert face_needs_target({"kind": kind, "target": "enemy"}) == "enemy"

@@ -1,7 +1,7 @@
 # MOD-09 infra 技术 PRD
 
 > 版本：v0.3.1（2026-10-03 修复 `bootstrap_process()` 早发 `infra.run_start`，见 §17；此前误留在 v0.3）· 状态：待评审 · 所属里程碑：M0–M3（L3 工程层，横切全模块）
-> 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源；与本文件冲突时以 Spec 为准）
+> 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源；与本文件冲突时以 Spec 为准）
 > 作者：主代理（MOD-09 owner）· 日期：2026-09-30
 > v0.3 起 Spec §11.2 已清零；新的临时决策按 Spec §11.2 从 P-31 起登记。
 
@@ -57,7 +57,7 @@ MOD-09 是 Spec §6 依赖矩阵中**唯一不被任何人阻塞、却阻塞所�
 
 ## 4. 功能需求（FR-09-x，编号，每条可测试）
 
-- **FR-09-1 配置优先级（Spec v1.4 B-26）**：合并顺序 `CLI 显式参数 > GAMERSI_* 环境变量 > harness/config.json（可演化层）> configs/default.yaml > 代码内 dataclass 默认值`。harness 层只接受白名单键（`policy.*` 训练期采样参数、`memory.retrieve.*`、`agent.tools.*`），出现其他键或试图设置评估温度 → `E_IO_CONFIG_INVALID`（退出码 2）；这一层计入 `artifact_hash`，不计入 `config_hash`。环境变量命名规则 `GAMERSI_<SECTION>__<KEY>`（双下划线分层），未知键 → 记 `E_IO_CONFIG_UNKNOWN` 并**忽略**（不中断），未知键清单写入 run 启动日志。
+- **FR-09-1 配置优先级（Spec v1.4 B-26）**：合并顺序 `CLI 显式参数 > DICERATCHET_* 环境变量 > harness/config.json（可演化层）> configs/default.yaml > 代码内 dataclass 默认值`。harness 层只接受白名单键（`policy.*` 训练期采样参数、`memory.retrieve.*`、`agent.tools.*`），出现其他键或试图设置评估温度 → `E_IO_CONFIG_INVALID`（退出码 2）；这一层计入 `artifact_hash`，不计入 `config_hash`。环境变量命名规则 `DICERATCHET_<SECTION>__<KEY>`（双下划线分层），未知键 → 记 `E_IO_CONFIG_UNKNOWN` 并**忽略**（不中断），未知键清单写入 run 启动日志。
 - **FR-09-2 schema 校验**：`AppConfig` 为 frozen dataclass + 显式 `validate()`（避免引入 pydantic 作为阶段一硬依赖）；类型不符或越界 → `E_IO_CONFIG_INVALID` 并以退出码 2 终止，错误信息必须指出键路径与期望类型。
 - **FR-09-3 config_hash**：`config_hash = sha256(json.dumps(_canonical(cfg), sort_keys=True, separators=(",",":"), ensure_ascii=False))[:16]`；`_canonical` **排除**易变字段（`run_id`、`created_at`、`log_level`、`paths.runs_root`）与所有绝对路径，**不包含** `harness_version`（Spec v1.3 B-19：否则第一代被接受后 `--resume` 必然冲突）。harness 的变化由 `artifact_hash(harness_dir)` 表达：对 `(相对路径, 文件 sha256)` 按路径排序后整体 sha256，逐代写入 `version.json` 与 report。
 - **FR-09-4 run_id**：`run_id = f"{git_short_sha}-{config_hash[:8]}-{utc_ts}"`，`utc_ts = YYYYMMDDTHHMMSSZ`；`git_short_sha` 取自 `git rev-parse --short HEAD`，仓库不可用（无 git / dirty 之外的情况）→ 用 `nogit` 占位并记 `E_IO_GIT_UNAVAILABLE`。**已回填（Spec v1.3 §4.6）**：`--run-id` 显式指定时以显式值为准，用于复现与测试。
@@ -83,12 +83,12 @@ MOD-09 是 Spec §6 依赖矩阵中**唯一不被任何人阻塞、却阻塞所�
 - **FR-09-10 CLI 一致性**：
   - 子命令树与 Spec v1.3 §4.6 逐字一致，包括 `inference *`、`loop status|smoke`、`eval ablation|test`、`memory *`、`guards check`。
   - run 一律用 `--run-id ID` 指定，续跑用 `--resume` 开关。本模块只负责解析与转发到各模块的 `register(subparser)`；**新增命令必须同步更新 Spec §4.6**。
-- **FR-09-11 退出码**：`0` 成功（含 HITL 挂起）；`1` 领域失败（如验收不达标）；`2` 配置/环境错误；`3` 模型不可用；`4` 沙箱/守卫违例；`5` IO 落盘失败；`130` 用户 Ctrl-C（与 Spec v1.3 §8.3 一致）。约定写入 `gamer_rsi/infra/exit_codes.py` 并被所有命令复用。
+- **FR-09-11 退出码**：`0` 成功（含 HITL 挂起）；`1` 领域失败（如验收不达标）；`2` 配置/环境错误；`3` 模型不可用；`4` 沙箱/守卫违例；`5` IO 落盘失败；`130` 用户 Ctrl-C（与 Spec v1.3 §8.3 一致）。约定写入 `dice_ratchet/infra/exit_codes.py` 并被所有命令复用。
 - **FR-09-12 dry-run 与 resume**：`--dry-run` 对所有命令生效——不调用模型、不写 `runs/`、只打印将执行的动作与配置摘要（stdout 为可解析 JSON）；`--run-id ID --resume` 由 MOD-06 实现语义，本模块负责定位目录、校验 `config_hash` 一致（`config_hash` 不含 harness，所以演化过的 run 也能续跑）、并在 `state.json` 缺失时报 `E_IO_STATE_MISSING`。
 - **FR-09-13 绘图**：`plot_generations(csv_path, out_dir)` 输出 `win_rate.png`、`stages_cleared.png`、`hearts_left.png`、`entropy.png`、`train_heldout_gap.png`（INV-7 口径，Spec v1.3），每图含 `n`、`ci95` 误差棒与数据点标注；无 matplotlib 时降级为 `E_IO_PLOT_UNAVAILABLE` 警告而不失败。
 - **FR-09-14 git 封装**：`worktree_clean_check()` 在有未提交改动时抛 `E_IO_GIT_DIRTY`（演化前门禁）；`commit_harness(version, message)` 提交 `harness/` 并返回 commit sha，提交信息格式 `harness(v{N}): {message}`；`tag_version(N)` 打 `harness-v{N}` 轻量 tag（已存在则跳过；不建同名分支，避免 `refname is ambiguous`）；`rollback_to(N)` 以 `git checkout harness-v{N} -- harness/` 恢复工件目录并返回新 commit sha。
-- **FR-09-15 确定性守卫（AST，非正则）**：`scan_determinism()` 报出 `E_IO_GUARD_RANDOM`（`import random` / `numpy.random.*` 未显式 seed / `time.time()` 参与采样 / `uuid4()` 用于标识 id）、`scan_layer_imports()` 报出 `E_IO_GUARD_LAYER`（`gamer_rsi/agent|memory|loop|evolve|evals/*` 中出现 `import gamer_rsi.env`，违反 INV-1）。白名单注释 `# guard: allow <CODE> reason=...` 可豁免，但会记 `guard_finding` 事件留痕。
-- **FR-09-16 错误码注册表**：`gamer_rsi/infra/errors.py` 集中定义全部 `E_*` 枚举 + 含义表 + 默认退出码映射；禁止其他模块自定义字符串错误码。
+- **FR-09-15 确定性守卫（AST，非正则）**：`scan_determinism()` 报出 `E_IO_GUARD_RANDOM`（`import random` / `numpy.random.*` 未显式 seed / `time.time()` 参与采样 / `uuid4()` 用于标识 id）、`scan_layer_imports()` 报出 `E_IO_GUARD_LAYER`（`dice_ratchet/agent|memory|loop|evolve|evals/*` 中出现 `import dice_ratchet.env`，违反 INV-1）。白名单注释 `# guard: allow <CODE> reason=...` 可豁免，但会记 `guard_finding` 事件留痕。
+- **FR-09-16 错误码注册表**：`dice_ratchet/infra/errors.py` 集中定义全部 `E_*` 枚举 + 含义表 + 默认退出码映射；禁止其他模块自定义字符串错误码。
 - **FR-09-18 schema 与原子写**：`schemas/*.schema.json` 由本模块登记并提供 `validate(name, obj)`；`write_json_atomic(path, obj)`（tmp + `os.replace`）是 `report.json`、`state.json`、`version.json` 唯一的写入口。
 - **FR-09-19 git 忽略检查**：`init_run_dir` 检查 `runs_root` 已被 `.gitignore` 覆盖（`git check-ignore`），否则记 `E_IO_RUNS_NOT_IGNORED` 并退出码 2，防止 `worktree_clean_check()` 永远判定为 dirty。
 - **FR-09-17 进程确定性环境**：`bootstrap_process()` 设置 `PYTHONHASHSEED=0`（若未设置则 re-exec 一次）、`TZ=UTC`、`LC_ALL=C.UTF-8`，并把 `infra.threads=1` 传给后端；设置内容经 `process_snapshot()` / `process_fingerprint()` 由**真正的** `infra.run_start` 事件记录（`cli.cli_init_run()`，此时配置与 sink 都已就绪）。`bootstrap_process()` **自身不发事件**：它在 `main()` 最开头执行，既没有 `config_hash` 也没有 `events` sink，早发只会产生一条缺必填字段、且必然被丢弃的 `run_start`（v0.3.1 修复）。
@@ -99,14 +99,14 @@ MOD-09 是 Spec §6 依赖矩阵中**唯一不被任何人阻塞、却阻塞所�
 - **NFR-09-2 性能**：单次 `write()` p99 < 1 ms（本地 SSD，不含 fsync）；`load_config()` < 50 ms；不得成为单步决策的瓶颈（单步预算见 MOD-04）。
 - **NFR-09-3 确定性**：`config_hash`、`run_id` 中除时间戳外全部稳定；`derive_seed` 对同一输入返回同一 64-bit 整数，且与进程、平台、`PYTHONHASHSEED` 无关（内部用 `hashlib.blake2b` 而非 `hash()`）。**作用域**：只用于 agent 侧随机（采样 seed、bootstrap、候选 id）；环境侧的流派生由 MOD-01 按 GAME-01 §3 的 xmur3 + SplitMix64 实现，两者互不替代。
 - **NFR-09-4 可观测**：任何失败必须带错误码 + 人类可读信息 + 复现命令三要素。
-- **NFR-09-5 依赖方向单向**：`infra` 不 import 任何其他 `gamer_rsi` 子包（除 `errors` 自身）；`guards` 对此做静态检查。
+- **NFR-09-5 依赖方向单向**：`infra` 不 import 任何其他 `dice_ratchet` 子包（除 `errors` 自身）；`guards` 对此做静态检查。
 
 ## 6. 接口契约（真实 Python 签名 + JSON Schema）
 
 ### 6.1 配置与随机
 
 ```python
-# gamer_rsi/infra/config.py
+# dice_ratchet/infra/config.py
 @dataclass(frozen=True)
 class AppConfig:
     env: EnvConfig; agent: AgentConfig; inference: InferenceConfig
@@ -121,7 +121,7 @@ def config_hash(cfg: AppConfig) -> str: ...                  # -> "a1b2c3d4e5f60
 def canonical_json(cfg: AppConfig) -> str: ...
 def derive_seed(*parts: object) -> int: ...                  # blake2b -> int(64)
 
-# gamer_rsi/infra/run.py
+# dice_ratchet/infra/run.py
 @dataclass(frozen=True)
 class RunPaths:
     root: Path; config: Path; episodes: Path; reflections: Path
@@ -137,7 +137,7 @@ def read_state(paths: RunPaths) -> dict: ...
 ### 6.2 事件与轨迹
 
 ```python
-# gamer_rsi/infra/logging.py
+# dice_ratchet/infra/logging.py
 EVENT_TYPES: Final[frozenset[str]]
 
 class Redactor:
@@ -195,16 +195,16 @@ def validate_trajectory_line(line: Mapping[str, Any]) -> None: ...  # 失败抛 
 ### 6.3 git / 绘图 / 守卫
 
 ```python
-# gamer_rsi/infra/git_ops.py
+# dice_ratchet/infra/git_ops.py
 def worktree_clean_check(repo: Path = Path(".")) -> None: ...
 def commit_harness(repo: Path, version: int, message: str) -> str: ...
 def tag_version(repo: Path, version: int) -> str: ...
 def rollback_to(repo: Path, version: int) -> str: ...
 
-# gamer_rsi/infra/plotting.py
+# dice_ratchet/infra/plotting.py
 def plot_generations(csv_path: Path, out_dir: Path) -> list[Path]: ...
 
-# gamer_rsi/infra/guards.py
+# dice_ratchet/infra/guards.py
 @dataclass(frozen=True)
 class GuardFinding:
     path: str; line: int; col: int; code: str; message: str; exempted: bool
@@ -251,11 +251,11 @@ def scan_all(root: Path) -> list[GuardFinding]: ...          # 供 CI 与 CLI �
 ### 6.5 事件与错误码注册表（Spec v1.3 §8.2/§8.3 的落地）
 
 ```python
-# gamer_rsi/infra/events.py
+# dice_ratchet/infra/events.py
 EVENT_REGISTRY: Final[Mapping[str, EventSpec]]   # 键为 "<module>.<event>"
 def emit(event: str, **fields: Any) -> None: ...
 
-# gamer_rsi/infra/errors.py
+# dice_ratchet/infra/errors.py
 class E(StrEnum): ...                             # 全部错误码
 EXIT_CODE: Final[Mapping[E, int]]
 ```
@@ -331,7 +331,7 @@ def log_step(writer, step_result, policy_step, obs):
 ```python
 # 演化前门禁（MOD-07 调用）
 worktree_clean_check()                    # 脏 → E_IO_GIT_DIRTY，拒绝演化
-findings = scan_all(Path("gamer_rsi"))    # 候选 harness 落地后、评估前再跑一次
+findings = scan_all(Path("dice_ratchet"))    # 候选 harness 落地后、评估前再跑一次
 if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(...)
 ```
 
@@ -374,7 +374,7 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
 
 | # | 给定 | 当 | 则 |
 |---|---|---|---|
-| T-09-1 | `default.yaml` 中 `loop.k=30`，环境变量 `GAMERSI_LOOP__K=5` | `load_config()` | `cfg.loop.k == 5` |
+| T-09-1 | `default.yaml` 中 `loop.k=30`，环境变量 `DICERATCHET_LOOP__K=5` | `load_config()` | `cfg.loop.k == 5` |
 | T-09-2 | 同上且 CLI 传 `--k 7` | `load_config(cli_overrides={"loop.k":7})` | `cfg.loop.k == 7`（CLI 胜出） |
 | T-09-3 | 同一 AppConfig，两次不同 `run_id`/时间 | `config_hash()` | 两次结果相同 |
 | T-09-4 | 仅 `harness_version` 或 harness 文件不同 | `config_hash()` / `artifact_hash()` | `config_hash` 相同；`artifact_hash` 不同（B-19） |
@@ -383,7 +383,7 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
 | T-09-7 | redactor 注册了 heldout seed `2042` | ① 写 prompt 快照 `"…seed 2042…"`；② 写 heldout 轨迹行 `"seed": 2042` | ① 替换为 `<REDACTED:seed>` 并产生 1 条 `infra.redaction_hit`；② 原样落盘、schema 校验通过、不产生事件 |
 | T-09-16 | 已接受 1 代（harness v1）的 run | `loop run --run-id X --resume` | 通过 `config_hash` 校验并继续 |
 | T-09-8 | 轨迹行缺 `obs_digest` | `validate_trajectory_line()` | 抛 `E_IO_TRAJECTORY_SCHEMA` |
-| T-09-9 | fixture 中 `gamer_rsi/agent/policy.py` 写了 `import gamer_rsi.env.engine` | `scan_layer_imports()` | 返回 1 条 `E_IO_GUARD_LAYER`，定位到具体行号 |
+| T-09-9 | fixture 中 `dice_ratchet/agent/policy.py` 写了 `import dice_ratchet.env.engine` | `scan_layer_imports()` | 返回 1 条 `E_IO_GUARD_LAYER`，定位到具体行号 |
 | T-09-10 | fixture 中 `random.random()` 未豁免 | `scan_determinism()` | 返回 `E_IO_GUARD_RANDOM`；加 `# guard: allow` 注释后 `exempted=True` 且仍可见 |
 | T-09-11 | 干净的 git 仓库 | `commit_harness(3, "add heuristic")` | 产生 commit，信息以 `harness(v3):` 开头，返回 40 位 sha |
 | T-09-12 | 已存在同 run_id 且 config_hash 不同 | `init_run_dir()` | 抛 `E_IO_RUN_CONFLICT` |
@@ -393,13 +393,13 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
 
 ## 12. 验收标准（DoD，对齐 Spec §9 质量门 G1–G6）
 
-- **G1 单测**：`gamer_rsi/infra/` 覆盖率 ≥ 80%（`config`、`logging`、`guards` 三个文件 ≥ 90%）。
+- **G1 单测**：`dice_ratchet/infra/` 覆盖率 ≥ 80%（`config`、`logging`、`guards` 三个文件 ≥ 90%）。
 - **G2 Golden**：§11 全部 15 条用例作为回归集，`guards` 的 fixture 目录纳入版本控制。
 - **G3 确定性**：`config_hash` 与 `derive_seed` 的稳定性由 T-09-3/4/5 保证，并在 CI 中跨 `PYTHONHASHSEED` 跑一次。
 - **G4 泄漏审计**：T-09-7 通过；`audit leak` 的输出文件由本模块写入 `audit/`。
 - **G5 Schema 校验**：轨迹行 schema 有 round-trip 测试（`dict → validate → jsonl → parse → dict` 等价）。
 - **G6 可复现命令**：`README`/PRD 中出现的命令可原样复制执行。
-- **M0 交付判定**：`python -m gamer_rsi guards check` 与 `python -m gamer_rsi env selftest --seed 1` 均可运行；`init_run_dir` 能创建完整目录树；JSONL 轨迹可被 MOD-08 的汇总脚本直接消费。
+- **M0 交付判定**：`python -m dice_ratchet guards check` 与 `python -m dice_ratchet env selftest --seed 1` 均可运行；`init_run_dir` 能创建完整目录树；JSONL 轨迹可被 MOD-08 的汇总脚本直接消费。
 
 ## 13. 指标与埋点
 
@@ -433,7 +433,7 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
 | 合计 | | **7.0 人日** |
 
 **实际交付（M0）**：M0a+M0b（config/事件/JSONL/守卫/git/CLI）于 **2026-10-01 → 2026-10-03** 分 4 个提交交付（`5d3574c`、`bbdc02e`、`aa62ab8`、`e621112`），并**额外提前交付了 M1 的 CLI 子命令树与退出码**。
-本项目**未单独记工**；按提交时间窗折算 ≤ 3 人日（计划 M0a+M0b = 3.5 人日），偏差详见 [排期 §8](../项目排期-GameRSI.md)。
+本项目**未单独记工**；按提交时间窗折算 ≤ 3 人日（计划 M0a+M0b = 3.5 人日），偏差详见 [排期 §8](../项目排期-DiceRatchet.md)。
 T-09-1～T-09-16 全部落地（`bbdc02e` 起）；证据见 [M0 验收报告](../reviews/2026-10-03-M0验收报告.md)（G1–G6 与 INV-1/INV-6 全通过，CI 门禁接线已补齐为 `scripts/ci_gate.sh` + `.github/workflows/ci.yml`）。
 
 ## 16. 开放问题
@@ -452,4 +452,4 @@ T-09-1～T-09-16 全部落地（`bbdc02e` 起）；证据见 [M0 验收报告](.
 | v0.1 | 2026-09-30 | 首版 |
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：`config_hash` 不再包含 harness_version，新增 `artifact_hash`（P0-7）；redaction 只作用于 prompt/memory/reflection（P0-7）；事件改为 `<module>.<event>` 注册表并统一落到 `events.jsonl`（P1-11）；轨迹 schema 对齐 §4.5 新字段与 `episode_key` 路径（P1-10）；退出码新增 5（P1-13）；CLI 对齐 §4.6，统一使用 `--run-id`（P1-14）；git tag 改为 `harness-v{N}`（P1-15）；新增 FR-09-18 schema 与原子写、FR-09-19 `runs/` 忽略检查 |
 | v0.3 | 2026-09-30 17:49 | FR-09-1 按 Spec B-26 插入 harness/config.json 层及白名单校验 |
-| v0.3.1 | 2026-10-03 | 修复 `bootstrap_process()` 早发 `infra.run_start`（缺必填 `config_hash`）：`GAMERSI_DEV=1` 下任何命令都会以退出码 1 失败（用 `guards check` 复现）。改为进程快照由 `cli_init_run()` 的 run_start 记录，并新增 `process_snapshot()`（FR-09-17）；`audit leak` 退出码注释同步为 `0/1/2/4` |
+| v0.3.1 | 2026-10-03 | 修复 `bootstrap_process()` 早发 `infra.run_start`（缺必填 `config_hash`）：`DICERATCHET_DEV=1` 下任何命令都会以退出码 1 失败（用 `guards check` 复现）。改为进程快照由 `cli_init_run()` 的 run_start 记录，并新增 `process_snapshot()`（FR-09-17）；`audit leak` 退出码注释同步为 `0/1/2/4` |

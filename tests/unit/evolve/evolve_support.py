@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from gamer_rsi.evolve.schemas import Candidate, CandidateReport, Verdict
+from dice_ratchet.evolve.schemas import Candidate, CandidateReport, Verdict
 
 RUN_ID = "1111111-abcdef12-20260930T120000Z"
 
@@ -65,7 +65,7 @@ def make_config(**overrides: Any) -> Any:
     """真实 ``EvolveConfig`` + 覆盖（``staging`` 相关字段由 EvolveContext 承载）。"""
     from dataclasses import replace
 
-    from gamer_rsi.infra.config import EvolveConfig
+    from dice_ratchet.infra.config import EvolveConfig
 
     base = EvolveConfig()
     fields = set(getattr(base, "__dataclass_fields__", {}))
@@ -79,7 +79,7 @@ def make_app_config(**overrides: Any) -> Any:
     """``AppConfig``（MOD-08 ``evaluate_generation`` 需要 ``evals.*`` 段）。"""
     from dataclasses import replace
 
-    from gamer_rsi.infra.config import AppConfig
+    from dice_ratchet.infra.config import AppConfig
 
     base = AppConfig()
     return replace(base, **{k: v for k, v in overrides.items()
@@ -108,7 +108,7 @@ def write_harness(root: Path | str, *, version: int = 0,
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8")
     if with_v0:
-        from gamer_rsi.evolve.versioning import snapshot_harness
+        from dice_ratchet.evolve.versioning import snapshot_harness
 
         snapshot_harness(int(version), harness=base, reason="v0 初始 harness")
     return base
@@ -117,7 +117,7 @@ def write_harness(root: Path | str, *, version: int = 0,
 def context_for(root: Path, *, run_id: str = RUN_ID, harness: Path | None = None,
                 runs_root: Path | str | None = None) -> Any:
     """``EvolveContext``（staging / 账本 / 报告三处路径同源）。"""
-    from gamer_rsi.evolve.paths import EvolveContext
+    from dice_ratchet.evolve.paths import EvolveContext
 
     return EvolveContext.of(None, run_id=run_id,
                             runs_root=(runs_root if runs_root is not None
@@ -174,7 +174,7 @@ def make_candidate(*, kind: str = "prompt_patch", diff: str | None = None,
     text = diff if diff is not None else prompt_diff()
     files = touched
     if files is None:
-        from gamer_rsi.evolve.schemas import parse_diff_paths
+        from dice_ratchet.evolve.schemas import parse_diff_paths
 
         files = parse_diff_paths(text)
     return Candidate.create(kind=kind, diff=text, rationale=rationale,
@@ -344,7 +344,7 @@ def proposal_payload(*, kind: str = "prompt_patch", diff: str | None = None,
     """一条 LLM 候选（``propose`` 的解析输入）。"""
     text = diff if diff is not None else prompt_diff()
     files = list(touched) if touched is not None else list(
-        __import__("gamer_rsi.evolve.schemas", fromlist=["parse_diff_paths"])
+        __import__("dice_ratchet.evolve.schemas", fromlist=["parse_diff_paths"])
         .parse_diff_paths(text))
     return {"kind": kind, "diff": text, "rationale": rationale,
             "expected_effect": list(effect or ("win_rate", "up", 2)),
@@ -379,7 +379,7 @@ class FakeRunContext:
                  harness: Path | None = None, memory: Any = None,
                  protocol: Any = None, episode_config: Any = None,
                  memory_version: int = 1) -> None:
-        from gamer_rsi.infra.run import RunPaths
+        from dice_ratchet.infra.run import RunPaths
 
         self.run_id = run_id
         self.paths = RunPaths(Path(root))
@@ -393,7 +393,7 @@ class FakeRunContext:
         self.protocol = protocol
 
     def harness_version(self) -> int:
-        from gamer_rsi.evolve.versioning import current_version
+        from dice_ratchet.evolve.versioning import current_version
 
         return current_version(self.harness_dir)
 

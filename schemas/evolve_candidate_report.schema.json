@@ -1,5 +1,5 @@
 {
-  "$id": "https://gamersi.local/schemas/evolve_candidate_report.schema.json",
+  "$id": "https://diceratchet.local/schemas/evolve_candidate_report.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "MOD-07 candidates/{candidate_id}.json（PRD §7：candidate + report + decision + reason + error_code）。",

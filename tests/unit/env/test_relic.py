@@ -9,7 +9,7 @@ import copy
 
 import pytest
 
-from gamer_rsi.env import relic as R
+from dice_ratchet.env import relic as R
 
 
 @pytest.fixture

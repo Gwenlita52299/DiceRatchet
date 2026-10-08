@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.infra.git_ops import (commit_harness, git_available, rollback_to,
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.infra.git_ops import (commit_harness, git_available, rollback_to,
                                      tag_version, worktree_clean_check)
 
 

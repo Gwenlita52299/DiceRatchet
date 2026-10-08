@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from jsonschema import SchemaError, ValidationError
 
-from gamer_rsi.inference.schema import (DECISION_SCHEMA, json_path_of, load_decision_schema,
+from dice_ratchet.inference.schema import (DECISION_SCHEMA, json_path_of, load_decision_schema,
                                         render_error, retry_reason, validate)
 
 

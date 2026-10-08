@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
-from gamer_rsi.evals.metrics import KIND_SPACE, EpisodeResult
+from dice_ratchet.evals.metrics import KIND_SPACE, EpisodeResult
 
 
 def make_result(seed: int, *, split: str = "heldout", outcome: str = "win",

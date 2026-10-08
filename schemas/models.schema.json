@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gamersi.local/schemas/models.schema.json",
+  "$id": "https://diceratchet.local/schemas/models.schema.json",
   "title": "ModelRegistry",
   "description": "MOD-03 `configs/models.yaml` 模型注册表（PRD §7）。静态注册表：M1–M3 不参与 harness 演化，只允许人工变更并记 CHANGELOG（NFR-03-04）。",
   "type": "object",

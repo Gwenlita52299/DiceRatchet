@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.env import GameEngine, load_tables
+from dice_ratchet.env import GameEngine, load_tables
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _GOLDEN = _REPO_ROOT / "src/game/tests/golden"

@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.env import GameEngine, digest, load_tables
+from dice_ratchet.env import GameEngine, digest, load_tables
 
 # golden 由 JS 侧生成，相对仓库根定位（支持从仓库根或 tests/ 下运行）
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -82,9 +82,9 @@ def test_golden_replay(engine: GameEngine, golden_file: Path) -> None:
 _T08_CHILD = """import hashlib, json, os, sys
 from pathlib import Path
 
-root = Path(os.environ["GAMERSI_REPO_ROOT"])
+root = Path(os.environ["DICERATCHET_REPO_ROOT"])
 sys.path.insert(0, str(root))
-from gamer_rsi.env import GameEngine, digest, load_tables  # noqa: E402
+from dice_ratchet.env import GameEngine, digest, load_tables  # noqa: E402
 
 engine = GameEngine(load_tables())
 h = hashlib.sha256()
@@ -115,7 +115,7 @@ def t08_subprocess_digests(tmp_path_factory) -> dict[tuple[str, str], str]:
     """四种 (PYTHONHASHSEED, TZ) 组合各跑一次子进程，返回 sha256。"""
     script = tmp_path_factory.mktemp("t08") / "replay.py"
     script.write_text(_T08_CHILD, encoding="utf-8")
-    env_base = {**os.environ, "GAMERSI_REPO_ROOT": str(_REPO_ROOT),
+    env_base = {**os.environ, "DICERATCHET_REPO_ROOT": str(_REPO_ROOT),
                 "PYTHONPATH": str(_REPO_ROOT)}
     out: dict[tuple[str, str], str] = {}
     for hashseed in ("0", "12345"):

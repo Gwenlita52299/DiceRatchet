@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gamersi.local/schemas/harness_gate.schema.json",
+  "$id": "https://diceratchet.local/schemas/harness_gate.schema.json",
   "title": "HarnessGateReport",
   "description": "MOD-02 `gate()` 的门禁记录（runs/<run_id>/audit/harness-gate.json，0600）。FR-02-13。",
   "type": "object",

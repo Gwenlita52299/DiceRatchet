@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from policy_case import (HERE, golden_context, golden_filename, golden_spec)  # noqa: E402
 
-from gamer_rsi.agent.prompts.assembler import assemble_prompt, sha256_of
+from dice_ratchet.agent.prompts.assembler import assemble_prompt, sha256_of
 
 METADATA = HERE / "policy_prompt.json"
 

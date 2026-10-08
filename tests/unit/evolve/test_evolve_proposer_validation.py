@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import pytest
 
-from gamer_rsi.evolve import proposer as P
-from gamer_rsi.evolve.errors import PatchInvalidError
-from gamer_rsi.infra.errors import E
+from dice_ratchet.evolve import proposer as P
+from dice_ratchet.evolve.errors import PatchInvalidError
+from dice_ratchet.infra.errors import E
 
 from evolve_support import make_candidate, make_config, prompt_diff, tool_diff
 
@@ -129,7 +129,7 @@ def test_harness_tool_decorator_removal_is_rejected():
 
 @pytest.mark.parametrize("imprt", ["import numpy", "import requests",
                                    "import urllib.request", "import os",
-                                   "from gamer_rsi.env.rng import RNG"])
+                                   "from dice_ratchet.env.rng import RNG"])
 def test_third_party_import_rejected(imprt):
     diff = tool_diff(added=[imprt])
     cand = make_candidate(kind="tool_patch", diff=diff,

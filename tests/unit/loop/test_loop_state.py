@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 
 from fakes import FakeEnv, FakePolicy
-from gamer_rsi.infra.io import validate
-from gamer_rsi.loop.state import RunState, load_state, save_state, scoreboard_path
+from dice_ratchet.infra.io import validate
+from dice_ratchet.loop.state import RunState, load_state, save_state, scoreboard_path
 from loop_support import (RUN_ID, build_paths, build_runner, end_row, reconfigure,
                           scoreboard_rows, step_rows)
 
@@ -62,8 +62,8 @@ def test_t06_7_resume_does_not_rescore(tmp_path, mk_orchestrator, mk_memory):
     runner2, ctx2 = build_runner(tmp_path, policy=FakePolicy(),
                                  env=FakeEnv(steps_to_terminate=5), memory=mk_memory(),
                                  loop_cfg=orch.config, state=reloaded)
-    from gamer_rsi.loop.generation import LoopOrchestrator
-    from gamer_rsi.loop.state import Scoreboard
+    from dice_ratchet.loop.generation import LoopOrchestrator
+    from dice_ratchet.loop.state import Scoreboard
 
     orch2 = LoopOrchestrator(run_ctx=ctx2, config=orch.config, runner=runner2,
                              evolve_fn=_noop_evolve,
@@ -84,7 +84,7 @@ def test_t06_7_resume_does_not_rescore(tmp_path, mk_orchestrator, mk_memory):
 
 
 def _noop_evolve(state, run_ctx):
-    from gamer_rsi.loop.generation import EvolveOutcome
+    from dice_ratchet.loop.generation import EvolveOutcome
 
     return EvolveOutcome(decision="reject", generation=int(state.generation) + 1,
                          harness_version=int(state.harness_version))
@@ -172,8 +172,8 @@ def test_t06_8_interrupt_mid_episode_then_resume(tmp_path, mk_orchestrator, mk_m
     runner2, ctx2 = build_runner(tmp_path, policy=FakePolicy(),
                                  env=FakeEnv(steps_to_terminate=5), memory=mk_memory(),
                                  loop_cfg=orch.config, state=reloaded)
-    from gamer_rsi.loop.generation import LoopOrchestrator
-    from gamer_rsi.loop.state import Scoreboard
+    from dice_ratchet.loop.generation import LoopOrchestrator
+    from dice_ratchet.loop.state import Scoreboard
 
     orch2 = LoopOrchestrator(run_ctx=ctx2, config=orch.config, runner=runner2,
                              evolve_fn=_noop_evolve,
@@ -244,7 +244,7 @@ def test_t06_13_save_load_roundtrip(tmp_path):
 
 def test_t06_13_corrupt_state_is_rejected(tmp_path):
     """损坏的 state.json 立即失败（``E_IO_RUN_STATE``），不能带着半截状态续跑。"""
-    from gamer_rsi.infra.errors import E, InfraError
+    from dice_ratchet.infra.errors import E, InfraError
 
     paths = build_paths(tmp_path)
     Path(paths.state).write_text(json.dumps({"run_id": "x"}), encoding="utf-8")
@@ -255,7 +255,7 @@ def test_t06_13_corrupt_state_is_rejected(tmp_path):
 
 def test_t06_13_schema_files_registered(tmp_path):
     """G5：§6 的三个 JSON Schema 落在 ``schemas/`` 并已登记错误码。"""
-    from gamer_rsi.infra.io import _SCHEMA_ERROR_CODES
+    from dice_ratchet.infra.io import _SCHEMA_ERROR_CODES
 
     for name in ("run_state", "scoreboard", "loop_reflection"):
         assert name in _SCHEMA_ERROR_CODES

@@ -36,12 +36,12 @@ for entry in (str(REPO_ROOT),):
     if entry not in sys.path:
         sys.path.insert(0, entry)
 
-from gamer_rsi.agent.heuristic import heuristic_policy  # noqa: E402
-from gamer_rsi.agent.policy import EpisodeContext, PolicyAgent  # noqa: E402
-from gamer_rsi.evals.baselines import fixed_prompt_policy_config  # noqa: E402
-from gamer_rsi.infra.config import load_config  # noqa: E402
-from gamer_rsi.sandbox.api import EpisodeConfig, make_default_env  # noqa: E402
-from gamer_rsi.sandbox.audit import (VisibleSet, build_forbidden,  # noqa: E402
+from dice_ratchet.agent.heuristic import heuristic_policy  # noqa: E402
+from dice_ratchet.agent.policy import EpisodeContext, PolicyAgent  # noqa: E402
+from dice_ratchet.evals.baselines import fixed_prompt_policy_config  # noqa: E402
+from dice_ratchet.infra.config import load_config  # noqa: E402
+from dice_ratchet.sandbox.api import EpisodeConfig, make_default_env  # noqa: E402
+from dice_ratchet.sandbox.audit import (VisibleSet, build_forbidden,  # noqa: E402
                                      load_forbidden_seeds, scan_text)
 
 OUT = REPO_ROOT / "tests/fixtures/inference/robustness_prompts.jsonl"

@@ -7,11 +7,11 @@ from dataclasses import replace
 
 import pytest
 
-from gamer_rsi.memory import (MemoryCandidate, SituationKey, bm25_score, estimate_tokens,
+from dice_ratchet.memory import (MemoryCandidate, SituationKey, bm25_score, estimate_tokens,
                               extract_candidates, obs_tag_weights, render_entries,
                               render_entry, similarity, situation_key, situation_of,
                               tokenize, utility_score)
-from gamer_rsi.memory.retriever import (MAX_RENDER_CHARS, doc_tokens, score_entry,
+from dice_ratchet.memory.retriever import (MAX_RENDER_CHARS, doc_tokens, score_entry,
                                         select_with_budget)
 
 
@@ -109,7 +109,7 @@ def test_extract_candidates_respects_limit(make_reflection, cfg) -> None:
 
 
 def test_extract_candidates_action_hint_kind_is_a_decision_kind(make_reflection) -> None:
-    from gamer_rsi.memory.schemas import ACTION_KINDS
+    from dice_ratchet.memory.schemas import ACTION_KINDS
 
     for text in ("净化值只剩 3 时我还在打输出", "应该先把光盾骰放进防御槽", "地图路线走左边",
                  "商店要买遗物", "技能优先用"):

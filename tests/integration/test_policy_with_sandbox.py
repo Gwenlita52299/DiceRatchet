@@ -6,7 +6,7 @@
 2. ``DecisionResult`` 能按 Spec §4.5 组装出合法轨迹行，并通过 ``trajectory_line`` schema
    round-trip（G5）；
 3. prompt 出口在 MOD-02 泄漏扫描下 0 finding，且蜜罐哨兵注入必被抓（G4）；
-4. MOD-04 不 import ``gamer_rsi.env.*``（INV-1 / NFR-04-6 静态门禁）。
+4. MOD-04 不 import ``dice_ratchet.env.*``（INV-1 / NFR-04-6 静态门禁）。
 """
 
 from __future__ import annotations
@@ -16,16 +16,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from gamer_rsi.agent import EpisodeContext, PolicyAgent
-from gamer_rsi.agent.heuristic import heuristic_policy
-from gamer_rsi.infra.config import PolicyConfig
-from gamer_rsi.infra.errors import E
-from gamer_rsi.infra.guards import scan_layer_imports
-from gamer_rsi.sandbox.api import EpisodeConfig, SandboxEnv
-from gamer_rsi.sandbox.audit import (VisibleSet, build_forbidden, derive_hidden_tokens,
+from dice_ratchet.agent import EpisodeContext, PolicyAgent
+from dice_ratchet.agent.heuristic import heuristic_policy
+from dice_ratchet.infra.config import PolicyConfig
+from dice_ratchet.infra.errors import E
+from dice_ratchet.infra.guards import scan_layer_imports
+from dice_ratchet.sandbox.api import EpisodeConfig, SandboxEnv
+from dice_ratchet.sandbox.audit import (VisibleSet, build_forbidden, derive_hidden_tokens,
                                      scan_text)
-from gamer_rsi.sandbox.honeypot import HONEYPOT_CANARY
-from gamer_rsi.sandbox.projection import obs_digest
+from dice_ratchet.sandbox.honeypot import HONEYPOT_CANARY
+from dice_ratchet.sandbox.projection import obs_digest
 
 REPO = Path(__file__).resolve().parents[2]
 SCHEMA = json.loads((REPO / "schemas/trajectory_line.schema.json").read_text(encoding="utf-8"))
@@ -36,7 +36,7 @@ _ENGINE: Any = None
 def _engine():
     global _ENGINE
     if _ENGINE is None:
-        from gamer_rsi.env import GameEngine, load_tables
+        from dice_ratchet.env import GameEngine, load_tables
 
         _ENGINE = GameEngine(load_tables())
     return _ENGINE
@@ -230,6 +230,6 @@ def test_honeypot_canary_in_prompt_is_caught():
 # ----------------------------------------------------------------------
 
 def test_agent_package_has_no_env_imports():
-    findings = [f for f in scan_layer_imports(REPO / "gamer_rsi" / "agent")
+    findings = [f for f in scan_layer_imports(REPO / "dice_ratchet" / "agent")
                 if not f.exempted]
     assert findings == [], [f.as_dict() for f in findings]

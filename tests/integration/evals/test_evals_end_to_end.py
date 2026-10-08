@@ -11,12 +11,12 @@ from uuid import uuid4
 
 import pytest
 
-from gamer_rsi.infra import events
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.evals import seeds as S
-from gamer_rsi.evals.ablation import run_ablation
-from gamer_rsi.evals.harness import ArmResult, load_episode_results
-from gamer_rsi.evals.metrics import EpisodeResult, aggregate
+from dice_ratchet.infra import events
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.evals import seeds as S
+from dice_ratchet.evals.ablation import run_ablation
+from dice_ratchet.evals.harness import ArmResult, load_episode_results
+from dice_ratchet.evals.metrics import EpisodeResult, aggregate
 
 _REPO = Path(__file__).resolve().parents[3]
 _FIXTURES = _REPO / "tests" / "fixtures" / "evals"
@@ -126,7 +126,7 @@ def test_ablation_unknown_arm_rejected(tmp_path):
     ["eval", "test", "--unlock-once"],
 ])
 def test_g6_commands_parse_and_dry_run(argv):
-    proc = subprocess.run([sys.executable, "-m", "gamer_rsi", *argv, "--dry-run"],
+    proc = subprocess.run([sys.executable, "-m", "dice_ratchet", *argv, "--dry-run"],
                           cwd=_REPO, capture_output=True, text=True, timeout=120)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert json.loads(proc.stdout)["dry_run"] is True
@@ -141,13 +141,13 @@ def test_g6_baseline_and_report_actually_run(tmp_path):
     run_dir = _REPO / "runs" / run_id
     try:
         proc = subprocess.run(
-            [sys.executable, "-m", "gamer_rsi", "baseline", "--kind", "heuristic",
+            [sys.executable, "-m", "dice_ratchet", "baseline", "--kind", "heuristic",
              "--split", "heldout", "--basket", "H1", "--run-id", run_id],
             cwd=_REPO, capture_output=True, text=True, timeout=900)
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert (run_dir / "baselines" / "heuristic-heldout.json").is_file()
         proc2 = subprocess.run(
-            [sys.executable, "-m", "gamer_rsi", "eval", "report", "--split", "heldout",
+            [sys.executable, "-m", "dice_ratchet", "eval", "report", "--split", "heldout",
              "--baseline", "all", "--run-id", run_id],
             cwd=_REPO, capture_output=True, text=True, timeout=900)
         assert proc2.returncode == 0, proc2.stdout + proc2.stderr

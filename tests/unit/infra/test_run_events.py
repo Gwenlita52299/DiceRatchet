@@ -8,11 +8,11 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra import events
-from gamer_rsi.infra.config import config_hash, load_config
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.infra.io import read_jsonl
-from gamer_rsi.infra.run import (RunPaths, init_run_dir, make_run_id, read_state,
+from dice_ratchet.infra import events
+from dice_ratchet.infra.config import config_hash, load_config
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.infra.io import read_jsonl
+from dice_ratchet.infra.run import (RunPaths, init_run_dir, make_run_id, read_state,
                                  resolve_run_dir, utc_timestamp, write_state)
 
 REPO = Path(__file__).resolve().parents[3]
@@ -58,13 +58,13 @@ def test_init_run_dir_creates_split_dirs_and_events_file(runs, cfg):
 
 def test_config_snapshot_is_complete(runs, cfg, monkeypatch):
     """Spec §7 / P1-8：快照含完整 AppConfig、content_hash、env 白名单与 harness 覆盖键。"""
-    monkeypatch.setenv("GAMERSI_LOOP__K", "12")
+    monkeypatch.setenv("DICERATCHET_LOOP__K", "12")
     cfg2 = load_config(config_dir=CONFIGS)
     paths = init_run_dir("r-snap", cfg2, runs_root=runs, git_check=False,
                          content_hash="content-abc")
     snap = json.loads(paths.config.read_text(encoding="utf-8"))
     assert snap["content_hash"] == "content-abc"
-    assert snap["env_whitelist"] == ["GAMERSI_LOOP__K"]
+    assert snap["env_whitelist"] == ["DICERATCHET_LOOP__K"]
     assert snap["harness_overridden_keys"] == []
     # 完整 AppConfig：volatile 字段也在（canonical_json 会裁掉它们）
     assert snap["config"]["infra"]["log_level"] == "INFO"
@@ -326,9 +326,9 @@ def test_registry_has_spec_sections():
 def test_cli_init_run_start_carries_process_env(tmp_path, monkeypatch):
     from argparse import Namespace
 
-    from gamer_rsi.infra import cli, events as ev
-    from gamer_rsi.infra import process as P
-    from gamer_rsi.infra import run as run_mod
+    from dice_ratchet.infra import cli, events as ev
+    from dice_ratchet.infra import process as P
+    from dice_ratchet.infra import run as run_mod
 
     # 临时目录不在 git 仓库里：跳过 runs/ 的 .gitignore 检查，只验 run_start 字段
     real_init = run_mod.init_run_dir
@@ -362,15 +362,15 @@ def test_unknown_keys_recorded_in_run_start_and_event(tmp_path, monkeypatch):
     """回归（P1-3）：FR-09-1 的「未知键清单写入 run 启动日志」+ E_IO_CONFIG_UNKNOWN 留痕。"""
     from argparse import Namespace
 
-    from gamer_rsi.infra import cli
-    from gamer_rsi.infra import run as run_mod
+    from dice_ratchet.infra import cli
+    from dice_ratchet.infra import run as run_mod
 
     real_init = run_mod.init_run_dir
     monkeypatch.setattr(cli, "init_run_dir",
                         lambda *a, **k: real_init(*a, **{**k, "git_check": False}))
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("GAMERSI_LOOP__NOPE", "1")
-    monkeypatch.setenv("GAMERSI_FOO__BAR", "1")
+    monkeypatch.setenv("DICERATCHET_LOOP__NOPE", "1")
+    monkeypatch.setenv("DICERATCHET_FOO__BAR", "1")
     events.unbind()
     events.set_dev_mode(True)
     try:
@@ -382,6 +382,6 @@ def test_unknown_keys_recorded_in_run_start_and_event(tmp_path, monkeypatch):
         events.unbind()
         events.set_dev_mode(False)
     start = next(r for r in rows if r["event"] == "infra.run_start")
-    assert set(start["unknown_keys"]) == {"loop.nope", "foo.bar", "GAMERSI_FOO__BAR"}
+    assert set(start["unknown_keys"]) == {"loop.nope", "foo.bar", "DICERATCHET_FOO__BAR"}
     unknown_event = next(r for r in rows if r["event"] == "infra.config_unknown_key")
     assert E.E_IO_CONFIG_UNKNOWN == unknown_event["code"]

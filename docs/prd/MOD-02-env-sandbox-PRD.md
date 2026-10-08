@@ -1,24 +1,24 @@
 # MOD-02 env-sandbox 技术 PRD
 
 > 版本：v1.2.1（2026-10-03 追加 §18 实现落地记录）· 状态：草案（待复核）· 所属里程碑：M0（`SandboxEnv` + 投影 + 审计器 + 蜜罐自测全部交付）
-> 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源，冲突以 Spec 为准）· 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md) §3/§8
-> 作者：GameRSI 技术文档（MOD-02 负责模块）
+> 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突以 Spec 为准）· 上游计划：[../../项目计划-DiceRatchet.md](../../项目计划-DiceRatchet.md) §3/§8
+> 作者：DiceRatchet 技术文档（MOD-02 负责模块）
 
 ## 1. 背景与目标
 
 计划 §3 与「米哈游小丑牌透视预读」教训给出本项目最硬的纪律：**agent 只能看到它该看到的**。MOD-02 是这条纪律在代码层的唯一执行者：它是 L0 与 L1 之间唯一合法数据通道，并提供三条独立防线——**投影裁剪（防泄漏）**、**代码/进程隔离（防越权）**、**审计与蜜罐（防未被发现的泄漏）**。
 
-M0 目标：① 交给 L1+ 的环境数据只可能来自 `gamer_rsi/sandbox/projection.py::project_state()`，未在 `OBSERVATION_SCHEMA` 登记的字段无法出现在 `Observation`（INV-2）；② agent 侧 import `gamer_rsi.env.*` 在 CI 与运行期两级被拒（INV-1）；③ 自编辑 harness 代码只能在受限执行器内运行：无网络、无文件写、无 subprocess、无 env 访问（INV-4）；④ `audit leak` 能从轨迹与 prompt 重建「agent 可见信息集合」并对 6 类泄漏结构化判定（INV-2/3/5）；⑤ 蜜罐 canary 与假字段一旦泄漏 100% 被抓到（G4）。
+M0 目标：① 交给 L1+ 的环境数据只可能来自 `dice_ratchet/sandbox/projection.py::project_state()`，未在 `OBSERVATION_SCHEMA` 登记的字段无法出现在 `Observation`（INV-2）；② agent 侧 import `dice_ratchet.env.*` 在 CI 与运行期两级被拒（INV-1）；③ 自编辑 harness 代码只能在受限执行器内运行：无网络、无文件写、无 subprocess、无 env 访问（INV-4）；④ `audit leak` 能从轨迹与 prompt 重建「agent 可见信息集合」并对 6 类泄漏结构化判定（INV-2/3/5）；⑤ 蜜罐 canary 与假字段一旦泄漏 100% 被抓到（G4）。
 
 ## 2. 范围
 
 ### 2.1 范围内
 
-- `gamer_rsi/sandbox/projection.py`：`OBSERVATION_SCHEMA` 注册表、字段级白名单投影、`obs_digest`、投影协议版本与 CHANGELOG 一致性校验。
-- `gamer_rsi/sandbox/api.py`：`SandboxEnv` 门面（agent 侧唯一入口），私有持有 MOD-01 引擎，不暴露 `FullState`。
-- `gamer_rsi/sandbox/guard.py`：import 门禁（静态 AST + 运行期 import hook + 子进程边界）、harness 代码受限执行（AST 白名单+黑名单）、资源与超时限制。
-- `gamer_rsi/sandbox/audit.py`：可见性重建器、规则扫描器、`leak-report` 输出 schema（CLI 由 MOD-09 暴露）。
-- `gamer_rsi/sandbox/honeypot.py`：canary/假字段注入、触发监控、P0 告警、自测用例生成。
+- `dice_ratchet/sandbox/projection.py`：`OBSERVATION_SCHEMA` 注册表、字段级白名单投影、`obs_digest`、投影协议版本与 CHANGELOG 一致性校验。
+- `dice_ratchet/sandbox/api.py`：`SandboxEnv` 门面（agent 侧唯一入口），私有持有 MOD-01 引擎，不暴露 `FullState`。
+- `dice_ratchet/sandbox/guard.py`：import 门禁（静态 AST + 运行期 import hook + 子进程边界）、harness 代码受限执行（AST 白名单+黑名单）、资源与超时限制。
+- `dice_ratchet/sandbox/audit.py`：可见性重建器、规则扫描器、`leak-report` 输出 schema（CLI 由 MOD-09 暴露）。
+- `dice_ratchet/sandbox/honeypot.py`：canary/假字段注入、触发监控、P0 告警、自测用例生成。
 - 落地文件：`runs/<run_id>/audit/leak-<scope>.json`、`harness-gate.json`、`honeypot.jsonl`。
 
 ### 2.2 范围外（非目标）
@@ -57,8 +57,8 @@ M0 目标：① 交给 L1+ 的环境数据只可能来自 `gamer_rsi/sandbox/pro
 | FR-02-8a | `reject(*, stage, reason, raw, final)`（Spec §4.1/§4.3，P-02 结案）：L1/L2 校验失败时由 MOD-04 调用，不改状态，`illegal_count += 1`，shaped `-0.05`，写一行 `illegal=true` 的轨迹。 |
 | FR-02-8b | **唯一判负方**（B-15）：连续 3 次 `reject(final=True)`（中间没有成功的决策）→ 返回 `truncated=True, info.truncation_reason="policy_failure"`，主指标计为 lose。另外 `episode.max_env_steps`/`max_decisions` 超限 → `truncation_reason="step_limit"/"decision_limit"`。MOD-04/06 不另行判负。 |
 | FR-02-8c | `legal_actions()` = MOD-01 `legal_actions` 去掉 `abandon_run`，顺序保持不变；`hints()` 转发 `play_hints` 供启发式使用（只含公开信息）。 |
-| FR-02-9 | `check_imports()` 扫描 L1–L3（`agent/memory/loop/evolve/evals/inference`）中任何 `import gamer_rsi.env...` / `from gamer_rsi.env import ...`，命中即 `E_ENV_IMPORT_DENIED`。 |
-| FR-02-10 | `install_agent_import_hook()` 安装不可卸载的 `MetaPathFinder`，按**调用方模块路径**判定：调用栈中发起 import 的帧属于 `gamer_rsi.{agent,memory,loop,evolve,evals,inference}` 时拒绝 `gamer_rsi.env.*` 并抛 `E_ENV_IMPORT_DENIED`；`gamer_rsi.sandbox` 自身的导入放行。另外，`SandboxEnv` 模块在安装 hook 之前预先 import env。 |
+| FR-02-9 | `check_imports()` 扫描 L1–L3（`agent/memory/loop/evolve/evals/inference`）中任何 `import dice_ratchet.env...` / `from dice_ratchet.env import ...`，命中即 `E_ENV_IMPORT_DENIED`。 |
+| FR-02-10 | `install_agent_import_hook()` 安装不可卸载的 `MetaPathFinder`，按**调用方模块路径**判定：调用栈中发起 import 的帧属于 `dice_ratchet.{agent,memory,loop,evolve,evals,inference}` 时拒绝 `dice_ratchet.env.*` 并抛 `E_ENV_IMPORT_DENIED`；`dice_ratchet.sandbox` 自身的导入放行。另外，`SandboxEnv` 模块在安装 hook 之前预先 import env。 |
 | FR-02-11 | 子进程边界 `run_agent_tick()`：`[sys.executable, "-I", "-S", "-c", shim]`，清空 `PYTHONPATH`、cwd 只读、stdin/stdout 仅 JSON 协议、超时即 kill；供不配合 hook 的第三方代码。 |
 | FR-02-12 | `analyze_code()` 采用**节点黑名单 + 调用白名单**：<br>• 禁止的节点：§6 `BLOCKED_NODES`（`Import/ImportFrom` 仅放行 `tool_import_allowlist` 内的模块）。<br>• 禁止的调用、模块与属性：§6 `BLOCKED_CALLS`、`BLOCKED_MODULES`、`ATTR_DENY`（任何 `__*__` 属性）。<br>• **运算符、比较、布尔、切片、推导式等表达式节点一律允许**（v1.0 的节点白名单漏掉了 `Add/Eq/And/USub…` 这些运算符节点，任何写了 `a + b` 的合法工具都会被拒）。<br>返回全部违规的行号与错误码。 |
 | FR-02-13 | `gate(artifact_dir)` 对 `harness/tools/*.py` 逐个 `analyze_code`，任一失败整批拒绝（fail-closed），写 `runs/<run_id>/audit/harness-gate.json`，旧 harness 保持可用。 |
@@ -87,7 +87,7 @@ M0 目标：① 交给 L1+ 的环境数据只可能来自 `gamer_rsi/sandbox/pro
 ## 6. 接口契约（真实 Python 签名 + JSON Schema）
 
 ```python
-# gamer_rsi/sandbox/projection.py —— INV-2 唯一权威登记表
+# dice_ratchet/sandbox/projection.py —— INV-2 唯一权威登记表
 OBSERVATION_SCHEMA_VERSION: str = "obs-agent-1.0.0"
 @dataclass(frozen=True)  # 全部数据类 frozen + 显式类型，禁可变默认值
 class ObsFieldSpec:                  # name/source_path/type/doc/since/optional=False/enabled=True
@@ -105,7 +105,7 @@ def obs_digest(obs: Mapping[str, Any]) -> str:          # 含 schema_version 的
 def validate_observation(obs: Mapping[str, Any]) -> list[str]:   # 违规字段路径（空=合法），供 G5 round-trip
 def render_compact(obs: Mapping[str, Any]) -> str: ...            # FR-02-3b，供 prompt
 
-# gamer_rsi/sandbox/api.py —— 唯一 agent 侧入口；内部 engine 为 MOD-01 实例，不对外暴露
+# dice_ratchet/sandbox/api.py —— 唯一 agent 侧入口；内部 engine 为 MOD-01 实例，不对外暴露
 class SandboxEnv:
     def __init__(self, *, engine: Any, episode_config: EpisodeConfig, projection_mode: str = "strict") -> None: ...
     def reset(self, seed: int, *, episode_config: EpisodeConfig | None = None) -> Observation: ...
@@ -119,13 +119,13 @@ class SandboxEnv:
     def __enter__(self) -> "SandboxEnv": ...;  def __exit__(self, *exc: object) -> None: ...
     # 严禁：任何返回 FullState、engine、rng_state 的公开方法/属性
 
-# gamer_rsi/sandbox/guard.py
+# dice_ratchet/sandbox/guard.py
 class GuardViolation(Exception):
     def __init__(self, code: str, message: str, *, lineno: int | None = None, col: int | None = None) -> None: ...
 
 # 黑/白名单（集合按字母序维护；命中 → E_ENV_CODE_* / E_ENV_AST_DENIED）
 BLOCKED_CALLS = frozenset({"eval","exec","compile","__import__","open","input","globals","locals","vars","dir","getattr","setattr","delattr","breakpoint","memoryview"})
-BLOCKED_MODULES = frozenset({"os","sys","io","socket","subprocess","shutil","pathlib","importlib","pickle","marshal","ctypes","multiprocessing","threading","requests","urllib","http","gamer_rsi.env","gamer_rsi.sandbox"})
+BLOCKED_MODULES = frozenset({"os","sys","io","socket","subprocess","shutil","pathlib","importlib","pickle","marshal","ctypes","multiprocessing","threading","requests","urllib","http","dice_ratchet.env","dice_ratchet.sandbox"})
 BLOCKED_NODES = frozenset({"Import","ImportFrom","While","Try","With","AsyncFunctionDef","AsyncFor","AsyncWith","ClassDef","Lambda","Yield","YieldFrom","Await","Global","Nonlocal","Delete","Raise"})
 # v1.1：只用 BLOCKED_NODES 黑名单 + BLOCKED_CALLS/ATTR_DENY；节点白名单 ALLOWED_NODES 已废弃（漏了 Add/Eq/And/USub 等运算符节点），原列表仅供对照：
 # ALLOWED_NODES = frozenset({"Module","FunctionDef","arguments","arg","Return","Assign","AnnAssign","AugAssign","If","For","Expr","Pass","Dict","List","Tuple","Set","Constant","Name","Load","Store","BinOp","BoolOp","UnaryOp","Compare","Call","keyword","Subscript","Slice","Attribute","comprehension","ListComp","DictComp","SetComp","GeneratorExp","IfExp","JoinedStr","FormattedValue","Starred"})
@@ -137,7 +137,7 @@ class GuardFinding: code: str; lineno: int; col: int; detail: str
 @dataclass(frozen=True)
 class GuardReport: ok: bool; findings: tuple[GuardFinding, ...]; n_imports: int; scanned_files: tuple[str, ...]
 
-def check_imports(paths: Iterable[Path], *, roots: tuple[str, ...] = ("gamer_rsi.env",)) -> GuardReport: ...
+def check_imports(paths: Iterable[Path], *, roots: tuple[str, ...] = ("dice_ratchet.env",)) -> GuardReport: ...
 def analyze_code(source: str, *, filename: str = "<harness>") -> GuardReport: ...
 def gate(artifact_dir: Path) -> GuardReport: ...
 def install_agent_import_hook() -> None: ...
@@ -149,7 +149,7 @@ class ToolWorker:                                      # FR-02-14 常驻子进�
 def run_agent_tick(payload: dict, *, timeout_s: float = 10.0) -> dict: ...
 def load_harness_tools(harness_dir: Path) -> ToolWorker: ...   # Spec §4.7
 
-# gamer_rsi/sandbox/audit.py
+# dice_ratchet/sandbox/audit.py
 RULESET_VERSION: str = "1.0.0"
 class LeakClass(str, Enum):   # 6 类泄漏 = FR-02-17
     SEED_LEAK="seed_leak"; FUTURE_ROOM_LEAK="future_room_leak"; SHOP_CONTENT_LEAK="shop_content_leak"; FULL_STATE_FIELD_LEAK="full_state_field_leak"; HIDDEN_FIELD_NAME_LEAK="hidden_field_name_leak"; CANARY_LEAK="canary_leak"
@@ -166,7 +166,7 @@ def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION) -> AuditResult: 
 def write_report(result: AuditResult, out: Path) -> Path: ...     # 0600
 def audit_to_console(result: AuditResult) -> int: ...             # 0/1/2
 
-# gamer_rsi/sandbox/honeypot.py
+# dice_ratchet/sandbox/honeypot.py
 HONEYPOT_CANARY: str = "HP-CANARY-7f3a9c1e-4d2b-4a8f-9c11-0b5e8d6a2f47"
 FAKE_FIELD_NAMES: tuple[str, ...] = ("_np_secret_price", "_np_future_die", "_np_hidden_status")
 @dataclass(frozen=True)
@@ -180,7 +180,7 @@ def reset_canary(*, salt: str) -> str:       # 按 run_id 派生 canary，写 ho
 `Observation` JSON（Spec v1.3 §4.2 的机器可读形式，字段集合由 `OBSERVATION_SCHEMA` 唯一决定；以下为 `player_turn` 的节选，其余键同 GAME-00 §9.4）：
 `{"schemaVersion":"obs-agent-1.0.0","episodeId":"e-001042-g003-train","decisionIndex":17,"phase":"player_turn","stage":4,"stageCount":6,"chapter":2,"turn":3,"difficulty":"hard","player":{"hearts":2,"heartsMax":2,"virtue":8,"virtueMax":24,"ward":4,"starShards":120,"statuses":[],"deckSchool":"blade","purifyLeft":0,"abilities":[{"id":"warrior_reroll","usesLeft":1}]},"hand":[{"dieId":"d-0007","defId":"skill_blade_execute","school":"blade","riskTier":"balanced","faceIndex":2,"label":"处决斩 4","kind":"purge","value":4,"statusKind":null,"isCorrupt":false,"corruptionValue":0}],"slots":[{"slotId":"slot_1","slotKind":"attack","constraint":"ge:3","filledBy":null,"effectKind":"purge","bonus":0,"disabled":false}],"enemies":[{"enemyId":"e-00","defId":"mon_verdant_slime","school":"verdant","hp":14,"hpMax":20,"ward":0,"statuses":[],"intent":[{"kind":"purge","value":5,"school":"verdant","arrow":"up","slotId":"e_slot_0"}],"phase":1}],"legalActionKinds":["discard_die","end_turn","play_face","use_ability"],"lastResult":null,"toggles":{"mapBranching":true,"relics":true,"events":true,"shops":true,"schoolCounter":true},"relics":[]}`
 
-`runs/<run_id>/audit/leak-<scope>.json` → `gamer_rsi/sandbox/audit/report.schema.json` 顶层字段：
+`runs/<run_id>/audit/leak-<scope>.json` → `dice_ratchet/sandbox/audit/report.schema.json` 顶层字段：
 `run_id` / `generated_at`(iso) / `ruleset_version` / `scope="leak"` / `verdict∈{clean,warn,critical}`（critical 优先级：canary 泄漏或蜜罐失效 > 其余）/ `scanned{episodes,steps,memory_entries}` / `visible_set{obs_paths[],obs_digests[],harness_version}` / `findings[]{leak_class,surface,episode_id,step,token_class,evidence,line_ref}` / `leak_counts{}` / `honeypot{injected,triggered,caught_rate}`。示例：
 `{"run_id":"4f2a1c9e-9d1c4e77","generated_at":"2026-09-30T12:00:00Z","ruleset_version":"1.0.0","scope":"leak","verdict":"critical","scanned":{"episodes":60,"steps":1840,"memory_entries":42},"visible_set":{"obs_paths":["schema_version","turn","phase"],"obs_digests":["sha256:..."],"harness_version":7},"findings":[{"leak_class":"seed_leak","surface":"prompt","episode_id":"e-000123","step":14,"token_class":"seed","evidence":"...2013...","line_ref":"prompts/e-001042-g003-train.txt:37"}],"leak_counts":{"seed_leak":1},"honeypot":{"injected":4,"triggered":0,"caught_rate":1.0}}`
 
@@ -199,7 +199,7 @@ full_state ─project_state(mode)→ {obs, ProjectionStat}：校验 schema_versi
   schema_version → obs_digest = sha256(canonical_json(obs))          # 单向摘要，可入轨迹
 # import 门禁（CI 静态 / 运行期 hook / 不配合时的子进程边界）
 CI:     check_imports([agent,memory,loop,evolve,evals,inference]) → 命中即红
-运行期: import gamer_rsi.env（sandbox 预导入）→ install_agent_import_hook() → L1+ 帧发起 find_spec("gamer_rsi.env.*") → GuardViolation(E_ENV_IMPORT_DENIED)
+运行期: import dice_ratchet.env（sandbox 预导入）→ install_agent_import_hook() → L1+ 帧发起 find_spec("dice_ratchet.env.*") → GuardViolation(E_ENV_IMPORT_DENIED)
 不配合: run_agent_tick() → [python -I -S -c shim] ←JSON→ 超时 kill
 # harness 准入与受限执行
 gate(harness/tools) → 全通过? 否 → 整批拒绝(E_ENV_AST_DENIED)，保留旧版本
@@ -219,7 +219,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 | `sandbox.projection.mode` | enum | `strict` | `strict` 记裁剪计数；`assert` 命中隐藏字段抛 `E_ENV_SCHEMA`（golden 用） |
 | `sandbox.projection.schema_version` | str | `obs-agent-1.0.0` | 期望投影协议版本（CHANGELOG 一致性由 CI 校验，FR-02-5） |
 | `sandbox.render.max_tokens_p95` | int | `1500` | 紧凑渲染预算（FR-02-3b） |
-| `sandbox.guard.enforce` / `scan_roots` | enum / list[str] | `enforce` / `gamer_rsi/{agent,memory,loop,evolve,evals,inference}` | 阻断或仅告警（CI 强制 enforce）；import 门禁扫描范围 |
+| `sandbox.guard.enforce` / `scan_roots` | enum / list[str] | `enforce` / `dice_ratchet/{agent,memory,loop,evolve,evals,inference}` | 阻断或仅告警（CI 强制 enforce）；import 门禁扫描范围 |
 | `sandbox.guard.process_boundary` | bool | `false` | 是否对不可信 agent 代码启用子进程边界 |
 | `sandbox.exec.timeout_s` / `mem_limit_mb` / `cpu_limit_s` / `max_tools` | float/int/int/int | `2.0` / `256` / `2` / `32` | 工具调用墙钟上限；**worker 子进程**的 `RLIMIT_AS`；`RLIMIT_CPU`；单 harness 工具数上限 |
 | `sandbox.policy_failure_streak` | int | `3` | 连续 `reject(final=True)` 的次数，达到即判 `policy_failure`（FR-02-8b） |
@@ -227,7 +227,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 | `sandbox.audit.ruleset` / `fail_on` / `evidence_chars` | str/enum/int | `1.0.0` / `critical` / `12` | 规则集版本（入报告）；非零退出门槛；证据前后保留字符数 |
 | `sandbox.honeypot.enabled` / `plan_path` / `self_test` | bool / str / bool | `true` / `configs/honeypot.yaml` / `true` | 是否注入；注入计划（canary 生成方式、注入点）；审计前是否强制跑 `self_test()` |
 
-环境变量前缀 `GAMERSI_SANDBOX_*`；优先级 CLI > 环境变量 > `configs/default.yaml`（Spec §5）。
+环境变量前缀 `DICERATCHET_SANDBOX_*`；优先级 CLI > 环境变量 > `configs/default.yaml`（Spec §5）。
 
 ## 10. 错误处理与降级（使用 Spec §8 的错误码前缀）
 
@@ -236,7 +236,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 | `E_ENV_PROJECTION_MISSING` | 非 optional 字段源缺失 | 终止该局，不返回部分观测 |
 | `E_ENV_PROJECTION_VERSION` | CHANGELOG 末行 ≠ 注册表版本 | CI 失败（运行时不读文档） |
 | `E_ENV_SCHEMA` | `mode="assert"` 命中隐藏字段、类型不符、观测校验失败 | 抛错；golden/CI 直接红 |
-| `E_ENV_IMPORT_DENIED` | agent 侧 import `gamer_rsi.env.*` | 静态：CI 失败；运行期：终止该 tick + P0 事件 |
+| `E_ENV_IMPORT_DENIED` | agent 侧 import `dice_ratchet.env.*` | 静态：CI 失败；运行期：终止该 tick + P0 事件 |
 | `E_ENV_AST_DENIED` / `E_ENV_CODE_SYNTAX` | 黑名单节点/调用/属性；AST 解析失败 | 拒绝该文件；`gate()` 整批拒绝并保留旧 harness |
 | `E_ENV_TIMEOUT` | 工具调用超墙钟 | 该次调用失败 → MOD-04 fallback，不判该局失败 |
 | `E_ENV_RESOURCE` | 内存/CPU 超限 | 同上；连续 3 次则该 harness 版本标 `degraded` |
@@ -253,7 +253,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 - 给定 源含未登记字段 `hidden_shop_preview`，当 `mode="strict"`，则输出无该字段、`dropped_hidden==1`、日志文本不含该字段名（FR-02-2）。
 - 给定 seed/后续房间/商店条目/RNG 状态/未来骰面各替换为唯一哨兵值，当 投影后逐字段比对，则任一哨兵出现在 obs 即失败（FR-02-3）。
 - 给定 注册表加字段却不改版本，且源 `schema_version="9.9.9"`，当 import projection / 执行投影，则分别抛 `E_ENV_PROJECTION_VERSION`、obs 取注册表版本（FR-02-5/6）。
-- 给定 含 `from gamer_rsi.env.engine import Engine` 的假 L1 文件 + 已装 import hook，当 `check_imports` / `import gamer_rsi.env.rng`，则 `ok=False`（带行号）、抛 `E_ENV_IMPORT_DENIED`（FR-02-9/10）。
+- 给定 含 `from dice_ratchet.env.engine import Engine` 的假 L1 文件 + 已装 import hook，当 `check_imports` / `import dice_ratchet.env.rng`，则 `ok=False`（带行号）、抛 `E_ENV_IMPORT_DENIED`（FR-02-9/10）。
 - 给定 8 个恶意片段（`open("/etc/passwd")`、`import socket`、`__import__("os")`、`eval`、`exec`、`getattr(x,"_np_secret_price")`、`while True`、`class X`），当 `analyze_code`，则全部被拒且码/行号正确（FR-02-12）。
 - 给定 合法 `rank_actions`（纯函数，使用 `+ - * //`、比较、`and/or/not`、推导式、`sorted/len/range/max/min`），当 `gate` + `worker.call`，则通过并返回正确重排（FR-02-12/14，**正例必测**）。
 - 给定 `time.sleep(5)` 与申请 1 GB 的两个工具，当 `worker.call(timeout_s=0.2)`，则分别抛 `E_ENV_TIMEOUT`（worker 被 kill 并自动重启，下一次调用正常）与 `E_ENV_RESOURCE`；主进程 RSS 与 rlimit 不变（FR-02-14）。
@@ -263,7 +263,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 
 Golden `tests/golden/sandbox/`：给定 `src/game/tests/golden/g5_hard_six_stage.jsonl` 的动作脚本，当 经 SandboxEnv 重放，则 agent 侧 `obs_digest` 序列与 `tests/golden/sandbox/g5_obs_agent.txt` 逐字节相同、`render_compact` 输出与 `tests/golden/sandbox/g5_render.txt` 相同（G2/G3）；给定 clean run，当 审计，则报告除 `generated_at` 外与 `tests/golden/sandbox/leak-report-clean.json` 相同（NFR-02-3）。
 
-集成 `tests/integration/`：给定 含 canary 的 fake run，当 `python -m gamer_rsi audit leak --run-id <id>`，则退出码 2、`verdict="critical"`、`leak_counts.canary_leak>=1`；给定 干净自测 run，当 审计，则退出码 0、`findings==[]`、`honeypot.caught_rate==1.0`（G4）；给定 JSONL 损坏一行，当 审计，则 `E_ENV_AUDIT_IO` 且判 `critical`；给定 `FullState` 字段清单快照变更，当 `test_env_sandbox_contract.py`，则注册表漂移被捕获。
+集成 `tests/integration/`：给定 含 canary 的 fake run，当 `python -m dice_ratchet audit leak --run-id <id>`，则退出码 2、`verdict="critical"`、`leak_counts.canary_leak>=1`；给定 干净自测 run，当 审计，则退出码 0、`findings==[]`、`honeypot.caught_rate==1.0`（G4）；给定 JSONL 损坏一行，当 审计，则 `E_ENV_AUDIT_IO` 且判 `critical`；给定 `FullState` 字段清单快照变更，当 `test_env_sandbox_contract.py`，则注册表漂移被捕获。
 
 ## 12. 验收标准（DoD，对齐 Spec §9 质量门 G1–G6）
 
@@ -276,14 +276,14 @@ Golden `tests/golden/sandbox/`：给定 `src/game/tests/golden/g5_hard_six_stage
 | G3 确定性 | 同 seed 双跑 `obs_digest`/`state_hash` 序列逐字节相同（CI diff） |
 | G4 泄漏审计 | 自测 run `audit leak` 0 告警；12/12 蜜罐用例被抓到；故意注入 canary 100% 触发 P0 |
 | G5 Schema | `Observation`、`report.schema.json`、`harness-gate.json` 有 schema + round-trip 测试 |
-| G6 命令 | 可直接复制：`python -m gamer_rsi env selftest --seed 1`、`python -m gamer_rsi audit leak --run-id <run_id>`、`pytest tests/unit/sandbox/test_sandbox_projection.py -q`、`./scripts/ci_gate.sh`（门禁总入口） |
+| G6 命令 | 可直接复制：`python -m dice_ratchet env selftest --seed 1`、`python -m dice_ratchet audit leak --run-id <run_id>`、`pytest tests/unit/sandbox/test_sandbox_projection.py -q`、`./scripts/ci_gate.sh`（门禁总入口） |
 | M0 交付 | `SandboxEnv` 可用且不暴露 `FullState`；L1 import env 的 CI 门禁上线（`./scripts/ci_gate.sh` + `.github/workflows/ci.yml`，见 [2026-10-03 M0 验收报告](../reviews/2026-10-03-M0验收报告.md) F2）；`OBSERVATION_CHANGELOG.md` 写入 1.0.0 |
 
 **与不变量逐条对应**：
 
 | 不变量 | MOD-02 的落实点 | 验证方式 |
 |---|---|---|
-| INV-1 agent 只能经 `SandboxEnv.observe/step` 触达环境；L1+ 禁 import `gamer_rsi.env.*` | FR-02-7（门面唯一入口、无 FullState 出口）、FR-02-9/10/11（静态 + import hook + 子进程）；`gamer_rsi.env` 在 `BLOCKED_MODULES` | 假 L1 文件门禁单测、import hook 单测、`sandbox_import_denied` 事件 |
+| INV-1 agent 只能经 `SandboxEnv.observe/step` 触达环境；L1+ 禁 import `dice_ratchet.env.*` | FR-02-7（门面唯一入口、无 FullState 出口）、FR-02-9/10/11（静态 + import hook + 子进程）；`dice_ratchet.env` 在 `BLOCKED_MODULES` | 假 L1 文件门禁单测、import hook 单测、`sandbox_import_denied` 事件 |
 | INV-2 `Observation` 是白名单投影，新字段必须登记 | FR-02-2/4/5/6、§6 `OBSERVATION_SCHEMA` 与 JSON、FR-02-24 | 哨兵替换测试、未登记字段丢弃测试、CHANGELOG 版本校验测试 |
 | INV-3 进入 prompt 的上下文仅限当前 Observation + memory + harness + 任务说明 | 审计器对 `prompt` 面重建可见集合（FR-02-16/17/18），检测 prompt 中出现非 obs 的 seed/隐藏字段；`obs_paths` 来自 `OBSERVATION_SCHEMA` 与轨迹求交 | 集成：synthetic seed 泄漏 → 退出码 2；`audit_leak` 事件 |
 | INV-4 harness 自编辑代码受限执行：无网络/无文件写/无 subprocess/无 env 访问 | FR-02-12（AST 黑/白名单：`import`/`open`/`subprocess`/`socket`/`__import__`/`eval`/`exec`/`getattr`）、FR-02-13（gate fail-closed）、FR-02-14（超时/内存/CPU）、FR-02-15（逃逸监测）；MOD-07 侧写入动作配合 | 8 个恶意片段拒收单测、超时/资源单测、`E_ENV_ESCAPE` P0 测试、`sandbox_harness_gate` 事件 |
@@ -298,7 +298,7 @@ Golden `tests/golden/sandbox/`：给定 `src/game/tests/golden/g5_hard_six_stage
 
 ## 14. 依赖与风险
 
-依赖：MOD-01 的 `FullState` 字段契约与 `state_hash()`；MOD-09 的 `infra/logging.py`、CLI、`guards.py` CI 作业、`GAMERSI_*` 配置加载；MOD-04/07 消费工具注册表与门禁结果。
+依赖：MOD-01 的 `FullState` 字段契约与 `state_hash()`；MOD-09 的 `infra/logging.py`、CLI、`guards.py` CI 作业、`DICERATCHET_*` 配置加载；MOD-04/07 消费工具注册表与门禁结果。
 
 | 风险 | 影响 | 对策 |
 |---|---|---|
@@ -325,12 +325,12 @@ Golden `tests/golden/sandbox/`：给定 `src/game/tests/golden/g5_hard_six_stage
 关键路径：MOD-01 → MOD-02 → MOD-03/04；M0.1–M0.5 是解锁 MOD-04 的前置。
 
 **实际交付（M0）**：M0.1–M0.6 于 **2026-10-03** 由单个提交 `e35279e` 交付（投影/隔离/审计/蜜罐 + golden + 单测）。
-本项目**未单独记工**，「实际人日」无法从仓库证据还原；按提交时间窗折算 ≤ 1 人日，与估算 18.0 人日的偏差 ≥ 90%，已在 [排期 §8](../项目排期-GameRSI.md) 记录。
+本项目**未单独记工**，「实际人日」无法从仓库证据还原；按提交时间窗折算 ≤ 1 人日，与估算 18.0 人日的偏差 ≥ 90%，已在 [排期 §8](../项目排期-DiceRatchet.md) 记录。
 M0.6 的「CI 门禁接线」在 2026-10-03 验收时缺失（验收报告 F2），同日补齐为 `scripts/ci_gate.sh`（平台中立，本地与 CI 同一份）+ `.github/workflows/ci.yml`（gate / parity 两个作业）。
 证据见 [M0 验收报告](../reviews/2026-10-03-M0验收报告.md)；M1 起按排期 §7 逐任务记录实际人日。
 ## 16. 开放问题
 
-1. **已裁决（Spec v1.4 B-24）**：全状态只由 `SandboxEnv._engine` 私有持有，`gamer_rsi.env` 列入 `BLOCKED_MODULES`，对 L1+ 不可导入。由于 MOD-01 v1.0 改为移植 GAME 内核，原 `build_full_state()` 方案已不再适用，改用这种等价封装；适配层归 MOD-02（`sandbox/api.py`）。`OBSERVATION_SCHEMA` 与 `FullState` 字段清单的契约测试落在 `tests/integration/test_env_sandbox_contract.py`，双方 PRD 各引用一次。
+1. **已裁决（Spec v1.4 B-24）**：全状态只由 `SandboxEnv._engine` 私有持有，`dice_ratchet.env` 列入 `BLOCKED_MODULES`，对 L1+ 不可导入。由于 MOD-01 v1.0 改为移植 GAME 内核，原 `build_full_state()` 方案已不再适用，改用这种等价封装；适配层归 MOD-02（`sandbox/api.py`）。`OBSERVATION_SCHEMA` 与 `FullState` 字段清单的契约测试落在 `tests/integration/test_env_sandbox_contract.py`，双方 PRD 各引用一次。
 2. **已裁决（Spec v1.4 B-25）**：审计器只做黑名单扫描 + canary 探针，不做「prompt 中每个数值都必须归因到 `VisibleSet`」的正向校验（噪声大）；若 M1 后仍出现未知泄漏再升级。
 3. **待定**：canary 是否按 `run_id` 派生（`reset_canary(salt=run_id)`）？跨 run 复用便于测试，但可能被 harness 长期记住；倾向按 run 派生。`sandbox.audit.fail_on` 是否允许 `warn`（本地调试）需 MOD-09 确认，CI 建议恒为 `critical`。
 4. **已结案（Spec v1.3 P-08 → B-10）**：`phase="shop"` 时，陈列随 `obs-agent-1.0.0` 的 `shop` 字段给出，`legal_actions()` 直接带 `itemId`，不再需要单独的 `shop_items` 扩展。
@@ -356,24 +356,24 @@ M0 的五个交付文件已全部落地并有单测/集成/golden 覆盖；节�
 
 | 文件 | 落地内容 | 对应 FR |
 |---|---|---|
-| `gamer_rsi/sandbox/projection.py` | `OBSERVATION_SCHEMA`（34 字段，含 4 个 agent 专属键）、`project_state`、`canonical_json`/`obs_digest`、`validate_observation`、`render_compact`、`changelog_version`/`check_changelog` | FR-02-1..6、3a、3b、24 |
-| `gamer_rsi/sandbox/api.py` | `SandboxEnv`（私有 `_engine`/`_state`、`__getattr__` 拒绝越权属性）、`EpisodeConfig`/`StepResult`、`reject(final)` 与 `policy_failure` 唯一判负、`max_env_steps`/`max_decisions` | FR-02-7、8、8a、8b、8c |
-| `gamer_rsi/sandbox/guard.py`（+ 私有 `_worker.py`） | `check_imports`、`analyze_code`（节点黑名单 + 调用白名单）、`gate`（fail-closed + `harness-gate.json`）、`install_agent_import_hook`、`guarded_globals`、`run_agent_tick`、`ToolWorker`/`load_harness_tools` | FR-02-9..15 |
-| `gamer_rsi/sandbox/audit.py` | `rebuild_visible_set`、6 类 `LeakClass`、`scan_text`、轨迹重放补齐 future_room/shop 规则集、`run_audit`/`write_report`/`audit_to_console`、`register_sensitive` | FR-02-16..19 |
-| `gamer_rsi/sandbox/honeypot.py` | 4 个注入点（`injected_copy` 只复制被触碰容器）、`scan`（字节级 `find`）、`self_test`（12/12）、`reset_canary` + ledger（只存指纹） | FR-02-20..23 |
+| `dice_ratchet/sandbox/projection.py` | `OBSERVATION_SCHEMA`（34 字段，含 4 个 agent 专属键）、`project_state`、`canonical_json`/`obs_digest`、`validate_observation`、`render_compact`、`changelog_version`/`check_changelog` | FR-02-1..6、3a、3b、24 |
+| `dice_ratchet/sandbox/api.py` | `SandboxEnv`（私有 `_engine`/`_state`、`__getattr__` 拒绝越权属性）、`EpisodeConfig`/`StepResult`、`reject(final)` 与 `policy_failure` 唯一判负、`max_env_steps`/`max_decisions` | FR-02-7、8、8a、8b、8c |
+| `dice_ratchet/sandbox/guard.py`（+ 私有 `_worker.py`） | `check_imports`、`analyze_code`（节点黑名单 + 调用白名单）、`gate`（fail-closed + `harness-gate.json`）、`install_agent_import_hook`、`guarded_globals`、`run_agent_tick`、`ToolWorker`/`load_harness_tools` | FR-02-9..15 |
+| `dice_ratchet/sandbox/audit.py` | `rebuild_visible_set`、6 类 `LeakClass`、`scan_text`、轨迹重放补齐 future_room/shop 规则集、`run_audit`/`write_report`/`audit_to_console`、`register_sensitive` | FR-02-16..19 |
+| `dice_ratchet/sandbox/honeypot.py` | 4 个注入点（`injected_copy` 只复制被触碰容器）、`scan`（字节级 `find`）、`self_test`（12/12）、`reset_canary` + ledger（只存指纹） | FR-02-20..23 |
 | `schemas/{observation,audit_report,harness_gate}.schema.json`、`docs/prd/OBSERVATION_CHANGELOG.md`、`configs/honeypot.yaml` | G5 schema + FR-02-4/5 的版本账本 + 注入计划（与实现不一致即 `E_ENV_HONEYPOT`） | FR-02-4、5、21 |
 
 G6 可复制命令（均已实测）：
 
 ```bash
-python -m gamer_rsi env selftest --seed 1
-python -m gamer_rsi audit leak --run-id <run_id>
-python -m gamer_rsi guards check --root gamer_rsi
+python -m dice_ratchet env selftest --seed 1
+python -m dice_ratchet audit leak --run-id <run_id>
+python -m dice_ratchet guards check --root dice_ratchet
 pytest tests/unit/sandbox/test_sandbox_projection.py -q
 pytest tests/unit/sandbox tests/golden/sandbox tests/integration -q
 ```
 
-G1 覆盖率（`--cov=gamer_rsi.sandbox`）：`projection` 90% / `audit` 83% / `honeypot` 90% /
+G1 覆盖率（`--cov=dice_ratchet.sandbox`）：`projection` 90% / `audit` 83% / `honeypot` 90% /
 `guard` 87% / `api` 92%（均 ≥80%）；`_worker.py` 是私有子进程入口，79%，其真实路径由
 `ToolWorker`/`run_agent_tick` 的子进程用例覆盖（子进程内不进覆盖率统计）。
 G2 golden：`tests/golden/sandbox/{g5_obs_agent.txt,g5_render.txt,leak-report-clean.json}`，
@@ -397,7 +397,7 @@ G2 golden：`tests/golden/sandbox/{g5_obs_agent.txt,g5_render.txt,leak-report-cl
    `battleHints`/`battleKind`/`outcome`（token 预算 + §4.2「删除」的语义；终局结果经
    `StepResult.info.outcome` 提供，不进 prompt）。`piles` 被排除还使蜜罐向 `drawPile`
    注入虚构骰时**不改变** `piles.draw` 计数。
-6. **schema 落 `schemas/` 而不是 §6 示例的 `gamer_rsi/sandbox/audit/report.schema.json`**：
+6. **schema 落 `schemas/` 而不是 §6 示例的 `dice_ratchet/sandbox/audit/report.schema.json`**：
    `sandbox/audit.py` 已是模块，同名包目录会与模块解析冲突；`schemas/` 是 MOD-09
    登记的跨模块 schema 根（`infra.io.validate` 默认搜索路径）。
 7. **seed 规则集默认只扫 heldout/test**：依 `configs/seeds.yaml::exposure_guard.numeric_scan`
@@ -407,8 +407,8 @@ G2 golden：`tests/golden/sandbox/{g5_obs_agent.txt,g5_render.txt,leak-report-cl
    sha256 片段、年份、token 数会刷出假阳性（假阳性同样是 P0 失效）。
 8. **import hook 双层**：`MetaPathFinder`（加载期，§4.10 的字面要求）+ `builtins.__import__`
    包装（缓存命中期）。因为 `SandboxEnv` 按 FR-02-10 预先 import 了环境层，agent 侧
-   `import gamer_rsi.env.rng` 会命中 `sys.modules`、绕过 finder；只装 finder 会让
-   FR-02-10 与 §11 的「import gamer_rsi.env.rng → 抛 E_ENV_IMPORT_DENIED」无法成立。
+   `import dice_ratchet.env.rng` 会命中 `sys.modules`、绕过 finder；只装 finder 会让
+   FR-02-10 与 §11 的「import dice_ratchet.env.rng → 抛 E_ENV_IMPORT_DENIED」无法成立。
 9. **`GuardViolation` 继承 `InfraError`**（仍是 `Exception` 子类，符合 §6 签名），
    从而 CLI 直接拿到 Spec §8.3 的退出码 4，无需第二套错误通道。
 10. **`_worker.py` 是第 6 个（私有）文件**：常驻工具子进程的入口必须能被

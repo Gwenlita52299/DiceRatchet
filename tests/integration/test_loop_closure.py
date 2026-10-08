@@ -1,11 +1,11 @@
 """MOD-06 闭环集成（PRD §11 的 T-06-14…T-06-17；M2 验收的闭环证据）。
 
-真实环境 + 真实 CLI（``python -m gamer_rsi loop …``），只用启发式 agent，
+真实环境 + 真实 CLI（``python -m dice_ratchet loop …``），只用启发式 agent，
 **不调模型**。为了让冒烟秒级完成，run 级 override 走 Spec §8.6 B-30 的环境变量写法：
 
-    GAMERSI_ENV__EPISODE__DIFFICULTY=easy GAMERSI_ENV__EPISODE__STAGE_COUNT=3
+    DICERATCHET_ENV__EPISODE__DIFFICULTY=easy DICERATCHET_ENV__EPISODE__STAGE_COUNT=3
 
-``GAMERSI_ENV__EPISODE__*`` 参与 ``config_hash``（F10），所以同一 run 的续跑必须带同一组
+``DICERATCHET_ENV__EPISODE__*`` 参与 ``config_hash``（F10），所以同一 run 的续跑必须带同一组
 环境变量（本文件的 ``_ENV`` 统一注入）。
 """
 
@@ -25,16 +25,16 @@ _REPO = Path(__file__).resolve().parents[2]
 
 #: 冒烟口径（Spec §8.6 bring-up 的同源写法）：easy × 3 关，秒级完成
 _ENV = {
-    "GAMERSI_ENV__EPISODE__DIFFICULTY": "easy",
-    "GAMERSI_ENV__EPISODE__STAGE_COUNT": "3",
+    "DICERATCHET_ENV__EPISODE__DIFFICULTY": "easy",
+    "DICERATCHET_ENV__EPISODE__STAGE_COUNT": "3",
 }
 
 
 def _run_cli(tmp_path: Path, argv: list[str], *, timeout: float = 300.0
              ) -> tuple[int, str, str]:
     """在 ``tmp_path`` 里跑真实 CLI（不 re-exec），返回 (exit_code, stdout, stderr)。"""
-    env = {**os.environ, **_ENV, "GAMERSI_INFRA__RUNS_ROOT": str(tmp_path / "runs")}
-    proc = subprocess.run([sys.executable, "-m", "gamer_rsi", *argv], cwd=_REPO,
+    env = {**os.environ, **_ENV, "DICERATCHET_INFRA__RUNS_ROOT": str(tmp_path / "runs")}
+    proc = subprocess.run([sys.executable, "-m", "dice_ratchet", *argv], cwd=_REPO,
                           env=env, capture_output=True, text=True, timeout=timeout)
     return proc.returncode, proc.stdout, proc.stderr
 
@@ -59,23 +59,23 @@ def _run_with_hook(tmp_path: Path, hook_source: str, run_id: str,
                    argv: list[str]) -> subprocess.CompletedProcess[str]:
     """把 ``hook_source``（注册 MOD-07 provider 的代码）注入进程后跑真实 CLI。
 
-    ``python -m gamer_rsi`` 没有通用插件入口，所以用 ``-c`` 先 exec 注入再调
-    ``gamer_rsi.app.main``——与被 ``wire()`` 注册的正式路径完全一致。
+    ``python -m dice_ratchet`` 没有通用插件入口，所以用 ``-c`` 先 exec 注入再调
+    ``dice_ratchet.app.main``——与被 ``wire()`` 注册的正式路径完全一致。
     """
-    env = {**os.environ, **_ENV, "GAMERSI_INFRA__RUNS_ROOT": str(tmp_path / "runs")}
+    env = {**os.environ, **_ENV, "DICERATCHET_INFRA__RUNS_ROOT": str(tmp_path / "runs")}
     full = [*argv, "--run-id", run_id]
     script = (
         f"exec(compile({hook_source!r}, '<evolve-hook>', 'exec'));"
         "import sys;"
-        f"sys.argv = ['gamer_rsi', *{full!r}];"
-        "from gamer_rsi.app import main;"
+        f"sys.argv = ['dice_ratchet', *{full!r}];"
+        "from dice_ratchet.app import main;"
         "raise SystemExit(main(sys.argv[1:], reexec=False))")
     proc = subprocess.run([sys.executable, "-c", script], cwd=_REPO, env=env,
                           capture_output=True, text=True, timeout=300)
     assert (_run_dir(tmp_path, run_id)).is_dir(), (
         f"注入 hook 的子进程没有产出 run 目录\nrc={proc.returncode}\n"
         f"stdout={proc.stdout}\nstderr={proc.stderr}\nruns_root="
-        f"{env.get('GAMERSI_INFRA__RUNS_ROOT')}")
+        f"{env.get('DICERATCHET_INFRA__RUNS_ROOT')}")
     return proc
 
 
@@ -215,10 +215,10 @@ def test_t06_16_cycle_boundary_writes_gen001_and_events(tmp_path):
     （排期 M3），本用例用 MOD-07 stub 覆盖 MOD-06 一侧的**编排契约**（FR-06-5/6/7）。
     """
     stub = """
-from gamer_rsi.loop.cli import set_evolve_provider
-from gamer_rsi.loop.generation import EvolveOutcome
-from gamer_rsi.infra.io import write_json_atomic
-from gamer_rsi.infra import events
+from dice_ratchet.loop.cli import set_evolve_provider
+from dice_ratchet.loop.generation import EvolveOutcome
+from dice_ratchet.infra.io import write_json_atomic
+from dice_ratchet.infra import events
 import pathlib
 
 
@@ -257,8 +257,8 @@ set_evolve_provider(provider)
 def test_t06_16_evolve_error_is_recorded_as_error_reject(tmp_path):
     """MOD-07 抛 ``E_EVOLVE_*`` → ``evolve.decision{decision:error_reject}`` 且 run 继续。"""
     stub = """
-from gamer_rsi.loop.cli import set_evolve_provider
-from gamer_rsi.infra.errors import E, InfraError
+from dice_ratchet.loop.cli import set_evolve_provider
+from dice_ratchet.infra.errors import E, InfraError
 
 
 def provider(cfg, runner, run_ctx):
@@ -293,8 +293,8 @@ def test_t06_17_sigkill_then_resume_loses_no_completed_seed(tmp_path):
     """
     run_id = "t17"
     seeds = [str(s) for s in range(1000, 1010)]
-    env = {**os.environ, **_ENV, "GAMERSI_INFRA__RUNS_ROOT": str(tmp_path / "runs")}
-    argv = [sys.executable, "-m", "gamer_rsi", "loop", "run", "--agent", "heuristic",
+    env = {**os.environ, **_ENV, "DICERATCHET_INFRA__RUNS_ROOT": str(tmp_path / "runs")}
+    argv = [sys.executable, "-m", "dice_ratchet", "loop", "run", "--agent", "heuristic",
             "--seeds", f"train:{seeds[0]}-{seeds[-1]}", "--k", "99", "--generations", "1",
             "--no-reflect", "--no-evolve", "--run-id", run_id]
     proc = subprocess.Popen(argv, cwd=_REPO, env=env, stdout=subprocess.PIPE,
@@ -347,7 +347,7 @@ def test_nfr06_3_orchestration_overhead_per_step(tmp_path):
     """假依赖下编排层的单步开销（落盘 + 记账）应远低于 5 ms（NFR-06-3）。"""
     from fakes import FakeEnv, FakePolicy                     # noqa: PLC0415
     from loop_support import build_runner                     # noqa: PLC0415
-    from gamer_rsi.loop.state import init_state               # noqa: PLC0415
+    from dice_ratchet.loop.state import init_state               # noqa: PLC0415
 
     env = FakeEnv(steps_to_terminate=200)
     policy = FakePolicy()
@@ -362,7 +362,7 @@ def test_nfr06_3_orchestration_overhead_per_step(tmp_path):
 
 
 def _perf_cfg():
-    from gamer_rsi.infra.config import LoopConfig
+    from dice_ratchet.infra.config import LoopConfig
 
     return LoopConfig(k=999, reflect_enabled=False, heldout_n=4, smoke_n=2, n_candidates=1)
 
@@ -379,8 +379,8 @@ def test_gen000_baseline_report_is_written(tmp_path, monkeypatch):
     """
     monkeypatch.chdir(_REPO)
     from fakes import FakeEnv, FakePolicy
-    from gamer_rsi.infra.config import load_config
-    from gamer_rsi.loop.generation import write_gen000_baseline
+    from dice_ratchet.infra.config import load_config
+    from dice_ratchet.loop.generation import write_gen000_baseline
     from loop_support import build_runner
 
     cfg = load_config()
@@ -409,8 +409,8 @@ def test_gen000_baseline_is_idempotent(tmp_path, monkeypatch):
     """已存在的 gen-000 report 不再重算（FR-06-13a 的幂等）。"""
     monkeypatch.chdir(_REPO)
     from fakes import FakeEnv, FakePolicy
-    from gamer_rsi.infra.config import load_config
-    from gamer_rsi.loop.generation import write_gen000_baseline
+    from dice_ratchet.infra.config import load_config
+    from dice_ratchet.loop.generation import write_gen000_baseline
     from loop_support import build_runner
 
     cfg = load_config()
@@ -436,9 +436,9 @@ def test_hitl_end_to_end_suspend_and_resume(tmp_path):
     这是 M2 验收要求的「HITL 挂起/恢复端到端演示记录」的可执行版本（PRD §12）。
     """
     stub = """
-from gamer_rsi.loop.cli import set_evolve_provider
-from gamer_rsi.loop.generation import EvolveOutcome
-from gamer_rsi.infra.io import write_json_atomic
+from dice_ratchet.loop.cli import set_evolve_provider
+from dice_ratchet.loop.generation import EvolveOutcome
+from dice_ratchet.infra.io import write_json_atomic
 import pathlib
 
 

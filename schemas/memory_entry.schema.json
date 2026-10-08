@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gamersi.local/schemas/memory_entry.schema.json",
+  "$id": "https://diceratchet.local/schemas/memory_entry.schema.json",
   "title": "MemoryEntry",
   "type": "object",
   "additionalProperties": false,

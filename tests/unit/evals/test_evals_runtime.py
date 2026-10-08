@@ -7,15 +7,15 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.config import load_config
-from gamer_rsi.evals import seeds as S
-from gamer_rsi.evals.baselines import run_baseline
-from gamer_rsi.evals.harness import (append_generations_csv, episode_result_from_rows,
+from dice_ratchet.infra.config import load_config
+from dice_ratchet.evals import seeds as S
+from dice_ratchet.evals.baselines import run_baseline
+from dice_ratchet.evals.harness import (append_generations_csv, episode_result_from_rows,
                                      evaluate_arm, evaluate_generation,
                                      load_episode_results, write_ext_metrics,
                                      write_plots_data)
-from gamer_rsi.evals.metrics import EpisodeResult, aggregate
-from gamer_rsi.evals import reward
+from dice_ratchet.evals.metrics import EpisodeResult, aggregate
+from dice_ratchet.evals import reward
 
 _PROTO = S.default_protocol()
 _CFG = load_config()
@@ -119,7 +119,7 @@ def test_evaluate_generation_reads_train_window(tmp_path):
                       kind_counts=tuple([1] * 16), slot_counts={}, seq_hash=f"s{i}",
                       decision_kinds=(0, 1, 2))
         for i in range(8))
-    from gamer_rsi.evals.harness import ArmResult
+    from dice_ratchet.evals.harness import ArmResult
 
     parent = ArmResult(arm="parent", split="heldout", basket="H1", harness_version=1,
                        memory_version=0, run_id="r-gen", results=runner_results,
@@ -144,7 +144,7 @@ def _capture_make_default_env(monkeypatch, seen):
         seen.update(kwargs)
         raise _StopBeforeEnv
 
-    monkeypatch.setattr("gamer_rsi.sandbox.api.make_default_env", _fake_make_default_env)
+    monkeypatch.setattr("dice_ratchet.sandbox.api.make_default_env", _fake_make_default_env)
 
 
 def test_sandbox_runner_honours_config_episode(monkeypatch):
@@ -154,11 +154,11 @@ def test_sandbox_runner_honours_config_episode(monkeypatch):
     ``episode_config=None`` 时曾直接落到 ``EpisodeConfig()`` 的**代码默认**（hard × 6、
     toggles 全开），而 ``baseline`` / ``play`` 这两个 MOD-08 入口都不显式传该参数 ——
     于是 ``env.episode.*``（difficulty / stage_count / toggles / character）对它们**完全失效**：
-    带 ``GAMERSI_ENV__EPISODE__DIFFICULTY=medium`` 的局与 hard × 6 逐位相同。
+    带 ``DICERATCHET_ENV__EPISODE__DIFFICULTY=medium`` 的局与 hard × 6 逐位相同。
     """
     from types import SimpleNamespace
 
-    from gamer_rsi.evals import harness as H
+    from dice_ratchet.evals import harness as H
 
     seen: dict = {}
     _capture_make_default_env(monkeypatch, seen)
@@ -178,7 +178,7 @@ def test_sandbox_runner_explicit_episode_wins(monkeypatch):
     """显式传入的 ``episode_config`` 优先于 ``config.env.episode``（Spec §5 的优先级）。"""
     from types import SimpleNamespace
 
-    from gamer_rsi.evals import harness as H
+    from dice_ratchet.evals import harness as H
 
     seen: dict = {}
     _capture_make_default_env(monkeypatch, seen)

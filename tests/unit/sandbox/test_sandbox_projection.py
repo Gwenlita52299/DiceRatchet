@@ -10,9 +10,9 @@ import json
 
 import pytest
 
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.sandbox import projection as P
-from gamer_rsi.sandbox.honeypot import FAKE_FIELD_NAMES, HONEYPOT_CANARY
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.sandbox import projection as P
+from dice_ratchet.sandbox.honeypot import FAKE_FIELD_NAMES, HONEYPOT_CANARY
 
 
 def _ctx(**kw):

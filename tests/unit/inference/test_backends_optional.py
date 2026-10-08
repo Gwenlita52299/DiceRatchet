@@ -11,14 +11,14 @@ import asyncio
 
 import pytest
 
-from gamer_rsi.infra.errors import E
-from gamer_rsi.inference.backend import (BackendManager, BackendHealth, Message, MockBackend,
+from dice_ratchet.infra.errors import E
+from dice_ratchet.inference.backend import (BackendManager, BackendHealth, Message, MockBackend,
                                          NullInfra, estimate_prompt_tokens)
-from gamer_rsi.inference.errors import InferenceError
-from gamer_rsi.inference.llama_backend import (LlamaCppBackend, LlamaServerBackend, _free_port,
+from dice_ratchet.inference.errors import InferenceError
+from dice_ratchet.inference.llama_backend import (LlamaCppBackend, LlamaServerBackend, _free_port,
                                                _server_args, llama_server_available)
-from gamer_rsi.inference.mlx_backend import JSON_INSTRUCTION, MLXBackend
-from gamer_rsi.inference.schema import DECISION_SCHEMA
+from dice_ratchet.inference.mlx_backend import JSON_INSTRUCTION, MLXBackend
+from dice_ratchet.inference.schema import DECISION_SCHEMA
 
 from support import GOOD, BAD_JSON, build, inference_config
 
@@ -26,7 +26,7 @@ MESSAGES = [Message(role="user", content="phase=player_turn")]
 
 
 def _spec(**overrides):
-    from gamer_rsi.inference.registry import ModelSpec
+    from dice_ratchet.inference.registry import ModelSpec
 
     base = dict(model_id="m", backend="mlx", weights_path="", weights_sha256="",
                 quantization="4bit", tokenizer_path=None, context_length=1024,
@@ -144,7 +144,7 @@ def test_llama_server_availability_is_boolean():
 
 
 def test_llama_server_backend_without_binary(tmp_path, monkeypatch):
-    from gamer_rsi.inference import llama_backend as llama_mod
+    from dice_ratchet.inference import llama_backend as llama_mod
 
     monkeypatch.setattr(llama_mod, "llama_server_available", lambda: False)
     backend = LlamaServerBackend()
@@ -296,7 +296,7 @@ def test_manager_reports_unloaded_health_for_registry_models():
 
 
 def test_manager_debug_dump_raw_writes_attempt_text(tmp_path):
-    from gamer_rsi.inference.backend import InfraBridge
+    from dice_ratchet.inference.backend import InfraBridge
 
     bridge = InfraBridge(run_id="r-1", runs_root=tmp_path, debug_dump_raw=True)
     manager = BackendManager(registry=build(), config=inference_config(debug_dump_raw=True),

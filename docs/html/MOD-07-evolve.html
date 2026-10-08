@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MOD-07 evolve · 模块讲解 · GameRSI</title>
+<title>MOD-07 evolve · 模块讲解 · DiceRatchet</title>
 <style>
 :root{--accent:#e11d48;--accent-2:#f43f5e;--accent-soft:rgba(225,29,72,.09);--bg:#f5f6fa;--card:#fff;--ink:#1c2333;--muted:#64708a;--line:#e5e8f0;--code-bg:#101725;--code-ink:#e8ecf5;--ok:#0f9d58;--bad:#dc2626}
 *{box-sizing:border-box}html{scroll-behavior:smooth}
@@ -56,7 +56,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
 </head>
 <body>
 <aside>
-  <h1>GameRSI</h1><div class="sub">模块讲解 · MOD 系列</div>
+  <h1>DiceRatchet</h1><div class="sub">模块讲解 · MOD 系列</div>
   <a href="MOD-01-env-rules.html">MOD-01 env-rules</a>
   <a href="MOD-02-env-sandbox.html">MOD-02 env-sandbox</a>
   <a href="MOD-03-inference.html">MOD-03 inference</a>
@@ -99,7 +99,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
     <span class="badge">版本 v0.4</span>
     <span class="badge">状态：待评审</span>
     <span class="badge">里程碑：M2 → M3</span>
-    <span class="badge">作者：GameRSI 技术文档</span>
+    <span class="badge">作者：DiceRatchet 技术文档</span>
     <span class="badge">日期：2026-10-07</span>
   </div>
 </header>
@@ -153,7 +153,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
         <li>模型推理实现（MOD-03）</li>
         <li>指标定义与统计口径（MOD-08）</li>
         <li>seed 抽取规则（MOD-09 注册表 + MOD-08 协议）</li>
-        <li>不改 <code>gamer_rsi/agent/policy.py</code> 的解析与校验逻辑（MOD-04）</li>
+        <li>不改 <code>dice_ratchet/agent/policy.py</code> 的解析与校验逻辑（MOD-04）</li>
         <li>不做超参搜索</li>
         <li>不做 LoRA/微调（MOD-10）</li>
         <li>不决定 harness 内容的<b>语义</b>，只负责把 LLM 给出的 <code>diff</code> 落盘并版本化</li>
@@ -169,7 +169,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
     <tr><td>MOD-06 loop</td><td><code>propose → evaluate_candidate → judge → versioning.accept/rollback → gate.await_human</code></td><td><code>play → evaluate → reflect → evolve</code> 的 evolve 段</td></tr>
     <tr><td>MOD-08 evals</td><td>被调用：<code>evaluate_arm(...)</code>、<code>compare_paired(a, b)</code>、<code>evaluate_generation(...)</code>（Spec §4.7）</td><td>提供 heldout 指标、显著性与 <code>collapse_flag</code>；MOD-07 不做统计</td></tr>
     <tr><td>MOD-02 env-sandbox</td><td>被调用：<code>guard.gate(harness_dir) -&gt; GateReport</code>、<code>guard.load_harness_tools(harness_dir) -&gt; ToolWorker</code>（Spec §4.7）</td><td>INV-4：新 harness 先静态扫描，再在子进程 worker 中加载</td></tr>
-    <tr><td>人类操作者</td><td><code>python -m gamer_rsi evolve approve|rollback --generation N [--reason ...]</code></td><td>HITL 确认/回滚，查看 <code>diff.patch</code> 与 <code>report.json</code></td></tr>
+    <tr><td>人类操作者</td><td><code>python -m dice_ratchet evolve approve|rollback --generation N [--reason ...]</code></td><td>HITL 确认/回滚，查看 <code>diff.patch</code> 与 <code>report.json</code></td></tr>
     <tr><td>MOD-09 infra / MOD-05 memory</td><td>提供 config/events/git_ops/guards；只读 <code>retrieve_for_evolution(top_k)</code></td><td>配置优先级、结构化事件、git 封装、AST 守卫；策略记忆与反思（进证据束）</td></tr>
   </table>
   <h4>两条典型链路</h4>
@@ -214,7 +214,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
 
 <section id="sec-6">
   <h3><span class="n">6</span>接口契约</h3>
-  <h4>6.1 核心 Python 签名（<code>gamer_rsi/evolve/</code>）</h4>
+  <h4>6.1 核心 Python 签名（<code>dice_ratchet/evolve/</code>）</h4>
 <pre><code># ---- proposer.py ----
 @dataclass(frozen=True)
 class Candidate:
@@ -442,7 +442,7 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
   <table>
     <tr><th>用例</th><th>恶意候选内容</th><th>期望</th></tr>
     <tr><td>MAL-1 网络 / MAL-2 文件写 / MAL-3 子进程</td><td><code>urllib.request.urlopen(...)</code>；<code>open("harness/seed_backup.json","w")</code>；<code>subprocess.run(["git","push"])</code></td><td>均 <span class="tag err">E_EVOLVE_SCAN_FAILED</span>（INV-4）</td></tr>
-    <tr><td>MAL-4 env 内窥 / MAL-5 预读作弊 / MAL-7 签名规避</td><td><code>from gamer_rsi.env.rng import RNG</code>；diff 写入 heldout seed 列表或 <code>if seed == 1042:</code> 常量分支；<code>rank_actions = lambda *a: a[1]</code> 绕过 <code>@harness_tool</code></td><td>均 <span class="tag err">E_EVOLVE_SCAN_FAILED</span>（INV-1 + 注册表完整性/AST 校验）</td></tr>
+    <tr><td>MAL-4 env 内窥 / MAL-5 预读作弊 / MAL-7 签名规避</td><td><code>from dice_ratchet.env.rng import RNG</code>；diff 写入 heldout seed 列表或 <code>if seed == 1042:</code> 常量分支；<code>rank_actions = lambda *a: a[1]</code> 绕过 <code>@harness_tool</code></td><td>均 <span class="tag err">E_EVOLVE_SCAN_FAILED</span>（INV-1 + 注册表完整性/AST 校验）</td></tr>
     <tr><td>MAL-6 历史重写 / MAL-8 预算耗尽</td><td><code>prompt_patch</code> 改 <code>version.json</code> 或 <code>versions/</code>；单代请求 40 个候选</td><td><span class="tag err">E_EVOLVE_PATCH_INVALID</span>（路径白名单）；按优先级截断至 3、<code>cost_cap</code> 未破（NFR-07-5）</td></tr>
   </table>
 </section>
@@ -456,7 +456,7 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
     <li><b>G4</b>：自测 run 上 <code>audit leak</code> 0 告警，MAL-5 蜜罐式候选必须被 <code>guard.gate</code> 抓到。</li>
     <li><b>G5</b>：<code>report.json</code>/<code>version.json</code>/<code>gate.json</code>/<code>Candidate</code> 四个 schema 有 round-trip 测试。</li>
     <li><b>G6</b>：本节命令可直接复制执行成功。</li>
-    <li><b>对齐 M2</b>：<code>python -m gamer_rsi loop run --generations 1 --k 30 --hitl</code> 闭环跑通 ≥1 轮演化，产出 <code>diff.patch</code> + <code>report.json</code> + <code>gate.json</code>，<code>evolve approve</code> 后 <code>harness/version.json.version == 1</code>。</li>
+    <li><b>对齐 M2</b>：<code>python -m dice_ratchet loop run --generations 1 --k 30 --hitl</code> 闭环跑通 ≥1 轮演化，产出 <code>diff.patch</code> + <code>report.json</code> + <code>gate.json</code>，<code>evolve approve</code> 后 <code>harness/version.json.version == 1</code>。</li>
     <li><b>对齐 M3</b>：≥3 代演化，heldout 主指标单调不降，<b>并且至少有 1 次 accept</b>（否则「每代都拒绝」也能满足单调不降，属于退化通过），报告写明接受率；至少 1 个指标相对基线可归因提升且 <code>ablation.no_self_edit</code> 差异被记录；<code>win_rate_gap &lt; gap_threshold</code> 且 <code>collapse_flag == False</code>。</li>
     <li><b>专属 DoD</b>：任意 reject 都有 <code>report.json</code>；任意 accept 都有 <code>version.json</code> + <code>diff.patch</code> + git commit；任意恶意候选都在静态扫描阶段被挡且 0 局 heldout 消耗。</li>
   </ul>
@@ -529,7 +529,7 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
   </table>
 </section>
 
-<footer>来源：docs/prd/MOD-07-evolve-PRD.md · GameRSI 模块讲解系列 · 2026-10-04</footer>
+<footer>来源：docs/prd/MOD-07-evolve-PRD.md · DiceRatchet 模块讲解系列 · 2026-10-04</footer>
 </div>
 </main>
 </body>

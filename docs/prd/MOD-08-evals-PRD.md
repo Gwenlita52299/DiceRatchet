@@ -1,8 +1,8 @@
 # MOD-08 evals 技术 PRD
 
 > 版本：v0.6（2026-10-06 按 M1 验收复核更正 §15 口径引用，见 §17）· 状态：待评审 · 所属里程碑：M1（基线）→ M2（执行器/指标）→ M3（完整：坍缩 + 消融 + test 终检）
-> 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（**唯一事实来源**，冲突以 Spec 为准）· 上游计划：[../../项目计划-GameRSI.md](../../项目计划-GameRSI.md)（§5 防坍缩、§6 三项验收、§8 沙箱泄漏）
-> 作者：MOD-08 owner · 落地：`gamer_rsi/evals/{harness,metrics,diversity,ablation,baselines}.py`
+> 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（**唯一事实来源**，冲突以 Spec 为准）· 上游计划：[../../项目计划-DiceRatchet.md](../../项目计划-DiceRatchet.md)（§5 防坍缩、§6 三项验收、§8 沙箱泄漏）
+> 作者：MOD-08 owner · 落地：`dice_ratchet/evals/{harness,metrics,diversity,ablation,baselines}.py`
 
 ## 1. 背景与目标
 
@@ -81,7 +81,7 @@ MOD-08 是 L3 测量层，**只读轨迹与报告，不参与决策**（Spec §1
 ## 6. 接口契约（真实 Python 签名 + JSON Schema）
 
 ```python
-# gamer_rsi/evals/harness.py
+# dice_ratchet/evals/harness.py
 Split = Literal["train","heldout","test"]; BasketId = Literal["H1","H2","H3","test_full","train_window"]
 @dataclass(frozen=True)
 class EvalSpec:   # run_id, generation, harness_version, split, basket, seeds, agent_kind, max_steps, n_rep, n_workers, seed_timeout_s, budget_seconds
@@ -89,13 +89,13 @@ class EvalSpec:   # run_id, generation, harness_version, split, basket, seeds, a
 def assert_split_isolation(split: Split, seeds: Sequence[int]) -> None: ...
 def guard_prompt_context(*, split: Split, seed: int, text: str, destination: Literal["prompt","memory","reflection"]) -> None: ...
 def resolve_basket(basket: BasketId, *, generation: int, protocol: SeedProtocol) -> tuple[int, ...]: ...
-# gamer_rsi/evals/seeds.py —— Spec §4.7 规定的 seed 唯一出口（INV-5）；MOD-06/07 不得自行切分
+# dice_ratchet/evals/seeds.py —— Spec §4.7 规定的 seed 唯一出口（INV-5）；MOD-06/07 不得自行切分
 def take(split: Split, *, generation: int | None = None, basket: BasketId | None = None) -> list[int]: ...   # train 需 generation，heldout 需 basket
 def run_eval(spec: EvalSpec, *, runner: EpisodeRunner, writer: TraceWriter, protocol: SeedProtocol) -> EvalResult: ...
 def evaluate_arm(harness_dir: Path, *, split: Split, basket: BasketId, memory_version: int, arm: str, run_id: str) -> ArmResult: ...   # Spec §4.7
 def compare_paired(a: ArmResult, b: ArmResult) -> PairedTest: ...                                                            # Spec §4.7
 def evaluate_generation(generation: int, parent: ArmResult, winner: ArmResult | None, *, run_id: str) -> dict: ...            # Spec §4.7，返回 report 指标段
-# gamer_rsi/evals/metrics.py
+# dice_ratchet/evals/metrics.py
 KIND_SPACE = ("play_face","discard_die","purify","use_ability","end_turn","map_choose","shop_buy","shop_refresh",
               "shop_remove","shop_leave","event_choose","treasure_pick","forge_pick","shrine_choose","rest_choose","relic_swap")  # 16，= Spec §4.3 agent 可用 kind
 MAIN_METRIC_SOURCES = ("info.outcome","info.truncation_reason","info.stages_cleared","info.hearts_left","info.battles_won")   # INV-7 白名单
@@ -108,16 +108,16 @@ def mcnemar_exact_p(a: Sequence[bool], b: Sequence[bool], alternative: Literal["
 def aggregate(results: Sequence[EpisodeResult], *, t_max: int = 120) -> SplitMetrics: ...
 def render_report_sections(*, generation: int, harness_version: int, parent_version: int, heldout: SplitMetrics, train: SplitMetrics, gain: GainVerdict, diversity: CollapseVerdict, ablation: Mapping[str,float], decision: str, decided_by: Literal["auto","human"], reason: str) -> dict: ...
 # 便捷访问器（签名同形，(results: Sequence[EpisodeResult]) -> float）：win_rate / mean_stages_cleared / mean_hearts_left / mean_battles_won / mean_decisions / illegal_rate / fallback_rate / truncation_rate
-# gamer_rsi/evals/diversity.py
+# dice_ratchet/evals/diversity.py
 def js_divergence(p: Mapping[str,float], q: Mapping[str,float], *, base: float = 2.0) -> float: ...
 def entropy_slope(curve: Sequence[float|None]) -> float: ...   # 非 null 点上的 OLS 斜率
 def collapse_check(*, curves: Sequence[Sequence[float|None]], jsd_kind: Sequence[float], win_rates: Sequence[float], cfg: CollapseConfig) -> CollapseVerdict: ...
 # 便捷函数（签名同形）：kind_distribution / slot_distribution(results) -> dict[str,float]；distinct_sequence_ratio(results) -> float
-# gamer_rsi/evals/ablation.py
+# dice_ratchet/evals/ablation.py
 AblationArm = Literal["full","no_reflection","no_self_edit"]
 def run_ablation(generation: int, *, arms: Sequence[AblationArm], run_id: str, split_basket: BasketId = "H2", alpha: float = 0.05) -> AblationReport: ...
 def attribution(full: Sequence[bool], arm: Sequence[bool], *, alpha: float = 0.05) -> str: ...
-# gamer_rsi/evals/baselines.py
+# dice_ratchet/evals/baselines.py
 class BaselineAgent(Protocol):   # name: str; reset(seed) -> None; act(obs, legal) -> Action
 # RandomAgent: rng = np.random.default_rng(seed ^ 0x5EED) 在 legal_actions 上均匀采样；HeuristicAgent: 委托 MOD-04 agent.heuristic.heuristic_policy(obs, legal)
 # fixed_prompt **没有**自己的 agent 类：build_agent 返回 MOD-04 PolicyAgent(mode="baseline_fixed_prompt")
@@ -333,15 +333,15 @@ eval:
 
 ## 12. 验收标准（DoD，对齐 Spec §9 质量门 G1–G6 与计划 §6 三项验收）
 
-- **G1**：`pytest tests/unit/evals --cov=gamer_rsi.evals --cov-fail-under=80` 通过（MOD-08 属纯函数模块）。**G2**：指标 golden 快照存在（T-13）；改动需显式更新并在 PR 说明。**G3**：同 `(run_id, generation, split, seeds)` 重跑 `report.sha256` 一致（T-09/T-15）。
+- **G1**：`pytest tests/unit/evals --cov=dice_ratchet.evals --cov-fail-under=80` 通过（MOD-08 属纯函数模块）。**G2**：指标 golden 快照存在（T-13）；改动需显式更新并在 PR 说明。**G3**：同 `(run_id, generation, split, seeds)` 重跑 `report.sha256` 一致（T-09/T-15）。
 - **G4**：`audit leak --run-id <run_id>` 在 eval run 上 0 告警，蜜罐注入必被抓到（T-16）。**G5**：`report.json` / `metrics/*.json` / `seeds.yaml` 均有 schema + round-trip 测试（T-14）。**G6**：下列命令可直接复制执行成功：
 
 ```bash
-python -m gamer_rsi baseline --kind random|heuristic|fixed_prompt --split heldout --basket H1
-python -m gamer_rsi eval report --split heldout --baseline all --run-id <run_id>
-python -m gamer_rsi eval diversity --run-id <run_id> --generation 3
-python -m gamer_rsi eval ablation --run-id <run_id> --generation 3 --arms no_reflection,no_self_edit
-python -m gamer_rsi eval test --run-id <run_id> --unlock-once --attestation runs/<run_id>/generations/gen-003/test_attestation.json
+python -m dice_ratchet baseline --kind random|heuristic|fixed_prompt --split heldout --basket H1
+python -m dice_ratchet eval report --split heldout --baseline all --run-id <run_id>
+python -m dice_ratchet eval diversity --run-id <run_id> --generation 3
+python -m dice_ratchet eval ablation --run-id <run_id> --generation 3 --arms no_reflection,no_self_edit
+python -m dice_ratchet eval test --run-id <run_id> --unlock-once --attestation runs/<run_id>/generations/gen-003/test_attestation.json
 ```
 
 **已回填 Spec v1.3 §4.6**：`--basket` 选项、`eval ablation`、`eval test` 子命令。
@@ -384,7 +384,7 @@ python -m gamer_rsi eval test --run-id <run_id> --unlock-once --attestation runs
 | 横切 | INV-5 三重护栏 + 蜜罐用例 + golden 指标快照 + README 命令 | 3 |
 | **合计** | | **18 人日**（含约 +15% 评审与返工缓冲） |
 
-**实际交付（M1）**：`gamer_rsi/evals/`（`seeds.py` / `metrics.py` / `harness.py` / `baselines.py`）于
+**实际交付（M1）**：`dice_ratchet/evals/`（`seeds.py` / `metrics.py` / `harness.py` / `baselines.py`）于
 **2026-10-04** 交付（提交 `bff9982`），并**提前**交付了原属 M3 的 `diversity.py` / `ablation.py` 与 test 单次解锁存证。
 本项目**未单独记工**；按提交时间窗折算 ≤ 2 人日（计划 M1 部分 4 人日），偏差 ≥ 50%。
 M1 验收的 **F1（三基线之一假入档）**、**F3（评估 run 上 `audit leak` 误判 critical）** 已在本模块修复；

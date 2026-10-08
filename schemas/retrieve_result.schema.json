@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gamersi.local/schemas/retrieve_result.schema.json",
+  "$id": "https://diceratchet.local/schemas/retrieve_result.schema.json",
   "title": "RetrieveResult",
   "type": "object",
   "additionalProperties": false,

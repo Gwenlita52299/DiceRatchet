@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gamersi.local/schemas/scoreboard.schema.json",
+  "$id": "https://diceratchet.local/schemas/scoreboard.schema.json",
   "title": "scoreboard",
   "description": "runs/<run_id>/metrics/scoreboard.json —— 训练局计分台账（MOD-06 PRD §6/§7.3，FR-06-10）。计分幂等键为 episode_key；同一 seed 因 --force-rerun 重跑时旧记录标 superseded_by，不删除。评估局**不写**本台账（Spec P-15）。",
   "type": "object",

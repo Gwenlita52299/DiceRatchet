@@ -6,10 +6,10 @@ import json
 from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
-from gamer_rsi.infra.config import InferenceConfig
-from gamer_rsi.inference.backend import MockBackend
-from gamer_rsi.inference.records import InferenceCallRecord
-from gamer_rsi.inference.registry import ModelRegistry, build_registry
+from dice_ratchet.infra.config import InferenceConfig
+from dice_ratchet.inference.backend import MockBackend
+from dice_ratchet.inference.records import InferenceCallRecord
+from dice_ratchet.inference.registry import ModelRegistry, build_registry
 
 # ---- 固定脚本文本（合法/非法 DECISION_SCHEMA）--------------------------------------
 GOOD = '{"reasoning": "ok", "plan": [{"kind": "end_turn"}]}'
@@ -73,7 +73,7 @@ def make_mock_manager(registry: ModelRegistry, script: Sequence[Any], *, mode: s
                       clock: FakeClock | None = None,
                       records: list[InferenceCallRecord] | None = None):
     """``(manager, records, created)`` —— 供不依赖 fixture 的用例直接构造。"""
-    from gamer_rsi.inference.backend import BackendManager
+    from dice_ratchet.inference.backend import BackendManager
 
     sink: list[InferenceCallRecord] = records if records is not None else []
     created: dict[str, MockBackend] = {}

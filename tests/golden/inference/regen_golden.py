@@ -14,7 +14,7 @@ REPO = Path(__file__).resolve().parents[3]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from gamer_rsi.inference.schema import (DECISION_SCHEMA, compile_grammar,  # noqa: E402
+from dice_ratchet.inference.schema import (DECISION_SCHEMA, compile_grammar,  # noqa: E402
                                         repair_prompt_text, validate)
 
 BAD_OUTPUT = '{"reasoning": "ok", "plan": [{"kind": "teleport"}]}'

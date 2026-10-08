@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.env import GameEngine, load_tables
-from gamer_rsi.sandbox.api import EpisodeConfig, SandboxEnv
-from gamer_rsi.sandbox.audit import run_audit
-from gamer_rsi.sandbox.projection import render_compact
+from dice_ratchet.env import GameEngine, load_tables
+from dice_ratchet.sandbox.api import EpisodeConfig, SandboxEnv
+from dice_ratchet.sandbox.audit import run_audit
+from dice_ratchet.sandbox.projection import render_compact
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]

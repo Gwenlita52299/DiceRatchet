@@ -29,6 +29,6 @@ exposure_guard:
   forbidden_tokens: [heldout, H1, H2, H3, "2000-2099", "9000-9099"]
 
 # 由 CLI 生成、CI 校验；改动必须同步更新并在 PR 说明
-# 生成/校验命令：python -m gamer_rsi eval diversity（协议校验）或
-#   python -c "from gamer_rsi.evals.seeds import load_protocol, protocol_hash; print(protocol_hash(load_protocol('configs')))"
+# 生成/校验命令：python -m dice_ratchet eval diversity（协议校验）或
+#   python -c "from dice_ratchet.evals.seeds import load_protocol, protocol_hash; print(protocol_hash(load_protocol('configs')))"
 seeds_hash: "sha256:2ba235a71a12396aa734b1f96b478133aad81944abeeaffbdfbf8f3063313c75"

@@ -7,7 +7,7 @@
 </defs>
 <rect width="1400" height="720" fill="#ffffff"/>
 <g transform="translate(0,90)">
-<text x="40" y="-52" font-size="22" font-weight="700" fill="#263238">GameRSI 模块依赖与关键路径</text>
+<text x="40" y="-52" font-size="22" font-weight="700" fill="#263238">DiceRatchet 模块依赖与关键路径</text>
 <text x="40" y="-28" font-size="13" fill="#607d8b">箭头：上游 → 下游（下游依赖上游）。数据源：Spec v1.4 §6 依赖矩阵、各 PRD §15 工作量（人日）</text>
 <path d="M190,205 C240,205 182,150 232,150" fill="none" stroke="#e53935" stroke-width="3" marker-end="url(#a-crit)"/>
 <path d="M385,150 C435,150 377,150 427,150" fill="none" stroke="#e53935" stroke-width="3" marker-end="url(#a-crit)"/>

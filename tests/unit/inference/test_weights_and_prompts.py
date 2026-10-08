@@ -8,13 +8,13 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.errors import E
-from gamer_rsi.inference.backend import Message
-from gamer_rsi.inference.errors import InferenceError
-from gamer_rsi.inference.prompts import (DEFAULT_PROMPTS_PATH, load_robustness_prompts,
+from dice_ratchet.infra.errors import E
+from dice_ratchet.inference.backend import Message
+from dice_ratchet.inference.errors import InferenceError
+from dice_ratchet.inference.prompts import (DEFAULT_PROMPTS_PATH, load_robustness_prompts,
                                          probe_messages, synthetic_prompts)
-from gamer_rsi.inference.registry import ModelSpec
-from gamer_rsi.inference.weights import weights_digest, verify_weights
+from dice_ratchet.inference.registry import ModelSpec
+from dice_ratchet.inference.weights import weights_digest, verify_weights
 
 
 def _spec(weights_path: Path | None, sha: str = "") -> ModelSpec:
@@ -82,8 +82,8 @@ def test_verify_weights_accepts_matching_digest(tmp_path: Path):
 
 
 def test_skip_hash_env_escape_hatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """PRD §9/Q-6：``GAMERSI_INFERENCE_SKIP_HASH=1`` 是唯一的本地逃生开关。"""
-    from gamer_rsi.inference.weights import SKIP_HASH_ENV, skip_hash_check_enabled
+    """PRD §9/Q-6：``DICERATCHET_INFERENCE_SKIP_HASH=1`` 是唯一的本地逃生开关。"""
+    from dice_ratchet.inference.weights import SKIP_HASH_ENV, skip_hash_check_enabled
 
     path = tmp_path / "m.gguf"
     path.write_bytes(b"x")

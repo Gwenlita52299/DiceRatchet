@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from fakes import FakeEnv, FakePolicy
-from gamer_rsi.infra.errors import E
+from dice_ratchet.infra.errors import E
 
 
 def _reflection_path(ctx, episode_key: str) -> Path:
@@ -154,7 +154,7 @@ def test_t06_5_reflect_failure_reasons(tmp_path, mk_orchestrator, mk_memory, mk_
 def test_t06_5_memory_write_failure_degrades(tmp_path, mk_orchestrator, mk_memory,
                                              mk_client):
     """MOD-05 写失败（``E_IO_MEMORY_WRITE_FAILED``）也只降级，不阻塞 run（FR-06-4）。"""
-    from gamer_rsi.infra.errors import InfraError
+    from dice_ratchet.infra.errors import InfraError
 
     memory = mk_memory(fail_add=InfraError(E.E_IO_MEMORY_WRITE_FAILED, "disk"))
     orch, ctx = mk_orchestrator(tmp_path, policy=FakePolicy(),
@@ -174,7 +174,7 @@ def test_t06_5_memory_write_failure_degrades(tmp_path, mk_orchestrator, mk_memor
 # =====================================================================
 
 def test_summary_is_deterministic_and_reflect_renders(tmp_path, mk_runner):
-    from gamer_rsi.loop.reflect import summarize_episode
+    from dice_ratchet.loop.reflect import summarize_episode
 
     runner, ctx = mk_runner(tmp_path, policy=FakePolicy(), env=FakeEnv(steps_to_terminate=2))
     rec = runner.run_episode(1000, split="train", arm="train", harness_version=0)
@@ -196,7 +196,7 @@ def test_skipped_reflections_are_retried_on_resume(tmp_path, mk_orchestrator, mk
     """``--retry-reflections`` 时 ``--resume`` 补跑此前 skipped 的反思（默认关闭）。"""
     from dataclasses import replace
 
-    from gamer_rsi.loop.state import load_state
+    from dice_ratchet.loop.state import load_state
     from loop_support import build_orchestrator
 
     memory = mk_memory()

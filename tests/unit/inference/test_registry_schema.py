@@ -6,12 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.errors import E
-from gamer_rsi.infra.io import validate as validate_schema
-from gamer_rsi.inference.errors import InferenceError
-from gamer_rsi.inference.registry import (DEFAULT_REGISTRY_PATH, ModelSpec, build_registry,
+from dice_ratchet.infra.errors import E
+from dice_ratchet.infra.io import validate as validate_schema
+from dice_ratchet.inference.errors import InferenceError
+from dice_ratchet.inference.registry import (DEFAULT_REGISTRY_PATH, ModelSpec, build_registry,
                                           load_registry, registry_to_json)
-from gamer_rsi.inference.registry import estimate_required_gb
+from dice_ratchet.inference.registry import estimate_required_gb
 
 REPO = Path(__file__).resolve().parents[3]
 REGISTRY_PATH = REPO / DEFAULT_REGISTRY_PATH

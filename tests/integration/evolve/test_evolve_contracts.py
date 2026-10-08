@@ -15,8 +15,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from gamer_rsi.evolve.paths import GenPaths
-from gamer_rsi.evolve.schemas import (Candidate, GateState, HarnessRef, Verdict,
+from dice_ratchet.evolve.paths import GenPaths
+from dice_ratchet.evolve.schemas import (Candidate, GateState, HarnessRef, Verdict,
                                       read_candidate_report, validate_candidate_dict,
                                       validate_candidate_report, validate_gate_state,
                                       validate_harness_ref, validate_verdict)
@@ -38,7 +38,7 @@ def test_candidate_schema_roundtrip():
 
 
 def test_verdict_schema_roundtrip():
-    from gamer_rsi.evolve.judge import judge
+    from dice_ratchet.evolve.judge import judge
     from evolve_it_support import FakeArm
 
     report = make_report()
@@ -70,7 +70,7 @@ def test_gate_state_schema_roundtrip():
 
 
 def test_candidate_report_schema_roundtrip_on_disk(tmp_path):
-    from gamer_rsi.evolve.schemas import write_candidate_report
+    from dice_ratchet.evolve.schemas import write_candidate_report
 
     report = make_report()
     path = tmp_path / "candidates" / f"{report.candidate_id}.json"
@@ -97,7 +97,7 @@ def test_harness_version_pointer_schema(tmp_path):
 
 def test_generation_report_decision_sections_validate(tmp_path):
     """决策段四键必须与 ``generation_report.schema.json`` 的枚举一致。"""
-    from gamer_rsi.infra.io import validate as validate_schema
+    from dice_ratchet.infra.io import validate as validate_schema
 
     report = {
         "generation": 1, "harness_version": 0, "parent_version": 0,
@@ -124,7 +124,7 @@ def test_generation_report_decision_sections_validate(tmp_path):
     validate_schema("generation_report", report) # 不抛即通过
 
     # MOD-07 只填四段：四段与枚举严格对齐
-    from gamer_rsi.evolve.versioning import build_decision_sections
+    from dice_ratchet.evolve.versioning import build_decision_sections
 
     sections = build_decision_sections(1, [], None, None)
     assert set(sections) == {"candidates", "decision", "decided_by", "reason"}
@@ -134,7 +134,7 @@ def test_generation_report_decision_sections_validate(tmp_path):
 
 def test_pending_gate_report_decision_is_enum_safe():
     """HITL pending → ``decision="pending"`` 属 schema 合法枚举（FR-07-11）。"""
-    from gamer_rsi.evolve.versioning import build_decision_sections
+    from dice_ratchet.evolve.versioning import build_decision_sections
 
     gate = GateState(generation=1, status="pending", harness_version=0, parent_version=0,
                      expires_at="2026-10-07T00:00:00Z")
@@ -148,7 +148,7 @@ def test_pending_gate_report_decision_is_enum_safe():
 # =====================================================================
 
 def test_audit_leak_clean_on_evolve_artifacts(tmp_path, monkeypatch):
-    from gamer_rsi.sandbox.audit import run_audit
+    from dice_ratchet.sandbox.audit import run_audit
 
     run_root = tmp_path / "runs" / "evolve-audit-1"
     paths = GenPaths.of(run_root, 1).ensure()
@@ -180,8 +180,8 @@ def test_audit_leak_clean_on_evolve_artifacts(tmp_path, monkeypatch):
 # =====================================================================
 
 def test_evolve_subcommands_are_wired():
-    from gamer_rsi.app import wire
-    from gamer_rsi.infra import cli
+    from dice_ratchet.app import wire
+    from dice_ratchet.infra import cli
 
     wire()
     assert cli.is_registered_command(("evolve", "approve")) is True \
@@ -192,7 +192,7 @@ def test_evolve_subcommands_are_wired():
 
 
 def test_cli_parser_accepts_evolve_commands():
-    from gamer_rsi.infra.cli import build_parser
+    from dice_ratchet.infra.cli import build_parser
 
     parser = build_parser()
     args = parser.parse_args(["evolve", "approve", "--run-id", "r1", "--generation", "1"])

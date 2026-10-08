@@ -18,13 +18,13 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.evals import harness as H
-from gamer_rsi.evals.baselines import run_baseline
-from gamer_rsi.evals.harness import (EvalSpec, SandboxRunner, load_episode_results, run_eval,
+from dice_ratchet.evals import harness as H
+from dice_ratchet.evals.baselines import run_baseline
+from dice_ratchet.evals.harness import (EvalSpec, SandboxRunner, load_episode_results, run_eval,
                                      write_episode_summaries)
-from gamer_rsi.evals.metrics import EpisodeResult, aggregate
-from gamer_rsi.infra.config import load_config
-from gamer_rsi.infra.errors import E, InfraError
+from dice_ratchet.evals.metrics import EpisodeResult, aggregate
+from dice_ratchet.infra.config import load_config
+from dice_ratchet.infra.errors import E, InfraError
 
 _REPO = Path(__file__).resolve().parents[3]
 _CONFIG_DIR = _REPO / "configs"
@@ -72,7 +72,7 @@ def test_runner_consumes_the_seed_timeout_budget():
 
 def test_policy_loop_also_consumes_the_budget():
     """决策点循环（``fixed_prompt`` 这类 ``PolicyAgent``）同样受单局预算约束。"""
-    from gamer_rsi.evals.baselines import build_agent
+    from dice_ratchet.evals.baselines import build_agent
 
     class _NeverCalled:
         model_id = "stub"
@@ -228,7 +228,7 @@ def test_load_episode_results_filters_by_arm(tmp_path):
 
 def test_eval_report_excludes_baseline_arms(tmp_path):
     """F5 的端到端形态：基线局不得进入代际 held-out 分母。"""
-    from gamer_rsi.evals import cli as cli_mod
+    from dice_ratchet.evals import cli as cli_mod
 
     _write(tmp_path, "parent", [2000, 2001])
     _write(tmp_path, "baseline-heuristic", [2002, 2003])
@@ -290,7 +290,7 @@ def _no_leftover_runs():
 # =====================================================================
 
 def test_episode_rows_carry_the_measurement_protocol(tmp_path):
-    from gamer_rsi.evals.harness import EPISODE_PROTOCOL, read_episode_protocols
+    from dice_ratchet.evals.harness import EPISODE_PROTOCOL, read_episode_protocols
 
     _write(tmp_path, "baseline-heuristic", [2000])
     assert read_episode_protocols(tmp_path, "heldout",
@@ -317,7 +317,7 @@ def test_resume_refuses_to_mix_measurement_protocols(tmp_path):
 
 def test_baseline_protocol_binds_the_frozen_template(tmp_path):
     """F23：固定提示词模板换过就不许续跑（一轮里改过三次模板，这条闸拦的就是它）。"""
-    from gamer_rsi.evals.baselines import baseline_protocol
+    from dice_ratchet.evals.baselines import baseline_protocol
 
     cfg = load_config(config_dir=_CONFIG_DIR)
     frozen = tmp_path / "frozen.md"
@@ -334,7 +334,7 @@ def test_baseline_protocol_binds_the_frozen_template(tmp_path):
 
 def test_resume_refuses_when_the_frozen_template_changed(tmp_path):
     """已落盘的局用了模板 A，现在换成模板 B 再 --resume → 必须拒绝（不许混算）。"""
-    from gamer_rsi.agent.prompts.assembler import sha256_of
+    from dice_ratchet.agent.prompts.assembler import sha256_of
 
     cfg = load_config(config_dir=_CONFIG_DIR)
     a = tmp_path / "a.md"
@@ -370,10 +370,10 @@ def _write_protocol_row(tmp_path: Path, seed: int, arm: str, protocol: str) -> N
 
 def test_same_protocol_rows_are_accepted(tmp_path):
     """反向：协议一致时必须放行（闸不能空转）。"""
-    from gamer_rsi.evals.harness import EPISODE_PROTOCOL
+    from dice_ratchet.evals.harness import EPISODE_PROTOCOL
 
     _write_protocol_row(tmp_path, 2000, "baseline-fixed_prompt", EPISODE_PROTOCOL)
-    from gamer_rsi.evals.harness import read_episode_protocols
+    from dice_ratchet.evals.harness import read_episode_protocols
 
     assert read_episode_protocols(tmp_path, "heldout", generation=0,
                                   arm="baseline-fixed_prompt") == {EPISODE_PROTOCOL}

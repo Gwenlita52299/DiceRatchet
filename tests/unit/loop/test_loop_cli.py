@@ -1,7 +1,7 @@
 """MOD-06 CLI 单测：``loop run|status|smoke`` 的参数面、装配与错误路径。
 
 集成用例（``tests/integration/test_loop_closure.py``）用子进程跑真实 CLI；
-这里**进程内**调用，覆盖 CLI 自身的分支（覆盖门 G1 要求 ``gamer_rsi/loop/**`` ≥ 75%）。
+这里**进程内**调用，覆盖 CLI 自身的分支（覆盖门 G1 要求 ``dice_ratchet/loop/**`` ≥ 75%）。
 """
 
 from __future__ import annotations
@@ -14,11 +14,11 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra import cli as infra_cli
-from gamer_rsi.infra import events
-from gamer_rsi.infra.config import LoopConfig, load_config
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.loop import cli as loop_cli
+from dice_ratchet.infra import cli as infra_cli
+from dice_ratchet.infra import events
+from dice_ratchet.infra.config import LoopConfig, load_config
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.loop import cli as loop_cli
 from loop_support import REPO_ROOT
 
 
@@ -33,12 +33,12 @@ def _run(tmp_path: Path, monkeypatch, argv: list[str], *,
          env: dict[str, str] | None = None) -> tuple[int, str, str]:
     """进程内跑组合根 CLI（不 re-exec），runs 根指向 ``tmp_path``。"""
     monkeypatch.chdir(REPO_ROOT)
-    monkeypatch.setenv("GAMERSI_INFRA__RUNS_ROOT", str(tmp_path / "runs"))
-    monkeypatch.setenv("GAMERSI_ENV__EPISODE__DIFFICULTY", "easy")
-    monkeypatch.setenv("GAMERSI_ENV__EPISODE__STAGE_COUNT", "3")
+    monkeypatch.setenv("DICERATCHET_INFRA__RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("DICERATCHET_ENV__EPISODE__DIFFICULTY", "easy")
+    monkeypatch.setenv("DICERATCHET_ENV__EPISODE__STAGE_COUNT", "3")
     for key, value in (env or {}).items():
         monkeypatch.setenv(key, value)
-    from gamer_rsi.app import main
+    from dice_ratchet.app import main
 
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -199,7 +199,7 @@ def test_cli_llm_agent_without_provider(tmp_path, monkeypatch):
 
 
 def _real_client_provider():
-    from gamer_rsi.app import _inference_client
+    from dice_ratchet.app import _inference_client
 
     return _inference_client
 

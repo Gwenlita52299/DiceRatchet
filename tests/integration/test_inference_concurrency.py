@@ -9,8 +9,8 @@ from __future__ import annotations
 import asyncio
 import time
 
-from gamer_rsi.inference.backend import Message
-from gamer_rsi.inference.schema import DECISION_SCHEMA
+from dice_ratchet.inference.backend import Message
+from dice_ratchet.inference.schema import DECISION_SCHEMA
 
 from inference_support import GOOD, MODEL_ID, mock_factory, model_entry, registry_of
 

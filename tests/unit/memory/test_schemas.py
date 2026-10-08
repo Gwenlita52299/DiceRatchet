@@ -8,12 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.memory import (ADD_RESULT_SCHEMA, MEMORY_ENTRY_SCHEMA, MEMORY_TAGS,
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.memory import (ADD_RESULT_SCHEMA, MEMORY_ENTRY_SCHEMA, MEMORY_TAGS,
                               REFLECTION_ENTRY_SCHEMA, RETRIEVE_RESULT_SCHEMA, AddResult,
                               MemoryEntry, ReflectionEntry, RetrieveResult, SituationKey,
                               validate_memory_entry, validate_reflection_entry)
-from gamer_rsi.memory.schemas import content_sha256_of
+from dice_ratchet.memory.schemas import content_sha256_of
 
 SCHEMA_FILES = ("memory_entry", "reflection_entry", "retrieve_result", "add_result")
 

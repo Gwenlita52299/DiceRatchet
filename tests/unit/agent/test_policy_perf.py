@@ -12,9 +12,9 @@ from typing import Callable
 
 import pytest
 
-from gamer_rsi.agent.heuristic import heuristic_policy
-from gamer_rsi.agent.parser import parse_llm_output
-from gamer_rsi.agent.prompts.assembler import (DEFAULT_TEMPLATE_PATH, MemoryItem,
+from dice_ratchet.agent.heuristic import heuristic_policy
+from dice_ratchet.agent.parser import parse_llm_output
+from dice_ratchet.agent.prompts.assembler import (DEFAULT_TEMPLATE_PATH, MemoryItem,
                                                PromptContext, ReflectionItem,
                                                assemble_prompt, load_template)
 

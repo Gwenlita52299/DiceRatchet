@@ -8,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.sandbox import audit as A
-from gamer_rsi.sandbox import honeypot as HP
-from gamer_rsi.sandbox.projection import obs_field_paths
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.sandbox import audit as A
+from dice_ratchet.sandbox import honeypot as HP
+from dice_ratchet.sandbox.projection import obs_field_paths
 
 FIXED = "2026-09-30T12:00:00Z"
 
@@ -227,7 +227,7 @@ def test_self_test_failure_makes_critical(build_run, tmp_path, monkeypatch):
 
 def test_exit_code_axes_machinery_beats_verdict(build_run, tmp_path, monkeypatch):
     """蜜罐失效：报告仍 critical（FR-02-23），但进程退出码取 Spec §8.3 的 4。"""
-    from gamer_rsi.infra.errors import error_code_of, EXIT_SANDBOX, E
+    from dice_ratchet.infra.errors import error_code_of, EXIT_SANDBOX, E
 
     assert error_code_of(E.E_ENV_HONEYPOT) == EXIT_SANDBOX == 4 # 注册表口径
     built = build_run(tmp_path, run_id="r-axis-hp")
@@ -338,7 +338,7 @@ def test_audit_to_console_reports_and_returns_exit_code(build_run, tmp_path, cap
 # ---- MOD-09 Redactor 反向注册 ------------------------------------------------------
 
 def test_register_sensitive_feeds_redactor(build_run, tmp_path):
-    from gamer_rsi.infra.logging import Redactor
+    from dice_ratchet.infra.logging import Redactor
 
     built = build_run(tmp_path, run_id="r-red")
     redactor = Redactor()

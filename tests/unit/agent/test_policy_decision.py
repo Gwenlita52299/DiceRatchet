@@ -10,12 +10,12 @@ import pytest
 
 from policy_support import ScriptedClient, plan
 
-from gamer_rsi.agent import DecisionResult, EpisodeContext, PolicyAgent
-from gamer_rsi.agent.heuristic import heuristic_policy
-from gamer_rsi.infra.config import PolicyConfig
-from gamer_rsi.infra.errors import E
-from gamer_rsi.inference import InferenceError
-from gamer_rsi.sandbox.api import StepResult
+from dice_ratchet.agent import DecisionResult, EpisodeContext, PolicyAgent
+from dice_ratchet.agent.heuristic import heuristic_policy
+from dice_ratchet.infra.config import PolicyConfig
+from dice_ratchet.infra.errors import E
+from dice_ratchet.inference import InferenceError
+from dice_ratchet.sandbox.api import StepResult
 
 BAD_JSON = "这不是 JSON"
 GOOD_JSON = plan({"kind": "end_turn"}, reasoning="收工")

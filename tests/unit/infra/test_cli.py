@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra import cli, events
-from gamer_rsi.infra.cli import build_parser, main, parse_seeds_spec
-from gamer_rsi.infra.errors import E
-from gamer_rsi.infra.io import read_jsonl
+from dice_ratchet.infra import cli, events
+from dice_ratchet.infra.cli import build_parser, main, parse_seeds_spec
+from dice_ratchet.infra.errors import E
+from dice_ratchet.infra.io import read_jsonl
 
 REPO = Path(__file__).resolve().parents[3]
 
@@ -68,8 +68,8 @@ def test_every_declared_command_is_wired():
     守门口径从"未落地模块返回 pending"改为"**不允许**再返回 pending"——任何新命令如果
     只登记了 argparse 却没有注册实现，本用例会红（``evolve approve`` 作为抽样）。
     """
-    from gamer_rsi.app import wire
-    from gamer_rsi.infra import cli as _cli
+    from dice_ratchet.app import wire
+    from dice_ratchet.infra import cli as _cli
 
     wire()
     # MOD-07 的两个子命令必须真的注册了实现（不是只登记了 argparse）
@@ -84,21 +84,21 @@ def test_every_declared_command_is_wired():
 
 
 def test_guards_check_on_repo_is_clean():
-    code, out, err = _run(["guards", "check", "--root", "gamer_rsi"])
+    code, out, err = _run(["guards", "check", "--root", "dice_ratchet"])
     assert code == 0, err
     assert "OK" in out
 
 
 def test_guards_check_dirty_fixture_exits_4():
     code, out, err = _run(["guards", "check",
-                           "--root", "tests/fixtures/guards/gamer_rsi"])
+                           "--root", "tests/fixtures/guards/dice_ratchet"])
     assert code == 4, err
     assert "E_IO_GUARD_LAYER" in err or "E_IO_GUARD_LAYER" in out
 
 
 def test_guards_check_fix_hints():
     code, out, err = _run(["guards", "check", "--fix-hints",
-                           "--root", "tests/fixtures/guards/gamer_rsi"])
+                           "--root", "tests/fixtures/guards/dice_ratchet"])
     assert code == 4
     assert "guard: allow" in out
 
@@ -201,8 +201,8 @@ def test_run_end_and_io_latency_written(tmp_path, monkeypatch, clean_registry):
     """P1-2：命令结束必须发 infra.run_end（含 exit_code/duration_s）并写 io_latency.csv。"""
     from argparse import Namespace
 
-    from gamer_rsi.infra import events
-    from gamer_rsi.infra import run as run_mod
+    from dice_ratchet.infra import events
+    from dice_ratchet.infra import run as run_mod
 
     monkeypatch.chdir(tmp_path)
     real_init = run_mod.init_run_dir
@@ -235,7 +235,7 @@ def test_content_hash_provider_feeds_snapshot(tmp_path, monkeypatch, clean_regis
     """Spec §7：content_hash 由组合根注入的提供者写入 config.json。"""
     from argparse import Namespace
 
-    from gamer_rsi.infra import run as run_mod
+    from dice_ratchet.infra import run as run_mod
 
     monkeypatch.chdir(tmp_path)
     real_init = run_mod.init_run_dir
@@ -258,7 +258,7 @@ def test_config_overrides_maps_log_level():
     """P1-7：--log-level 必须真正进入配置覆盖（旧实现是 no-op）。"""
     from argparse import Namespace
 
-    from gamer_rsi.infra.config import load_config
+    from dice_ratchet.infra.config import load_config
 
     assert cli.config_overrides(Namespace(log_level="DEBUG")) == {"infra.log_level": "DEBUG"}
     cfg = load_config(cli.config_overrides(Namespace(log_level="DEBUG")),
@@ -294,7 +294,7 @@ def test_parse_seeds_spec_file(tmp_path):
 
 
 def test_parse_seeds_spec_bad_file(tmp_path):
-    from gamer_rsi.infra.errors import InfraError
+    from dice_ratchet.infra.errors import InfraError
     with pytest.raises(InfraError) as exc:
         parse_seeds_spec(f"file:{tmp_path / 'nope.txt'}")
     assert exc.value.code == E.E_IO_CONFIG_INVALID
@@ -307,8 +307,8 @@ def test_parse_seeds_spec_bad_file(tmp_path):
 def test_end_to_end_guards_check():
     env = {"MPLCONFIGDIR": "/tmp", "PYTHONHASHSEED": "0", "PATH": "/usr/bin:/bin"}
     proc = subprocess.run(
-        [str(REPO / ".venv" / "bin" / "python"), "-m", "gamer_rsi",
-         "guards", "check", "--root", "gamer_rsi"],
+        [str(REPO / ".venv" / "bin" / "python"), "-m", "dice_ratchet",
+         "guards", "check", "--root", "dice_ratchet"],
         cwd=str(REPO), capture_output=True, text=True, env=env)
     assert proc.returncode == 0, proc.stderr
     assert "guards: OK" in proc.stdout
@@ -317,13 +317,13 @@ def test_end_to_end_guards_check():
 @pytest.mark.skipif(not (REPO / ".venv" / "bin" / "python").is_file(),
                     reason="无 .venv")
 def test_end_to_end_dev_mode_is_not_broken():
-    """回归（2026-10-03）：``GAMERSI_DEV=1`` 下任何命令都曾因 bootstrap 早发
+    """回归（2026-10-03）：``DICERATCHET_DEV=1`` 下任何命令都曾因 bootstrap 早发
     ``infra.run_start``（缺 config_hash 必填字段）而退出 1。"""
     env = {"MPLCONFIGDIR": "/tmp", "PYTHONHASHSEED": "0", "PATH": "/usr/bin:/bin",
-           "GAMERSI_DEV": "1"}
+           "DICERATCHET_DEV": "1"}
     proc = subprocess.run(
-        [str(REPO / ".venv" / "bin" / "python"), "-m", "gamer_rsi",
-         "guards", "check", "--root", "gamer_rsi"],
+        [str(REPO / ".venv" / "bin" / "python"), "-m", "dice_ratchet",
+         "guards", "check", "--root", "dice_ratchet"],
         cwd=str(REPO), capture_output=True, text=True, env=env)
     assert proc.returncode == 0, proc.stderr
     assert "E_IO_EVENT_UNKNOWN" not in proc.stdout + proc.stderr

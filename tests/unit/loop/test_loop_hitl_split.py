@@ -5,9 +5,9 @@ from __future__ import annotations
 import pytest
 
 from fakes import FakeEnv, FakePolicy
-from gamer_rsi.infra.errors import E, InfraError, error_code_of
-from gamer_rsi.loop.generation import EvolveOutcome
-from gamer_rsi.loop.state import load_state, scoreboard_path, Scoreboard
+from dice_ratchet.infra.errors import E, InfraError, error_code_of
+from dice_ratchet.loop.generation import EvolveOutcome
+from dice_ratchet.loop.state import load_state, scoreboard_path, Scoreboard
 from loop_support import REPO_ROOT, build_runner, reconfigure, write_harness
 
 
@@ -58,7 +58,7 @@ def test_t06_9_hitl_suspends_then_resumes(tmp_path, mk_orchestrator, mk_memory):
     runner2, ctx2 = build_runner(tmp_path, policy=FakePolicy(),
                                  env=FakeEnv(steps_to_terminate=2), memory=mk_memory(),
                                  loop_cfg=orch.config, state=reloaded, harness_version=1)
-    from gamer_rsi.loop.generation import LoopOrchestrator
+    from dice_ratchet.loop.generation import LoopOrchestrator
 
     orch2 = LoopOrchestrator(run_ctx=ctx2, config=orch.config, runner=runner2,
                              evolve_fn=_pending_evolve(),
@@ -89,13 +89,13 @@ def test_t06_9_evolving_cycle_artifacts_short_circuit(tmp_path, mk_runner, mk_me
     存在 → 不重跑 MOD-07，标该 cycle 完成并 ``generation += 1``；
     不存在 → 重置 ``phase="playing"`` 后重新触发（FR-06-6 的三重校验）。
     """
-    from gamer_rsi.loop.generation import maybe_run_generation
-    from gamer_rsi.loop.state import RunState
+    from dice_ratchet.loop.generation import maybe_run_generation
+    from dice_ratchet.loop.state import RunState
 
     # ---- 产物存在 -------------------------------------------------------
     runner, run_ctx = mk_runner(tmp_path, policy=FakePolicy(),
                                 env=FakeEnv(steps_to_terminate=2), memory=mk_memory())
-    from gamer_rsi.infra.config import LoopConfig
+    from dice_ratchet.infra.config import LoopConfig
 
     run_ctx.config = LoopConfig(k=2, heldout_n=4, smoke_n=2, n_candidates=1)
     (tmp_path / "r-loop-test" / "generations" / "gen-001").mkdir(parents=True,
@@ -155,7 +155,7 @@ def test_t06_12_cli_seeds_prefix_rejected(tmp_path, monkeypatch):
     """``--seeds heldout:2000-2001`` 在 CLI 解析层即被拒（INV-5）。"""
     import argparse
 
-    from gamer_rsi.loop.cli import _resolve_seeds
+    from dice_ratchet.loop.cli import _resolve_seeds
 
     monkeypatch.chdir(REPO_ROOT)
     args = argparse.Namespace(seeds="heldout:2000-2001")
@@ -168,7 +168,7 @@ def test_t06_12_train_seeds_accepted(tmp_path, monkeypatch):
     """train 前缀 / 无前缀的 train seed 正常接受。"""
     import argparse
 
-    from gamer_rsi.loop.cli import _resolve_seeds
+    from dice_ratchet.loop.cli import _resolve_seeds
 
     monkeypatch.chdir(REPO_ROOT)
     args = argparse.Namespace(seeds="train:1000-1002")

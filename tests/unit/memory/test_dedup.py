@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from gamer_rsi.memory import SituationKey, similarity
+from dice_ratchet.memory import SituationKey, similarity
 
 LESSON = "净化值低于 25% 时先把光盾骰放进防御槽，再考虑输出。"
 

@@ -8,17 +8,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.infra.io import validate
-from gamer_rsi.evals import seeds as S
-from gamer_rsi.evals.harness import (ArmResult, EvalSpec, append_generations_csv,
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.infra.io import validate
+from dice_ratchet.evals import seeds as S
+from dice_ratchet.evals.harness import (ArmResult, EvalSpec, append_generations_csv,
                                      bootstrap_seed, check_report_determinism,
                                      compare_paired, evaluate_arm, evaluate_generation,
                                      generation_report_path, run_eval,
                                      write_generation_report)
-from gamer_rsi.evals.metrics import (aggregate, bootstrap_mean_ci, judge_gain,
+from dice_ratchet.evals.metrics import (aggregate, bootstrap_mean_ci, judge_gain,
                                      paired_bootstrap_gap, render_report_sections)
-from gamer_rsi.evals.diversity import CollapseConfig, collapse_check
+from dice_ratchet.evals.diversity import CollapseConfig, collapse_check
 
 from evals_support import FakeRunner, make_result
 
@@ -219,6 +219,6 @@ def test_generations_csv_columns_are_fixed(tmp_path):
     append_generations_csv(tmp_path, {"generation": 1, "win_rate": 0.5, "verdict": "null"})
     text = (tmp_path / "metrics" / "generations.csv").read_text(encoding="utf-8")
     header = text.splitlines()[0].split(",")
-    from gamer_rsi.evals.harness import GENERATIONS_COLUMNS
+    from dice_ratchet.evals.harness import GENERATIONS_COLUMNS
 
     assert tuple(header) == GENERATIONS_COLUMNS

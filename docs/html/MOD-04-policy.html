@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MOD-04 · policy 决策策略层 — GameRSI 模块讲解</title>
+<title>MOD-04 · policy 决策策略层 — DiceRatchet 模块讲解</title>
 <style>
 :root{--accent:#2563eb;--accent-2:#3b82f6;--accent-soft:rgba(37,99,235,.09);--bg:#f5f6fa;--card:#fff;--ink:#1c2333;--muted:#64708a;--line:#e5e8f0;--code-bg:#101725;--code-ink:#e8ecf5;--ok:#0f9d58;--bad:#dc2626}
 *{box-sizing:border-box}html{scroll-behavior:smooth}
@@ -56,7 +56,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
 </head>
 <body>
 <aside>
-  <h1>GameRSI</h1><div class="sub">模块讲解 · MOD 系列</div>
+  <h1>DiceRatchet</h1><div class="sub">模块讲解 · MOD 系列</div>
   <a href="MOD-01-env-rules.html">MOD-01 env-rules</a>
   <a href="MOD-02-env-sandbox.html">MOD-02 env-sandbox</a>
   <a href="MOD-03-inference.html">MOD-03 inference</a>
@@ -165,7 +165,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
     <tr><td>MOD-06 loop</td><td>每个决策点 <code>PolicyAgent.play_decision(env, obs, ctx) -&gt; DecisionResult</code></td><td>一个决策点（计划 + 重试 + fallback）；不查环境内部状态</td></tr>
     <tr><td>MOD-07 evolve</td><td>代际边界替换 <code>harness/</code> 三工件后新建 <code>PolicyAgent</code></td><td>只读消费；MOD-04 不做热重载</td></tr>
     <tr><td>MOD-08 evals</td><td><code>mode="baseline_fixed_prompt"</code> / <code>"baseline_heuristic"</code></td><td>冻结模板 <code>fixed_v1.md</code>；启发式不调 LLM</td></tr>
-    <tr><td>MOD-09 infra</td><td>配置加载、<code>python -m gamer_rsi play --agent llm</code></td><td>配置键见 §9；日志走 MOD-09</td></tr>
+    <tr><td>MOD-09 infra</td><td>配置加载、<code>python -m dice_ratchet play --agent llm</code></td><td>配置键见 §9；日志走 MOD-09</td></tr>
     <tr><td>MOD-03 inference</td><td><code>generate_json(prompt, schema, sampling)</code></td><td>MOD-04 只传 prompt / schema / 采样参数</td></tr>
   </table>
   <h4>典型场景</h4>
@@ -181,18 +181,18 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
   <h3><span class="n">4</span>功能需求</h3>
   <p>共 16 条 FR，每条都可独立测试。新人可以先抓主线：<span class="tag">FR-04-1</span>~<span class="tag">FR-04-4</span> 管 prompt 组装，<span class="tag">FR-04-7</span>~<span class="tag">FR-04-10</span> 管决策与重试，<span class="tag">FR-04-14</span> 是最后的兜底。</p>
   <ul>
-    <li><span class="tag">FR-04-1</span><strong>模板加载</strong>：<code>policy.template_path</code> 必须存在且 UTF-8 可解析，且含 <code>{{observation}}</code>、<code>{{memory}}</code>；缺失 → <code>E_ACTION_TEMPLATE</code>，回退内置 <code>gamer_rsi/agent/prompts/decision_fallback.md</code> 并置 <code>fallback_used=True</code>。</li>
+    <li><span class="tag">FR-04-1</span><strong>模板加载</strong>：<code>policy.template_path</code> 必须存在且 UTF-8 可解析，且含 <code>{{observation}}</code>、<code>{{memory}}</code>；缺失 → <code>E_ACTION_TEMPLATE</code>，回退内置 <code>dice_ratchet/agent/prompts/decision_fallback.md</code> 并置 <code>fallback_used=True</code>。</li>
     <li><span class="tag">FR-04-2</span><strong>填充顺序固定</strong>：按 <code>{{task}}</code> → <code>{{harness_version}}</code> → <code>{{tools}}</code> → <code>{{observation}}</code> → <code>{{reflections}}</code> → <code>{{memory}}</code> → <code>{{constraints}}</code> 单遍替换；未知占位符保留原样并记入 <code>PromptBundle.unknown_placeholders</code>。</li>
     <li><span class="tag">FR-04-3</span><strong>上下文预算与裁剪</strong>：预算 <code>policy.prompt_token_budget</code>（默认 3072，按 <code>policy.token_estimator</code> 估算）。优先级「当前 Observation &gt; 近期反思 &gt; 策略记忆 top_k」：<code>{{task}}</code>/<code>{{harness_version}}</code>/<code>{{tools}}</code>/<code>{{observation}}</code> 永不裁剪；反思按 <code>(generation desc, reflection_id asc)</code> 留最多 <code>policy.reflection_max</code> 条；memory 按 <code>(score desc, memory_id asc)</code> 留 top_k 且先丢分数最低者；每次丢弃写入 <code>PromptBundle.truncated</code>。<br><b>补充：<code>{{legal_actions}}</code> 超预算时的压缩</b>（2026-10-05，M1 验收 F13）：实测某 <code>phase=forge</code> 决策点的合法动作是笛卡尔积（23 张骰 × 6 个面 × 5 个候选 = <b>690</b> 条 <code>forge_pick</code>），完整枚举 54,393 字符 ≈ 19,633 token，而观测本身只有 2,798 字符。裁剪顺序因此扩展为：<b>① 丢 memory → ② 丢 reflections → ③ 把 <code>{{legal_actions}}</code> 换成压缩渲染 → ④ 仍超预算才 <code>E_ACTION_BUDGET</code></b>（观测段仍永不裁剪）。压缩渲染是确定性的：按 <code>kind</code> 分组列出<b>字段取值集合</b>（每字段最多 8 个，其余记 <code>…(+K)</code>）+ 每种 <code>kind</code> <b>等距抽 12 条真实合法动作</b>作为可照抄样例，并在 <code>PromptBundle.truncated</code> 记 <code>TruncationRecord("legal_actions", …, "budget")</code>。语义校验仍以<b>全量</b> <code>legal_actions()</code> 为准（FR-04-8），压缩只影响「模型看得到什么」。</li>
     <li><span class="tag">FR-04-4</span><strong>prompt 哈希</strong>：<code>prompt_hash = "sha256:" + sha256(rendered_text.encode("utf-8")).hexdigest()</code>；同一 <code>obs_digest + harness_version + sorted(memory_ids) + mode</code> 必须得到同一 hash。</li>
-    <li><span class="tag">FR-04-5</span><strong>INV-3 白名单</strong>：进入 prompt 的文本只允许四个来源——① 当前 <code>Observation</code>（<code>SandboxEnv.observe()</code> 投影结果）② MOD-05 检索到的 memory 条目 ③ 当前 harness 工件（<code>prompts/decision.md</code>、<code>tools/*.py</code> 签名摘要、<code>version.json</code>）④ 任务说明 <code>gamer_rsi/agent/prompts/task.md</code>。<code>assemble_prompt()</code> 是唯一注入出口，禁止调用方拼接 prompt。</li>
+    <li><span class="tag">FR-04-5</span><strong>INV-3 白名单</strong>：进入 prompt 的文本只允许四个来源——① 当前 <code>Observation</code>（<code>SandboxEnv.observe()</code> 投影结果）② MOD-05 检索到的 memory 条目 ③ 当前 harness 工件（<code>prompts/decision.md</code>、<code>tools/*.py</code> 签名摘要、<code>version.json</code>）④ 任务说明 <code>dice_ratchet/agent/prompts/task.md</code>。<code>assemble_prompt()</code> 是唯一注入出口，禁止调用方拼接 prompt。</li>
     <li><span class="tag">FR-04-6</span><strong>强制泄漏扫描</strong>：每次 LLM 调用前（含重试的修复 prompt）必须调用 MOD-02 <code>sandbox.audit.scan_text(text, surface="prompt")</code>；有 finding → <code>E_ACTION_LEAK_BLOCK</code>，按 §10 阶梯降级。<code>policy.leak_scan</code> 恒 <code>true</code>，不可关闭。</li>
-    <li><span class="tag">FR-04-7</span><strong>决策点与三级校验</strong>（Spec v1.3 §4.3 唯一口径）：一次 <code>play_decision</code> 对应一个决策点：<code>player_turn</code> 每回合一个计划（1..12 个动作），其余 phase 一个动作。计划逐个执行，每个动作执行前用<strong>当前</strong>的 <code>legal_actions()</code> 校验：<strong>① 语法</strong> = 通过 <code>schemas/decision.schema.json</code>（与 MOD-03 共用）+ kind 必填字段；<strong>② 语义</strong> = 动作落在 <code>legal_actions()</code> 内；<strong>③ 执行</strong> = <code>step()</code> 的 <code>info["illegal"]</code>。离开 <code>player_turn</code> 后剩余动作直接丢弃（不计非法）；计划执行完仍处于 <code>player_turn</code> → 本决策结束，由 MOD-06 发起下一个决策。<br><b>模板必须把这个逐动作校验的事实写清楚</b>（2026-10-05，M1 验收 F23）：<b>①</b> <code>play_face</code> 的 <code>dieId</code> 与 <code>slotId</code> 是<b>一个配对</b>，必须逐字取自 <code>legal_actions</code> 里出现过的组合，禁止把观测 <code>hand</code> 里的骰子与 <code>slots</code> 里的槽位自行组合；<b>②</b> 同一个 <code>plan</code> 内不得重复使用同一 <code>slotId</code>/<code>dieId</code>；<b>③</b> <code>use_ability</code> 只能用于还有次数的能力；<b>④</b> <b>可选字段不需要时直接省略</b>（不要写 <code>null</code>/<code>"null"</code>/<code>""</code>/<code>-</code>，它们不是合法 id 且会让整条 JSON 校验失败）；<b>⑤</b> <b>一次决策 = 一个回合</b>：<code>player_turn</code> 下把本回合想打的牌都放进同一个 <code>plan</code>，最后 <code>end_turn</code> 收尾（过早结束等于把一回合拆成多个决策点）。实测（真实 8B，只读 A/B，每条 24 个 <code>player_turn</code> 观测）：缺 ④ 时首答 schema 通过率 71%、补后 <b>92%</b>；缺 ⑤ 时每决策点合法动作数 1.35、补后 <b>2.32</b>（<code>plan ≥ 2</code> 的比例 39% → 95%），而 <code>steps/decisions</code> 只有启发式的约 1/3（1.17 vs 3.0）会让同一局的决策点数 ×2.5–3。两条模板（<code>harness/prompts/decision.md</code> 与 <code>gamer_rsi/agent/prompts/fixed_v1.md</code>）必须<b>对称</b>保留这五条，否则基线与演化 agent 的提示词强度不可比。</li>
+    <li><span class="tag">FR-04-7</span><strong>决策点与三级校验</strong>（Spec v1.3 §4.3 唯一口径）：一次 <code>play_decision</code> 对应一个决策点：<code>player_turn</code> 每回合一个计划（1..12 个动作），其余 phase 一个动作。计划逐个执行，每个动作执行前用<strong>当前</strong>的 <code>legal_actions()</code> 校验：<strong>① 语法</strong> = 通过 <code>schemas/decision.schema.json</code>（与 MOD-03 共用）+ kind 必填字段；<strong>② 语义</strong> = 动作落在 <code>legal_actions()</code> 内；<strong>③ 执行</strong> = <code>step()</code> 的 <code>info["illegal"]</code>。离开 <code>player_turn</code> 后剩余动作直接丢弃（不计非法）；计划执行完仍处于 <code>player_turn</code> → 本决策结束，由 MOD-06 发起下一个决策。<br><b>模板必须把这个逐动作校验的事实写清楚</b>（2026-10-05，M1 验收 F23）：<b>①</b> <code>play_face</code> 的 <code>dieId</code> 与 <code>slotId</code> 是<b>一个配对</b>，必须逐字取自 <code>legal_actions</code> 里出现过的组合，禁止把观测 <code>hand</code> 里的骰子与 <code>slots</code> 里的槽位自行组合；<b>②</b> 同一个 <code>plan</code> 内不得重复使用同一 <code>slotId</code>/<code>dieId</code>；<b>③</b> <code>use_ability</code> 只能用于还有次数的能力；<b>④</b> <b>可选字段不需要时直接省略</b>（不要写 <code>null</code>/<code>"null"</code>/<code>""</code>/<code>-</code>，它们不是合法 id 且会让整条 JSON 校验失败）；<b>⑤</b> <b>一次决策 = 一个回合</b>：<code>player_turn</code> 下把本回合想打的牌都放进同一个 <code>plan</code>，最后 <code>end_turn</code> 收尾（过早结束等于把一回合拆成多个决策点）。实测（真实 8B，只读 A/B，每条 24 个 <code>player_turn</code> 观测）：缺 ④ 时首答 schema 通过率 71%、补后 <b>92%</b>；缺 ⑤ 时每决策点合法动作数 1.35、补后 <b>2.32</b>（<code>plan ≥ 2</code> 的比例 39% → 95%），而 <code>steps/decisions</code> 只有启发式的约 1/3（1.17 vs 3.0）会让同一局的决策点数 ×2.5–3。两条模板（<code>harness/prompts/decision.md</code> 与 <code>dice_ratchet/agent/prompts/fixed_v1.md</code>）必须<b>对称</b>保留这五条，否则基线与演化 agent 的提示词强度不可比。</li>
     <li><span class="tag">FR-04-8</span><strong>legal_actions 判定</strong>：每个 env 步之前都重新调用 <code>legal_actions()</code>，禁止缓存。<code>legal_actions()</code> 是精确集合（MOD-01 同 JS，只去掉 <code>abandon_run</code>），语义校验只做集合成员判定；可选字段缺省时（如 <code>targetId</code>）按 GAME D-19 由内核规范化后再比对。</li>
     <li><span class="tag">FR-04-9</span><strong>重试与轻罚</strong>：每个<strong>决策</strong>最多 3 次尝试（首次 + <code>policy.retry_max=2</code>）。失败尝试包括：MOD-03 <code>E_LLM_SCHEMA_INVALID</code>（L0 修复已在 MOD-03 内耗尽，修复本身不计非法），以及计划中任一动作的 ①②③ 失败。每次失败尝试调用 <code>env.reject(stage, reason, raw, final=False)</code> 触发 <code>reward -= 0.05</code>，观测带上 <code>lastResult</code>（环境状态不变）。重试时：已执行过的动作保留，基于当前观测重新请求计划，<code>{{constraints}}</code> 段写入上次的 <code>error_code + error_detail</code>；采样 seed 换为 <code>derive_seed(run, episode, decision, attempt)</code>，否则温度 0 下会得到相同输出。</li>
     <li><span class="tag">FR-04-10</span><strong>尝试耗尽 → fallback（本模块不判负）</strong>：3 次尝试都失败时，调用 <code>env.reject(..., final=True)</code>，然后由 <code>heuristic_policy</code> 执行 1 个动作（<code>source="fallback"</code>），决策完成。连续 3 个 <code>final=True</code> 的判负<strong>只由 MOD-02 负责</strong>（<code>truncation_reason="policy_failure"</code>，Spec B-15）。v0.1 按尝试计数、3 次即判负，会让 FR-04-14 的 fallback 永远走不到，已废弃。</li>
     <li><span class="tag">FR-04-11</span><strong>工具注册表</strong>：<code>harness/tools/*.py</code> 中的函数必须用 <code>@harness_tool</code> 注册；被调用工具<strong>唯一签名</strong>为 <code>rank_actions(obs, candidates, memory) -&gt; list[dict]</code>，签名不符 → <code>E_ACTION_TOOL_SIG</code> 并整体弃用工具目录（退化为恒等排序）。</li>
-    <li><span class="tag">FR-04-12</span><strong>受限加载</strong>：工具目录先过 MOD-02 <code>guard.gate()</code> 静态扫描（禁网络 / 文件写 / subprocess / <code>import gamer_rsi.env.*</code> / <code>random</code> / 时间随机），再经 <code>guard.load_harness_tools()</code> 在<strong>子进程 worker</strong> 中加载执行（Spec B-20）；某文件违规 → 弃用该文件、落 <code>E_ACTION_TOOL_GUARD</code>，其余工具继续可用。</li>
+    <li><span class="tag">FR-04-12</span><strong>受限加载</strong>：工具目录先过 MOD-02 <code>guard.gate()</code> 静态扫描（禁网络 / 文件写 / subprocess / <code>import dice_ratchet.env.*</code> / <code>random</code> / 时间随机），再经 <code>guard.load_harness_tools()</code> 在<strong>子进程 worker</strong> 中加载执行（Spec B-20）；某文件违规 → 弃用该文件、落 <code>E_ACTION_TOOL_GUARD</code>，其余工具继续可用。</li>
     <li><span class="tag">FR-04-13</span><strong>工具异常降级</strong>：<code>rank_actions()</code> 抛异常、超时（<code>policy.tool_timeout_ms</code>，默认 200，含一次 worker 往返）、返回非 list、返回元素集合与 <code>candidates</code> 不等价 → 捕获、记 <code>E_ACTION_TOOL_FAIL</code>、<strong>返回原始候选序</strong>（不做部分采纳）。</li>
     <li><span class="tag">FR-04-14</span><strong>启发式 fallback</strong>：触发条件为 <code>E_LLM_UNAVAILABLE</code> / <code>E_LLM_TIMEOUT</code> / 尝试耗尽 / 泄漏阻断。实现为 <code>agent/heuristic.py::heuristic_policy(obs, legal, hints) -&gt; Action</code>，<strong>逐行移植 GAME <code>src/game/scripts/bots.js</code> 的 <code>greedy_counter</code></strong>：战斗内按 <code>scorePlay</code> 打分（击杀奖励、克制箭头、需要的光盾与净化、状态权重、自魔化惩罚），没有正分动作时先处理魔化骰（净化 → 重掷 → 弃骰），最后 <code>end_turn</code>；地图、商店、宝箱、事件、锻造按 <code>nodeScore</code>/<code>pickDieDef</code> 等规则处理。只使用 obs-agent 字段与 <code>env.hints()</code>（公开信息）。这份实现同时是 MOD-08 的 heuristic 基线，参考通关率默认局 45.5%（JS，n=200，seed 1–200），Python 版须在 ±3pp 以内。返回可读的 <code>reasoning</code>，如 <code>"heuristic:counter play_face d-0007→slot_1 e-00"</code>。</li>
     <li><span class="tag">FR-04-15</span><strong>模式与采样覆盖</strong>：<code>play</code> 用可演化采样参数且 <code>temperature = clamp(policy.temperature, 0.7, 1.2)</code>；<code>eval</code> 固定 <code>temperature=0.0</code> 加显式 seed（Spec v1.3 §8.1 B-14，不可被 <code>harness/config.json</code> 覆盖；MOD-03 在 <code>mode="eval"</code> 下强制）；<code>baseline_fixed_prompt</code> 用冻结模板与固定采样；<code>baseline_heuristic</code> 不调 LLM。采样 <code>seed = derive_seed("policy", salt, episode_seed, decision_index, attempt, harness_version)</code>（INV-6），禁 <code>random</code> / 时间随机。</li>
@@ -209,14 +209,14 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
     <li><span class="tag nfr">NFR-04-3</span><strong>可复现</strong>：同 <code>obs + harness_version + episode_seed + step_index</code> 重跑得到逐字节相同 <code>prompt_hash</code>；仓库含 golden 快照 <code>tests/golden/agent/policy_prompt_&lt;hash&gt;.txt</code>。</li>
     <li><span class="tag nfr">NFR-04-4</span><strong>可观测</strong>：每步恰好一行 JSONL + 结构化事件（<code>decision</code>/<code>illegal</code>/<code>fallback</code>/<code>tool_call</code>/<code>audit_leak</code>），不自建日志格式（Spec §8.2）。</li>
     <li><span class="tag nfr">NFR-04-5</span><strong>覆盖率</strong>：<code>parser.py</code> 与 prompt 组装纯函数 ≥ 85%；<code>policy.py</code>（含编排分支）≥ 70%。</li>
-    <li><span class="tag nfr">NFR-04-6</span><strong>隔离</strong>：仅从 <code>gamer_rsi.sandbox.api</code> 导入环境相关类型，<strong>禁止 import <code>gamer_rsi.env.*</code></strong>（INV-1），由 MOD-02 静态检查 + MOD-09 import 门禁双重拦截。</li>
+    <li><span class="tag nfr">NFR-04-6</span><strong>隔离</strong>：仅从 <code>dice_ratchet.sandbox.api</code> 导入环境相关类型，<strong>禁止 import <code>dice_ratchet.env.*</code></strong>（INV-1），由 MOD-02 静态检查 + MOD-09 import 门禁双重拦截。</li>
   </ul>
 </section>
 
 <section id="sec-6">
   <h3><span class="n">6</span>接口契约</h3>
   <p>下面是 PRD 里给出的真实 Python 签名（签名以 Spec v1.3 §4.7 为准），也是你平时打交道最多的几个类与函数。</p>
-  <pre><code># gamer_rsi/agent/policy.py —— 签名以 Spec v1.3 §4.7 为准
+  <pre><code># dice_ratchet/agent/policy.py —— 签名以 Spec v1.3 §4.7 为准
 @dataclass(frozen=True)
 class StepRecord:                       # 一个 env 步（含 reject 行），MOD-06 据此写轨迹行
     action: dict | None; result: StepResult; plan_index: int; attempt: int
@@ -234,9 +234,9 @@ class PolicyAgent:
     def reset(self, ctx: EpisodeContext) -> None: ...
     def play_decision(self, env: SandboxEnv, obs: Observation, *, ctx: EpisodeContext) -> DecisionResult: ...  # 唯一对外决策入口
     def prompt_bundle(self, obs: Observation, *, ctx: EpisodeContext) -> PromptBundle: ...
-# gamer_rsi/agent/heuristic.py
+# dice_ratchet/agent/heuristic.py
 def heuristic_policy(obs: Observation, legal: list[dict], hints: Mapping[str, Any]) -> dict: ...   # 移植 greedy_counter
-# gamer_rsi/agent/parser.py
+# dice_ratchet/agent/parser.py
 @dataclass(frozen=True)
 class ParseResult:
     ok: bool; action: Action | None; reasoning: str
@@ -247,11 +247,11 @@ def parse_llm_output(raw: str, *, phase: str) -> ParseResult: ...          # 只
 def validate_syntax(raw: str) -> tuple[dict | None, str | None]: ...
 def validate_schema(payload: dict) -> tuple[Action | None, str | None]: ...
 def validate_semantic(action: dict, legal_actions: list[dict]) -> tuple[bool, str | None]: ...
-# gamer_rsi/agent/prompts/assembler.py
+# dice_ratchet/agent/prompts/assembler.py
 def load_template(path: Path) -> PromptSpec: ...
 def assemble_prompt(spec: PromptSpec, ctx: PromptContext) -> PromptBundle: ...
 def check_placeholders(spec: PromptSpec, required: frozenset[str]) -> None: ...  # 违则 E_ACTION_TEMPLATE
-# gamer_rsi/agent/tools/registry.py
+# dice_ratchet/agent/tools/registry.py
 def harness_tool(fn: F) -> F: ...
 def load_harness_tools(harness_dir: Path, *, guard: ExecutionGuard) -> ToolRegistry: ...
 class ToolRegistry:
@@ -277,7 +277,7 @@ class ToolRegistry:
     <tr><td><code>relic_swap</code></td><td><code>relicId</code>（<code>"skip"</code> 表示放弃）</td><td>—</td></tr>
     <tr><td><code>end_turn</code> / <code>shop_refresh</code> / <code>shop_leave</code></td><td>—</td><td>—</td></tr>
   </table>
-  <blockquote>动作即 GAME 动作对象（dict，camelCase），<code>canonical()</code> = MOD-01 <code>stable_stringify(action)</code>。<strong>已裁决（Spec v1.4 B-23）</strong>：<code>Action</code> 类型仍定义在 <code>gamer_rsi/env/actions.py</code>，但由 <code>gamer_rsi/sandbox/api.py</code> re-export，L1 只允许从 sandbox 门面导入——否则 INV-1 与「MOD-04 产出动作」互相矛盾；「产出」解释为产出 Action <strong>值</strong>而非类定义。</blockquote>
+  <blockquote>动作即 GAME 动作对象（dict，camelCase），<code>canonical()</code> = MOD-01 <code>stable_stringify(action)</code>。<strong>已裁决（Spec v1.4 B-23）</strong>：<code>Action</code> 类型仍定义在 <code>dice_ratchet/env/actions.py</code>，但由 <code>dice_ratchet/sandbox/api.py</code> re-export，L1 只允许从 sandbox 门面导入——否则 INV-1 与「MOD-04 产出动作」互相矛盾；「产出」解释为产出 Action <strong>值</strong>而非类定义。</blockquote>
 </section>
 
 <section id="sec-7">
@@ -290,8 +290,8 @@ class ToolRegistry:
     <tr><td>轨迹行</td><td><code>runs/&lt;run_id&gt;/episodes/&lt;split&gt;/&lt;episode_key&gt;.jsonl</code>（MOD-09 写）</td><td>永久</td><td>Spec §4.5 字段 + <strong>新增</strong> <code>prompt_hash</code>、<code>memory_ids</code>、<code>decision_source</code>、<code>attempts</code>、<code>error_codes</code>、<code>mode</code>、<code>tool_hash</code></td></tr>
     <tr><td>prompt 快照</td><td><code>runs/&lt;run_id&gt;/prompts/&lt;prompt_hash&gt;.txt</code></td><td>随 run</td><td>按 hash 去重落盘，供 <code>audit leak</code> 与人工复现</td></tr>
     <tr><td>harness 工件</td><td><code>harness/{version.json,prompts/decision.md,tools/*.py,config.json}</code></td><td>按 <code>harness_version</code></td><td>只读消费（Spec §4.4）；MOD-04 不写</td></tr>
-    <tr><td>任务说明</td><td><code>gamer_rsi/agent/prompts/task.md</code></td><td>人工版本化</td><td>INV-3 第 ④ 来源，<strong>非</strong>演化对象（Spec v1.4 B-27），改动需人工 + CHANGELOG</td></tr>
-    <tr><td>冻结基线模板</td><td><code>gamer_rsi/agent/prompts/fixed_v1.md</code></td><td>冻结</td><td>供 MOD-08 <code>fixed_prompt</code> 基线</td></tr>
+    <tr><td>任务说明</td><td><code>dice_ratchet/agent/prompts/task.md</code></td><td>人工版本化</td><td>INV-3 第 ④ 来源，<strong>非</strong>演化对象（Spec v1.4 B-27），改动需人工 + CHANGELOG</td></tr>
+    <tr><td>冻结基线模板</td><td><code>dice_ratchet/agent/prompts/fixed_v1.md</code></td><td>冻结</td><td>供 MOD-08 <code>fixed_prompt</code> 基线</td></tr>
   </table>
   <blockquote><strong>已裁决（Spec B-03 / P-04 / P-19）</strong>：轨迹新增字段已写入 Spec §4.5，prompt 快照目录为 <code>runs/&lt;run_id&gt;/prompts/</code>。</blockquote>
 </section>
@@ -358,12 +358,12 @@ class ToolRegistry:
 
 <section id="sec-9">
   <h3><span class="n">9</span>配置项</h3>
-  <p>配置优先级：<strong>CLI 参数 &gt; 环境变量 <code>GAMERSI_POLICY_*</code> &gt; <code>harness/config.json</code> &gt; <code>configs/default.yaml</code></strong>。<strong>已裁决（Spec v1.4 B-26）</strong>：可演化的 <code>harness/config.json</code> 插在 env 与 default 之间，只允许白名单键（<code>policy.*</code> 训练期采样参数、<code>memory.retrieve.*</code>、<code>agent.tools.*</code>），不得覆盖评估温度；其结构为 <code>{"version": int, "policy": {...}}</code>，键名为下表去掉 <code>policy.</code> 前缀。本表是这些键名的唯一登记处，变更需同步。</p>
+  <p>配置优先级：<strong>CLI 参数 &gt; 环境变量 <code>DICERATCHET_POLICY_*</code> &gt; <code>harness/config.json</code> &gt; <code>configs/default.yaml</code></strong>。<strong>已裁决（Spec v1.4 B-26）</strong>：可演化的 <code>harness/config.json</code> 插在 env 与 default 之间，只允许白名单键（<code>policy.*</code> 训练期采样参数、<code>memory.retrieve.*</code>、<code>agent.tools.*</code>），不得覆盖评估温度；其结构为 <code>{"version": int, "policy": {...}}</code>，键名为下表去掉 <code>policy.</code> 前缀。本表是这些键名的唯一登记处，变更需同步。</p>
   <table>
     <tr><th>键</th><th>类型</th><th>默认</th><th>含义</th></tr>
     <tr><td><code>policy.mode</code></td><td>str</td><td><code>"play"</code></td><td><code>play</code>/<code>eval</code>/<code>baseline_fixed_prompt</code>/<code>baseline_heuristic</code></td></tr>
     <tr><td><code>policy.template_path</code></td><td>str</td><td><code>"harness/prompts/decision.md"</code></td><td>决策模板（Spec §4.4）</td></tr>
-    <tr><td><code>policy.fixed_prompt_path</code> / <code>policy.task_path</code></td><td>str</td><td><code>gamer_rsi/agent/prompts/fixed_v1.md</code> / <code>gamer_rsi/agent/prompts/task.md</code></td><td>冻结基线模板 / INV-3 第 ④ 来源任务说明（<strong>非演化对象</strong>，故取包内冻结件；F12 前默认值指向不存在的 <code>harness/prompts/*</code>，靠包内回落静默兜住）</td></tr>
+    <tr><td><code>policy.fixed_prompt_path</code> / <code>policy.task_path</code></td><td>str</td><td><code>dice_ratchet/agent/prompts/fixed_v1.md</code> / <code>dice_ratchet/agent/prompts/task.md</code></td><td>冻结基线模板 / INV-3 第 ④ 来源任务说明（<strong>非演化对象</strong>，故取包内冻结件；F12 前默认值指向不存在的 <code>harness/prompts/*</code>，靠包内回落静默兜住）</td></tr>
     <tr><td><code>policy.prompt_token_budget</code></td><td>int</td><td><code>3072</code></td><td>prompt token 预算（含模板）</td></tr>
     <tr><td><code>policy.token_estimator</code></td><td>str</td><td><code>"chars_div_3"</code></td><td><code>chars_div_3</code> 或 <code>backend_tokenizer</code>（借 MOD-03 tokenizer）</td></tr>
     <tr><td><code>policy.memory_top_k</code> / <code>policy.reflection_max</code></td><td>int</td><td><code>5</code> / <code>3</code></td><td>策略记忆注入条数（Spec §4.4「检索 top_k」）/ 近期反思注入条数</td></tr>
@@ -392,7 +392,7 @@ class ToolRegistry:
     <tr><td><span class="tag err">E_ACTION_LEGAL_NOISE</span></td><td><code>legal_actions()</code> 噪声致合法动作被拒</td><td>warning + MOD-08 统计，不阻断</td></tr>
     <tr><td><span class="tag err">E_ACTION_ILLEGAL_STREAK</span></td><td>连续非法 ≥ 3</td><td>判该局失败，<code>terminate_episode=True</code>，停止调 LLM</td></tr>
     <tr><td><span class="tag err">E_ACTION_TOOL_SIG</span></td><td>工具签名 ≠ <code>rank_actions(obs, candidates, memory)</code></td><td>弃用整个工具目录，恒等排序</td></tr>
-    <tr><td><span class="tag err">E_ACTION_TOOL_GUARD</span></td><td>静态扫描命中禁项（网络 / 写文件 / subprocess / <code>import gamer_rsi.env.*</code> / <code>random</code>）</td><td>弃用该文件，其余可用</td></tr>
+    <tr><td><span class="tag err">E_ACTION_TOOL_GUARD</span></td><td>静态扫描命中禁项（网络 / 写文件 / subprocess / <code>import dice_ratchet.env.*</code> / <code>random</code>）</td><td>弃用该文件，其余可用</td></tr>
     <tr><td><span class="tag err">E_ACTION_TOOL_FAIL</span></td><td>工具抛异常 / 超时 / 返回不等价</td><td>捕获 → <strong>原始候选序</strong></td></tr>
     <tr><td><span class="tag err">E_ACTION_BUDGET</span></td><td>Observation 单独超预算</td><td>丢光 memory/reflections 后仍超 → 直接 heuristic</td></tr>
     <tr><td><span class="tag err">E_ACTION_FALLBACK</span></td><td>重试耗尽</td><td>启发式出招，<code>source="heuristic"</code>，仍计一次非法</td></tr>
@@ -416,7 +416,7 @@ class ToolRegistry:
     <li><strong>U11 动作清单超预算压缩</strong>（M1 验收 F13，<code>tests/unit/agent/test_policy_prompt_budget.py</code>）：<strong>给定</strong> 690 条 <code>forge_pick</code> 的 <code>legal_actions</code>，<strong>当</strong> <code>assemble_prompt()</code>，<strong>则</strong> <code>token_estimate ≤ prompt_token_budget</code>、<code>error_codes==()</code>、<code>truncated</code> 含 <code>legal_actions</code>、观测段原文仍在；反例（观测单独超限）仍返回 <code>E_ACTION_BUDGET</code>。</li>
   </ul>
   <h4>集成测试</h4>
-  <p>用 MOD-02 真实 <code>SandboxEnv</code> + MOD-03 可注入畸形输出的假后端跑 1 局，断言：① 重跑下 <code>obs_digest</code>/<code>state_hash</code> 序列一致（G3）；② <code>prompt_hash</code> 稳定；③ JSONL 含 §7 新增字段且 round-trip 通过（G5）；④ 自测 run 上 <code>python -m gamer_rsi audit leak --run-id &lt;run_id&gt;</code> 0 告警、蜜罐注入必被抓（G4）。</p>
+  <p>用 MOD-02 真实 <code>SandboxEnv</code> + MOD-03 可注入畸形输出的假后端跑 1 局，断言：① 重跑下 <code>obs_digest</code>/<code>state_hash</code> 序列一致（G3）；② <code>prompt_hash</code> 稳定；③ JSONL 含 §7 新增字段且 round-trip 通过（G5）；④ 自测 run 上 <code>python -m dice_ratchet audit leak --run-id &lt;run_id&gt;</code> 0 告警、蜜罐注入必被抓（G4）。</p>
   <h4>格式鲁棒性矩阵（M1 专项，输入 = <code>llm_raw</code>）</h4>
   <table>
     <tr><th>#</th><th>输入形态</th><th>期望 level</th><th>错误码 / 结果</th></tr>
@@ -445,8 +445,8 @@ class ToolRegistry:
     <li><strong>G3</strong>：评估模式（<code>temperature=0</code>）同 seed 重跑 3 次，<code>prompt_hash</code>、<code>obs_digest</code> 与动作序列逐字节一致。</li>
     <li><strong>G4</strong>：自测 run 上 <code>audit leak</code> 0 告警；蜜罐注入被抓到且被 <code>E_ACTION_LEAK_BLOCK</code> 拦下。</li>
     <li><strong>G5</strong>：<code>llm_decision.json</code> Schema 有 round-trip 测试（合法样例 → 解析 → 再序列化等价）。</li>
-    <li><strong>G6</strong>：命令可复制执行：<code>python -m gamer_rsi play --agent llm --seeds train:1000-1004</code>、<code>python -m gamer_rsi baseline --kind heuristic</code>、<code>python -m gamer_rsi baseline --kind fixed_prompt</code>。</li>
-    <li><strong>M1 专项</strong>：格式鲁棒性矩阵 13 行全部按期望落档；断言 MOD-04 无 <code>gamer_rsi.env.*</code> 导入（INV-1 门禁）。
+    <li><strong>G6</strong>：命令可复制执行：<code>python -m dice_ratchet play --agent llm --seeds train:1000-1004</code>、<code>python -m dice_ratchet baseline --kind heuristic</code>、<code>python -m dice_ratchet baseline --kind fixed_prompt</code>。</li>
+    <li><strong>M1 专项</strong>：格式鲁棒性矩阵 13 行全部按期望落档；断言 MOD-04 无 <code>dice_ratchet.env.*</code> 导入（INV-1 门禁）。
       <ul><li><b><code>illegal_rate ≤ 0.02</code> 的范围澄清（2026-10-06，M1 验收复核裁定）</b>：该条（与 §1 的 <code>fallback_rate ≤ 0.05</code>）针对<b>最终演化后的 harness agent</b>，由 <b>M3</b> 判定，<b>M1 不判</b>；M1 只保证该指标可度量、可入档、可复算（<code>illegal</code> / <code>fallback</code> 逐局字段 + <code>aggregate()</code> 的 <code>illegal_rate</code> / <code>fallback_rate</code>）。</li></ul></li>
   </ul>
 </section>
@@ -498,13 +498,13 @@ class ToolRegistry:
     <tr><td>文档与命令验证（G6）</td><td>0.5</td><td>M1</td></tr>
     <tr><td><strong>合计</strong></td><td><strong>13.5</strong></td><td>M1（关键路径 MOD-01→MOD-02→MOD-03/04）</td></tr>
   </table>
-  <p><b>实际交付（M1）</b>：<code>gamer_rsi/agent/</code>（<code>policy.py</code> / <code>parser.py</code> / <code>heuristic.py</code> / <code>prompts/</code> / <code>tools/</code>）于 <b>2026-10-04</b> 交付（提交 <code>bff9982</code>；同日落地的还有 MOD-08 与 M1 验收修复）。本项目<b>未单独记工</b>；按提交时间窗折算 ≤ 3 人日（计划 13.5），偏差 ≥ 78%。M1 验收的 <b>F1（<code>fixed_prompt</code> 无真实 LLM 路径 + 降级静默）</b> 与 <b>F4（<code>play</code> 未接线）</b> 都落在本模块边界上，已修复并补端到端守门用例；此外实测发现 <b>F16</b>（<code>probe/bench</code> 的固定 prompt 未给输出契约与 legal_actions，把「提示词欠约束」误报成「模型格式鲁棒性差」）与 <b>F13</b>（观测块未被 <code>prompt_token_budget</code> 裁剪，单决策点实测 19,633 token &gt; <code>context_length=8192</code>，仍未修）。</p>
+  <p><b>实际交付（M1）</b>：<code>dice_ratchet/agent/</code>（<code>policy.py</code> / <code>parser.py</code> / <code>heuristic.py</code> / <code>prompts/</code> / <code>tools/</code>）于 <b>2026-10-04</b> 交付（提交 <code>bff9982</code>；同日落地的还有 MOD-08 与 M1 验收修复）。本项目<b>未单独记工</b>；按提交时间窗折算 ≤ 3 人日（计划 13.5），偏差 ≥ 78%。M1 验收的 <b>F1（<code>fixed_prompt</code> 无真实 LLM 路径 + 降级静默）</b> 与 <b>F4（<code>play</code> 未接线）</b> 都落在本模块边界上，已修复并补端到端守门用例；此外实测发现 <b>F16</b>（<code>probe/bench</code> 的固定 prompt 未给输出契约与 legal_actions，把「提示词欠约束」误报成「模型格式鲁棒性差」）与 <b>F13</b>（观测块未被 <code>prompt_token_budget</code> 裁剪，单决策点实测 19,633 token &gt; <code>context_length=8192</code>，仍未修）。</p>
   <h4>§13.2 前置项收口（2026-10-05，<code>&lt;本轮提交&gt;</code>）</h4>
   <p>本模块承担的两项已闭环：</p>
   <ul>
     <li><b>F13</b>（见 FR-04-3 的补充条款）：定位修正为「<b><code>legal_actions</code> 枚举</b>爆预算」而非观测块，修复为「压缩动作清单（字段取值集合 + 12 条等距真实样例）」，观测段仍永不裁剪；实测同一决策点 19,633 → <b>1,939 token</b>（预算 3,072），快照生成器的 <code>oversize</code> 计数归 0。新增 <code>tests/unit/agent/test_policy_prompt_budget.py</code>（8 条，含真环境整局的预算不变式）。</li>
     <li><b>F22 的 MOD-04 一侧</b>：<code>PolicyAgent</code> 新增/收敛了基线语义——<code>mode="baseline_fixed_prompt"</code> 下 <code>harness_version</code> 恒 0（不再读 <code>harness/version.json</code>）、<code>tools_enabled=false</code> 时 <code>{{tools}}</code> 段为空且 <code>tool_hash=None</code>，使「基线不随 harness 漂移」（R-6）真正成立；基线 agent 现在由本模块的 <code>PolicyAgent</code> 承担（MOD-08 不再自带逐 env 步的第二套实现）。</li>
-    <li><b>F12 的 MOD-04 一侧</b>：<code>policy.fixed_prompt_path</code> / <code>policy.task_path</code> 默认值改为真实存在的包内路径（<code>gamer_rsi/agent/prompts/{fixed_v1,task}.md</code>），不再依赖「静默回落」；<code>fixed_v1.md</code> 同时提升到与 <code>harness/prompts/decision.md</code> <b>同级</b>的契约明确度（F21：同批 200 条真实 prompt 的首答通过率由 52% 提升）。</li>
+    <li><b>F12 的 MOD-04 一侧</b>：<code>policy.fixed_prompt_path</code> / <code>policy.task_path</code> 默认值改为真实存在的包内路径（<code>dice_ratchet/agent/prompts/{fixed_v1,task}.md</code>），不再依赖「静默回落」；<code>fixed_v1.md</code> 同时提升到与 <code>harness/prompts/decision.md</code> <b>同级</b>的契约明确度（F21：同批 200 条真实 prompt 的首答通过率由 52% 提升）。</li>
   </ul>
 </section>
 
@@ -532,11 +532,11 @@ class ToolRegistry:
     <tr><td>v0.5</td><td>2026-10-05</td><td><b>n=10 <code>fixed_prompt</code> 归档回填</b>：§15 补 <code>PolicyAgent(mode="baseline_fixed_prompt")</code> 在最终契约上的 n=10 结果（<code>runs/m1-real-h1n10b/</code>，seed 2000–2009，10 局 <code>protocol</code> 一致、<code>n=10 / degraded_n=0 / n_dropped=0</code>、<b>0/10 = 0.0%，CI [0.000, 0.278]</b>）与推理成本/质量实测（<code>t_d</code> p50 7.46 s、<code>calls/决策点</code> 1.62、schema 全失败率 5.8%、<code>policy.reject</code> 739、<code>fallback</code> 122、<code>D</code> 均值 97.1、单局模型时间 19.6 min）</td></tr>
     <tr><td>v0.6</td><td>2026-10-06</td><td><b>§1 成功度量的判据范围澄清（M1 验收复核裁定 M-2）</b>：<code>illegal_rate ≤ 0.02</code> 与 <code>fallback_rate ≤ 0.05</code> 明确为<b>最终演化后 harness agent</b> 的指标、由 <b>M3</b> 在 held-out 上判定，<b>M1 不判</b>；M1 只需保证该指标可度量/可入档/可复算。① §1 增加历史注记，声明早期「<code>illegal_rate=0.0</code> 达标」依据的是 F1 修复前静默降级的假 <code>fixed_prompt</code> 归档，已被基线实测 <code>0.3021 / 0.181</code> 取代，<b>不得再作为达标证据</b>；② §12 的 M1 专项去掉该项、改为显式范围说明。依据 <a href="../reviews/2026-10-05-M1验收复核.md">M1 验收复核 §M-2</a></td></tr>
   </table>
-  <blockquote>v0.3 起本 PRD 的临时决策均已由 Spec v1.4 裁决回填，原「决策（本 PRD 提出，待回填 Spec）」标注已改为「已裁决（Spec B-xx）」。上游 Spec（<code>../模块拆分Spec-GameRSI.md</code>）是唯一事实来源，与本文件冲突时以 Spec 为准。</blockquote>
+  <blockquote>v0.3 起本 PRD 的临时决策均已由 Spec v1.4 裁决回填，原「决策（本 PRD 提出，待回填 Spec）」标注已改为「已裁决（Spec B-xx）」。上游 Spec（<code>../模块拆分Spec-DiceRatchet.md</code>）是唯一事实来源，与本文件冲突时以 Spec 为准。</blockquote>
 </section>
 
 </div>
-<footer>来源：docs/prd/MOD-04-policy-PRD.md · GameRSI 模块讲解系列 · 2026-10-04 · 同步 2026-10-06</footer>
+<footer>来源：docs/prd/MOD-04-policy-PRD.md · DiceRatchet 模块讲解系列 · 2026-10-04 · 同步 2026-10-06</footer>
 </main>
 </body>
 </html>

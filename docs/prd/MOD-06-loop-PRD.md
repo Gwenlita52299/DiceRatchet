@@ -1,7 +1,7 @@
 # MOD-06 loop 技术 PRD
 
-> 版本：v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：草案（待评审）· 所属里程碑：M2 · 上游 Spec：[模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源，冲突时以 Spec 为准）· 作者：MOD-06 模块作者
-> 代码路径：`gamer_rsi/loop/{runner.py, reflect.py, generation.py}` · 产物路径：`runs/<run_id>/`
+> 版本：v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：草案（待评审）· 所属里程碑：M2 · 上游 Spec：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突时以 Spec 为准）· 作者：MOD-06 模块作者
+> 代码路径：`dice_ratchet/loop/{runner.py, reflect.py, generation.py}` · 产物路径：`runs/<run_id>/`
 
 ## 1. 背景与目标
 
@@ -42,10 +42,10 @@ MOD-06 是 L2 进化层里的**编排器**：它自己不产生策略、不训�
 可复现命令（G6，必须可直接复制执行）：
 
 ```bash
-python -m gamer_rsi loop run --agent llm --seeds train:1000-1029 --k 30 --hitl
-python -m gamer_rsi loop status --run-id <run_id>
-python -m gamer_rsi loop run --run-id <run_id> --resume
-python -m gamer_rsi loop smoke --seeds train:1000-1002 --k 3 --no-reflect   # 只验编排，不调模型
+python -m dice_ratchet loop run --agent llm --seeds train:1000-1029 --k 30 --hitl
+python -m dice_ratchet loop status --run-id <run_id>
+python -m dice_ratchet loop run --run-id <run_id> --resume
+python -m dice_ratchet loop smoke --seeds train:1000-1002 --k 3 --no-reflect   # 只验编排，不调模型
 ```
 
 ## 4. 功能需求（FR-06-x，编号，每条可测试）
@@ -87,7 +87,7 @@ python -m gamer_rsi loop smoke --seeds train:1000-1002 --k 3 --no-reflect   # �
 
 ## 5. 非功能需求（NFR-06-x：确定性/性能/可复现/可观测）
 
-- **NFR-06-1（确定性）**：同一 `run_id` + 同 seed 清单 + 同 `harness_version` + `mode=eval`（温度 0）时，评估局与并发度无关，且`obs_digest`/`action`/`reward` 序列逐字节一致；所有随机来自 `gamer_rsi.infra.rng_for(seed, namespace)`，禁用 `random`/`time` 相关随机（MOD-09 `guards.py` CI 扫描）。
+- **NFR-06-1（确定性）**：同一 `run_id` + 同 seed 清单 + 同 `harness_version` + `mode=eval`（温度 0）时，评估局与并发度无关，且`obs_digest`/`action`/`reward` 序列逐字节一致；所有随机来自 `dice_ratchet.infra.rng_for(seed, namespace)`，禁用 `random`/`time` 相关随机（MOD-09 `guards.py` CI 扫描）。
 - **NFR-06-2（可复现）**：`state.json` 能独立重建「下一步做什么」，不依赖内存态；`runs/<run_id>/config.json` 固化合并后配置（含 `config_hash`）。
 - **NFR-06-3（性能）**：编排层单步开销（不含推理与环境 step）≤ 5 ms（M5 本机）；每步 ≤ 1 次 append+flush；代际目录用增量读，不整目录 `glob`。
 - **NFR-06-4（可观测）**：事件统一经 MOD-09 `emit` 写入 `events.jsonl`，名称为 `loop.{episode_start,episode_end,cycle_start,reflect,budget_exhausted,interrupted,resume}`（Spec §8.2）。轨迹行不是事件。v1.0 的 `metrics/loop_trace.jsonl` 已废弃。
@@ -98,7 +98,7 @@ python -m gamer_rsi loop smoke --seeds train:1000-1002 --k 3 --no-reflect   # �
 ## 6. 接口契约（真实 Python 签名 + JSON Schema）
 
 ```python
-# gamer_rsi/loop/runner.py —— 对 MOD-04/05 的调用签名以 Spec v1.3 §4.7 为准
+# dice_ratchet/loop/runner.py —— 对 MOD-04/05 的调用签名以 Spec v1.3 §4.7 为准
 class PolicyProto(Protocol):
     def reset(self, ctx: "EpisodeContext") -> None: ...
     def play_decision(self, env: SandboxEnv, obs: Observation, *, ctx: "EpisodeContext") -> "DecisionResult": ...
@@ -123,12 +123,12 @@ class EpisodeRunner:
     def run_episode(self, seed: int, *, split: str, arm: str,
                     episode_config: EpisodeConfig, harness_version: int) -> RecordedEpisode: ...
 
-# gamer_rsi/loop/reflect.py —— 返回 None = 降级跳过，由调用方写 skipped 标注（FR-06-4）
+# dice_ratchet/loop/reflect.py —— 返回 None = 降级跳过，由调用方写 skipped 标注（FR-06-4）
 def summarize_episode(rec: RecordedEpisode, *, window: Sequence[RecordedEpisode]) -> "EpisodeSummary": ...  # 确定性摘要
 def reflect(summary: "EpisodeSummary", *, client: "InferenceClient", template: Path,
             timeout_s: float = 60.0) -> "ReflectionEntry | None": ...
 
-# gamer_rsi/loop/generation.py —— 评估一律委托 MOD-08 evaluate_arm（Spec §4.7），本模块不自建评估批
+# dice_ratchet/loop/generation.py —— 评估一律委托 MOD-08 evaluate_arm（Spec §4.7），本模块不自建评估批
 def episodes_per_generation(cfg: "LoopConfig") -> int: ...              # FR-06-13：K + (H+S) + C·(S+H)
 def maybe_run_generation(*, state: "RunState", run_ctx: "RunContext",
                          evolve_fn: "Callable[[RunState, RunContext], EvolveOutcome]",
@@ -303,7 +303,7 @@ def run(self, seeds=None, *, resume=False):
 | `loop.retry_reflections_on_resume` | bool | false | `--resume` 时是否重试此前 `skipped` 的反思 |
 | `loop.max_run_bytes` | int | 2 GB | 单 run 轨迹配额，超限告警（不中断） |
 
-配置优先级：CLI 参数 > 环境变量 `GAMERSI_LOOP_*` > `configs/default.yaml`（Spec §5）。
+配置优先级：CLI 参数 > 环境变量 `DICERATCHET_LOOP_*` > `configs/default.yaml`（Spec §5）。
 
 ## 10. 错误处理与降级（使用 Spec §8 的错误码前缀）
 
@@ -351,11 +351,11 @@ def run(self, seeds=None, *, resume=False):
 
 ## 12. 验收标准（DoD，对齐 Spec §9 质量门 G1–G6）
 
-- **G1 单测**：`gamer_rsi/loop/**` 行覆盖率 ≥ 75%（编排层含 IO，阈值低于纯函数模块的 80%）；T-06-1…T-06-13 全绿。
+- **G1 单测**：`dice_ratchet/loop/**` 行覆盖率 ≥ 75%（编排层含 IO，阈值低于纯函数模块的 80%）；T-06-1…T-06-13 全绿。
 - **G2 Golden**：本模块不产出 golden 轨迹（归 MOD-01/02），但必须消费其 golden seed 集跑通且不修改既有 golden 文件。
 - **G3 确定性**：T-06-15 通过；`loop/` 经 MOD-09 `guards.py` AST 扫描 0 处 `random`/`time` 依赖。
-- **G4 泄漏审计**：`python -m gamer_rsi audit leak --run-id <run_id>` 对本模块产出的 run 0 告警；`state.json` 与 `reflections/*.json` 中不得出现 held-out/test seed 值（按 MOD-08 seed 注册表白名单正则扫描）。
-- **G5 Schema**：§6 的 JSON Schema 落 `gamer_rsi/loop/schemas/`，round-trip 测试通过。
+- **G4 泄漏审计**：`python -m dice_ratchet audit leak --run-id <run_id>` 对本模块产出的 run 0 告警；`state.json` 与 `reflections/*.json` 中不得出现 held-out/test seed 值（按 MOD-08 seed 注册表白名单正则扫描）。
+- **G5 Schema**：§6 的 JSON Schema 落 `dice_ratchet/loop/schemas/`，round-trip 测试通过。
 - **G6 可复现命令**：§3 四条命令在干净 checkout 上可直接复制执行成功（含 `--no-reflect` 免模型路径）。
 - **M2 验收（计划 §7 / Spec §7）**：闭环自动运行 ≥1 轮演化并产出 diff 与决策记录；`--resume` 与 HITL 挂起/恢复各有一条端到端演示记录（README 附命令与日志片段）。
 - **计分正确性**：任意中断/恢复组合下，`scoreboard.json` 的 `episode_key` 集合等于「实际完整跑完的 episode 集合」，无重复、无幻影。

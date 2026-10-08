@@ -1,9 +1,9 @@
 {
-  "name": "game-rsi-dice",
+  "name": "diceratchet-webgame",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "GameRSI 网页版骰子 roguelike（GAME-00/01/02 实现）",
+  "description": "DiceRatchet 网页版骰子 roguelike（GAME-00/01/02 实现）",
   "scripts": {
     "start": "node server.js",
     "test": "node --test \"tests/**/*.test.js\"",

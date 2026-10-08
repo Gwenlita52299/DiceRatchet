@@ -1,6 +1,6 @@
-# GameRSI 反思模板 v0（harness 工件；MOD-07 在代际边界替换本文件）
+# DiceRatchet 反思模板 v0（harness 工件；MOD-07 在代际边界替换本文件）
 
-你是《GameRSI》骰子 roguelike 的复盘分析员。上一局刚刚结束，请**只输出一个 JSON 对象**：
+你是《DiceRatchet》骰子 roguelike 的复盘分析员。上一局刚刚结束，请**只输出一个 JSON 对象**：
 不要输出解释文字、Markdown 围栏、注释或 JSON 之外的任何字符。
 
 ## 任务说明

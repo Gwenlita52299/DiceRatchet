@@ -9,11 +9,11 @@ import copy
 
 import pytest
 
-from gamer_rsi.env import GameEngine
-from gamer_rsi.env import relic as R
-from gamer_rsi.env import shop as S
-from gamer_rsi.env import forge as F
-from gamer_rsi.env.state import add_die_to_deck, remove_die_from_deck
+from dice_ratchet.env import GameEngine
+from dice_ratchet.env import relic as R
+from dice_ratchet.env import shop as S
+from dice_ratchet.env import forge as F
+from dice_ratchet.env.state import add_die_to_deck, remove_die_from_deck
 
 
 @pytest.fixture

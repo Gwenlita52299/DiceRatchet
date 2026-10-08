@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 import pytest
 
-from gamer_rsi.inference.backend import Backend
+from dice_ratchet.inference.backend import Backend
 
 from inference_support import FakeClock, build_manager, inference_config
 

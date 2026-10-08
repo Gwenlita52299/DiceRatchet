@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.inference.mlx_backend import MLXBackend
-from gamer_rsi.inference.prompts import PROBE_MESSAGES, probe_messages
-from gamer_rsi.inference.weights import weights_digest
+from dice_ratchet.inference.mlx_backend import MLXBackend
+from dice_ratchet.inference.prompts import PROBE_MESSAGES, probe_messages
+from dice_ratchet.inference.weights import weights_digest
 
 from test_backends_faked import MESSAGES, _FakeTokenizer, _spec  # noqa: E402
 
@@ -92,7 +92,7 @@ def test_load_fails_loudly_when_separate_tokenizer_is_unsupported(tmp_path, monk
 
     import asyncio
 
-    from gamer_rsi.inference.errors import InferenceError
+    from dice_ratchet.inference.errors import InferenceError
 
     async def run():
         await backend.load(_spec(weights_path=str(weights), tokenizer_path=str(other)))
@@ -175,8 +175,8 @@ def test_weights_digest_ignores_hidden_cache_paths(tmp_path):
 
 def test_weights_digest_matches_shipped_registry_if_weights_present():
     """权重在场时，注册表里的 ``weights_sha256`` 必须能通过校验（Q-6 的端到端守门）。"""
-    from gamer_rsi.inference.registry import load_registry
-    from gamer_rsi.inference.weights import verify_weights
+    from dice_ratchet.inference.registry import load_registry
+    from dice_ratchet.inference.weights import verify_weights
 
     repo = Path(__file__).resolve().parents[3]
     registry = load_registry(str(repo / "configs" / "models.yaml"))

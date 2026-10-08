@@ -15,8 +15,8 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.env import GameEngine, load_tables
-from gamer_rsi.sandbox import projection as P
+from dice_ratchet.env import GameEngine, load_tables
+from dice_ratchet.sandbox import projection as P
 
 #: ``GameState`` 顶层字段快照（GAME-01 §2 / MOD-01 v1.0）。改动 → 本测试红。
 GAMESTATE_TOP_LEVEL = frozenset({
@@ -95,7 +95,7 @@ def test_registry_keeps_only_spec_allowed_sources(state):
     """注册表不得偷偷保留 Spec §4.2「删除」的字段（防越权可见性）。"""
     engine, cur = state
     obs = engine.observe(cur, "full")
-    from gamer_rsi.sandbox.api import EpisodeConfig, SandboxEnv
+    from dice_ratchet.sandbox.api import EpisodeConfig, SandboxEnv
 
     env = SandboxEnv(engine=engine, episode_config=EpisodeConfig())
     view = env.reset(int(cur["config"]["seed"]), episode_id="e-000001-g000-train")
@@ -111,12 +111,12 @@ def test_registry_keeps_only_spec_allowed_sources(state):
 def test_default_config_toggle_names_match_kernel_toggle_keys():
     """``configs/default.yaml`` 的 ``env.episode.toggles`` 必须恰好是内核 ``TOGGLE_KEYS``。
 
-    ``infra`` 不能 import ``gamer_rsi.env``（NFR-09-5），所以这条跨模块契约只能在这里守：
+    ``infra`` 不能 import ``dice_ratchet.env``（NFR-09-5），所以这条跨模块契约只能在这里守：
     名字写错时内核会**静默忽略**未知键、并把缺失键默认为 True，配置会静默失效
     （M0 验收 F1：原值含 ``forge/shop/shrines/blessings`` 四个不存在的开关名）。
     """
-    from gamer_rsi.env import TOGGLE_KEYS
-    from gamer_rsi.infra.config import load_config
+    from dice_ratchet.env import TOGGLE_KEYS
+    from dice_ratchet.infra.config import load_config
 
     declared = load_config().env.episode.toggles
     assert set(declared) == set(TOGGLE_KEYS), (
@@ -126,9 +126,9 @@ def test_default_config_toggle_names_match_kernel_toggle_keys():
 
 def test_default_config_episode_is_all_on_and_effective(state):
     """默认局（Spec §8.6）必须是**全开**，且该配置真的传导到内核（不是死配置）。"""
-    from gamer_rsi.env import TOGGLE_KEYS
-    from gamer_rsi.infra.config import load_config
-    from gamer_rsi.sandbox.api import EpisodeConfig
+    from dice_ratchet.env import TOGGLE_KEYS
+    from dice_ratchet.infra.config import load_config
+    from dice_ratchet.sandbox.api import EpisodeConfig
 
     engine, _ = state
     cfg = EpisodeConfig.from_any(load_config().env.episode)

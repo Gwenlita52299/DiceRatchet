@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from fakes import FakeEnv, FakePolicy
-from gamer_rsi.sandbox.api import EpisodeConfig
+from dice_ratchet.sandbox.api import EpisodeConfig
 
 
 # =====================================================================
@@ -159,7 +159,7 @@ def test_t06_3_multi_step_plan_with_reject_row(tmp_path, mk_runner):
 
 def test_t06_3_step_rows_satisfy_trajectory_schema(tmp_path, mk_runner):
     """落盘的每一行都过 MOD-09 的 ``trajectory_line`` schema（G5 的实际用途）。"""
-    from gamer_rsi.infra.logging import validate_trajectory_line
+    from dice_ratchet.infra.logging import validate_trajectory_line
 
     runner, _ = mk_runner(tmp_path, policy=FakePolicy(), env=FakeEnv(steps_to_terminate=2))
     rec = runner.run_episode(1, split="train", arm="train", harness_version=0)

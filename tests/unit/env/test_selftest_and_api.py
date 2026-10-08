@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.env import GameEngine, digest
-from gamer_rsi.env import selftest as ST
-from gamer_rsi.env.error import KernelError
-from gamer_rsi.env.state import assert_invariants, is_mono
+from dice_ratchet.env import GameEngine, digest
+from dice_ratchet.env import selftest as ST
+from dice_ratchet.env.error import KernelError
+from dice_ratchet.env.state import assert_invariants, is_mono
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -24,7 +24,7 @@ def test_selftest_cli_path(engine, tables):
     import subprocess
     import sys
 
-    proc = subprocess.run([sys.executable, "-m", "gamer_rsi", "env", "selftest", "--seed", "1"],
+    proc = subprocess.run([sys.executable, "-m", "dice_ratchet", "env", "selftest", "--seed", "1"],
                           cwd=_REPO_ROOT, capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, proc.stdout[-2000:] + proc.stderr[-2000:]
     assert "selftest 全部通过" in proc.stdout
@@ -58,7 +58,7 @@ def test_play_hints_purge_previews(engine, phases, tables):
     hints = engine.play_hints(state)
     p = state["player"]
     for die_id in p["hand"]:
-        from gamer_rsi.env.state import current_face
+        from dice_ratchet.env.state import current_face
         kind = current_face(state, tables, die_id)["kind"]
         for s in p["slots"]:
             h = hints[die_id][s["slotId"]]
@@ -85,7 +85,7 @@ def test_debug_start_battle(engine, tables):
     state = engine.create({"difficulty": "medium", "seed": 7})
     s2 = engine.reduce(state, {"kind": "map_choose", "nodeId": "n-01-0-0"})["state"]
     member = s2["enemies"][0]["defId"] if s2["enemies"] else "mon_verdant_slime"
-    from gamer_rsi.env.engine import debug_start_battle
+    from dice_ratchet.env.engine import debug_start_battle
     s3 = debug_start_battle(engine.create({"difficulty": "medium", "seed": 7}),
                             [member], tables, "elite")
     assert s3["phase"] == "player_turn"
@@ -94,7 +94,7 @@ def test_debug_start_battle(engine, tables):
 
 
 def test_replay_reproduces_golden(engine):
-    from gamer_rsi.env.engine import observe, replay
+    from dice_ratchet.env.engine import observe, replay
     path = _REPO_ROOT / "src/game/tests/golden/g2_all_on_medium.jsonl"
     lines = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
     actions = [l["action"] for l in lines[1:] if l.get("action")]
@@ -105,14 +105,14 @@ def test_replay_reproduces_golden(engine):
 
 
 def test_native_result_fields(engine, phases):
-    from gamer_rsi.env.engine import native_result
+    from dice_ratchet.env.engine import native_result
     nr = native_result(phases("player_turn"))
     assert set(nr.keys()) == {"outcome", "truncationReason", "stagesCleared",
                               "heartsLeft", "battlesWon", "turns", "kills"}
 
 
 def test_config_schema(engine, tables):
-    from gamer_rsi.env.engine import config_schema
+    from dice_ratchet.env.engine import config_schema
     schema = config_schema(tables)
     assert set(schema.keys()) == {"difficulties", "difficultyKeys", "toggles", "stageCounts",
                                   "characters", "enums", "schools", "defaults"}
@@ -124,7 +124,7 @@ def test_config_schema(engine, tables):
 
 def test_state_hash_and_digest(engine):
     state = engine.create({"difficulty": "easy", "seed": 3})
-    from gamer_rsi.env.engine import state_hash
+    from dice_ratchet.env.engine import state_hash
     h = state_hash(state)
     assert h.startswith("sha256:") and len(h) == len("sha256:") + 64
     assert state_hash(state) == h
@@ -167,7 +167,7 @@ def test_assert_invariants_catches_violations(engine, tables):
 
 
 def test_deck_school_info(tables, started):
-    from gamer_rsi.env.state import deck_school_info
+    from dice_ratchet.env.state import deck_school_info
     info = deck_school_info(started, tables)
     assert set(info.keys()) == {"school", "counts", "total", "concentrationPermille"}
     assert info["school"] in ("blade", "arcana", "verdant", "neutral")

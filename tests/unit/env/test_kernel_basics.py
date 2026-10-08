@@ -13,13 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.env import (GAME_CONTENT_DIR, TOGGLE_KEYS, GameEngine, STREAM_NAMES,
+from dice_ratchet.env import (GAME_CONTENT_DIR, TOGGLE_KEYS, GameEngine, STREAM_NAMES,
                           apply_difficulty, allowed_stage_counts, config_hash, digest,
                           load_tables, validate_config)
-from gamer_rsi.env.error import KernelError
-from gamer_rsi.env.rng import (TWO32, add64, create_rng_state, derive_seed, mul64, mul_u32,
+from dice_ratchet.env.error import KernelError
+from dice_ratchet.env.rng import (TWO32, add64, create_rng_state, derive_seed, mul64, mul_u32,
                               next_u32, randint, shuffle, splitmix64, u32, xmur3)
-from gamer_rsi.env.digest import stable_stringify
+from dice_ratchet.env.digest import stable_stringify
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 

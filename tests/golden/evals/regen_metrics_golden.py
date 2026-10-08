@@ -18,8 +18,8 @@ _REPO = Path(__file__).resolve().parents[3]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from gamer_rsi.evals.harness import load_episode_results  # noqa: E402
-from gamer_rsi.evals.metrics import aggregate  # noqa: E402
+from dice_ratchet.evals.harness import load_episode_results  # noqa: E402
+from dice_ratchet.evals.metrics import aggregate  # noqa: E402
 
 FIXTURES = _REPO / "tests" / "fixtures" / "evals"
 GOLDEN = _REPO / "tests" / "golden" / "evals" / "split_metrics.json"

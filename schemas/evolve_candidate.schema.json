@@ -1,5 +1,5 @@
 {
-  "$id": "https://gamersi.local/schemas/evolve_candidate.schema.json",
+  "$id": "https://diceratchet.local/schemas/evolve_candidate.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "description": "MOD-07 Candidate（PRD §6.1）。落盘于 runs/<run_id>/generations/gen-{NNN}/candidates/{candidate_id}.json 的 candidate 段。",

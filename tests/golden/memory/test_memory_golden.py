@@ -14,7 +14,7 @@ import pytest
 from memory_case import (CONFIG_DIR, OBS, RETRIEVE_GOLDEN, SHA256_GOLDEN, build,
                          golden_view)  # noqa: E402
 
-from gamer_rsi.memory import MemoryStore
+from dice_ratchet.memory import MemoryStore
 
 
 @pytest.fixture

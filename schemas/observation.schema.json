@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gamersi.local/schemas/observation.schema.json",
+  "$id": "https://diceratchet.local/schemas/observation.schema.json",
   "title": "Observation",
-  "description": "MOD-02 agent 侧观测 obs-agent-1.0.0（Spec §4.2）。字段集合由 gamer_rsi/sandbox/projection.py::OBSERVATION_SCHEMA 唯一决定；本文件是它的机器可读形式，二者一致性由 tests/unit/sandbox/test_sandbox_projection.py 的契约测试守住（G5）。",
+  "description": "MOD-02 agent 侧观测 obs-agent-1.0.0（Spec §4.2）。字段集合由 dice_ratchet/sandbox/projection.py::OBSERVATION_SCHEMA 唯一决定；本文件是它的机器可读形式，二者一致性由 tests/unit/sandbox/test_sandbox_projection.py 的契约测试守住（G5）。",
   "type": "object",
   "additionalProperties": false,
   "required": [

@@ -10,10 +10,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from gamer_rsi.infra.config import MemoryConfig
-from gamer_rsi.memory import (MemoryEntry, MemoryStore, Provenance, ReflectionEntry,
+from dice_ratchet.infra.config import MemoryConfig
+from dice_ratchet.memory import (MemoryEntry, MemoryStore, Provenance, ReflectionEntry,
                               RetrieveResult)
-from gamer_rsi.memory.snapshot import entries_sha256, read_snapshot, snapshot_path
+from dice_ratchet.memory.snapshot import entries_sha256, read_snapshot, snapshot_path
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]

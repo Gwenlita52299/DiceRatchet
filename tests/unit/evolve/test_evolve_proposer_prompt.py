@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import pytest
 
-from gamer_rsi.evolve import proposer as P
-from gamer_rsi.evolve.errors import HoldoutLeakError, ProposeFailedError
-from gamer_rsi.evolve.schemas import EvidenceBundle, HarnessSnapshot
-from gamer_rsi.infra.errors import E
+from dice_ratchet.evolve import proposer as P
+from dice_ratchet.evolve.errors import HoldoutLeakError, ProposeFailedError
+from dice_ratchet.evolve.schemas import EvidenceBundle, HarnessSnapshot
+from dice_ratchet.infra.errors import E
 
 from evolve_support import (StubLLM, make_candidate, make_config, prompt_diff,
                             proposal_payload, tool_diff)
@@ -233,7 +233,7 @@ def test_attempt_seed_is_deterministic_and_changes():
 
 
 def test_propose_seed_derivation_is_stable():
-    from gamer_rsi.evolve.generation import propose_seed
+    from dice_ratchet.evolve.generation import propose_seed
 
     a = propose_seed("run-1", 3)
     b = propose_seed("run-1", 3)

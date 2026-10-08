@@ -10,12 +10,12 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra import events
-from gamer_rsi.infra.errors import (EXIT_CONFIG, EXIT_DOMAIN, EXIT_INTERRUPT,
+from dice_ratchet.infra import events
+from dice_ratchet.infra.errors import (EXIT_CONFIG, EXIT_DOMAIN, EXIT_INTERRUPT,
                                     EXIT_IO, EXIT_MODEL, EXIT_OK, EXIT_SANDBOX,
                                     E, InfraError, error_code_of)
-from gamer_rsi.infra.io import read_jsonl, write_json_atomic
-from gamer_rsi.infra.process import (bootstrap_process, process_fingerprint,
+from dice_ratchet.infra.io import read_jsonl, write_json_atomic
+from dice_ratchet.infra.process import (bootstrap_process, process_fingerprint,
                                      process_snapshot)
 
 REPO = Path(__file__).resolve().parents[3]
@@ -64,7 +64,7 @@ def test_infra_error_defaults_message_from_registry():
 
 
 def ERROR_MESSAGE_IF_AVAILABLE() -> str:
-    from gamer_rsi.infra.errors import ERROR_MESSAGE
+    from dice_ratchet.infra.errors import ERROR_MESSAGE
     return ERROR_MESSAGE[E.E_IO_GIT_DIRTY]
 
 
@@ -85,7 +85,7 @@ def test_spec_named_codes_present():
 # ---- FR-09-17 进程确定性环境 -----------------------------------------------------------------
 
 def test_bootstrap_forces_env(monkeypatch):
-    monkeypatch.delenv("GAMERSI_REEXECED", raising=False)
+    monkeypatch.delenv("DICERATCHET_REEXECED", raising=False)
     monkeypatch.setenv("PYTHONHASHSEED", "0") # 已设置 → 不触发 re-exec
     snap = bootstrap_process(reexec=False)
     assert os.environ["PYTHONHASHSEED"] == "0"
@@ -109,10 +109,10 @@ def test_bootstrap_reexec_in_subprocess(tmp_path):
     script.write_text(
         "import os, sys\n"
         "sys.path.insert(0, %r)\n"
-        "from gamer_rsi.infra.process import bootstrap_process\n"
-        "bootstrap_process(module='gamer_rsi')\n"
+        "from dice_ratchet.infra.process import bootstrap_process\n"
+        "bootstrap_process(module='dice_ratchet')\n"
         "print('HASHSEED=' + os.environ['PYTHONHASHSEED'])\n"
-        "print('REEXECED=' + os.environ.get('GAMERSI_REEXECED', '0'))\n"
+        "print('REEXECED=' + os.environ.get('DICERATCHET_REEXECED', '0'))\n"
         % (str(REPO),), encoding="utf-8")
     env = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""),
            "PYTHONHASHSEED": ""} # 未设置
@@ -131,7 +131,7 @@ def test_derive_seed_stable_across_hashseed(tmp_path):
     script.write_text(
         "import sys\n"
         "sys.path.insert(0, %r)\n"
-        "from gamer_rsi.infra.config import derive_seed\n"
+        "from dice_ratchet.infra.config import derive_seed\n"
         "print(derive_seed('a', 1, 2))\n" % (str(REPO),), encoding="utf-8")
     values = set()
     for seed in ("0", "1", "42", "random"):
@@ -165,11 +165,11 @@ def test_bootstrap_emits_no_event(monkeypatch):
     """回归（2026-10-03）：bootstrap 在配置加载与 events.bind 之前执行，
     不能发 ``infra.run_start``——否则 dev 模式下缺 ``config_hash`` 必填字段，
     任何 CLI 命令都会以退出码 1 失败（曾用 ``guards check`` 复现）。"""
-    from gamer_rsi.infra import events as ev
+    from dice_ratchet.infra import events as ev
 
     emitted: list[str] = []
     monkeypatch.setattr(ev, "emit", lambda name, **f: emitted.append(name))
-    monkeypatch.setenv("GAMERSI_DEV", "1")
+    monkeypatch.setenv("DICERATCHET_DEV", "1")
     ev.set_dev_mode(True)
     try:
         bootstrap_process(reexec=False)
@@ -180,7 +180,7 @@ def test_bootstrap_emits_no_event(monkeypatch):
 
 def test_process_snapshot_before_and_after_bootstrap(monkeypatch):
     """``process_snapshot()`` 无论 bootstrap 是否跑过都能给 run_start 提供 env。"""
-    import gamer_rsi.infra.process as P
+    import dice_ratchet.infra.process as P
 
     monkeypatch.setattr(P, "_SNAPSHOT", None)
     fresh = P.process_snapshot()

@@ -1,6 +1,6 @@
 """``src/game/scripts/bots.js`` 的 ``greedy_counter`` 移植（MOD-01 成功度量③）。
 
-这是**测试基础设施**，不属于 ``gamer_rsi/env``（env 只逐文件镜像 JS kernel，
+这是**测试基础设施**，不属于 ``dice_ratchet/env``（env 只逐文件镜像 JS kernel，
 FR-01-1）；bot 策略在 JS 侧位于 ``scripts/bots.js``。因为内核已由 golden/差分对拍
 证明逐位等价，同一策略 + 同一 seed 的 Python 结局必须与 JS 逐局相同。
 """
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Sequence
 
-from gamer_rsi.env import GameEngine
+from dice_ratchet.env import GameEngine
 
 __all__ = ["run_game", "choose_action", "bot_rng"]
 

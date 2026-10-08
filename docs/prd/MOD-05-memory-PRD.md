@@ -1,6 +1,6 @@
 # MOD-05 memory 技术 PRD
 
-> 版本：v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：草案（待复核） · 所属里程碑：M2（MOD-05/06/07 初版） · 上游 Spec：[../模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md)（唯一事实来源，冲突以 Spec 为准） · 作者：MOD-05 技术文档 author
+> 版本：v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：草案（待复核） · 所属里程碑：M2（MOD-05/06/07 初版） · 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突以 Spec 为准） · 作者：MOD-05 技术文档 author
 
 ## 1. 背景与目标
 MOD-05 是 L1 层的**策略记忆与反思库**：把 MOD-06 局末产出的反思文本转成可检索、可度量、可淘汰、可回滚的结构化记忆，供 MOD-04 组装 prompt 时按当前 `Observation` 取用。它是「反思注入」演化对象（项目计划 §5 改进对象 a/c）的落地载体，也是 MOD-07 可回滚的演化对象之一（Spec §3 MOD-05）。目标：① 写入→去重→冲突裁决→检索→淘汰→快照/回滚 全链路**确定性可复现**；② 效用证据只用**环境原生胜负**（Spec INV-7），避免自证式膨胀（调研纪要 §4.1）；③ 硬性落实 **INV-5**：heldout/test 的 seed 与相关信息**永不进入记忆**，四拦截点可审计。非目标见 §2.2——本模块只做存储、检索与生命周期，不生成反思文本，也不判定记忆价值。
@@ -57,12 +57,12 @@ MOD-05 是 L1 层的**策略记忆与反思库**：把 MOD-06 局末产出的反
 ## 6. 接口契约（真实 Python 签名 + JSON Schema）
 ### 6.1 模块布局（对齐 Spec §5；`snapshot.py` 为新增）
 ```python
-# gamer_rsi/memory/schemas.py 类型 + JSON Schema + round-trip；store.py MemoryStore：写入/去重/冲突/淘汰/快照/回滚
-# gamer_rsi/memory/retriever.py retrieve() 打分与预算裁剪；snapshot.py memory_v{N}.jsonl 读写、sha256、回滚  ← 已回填 Spec §5（B-35）
+# dice_ratchet/memory/schemas.py 类型 + JSON Schema + round-trip；store.py MemoryStore：写入/去重/冲突/淘汰/快照/回滚
+# dice_ratchet/memory/retriever.py retrieve() 打分与预算裁剪；snapshot.py memory_v{N}.jsonl 读写、sha256、回滚  ← 已回填 Spec §5（B-35）
 ```
 ### 6.2 数据类与函数签名
 ```python
-# gamer_rsi/memory/schemas.py
+# dice_ratchet/memory/schemas.py
 MEMORY_SCHEMA_VERSION = "1.0"
 @dataclass(frozen=True)
 class SituationKey:                       # 受控取值，用于硬过滤与情境加成
@@ -91,7 +91,7 @@ class ReflectionEntry:                    # 文本由 MOD-06 产出，本模块�
 @dataclass(frozen=True)
 class Provenance:                         # 写入准入凭证：唯一的 seed 入口，且只允许 train
     run_id: str; episode_id: str; split: Literal["train"]; seed: int; generation: int; harness_version: int
-# gamer_rsi/memory/store.py
+# dice_ratchet/memory/store.py
 class MemoryStore:
     def __init__(self, run_dir: Path, cfg: MemoryConfig) -> None: ...        # 不注入墙钟；时间只来自调用方传入的 tick
     def add_reflection(self, reflection: ReflectionEntry, *, provenance: Provenance) -> AddResult: ...
@@ -104,7 +104,7 @@ class MemoryStore:
     def rollback(self, target_version: int, *, dry_run: bool = False) -> RollbackReport: ...
     def stats(self) -> StoreStats: ...
     def verify(self, *, full: bool = False) -> VerifyReport: ...
-# gamer_rsi/memory/retriever.py（纯函数；本模块不接收 seed 与 FullState）
+# dice_ratchet/memory/retriever.py（纯函数；本模块不接收 seed 与 FullState）
 def situation_key(obs: ObservationDict) -> tuple[str, SituationKey, tuple[str, ...]]: ...
 def extract_candidates(reflection: ReflectionEntry, cfg: MemoryConfig) -> list[MemoryCandidate]: ...
 def similarity(a: MemoryCandidate, b: MemoryCandidate) -> float: ...
@@ -180,9 +180,9 @@ runs/<run_id>/metrics/memory.jsonl                                    # §13 埋
 
 ### 7.4 CLI（走 MOD-09 CLI 注册；已回填 Spec §4.6，B-08）
 ```bash
-python -m gamer_rsi memory stats|snapshot|rollback|verify|retrieve --run-id <run_id> [--reason gen-003] [--to-version 4] [--dry-run] [--full] [--obs <obs.json>] [--top-k 8] [--token-budget 900]
-# 例：python -m gamer_rsi memory snapshot --run-id <run_id> --reason gen-003
-# 例：python -m gamer_rsi memory rollback --run-id <run_id> --to-version 4 --dry-run
+python -m dice_ratchet memory stats|snapshot|rollback|verify|retrieve --run-id <run_id> [--reason gen-003] [--to-version 4] [--dry-run] [--full] [--obs <obs.json>] [--top-k 8] [--token-budget 900]
+# 例：python -m dice_ratchet memory snapshot --run-id <run_id> --reason gen-003
+# 例：python -m dice_ratchet memory rollback --run-id <run_id> --to-version 4 --dry-run
 ```
 `rollback` 打印 `memory_version: 5 -> 6 (restored from v4, harness_version=6)`；目标缺失退出码 2（`E_IO_SNAPSHOT_MISSING`）。
 
@@ -228,7 +228,7 @@ rollback(target, dry_run): 文件不存在 → E_IO_SNAPSHOT_MISSING（退出码
 S4 时序：MOD-07 判负 → 恢复 `harness/version.json` 到 v6 → `memory.rollback(同代快照)` → MOD-07 重跑 heldout 确认 → 报告记录 `(generation, harness_version=6, memory_version=6)`。
 
 ## 9. 配置项
-`configs/default.yaml` 的 `memory:` 段；优先级（Spec §5）：CLI > 环境变量 > 默认值，嵌套键用 `__`（如 `GAMERSI_MEMORY_RETRIEVE__TOP_K`），已回填 Spec §5（B-30）。`memory.retrieve.*` 属于 `harness/config.json` 的白名单键，可被演化（B-26）。
+`configs/default.yaml` 的 `memory:` 段；优先级（Spec §5）：CLI > 环境变量 > 默认值，嵌套键用 `__`（如 `DICERATCHET_MEMORY_RETRIEVE__TOP_K`），已回填 Spec §5（B-30）。`memory.retrieve.*` 属于 `harness/config.json` 的白名单键，可被演化（B-26）。
 
 | 键 | 类型 | 默认 | 含义 |
 |---|---|---|---|
@@ -276,8 +276,8 @@ S4 时序：MOD-07 判负 → 恢复 `harness/version.json` 到 v6 → `memory.r
 对齐 Spec §9 质量门与里程碑 M2：
 - **G1 单测**：`tests/unit/memory/` 全绿；`schemas/retriever/dedup/utility` 等纯函数**行覆盖 ≥80%**，`store.py` 分支覆盖 ≥70%。
 - **G2 Golden**：`retrieve_seed1042_g0.json` 与 `memory_v0_sha256.txt` 入库；任何改变检索输出的改动必须显式更新 golden 并在 PR 说明。
-- **G3 确定性**：同 run/同 seed/同 `tick` 两次 `retrieve()` 逐字节相同，两次重跑得到的记忆库 `content_sha256` 相同；`gamer_rsi/memory/` 中无 `random`/墙钟随机（MOD-09 AST 守卫通过）。
-- **G4 泄漏审计**：自测 run 上 `python -m gamer_rsi audit leak --run-id <run_id>` **0 告警**；蜜罐注入**必须**产生 ≥1 告警（GWT-05-11）。
+- **G3 确定性**：同 run/同 seed/同 `tick` 两次 `retrieve()` 逐字节相同，两次重跑得到的记忆库 `content_sha256` 相同；`dice_ratchet/memory/` 中无 `random`/墙钟随机（MOD-09 AST 守卫通过）。
+- **G4 泄漏审计**：自测 run 上 `python -m dice_ratchet audit leak --run-id <run_id>` **0 告警**；蜜罐注入**必须**产生 ≥1 告警（GWT-05-11）。
 - **G5/G6 Schema 与命令**：两个 entry 有 JSON Schema + round-trip 测试，跨模块 `RetrieveResult`/`AddResult` 有 schema；§7.4 五条 CLI 在空 run 上可直接复制执行成功。
 - **M2 交付**：闭环 ≥1 轮演化中「反思入库 → 记忆检索注入 → 快照 → 回滚演练」全链路跑通；`report.json` 引用 `(memory_version, harness_version)` 血缘；`memory rollback` 演练 ≥1 次并留事件。**明确不验收**：反思文本质量（MOD-08 指标 + MOD-07 取舍）、记忆是否提升胜率（MOD-08 消融）。
 

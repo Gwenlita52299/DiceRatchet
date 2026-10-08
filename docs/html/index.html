@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GameRSI 模块讲解 · 系列索引</title>
+<title>DiceRatchet 模块讲解 · 系列索引</title>
 <style>
 :root{--bg:#f5f6fa;--card:#fff;--ink:#1c2333;--muted:#64708a;--line:#e5e8f0;--code-bg:#101725}
 *{box-sizing:border-box}html{scroll-behavior:smooth}
@@ -39,8 +39,8 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
 
 <header class="hero">
   <div class="kid">GAME RSI · MODULE WALKTHROUGH</div>
-  <h1>GameRSI 模块讲解系列</h1>
-  <p>GameRSI 是一个「自我改进（RSI）游戏智能体」研究项目：agent 在一局卡牌游戏里做决策，每隔 K 局改写自己的 harness，再由环境 ground-truth 决定改动去留。整套系统被拆成 9 个有明确上下游纪律的模块（MOD-01 ～ MOD-09），每个模块一份技术 PRD，本系列把它们讲成新人能读的讲解页。</p>
+  <h1>DiceRatchet 模块讲解系列</h1>
+  <p>DiceRatchet 是一个「自我改进（RSI）游戏智能体」研究项目：agent 在一局卡牌游戏里做决策，每隔 K 局改写自己的 harness，再由环境 ground-truth 决定改动去留。整套系统被拆成 9 个有明确上下游纪律的模块（MOD-01 ～ MOD-09），每个模块一份技术 PRD，本系列把它们讲成新人能读的讲解页。</p>
   <div class="hero-stats">
     <span>9 个模块</span><span>4 个层级 L0–L3</span><span>每页 17 节：背景 / 范围 / FR / NFR / 接口契约 / 流程 / 配置 / 错误码 / 测试 / DoD</span>
   </div>
@@ -56,14 +56,14 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
     <a class="mod" style="--c:#4f46e5" href="MOD-01-env-rules.html">
       <div class="mid">MOD-01 · M0</div>
       <h3>环境规则内核</h3>
-      <div class="en">env-rules · gamer_rsi/env/</div>
+      <div class="en">env-rules · dice_ratchet/env/</div>
       <p>GAME 内核的纯 Python 等价移植。不定义任何游戏规则——规则、数值、配表全部引用 GAME；唯一目标是给定同一配表、同一 config、同一动作序列，与 JS 内核逐字节相等。</p>
       <div class="meta"><span>逐位等价</span><span>golden 对拍</span><span>确定性</span></div>
     </a>
     <a class="mod" style="--c:#0891b2" href="MOD-02-env-sandbox.html">
       <div class="mid">MOD-02 · M0</div>
       <h3>环境沙箱</h3>
-      <div class="en">env-sandbox · gamer_rsi/sandbox/</div>
+      <div class="en">env-sandbox · dice_ratchet/sandbox/</div>
       <p>L0 与 L1 之间唯一合法数据通道。三条独立防线：投影裁剪防泄漏、代码/进程隔离防越权、审计与蜜罐防未被发现的泄漏——「agent 只能看到它该看到的」。</p>
       <div class="meta"><span>投影 schema 登记</span><span>受限执行器</span><span>蜜罐 canary</span></div>
     </a>
@@ -76,21 +76,21 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
     <a class="mod" style="--c:#7c3aed" href="MOD-03-inference.html">
       <div class="mid">MOD-03 · M1</div>
       <h3>推理层</h3>
-      <div class="en">inference · gamer_rsi/inference/</div>
+      <div class="en">inference · dice_ratchet/inference/</div>
       <p>L1 层唯一的「模型出口」：把 Mac M5 24GB 全程离线的本地推理收敛为可测、可复现、可降级的接口，屏蔽 MLX / llama.cpp 差异，收口 JSON 语法错误与 OOM。</p>
       <div class="meta"><span>generate_json 三级降级</span><span>同 seed 逐字节一致</span><span>E_LLM_OOM 可捕获</span></div>
     </a>
     <a class="mod" style="--c:#2563eb" href="MOD-04-policy.html">
       <div class="mid">MOD-04 · M1</div>
       <h3>策略层</h3>
-      <div class="en">policy · gamer_rsi/agent/</div>
+      <div class="en">policy · dice_ratchet/agent/</div>
       <p>把 Observation 变成 prompt、把 LLM 原始文本变成 Action。模型再离谱也不污染环境与指标：三级校验、每步重试、连续非法判负，故障一律退化为可解释的启发式动作。</p>
       <div class="meta"><span>prompt_hash 可复现</span><span>illegal_rate ≤ 0.02（M3 判定）</span><span>启发式 fallback</span></div>
     </a>
     <a class="mod" style="--c:#d97706" href="MOD-05-memory.html">
       <div class="mid">MOD-05 · M2</div>
       <h3>记忆层</h3>
-      <div class="en">memory · gamer_rsi/memory/</div>
+      <div class="en">memory · dice_ratchet/memory/</div>
       <p>L1 层的策略记忆与反思库：把局末反思转成可检索、可度量、可淘汰、可回滚的结构化记忆，供组装 prompt 时按当前 Observation 取用；heldout seed 永不进入记忆。</p>
       <div class="meta"><span>BM25 + 效用打分</span><span>memory_v{N} 快照回滚</span><span>INV-5 四拦截点</span></div>
     </a>
@@ -103,14 +103,14 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
     <a class="mod" style="--c:#059669" href="MOD-06-loop.html">
       <div class="mid">MOD-06 · M2</div>
       <h3>训练循环</h3>
-      <div class="en">loop · gamer_rsi/loop/</div>
+      <div class="en">loop · dice_ratchet/loop/</div>
       <p>L2 的编排器：自己不产生策略、不训练模型，只让 play → evaluate → reflect → evolve 这条闭环在一局、K 局、一代三个时间尺度上正确、可复现、可中断、可恢复地跑起来。</p>
       <div class="meta"><span>局/周期双层调度</span><span>run 级续跑</span><span>反思降级不阻塞</span></div>
     </a>
     <a class="mod" style="--c:#e11d48" href="MOD-07-evolve.html">
       <div class="mid">MOD-07 · M2→M3</div>
       <h3>演化层</h3>
-      <div class="en">evolve · gamer_rsi/evolve/</div>
+      <div class="en">evolve · dice_ratchet/evolve/</div>
       <p>RSI 闭环中最危险的一段：让 agent 改写自己的 harness，并由环境 ground-truth 决定改动去留。设计重心不是「更聪明的改动」，而是在结构上掐死自我确认环路。</p>
       <div class="meta"><span>生成者/裁判上下文不重叠</span><span>verdict 防过拟合</span><span>版本门禁 + 回滚</span></div>
     </a>
@@ -123,21 +123,21 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
     <a class="mod" style="--c:#ea580c" href="MOD-08-evals.html">
       <div class="mid">MOD-08 · M1→M3</div>
       <h3>评估层</h3>
-      <div class="en">evals · gamer_rsi/evals/</div>
+      <div class="en">evals · dice_ratchet/evals/</div>
       <p>L3 测量层，只读轨迹与报告、不参与决策。唯一理由是让「自我改进是否真的发生」成为可复现、可审计、可证伪的数字：主指标只用环境原生胜负，heldout 严格隔离，熵曲线盯防坍缩。</p>
       <div class="meta"><span>win_rate 主指标</span><span>real_gain vs overfit_suspect</span><span>collapse_flag</span></div>
     </a>
     <a class="mod" style="--c:#0d9488" href="MOD-09-infra.html">
       <div class="mid">MOD-09 · M0–M3</div>
       <h3>基础设施</h3>
-      <div class="en">infra · gamer_rsi/infra/</div>
+      <div class="en">infra · dice_ratchet/infra/</div>
       <p>依赖矩阵里唯一不被任何人阻塞、却阻塞所有人的模块。M0 第一天就要有配置、日志、CLI 与确定性守卫——否则可复现性与 INV-6 从第一天就失效。</p>
       <div class="meta"><span>统一配置/日志</span><span>seed 派生守卫</span><span>Git 自动提交</span></div>
     </a>
   </div>
 </div>
 
-<footer>来源：docs/prd/MOD-01…09 技术 PRD · 上游事实来源：docs/模块拆分Spec-GameRSI.md · GameRSI 模块讲解系列 · 2026-10-04 · 同步 2026-10-06</footer>
+<footer>来源：docs/prd/MOD-01…09 技术 PRD · 上游事实来源：docs/模块拆分Spec-DiceRatchet.md · DiceRatchet 模块讲解系列 · 2026-10-04 · 同步 2026-10-06</footer>
 
 </div></main>
 </body>

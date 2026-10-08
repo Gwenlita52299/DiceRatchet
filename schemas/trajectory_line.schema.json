@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gamersi.local/schemas/trajectory_line.schema.json",
+  "$id": "https://diceratchet.local/schemas/trajectory_line.schema.json",
   "title": "TrajectoryLine",
   "description": "单步轨迹行（Spec v1.4 §4.5）。局末 episode_end 行走 $defs/EpisodeEnd 分支。",
   "type": "object",

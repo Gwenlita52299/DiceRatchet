@@ -1,6 +1,6 @@
 """T-06 INV-7 结构检查：主指标计算路径不得出现 shaped 分数字段标识符。
 
-用 **AST**（非正则/非子串）扫描 ``gamer_rsi/evals/metrics.py``：任何 ``Name`` /
+用 **AST**（非正则/非子串）扫描 ``dice_ratchet/evals/metrics.py``：任何 ``Name`` /
 ``Attribute`` / ``arg`` / ``keyword`` 标识符命中 ``reward`` / ``cum_reward`` 即失败。
 另守：``EpisodeResult`` 无对应字段；``metrics`` 不 import ``reward``。
 """
@@ -10,10 +10,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from gamer_rsi.evals.metrics import EpisodeResult
+from dice_ratchet.evals.metrics import EpisodeResult
 
 _REPO = Path(__file__).resolve().parents[3]
-_METRICS = _REPO / "gamer_rsi" / "evals" / "metrics.py"
+_METRICS = _REPO / "dice_ratchet" / "evals" / "metrics.py"
 _BANNED = {"reward", "cum_reward", "shaped_reward", "mean_cum_reward_debug"}
 
 

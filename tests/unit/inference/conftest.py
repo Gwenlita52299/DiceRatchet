@@ -9,10 +9,10 @@ from typing import Any, Callable, Sequence
 
 import pytest
 
-from gamer_rsi.infra.config import InferenceConfig
-from gamer_rsi.inference.backend import BackendManager, MockBackend
-from gamer_rsi.inference.records import InferenceCallRecord
-from gamer_rsi.inference.registry import ModelRegistry, build_registry
+from dice_ratchet.infra.config import InferenceConfig
+from dice_ratchet.inference.backend import BackendManager, MockBackend
+from dice_ratchet.inference.records import InferenceCallRecord
+from dice_ratchet.inference.registry import ModelRegistry, build_registry
 
 from support import GOOD, FakeClock, inference_config, registry_data
 

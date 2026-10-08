@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from gamer_rsi.env import TOGGLE_KEYS
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.sandbox.api import (ALL_ON_TOGGLES, EpisodeConfig, SandboxEnv, StepResult,
+from dice_ratchet.env import TOGGLE_KEYS
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.sandbox.api import (ALL_ON_TOGGLES, EpisodeConfig, SandboxEnv, StepResult,
                                    make_default_env)
-from gamer_rsi.sandbox.projection import obs_digest, validate_observation
+from dice_ratchet.sandbox.projection import obs_digest, validate_observation
 
 
 # ---- FR-02-7 门面：不暴露 FullState -----------------------------------------------

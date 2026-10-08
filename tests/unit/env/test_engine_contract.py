@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.env import GameEngine, digest, load_tables, map_error_code
-from gamer_rsi.env.engine import EnvError, native_result, observe
-from gamer_rsi.env.error import KernelError
+from dice_ratchet.env import GameEngine, digest, load_tables, map_error_code
+from dice_ratchet.env.engine import EnvError, native_result, observe
+from dice_ratchet.env.error import KernelError
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -165,7 +165,7 @@ def test_tables_are_read_only(tables):
 
 def test_types_cover_real_state_fields(engine):
     import typing
-    from gamer_rsi.env import types as env_types
+    from dice_ratchet.env import types as env_types
     hints = typing.get_type_hints(env_types.GameState)
     real = set(engine.create({"difficulty": "medium", "seed": 1}).keys())
     missing = real - set(hints)
@@ -174,7 +174,7 @@ def test_types_cover_real_state_fields(engine):
 
 def test_types_cover_real_obs_fields(engine, started):
     import typing
-    from gamer_rsi.env import types as env_types
+    from dice_ratchet.env import types as env_types
     hints = typing.get_type_hints(env_types.Observation)
     real = set(observe(started, "full", engine._tables).keys())
     missing = real - set(hints)

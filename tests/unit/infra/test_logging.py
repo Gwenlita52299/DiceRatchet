@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.infra.logging import (JsonlWriter, Redactor, validate_trajectory_line)
-from gamer_rsi.infra.io import (read_jsonl, schema_error_code, schema_key, validate,
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.infra.logging import (JsonlWriter, Redactor, validate_trajectory_line)
+from dice_ratchet.infra.io import (read_jsonl, schema_error_code, schema_key, validate,
                                 write_json_atomic)
 
 REPO = Path(__file__).resolve().parents[3]
@@ -72,7 +72,7 @@ def test_sigkill_preserves_all_but_last_line(tmp_path):
     path = tmp_path / "killed.jsonl"
     script = (
         "import json,sys,time\n"
-        "from gamer_rsi.infra.logging import JsonlWriter\n"
+        "from dice_ratchet.infra.logging import JsonlWriter\n"
         f"path = {str(path)!r}\n"
         "w = JsonlWriter(__import__('pathlib').Path(path))\n"
         "for i in range(50):\n"
@@ -391,7 +391,7 @@ def test_read_trajectory_helper(tmp_path):
     path = tmp_path / "ep.jsonl"
     with JsonlWriter(path) as w:
         w.write(good_line())
-    from gamer_rsi.infra.logging import read_trajectory
+    from dice_ratchet.infra.logging import read_trajectory
     rows, n_trunc = read_trajectory(path)
     assert len(rows) == 1
     assert n_trunc == 0
@@ -434,7 +434,7 @@ def test_rotation_missing_file_safe(tmp_path):
 
 def test_make_redacted_writer_emits_event_and_alert(tmp_path):
     """命中 > 0 → 写 infra.redaction_hit 事件 + 触发 MOD-02 告警回调（FR-09-9）。"""
-    from gamer_rsi.infra import events
+    from dice_ratchet.infra import events
 
     events.unbind()
     events.set_dev_mode(True)
@@ -464,7 +464,7 @@ def test_make_redacted_writer_emits_event_and_alert(tmp_path):
 @pytest.mark.parametrize("surface", ["episodes", "generations", "events", "train"])
 def test_make_redacted_writer_rejects_non_redacted_surfaces(tmp_path, surface):
     """B-19：轨迹/事件/generations 属审计侧，作用域在 API 层强制。"""
-    from gamer_rsi.infra import events
+    from dice_ratchet.infra import events
 
     with pytest.raises(InfraError) as exc:
         events.make_redacted_writer(tmp_path / f"{surface}.jsonl", Redactor(),
@@ -473,7 +473,7 @@ def test_make_redacted_writer_rejects_non_redacted_surfaces(tmp_path, surface):
 
 
 def test_redacted_surfaces_constant_matches_spec():
-    from gamer_rsi.infra.logging import REDACTED_SURFACES
+    from dice_ratchet.infra.logging import REDACTED_SURFACES
     assert REDACTED_SURFACES == ("prompts", "memory", "reflections")
 
 
@@ -486,7 +486,7 @@ def test_every_schema_has_a_registered_error_code():
     ``E_EVAL_SCHEMA``（MOD-08 的码）。本用例把漏登记变成红灯：新增 schema 文件时
     必须同时决定它归哪个模块（IO / ENV / EVAL）。
     """
-    from gamer_rsi.infra.io import _SCHEMA_ERROR_CODES
+    from dice_ratchet.infra.io import _SCHEMA_ERROR_CODES
 
     on_disk = {schema_key(p.name) for p in sorted((REPO / "schemas").glob("*.schema.json"))}
     assert on_disk, "schemas/ 下没有 schema 文件？"

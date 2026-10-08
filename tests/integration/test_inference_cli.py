@@ -1,6 +1,6 @@
 """G6 可复现命令（PRD §12 G6 / §11 集成）。
 
-``python -m gamer_rsi inference probe|bench|robustness`` 必须退出码 0 且报告落盘；
+``python -m dice_ratchet inference probe|bench|robustness`` 必须退出码 0 且报告落盘；
 错误路径必须给出退出码（3 模型不可用 / 2 配置错误 / 1 未达 M1 阈值）。
 """
 
@@ -13,13 +13,13 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi import app
-from gamer_rsi.infra import events
+from dice_ratchet import app
+from dice_ratchet.infra import events
 
 
 @pytest.fixture(autouse=True)
 def _isolated_run_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("GAMERSI_INFRA__RUNS_ROOT", str(tmp_path / "runs"))
+    monkeypatch.setenv("DICERATCHET_INFRA__RUNS_ROOT", str(tmp_path / "runs"))
     events.unbind()
     yield
     events.unbind()
@@ -86,7 +86,7 @@ def test_raw_prompt_is_not_dumped_by_default(tmp_path: Path):
 
 
 def test_debug_dump_raw_writes_under_run_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("GAMERSI_INFERENCE__DEBUG_DUMP_RAW", "true")
+    monkeypatch.setenv("DICERATCHET_INFERENCE__DEBUG_DUMP_RAW", "true")
     code, _, stderr = _run(["inference", "probe", "--model", "mock",
                             "--run-id", "it-raw", "--mode", "eval", "--seed", "7"])
     assert code == 0, stderr
@@ -129,7 +129,7 @@ def test_dry_run_does_not_touch_runs_dir(tmp_path: Path):
 
 
 def test_parser_exposes_g6_flags():
-    from gamer_rsi.infra.cli import build_parser
+    from dice_ratchet.infra.cli import build_parser
 
     for name in ("probe", "bench", "robustness"):
         args = build_parser().parse_args(["inference", name, "--model", "mock", "--n", "3",

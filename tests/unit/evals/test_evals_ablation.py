@@ -6,11 +6,11 @@ import json
 
 import pytest
 
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.evals.ablation import (ARM_MECHANISM, attribution, combine_attribution,
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.evals.ablation import (ARM_MECHANISM, attribution, combine_attribution,
                                       run_ablation)
-from gamer_rsi.evals.harness import ArmResult
-from gamer_rsi.evals.metrics import EpisodeResult, aggregate, holm_bonferroni
+from dice_ratchet.evals.harness import ArmResult
+from dice_ratchet.evals.metrics import EpisodeResult, aggregate, holm_bonferroni
 
 
 def _arm(name: str, wins: int, n: int = 40) -> ArmResult:
@@ -73,7 +73,7 @@ def test_holm_bonferroni_thresholds_and_step_down():
 # ---- run_ablation ------------------------------------------------------------------
 
 def test_run_ablation_default_evaluator_is_used(tmp_path, monkeypatch):
-    import gamer_rsi.evals.ablation as mod
+    import dice_ratchet.evals.ablation as mod
 
     calls: list[str] = []
 

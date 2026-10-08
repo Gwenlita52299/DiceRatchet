@@ -14,9 +14,9 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.evolve import gate as G
-from gamer_rsi.evolve.paths import GenPaths
-from gamer_rsi.infra.errors import E, InfraError
+from dice_ratchet.evolve import gate as G
+from dice_ratchet.evolve.paths import GenPaths
+from dice_ratchet.infra.errors import E, InfraError
 
 from evolve_support import make_candidate, make_config
 
@@ -172,7 +172,7 @@ def test_timeout_verdict_is_rollback(tmp_path):
 
 
 def test_raise_for_timeout_raises_gate_timeout(tmp_path):
-    from gamer_rsi.evolve.errors import GateTimeoutError
+    from dice_ratchet.evolve.errors import GateTimeoutError
 
     state = _await(tmp_path, make_config(hitl=True, gate_timeout_hours=1))
     future = datetime.now(tz=timezone.utc) + timedelta(hours=5)
@@ -182,7 +182,7 @@ def test_raise_for_timeout_raises_gate_timeout(tmp_path):
 
 
 def test_verdict_from_approved_gate():
-    from gamer_rsi.evolve.schemas import GateState
+    from dice_ratchet.evolve.schemas import GateState
 
     state = GateState(generation=2, status="approved", harness_version=0,
                       parent_version=0, expires_at="", resolved_by="human",
@@ -192,7 +192,7 @@ def test_verdict_from_approved_gate():
 
 
 def test_write_gate_validates_schema(tmp_path):
-    from gamer_rsi.evolve.schemas import GateState
+    from dice_ratchet.evolve.schemas import GateState
 
     bad = GateState(generation=0, status="pending", harness_version=0, parent_version=0,
                     expires_at="")

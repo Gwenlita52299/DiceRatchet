@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import copy
 
-from gamer_rsi.env import GameEngine
-from gamer_rsi.env import map as M
-from gamer_rsi.env import shop as S
-from gamer_rsi.env import forge as F
+from dice_ratchet.env import GameEngine
+from dice_ratchet.env import map as M
+from dice_ratchet.env import shop as S
+from dice_ratchet.env import forge as F
 
 _ILLEGAL_CASES = [
     ("syntax_kind", lambda s: {"kind": "nope"}),
@@ -230,8 +230,8 @@ def test_replay_matches_stepwise(engine):
     import json
     from pathlib import Path
 
-    from gamer_rsi.env import digest
-    from gamer_rsi.env.engine import observe, replay
+    from dice_ratchet.env import digest
+    from dice_ratchet.env.engine import observe, replay
 
     path = Path(__file__).resolve().parents[3] / "src/game/tests/golden/g5_hard_six_stage.jsonl"
     lines = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]

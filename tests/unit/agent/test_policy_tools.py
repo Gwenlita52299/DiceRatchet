@@ -9,10 +9,10 @@ import pytest
 
 from policy_support import FakeResponse, plan
 
-from gamer_rsi.agent.tools.registry import (RANK_ACTIONS_ARGS, ToolRegistry, harness_tool,
+from dice_ratchet.agent.tools.registry import (RANK_ACTIONS_ARGS, ToolRegistry, harness_tool,
                                             load_harness_tools, tool_hash, tool_signatures,
                                             tool_summary)
-from gamer_rsi.infra.errors import E
+from dice_ratchet.infra.errors import E
 
 GOOD = '''
 @harness_tool
@@ -235,9 +235,9 @@ def test_registry_close_is_idempotent(tmp_path):
 # ----------------------------------------------------------------------
 
 def test_policy_agent_uses_tool_reordering(make_env, tmp_path):
-    from gamer_rsi.agent import EpisodeContext, PolicyAgent
-    from gamer_rsi.agent.heuristic import heuristic_policy
-    from gamer_rsi.infra.config import PolicyConfig
+    from dice_ratchet.agent import EpisodeContext, PolicyAgent
+    from dice_ratchet.agent.heuristic import heuristic_policy
+    from dice_ratchet.infra.config import PolicyConfig
 
     root = make_harness(tmp_path / "h", {"good.py": GOOD})
     (root / "version.json").write_text(json.dumps({"version": 3}), encoding="utf-8")

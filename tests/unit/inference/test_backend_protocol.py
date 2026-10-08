@@ -12,10 +12,10 @@ from typing import Any, Sequence
 
 import pytest
 
-from gamer_rsi.inference.backend import (Backend, BackendHealth, GenerationResult,
+from dice_ratchet.inference.backend import (Backend, BackendHealth, GenerationResult,
                                          LocalBackend, Message, MockBackend, Usage,
                                          make_result, estimate_prompt_tokens)
-from gamer_rsi.inference.schema import DECISION_SCHEMA
+from dice_ratchet.inference.schema import DECISION_SCHEMA
 
 GOOD = '{"reasoning": "ok", "plan": [{"kind": "end_turn"}]}'
 
@@ -105,9 +105,9 @@ def test_protocol_rejects_incomplete_implementation():
 
 
 @pytest.mark.parametrize("module,name", [
-    ("gamer_rsi.inference.mlx_backend", "MLXBackend"),
-    ("gamer_rsi.inference.llama_backend", "LlamaCppBackend"),
-    ("gamer_rsi.inference.llama_backend", "LlamaServerBackend"),
+    ("dice_ratchet.inference.mlx_backend", "MLXBackend"),
+    ("dice_ratchet.inference.llama_backend", "LlamaCppBackend"),
+    ("dice_ratchet.inference.llama_backend", "LlamaServerBackend"),
 ])
 def test_real_backends_satisfy_contract_surface(module: str, name: str):
     """真实后端只需依赖缺失时不 ImportError 即可验契约面（懒加载设计）。"""

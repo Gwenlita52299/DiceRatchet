@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://gamersi.local/schemas/audit_report.schema.json",
+  "$id": "https://diceratchet.local/schemas/audit_report.schema.json",
   "title": "AuditLeakReport",
   "description": "MOD-02 `audit leak` 报告（runs/<run_id>/audit/leak-<scope>.json，0600）。字段定义见 MOD-02 PRD §6（FR-02-19）。",
   "type": "object",

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.infra.errors import E, InfraError
-from gamer_rsi.evals import seeds as S
+from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.evals import seeds as S
 
 _REPO = Path(__file__).resolve().parents[3]
 

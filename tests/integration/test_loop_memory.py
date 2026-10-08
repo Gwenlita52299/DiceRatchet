@@ -16,9 +16,9 @@ from pathlib import Path
 import pytest
 
 from fakes import FakeEnv, FakePolicy, ScriptedClient
-from gamer_rsi.infra.config import MemoryConfig
-from gamer_rsi.loop.generation import LoopOrchestrator
-from gamer_rsi.loop.state import Scoreboard, scoreboard_path
+from dice_ratchet.infra.config import MemoryConfig
+from dice_ratchet.loop.generation import LoopOrchestrator
+from dice_ratchet.loop.state import Scoreboard, scoreboard_path
 from loop_support import REPO_ROOT, build_paths, write_harness
 
 _TRAIN_SEED = 1042
@@ -28,8 +28,8 @@ _LESSON = "净化值只剩 3 时继续硬吃伤害，应先用手牌清场再进
 @pytest.fixture
 def memory_store(tmp_path):
     """真实 ``MemoryStore``：run 目录在 ``tmp_path``，seed 协议读仓库的 configs/。"""
-    pytest.importorskip("gamer_rsi.memory")
-    from gamer_rsi.memory import MemoryStore
+    pytest.importorskip("dice_ratchet.memory")
+    from dice_ratchet.memory import MemoryStore
 
     paths = build_paths(tmp_path, "r-loop-mem")
     return MemoryStore(paths.root, MemoryConfig(), config_dir=REPO_ROOT / "configs",
@@ -44,9 +44,9 @@ def _reflection_llm():
 def test_train_episode_writes_reflection_into_memory_store(tmp_path, memory_store):
     """训练局 → 反思 → MOD-05 落库 → 可检索（FR-06-3 + Spec §4.7）。"""
     store, paths = memory_store
-    from gamer_rsi.loop.runner import EpisodeRunner, RunContext
-    from gamer_rsi.loop.trajectory import TrajectoryWriter
-    from gamer_rsi.sandbox.api import EpisodeConfig
+    from dice_ratchet.loop.runner import EpisodeRunner, RunContext
+    from dice_ratchet.loop.trajectory import TrajectoryWriter
+    from dice_ratchet.sandbox.api import EpisodeConfig
 
     write_harness(tmp_path, version=0)
     cfg = _loop_cfg(reflect=True)
@@ -66,7 +66,7 @@ def test_train_episode_writes_reflection_into_memory_store(tmp_path, memory_stor
         f"反思没有落到记忆库：{lessons}")
 
     # ---- 下一局可以检索到它（闭环的最后一跳）------------------------------
-    from gamer_rsi.sandbox.api import make_default_env
+    from dice_ratchet.sandbox.api import make_default_env
 
     env = make_default_env(episode_config=EpisodeConfig(difficulty="easy", stage_count=3),
                            episode_id="probe")
@@ -132,7 +132,7 @@ def test_reflection_scan_blocks_heldout_seed_text(tmp_path, memory_store):
 # =====================================================================
 
 def _loop_cfg(*, reflect: bool):
-    from gamer_rsi.infra.config import LoopConfig
+    from dice_ratchet.infra.config import LoopConfig
 
     return LoopConfig(k=99, reflect_enabled=reflect, reflect_timeout_s=5.0,
                       reflect_context_window=3, heldout_n=4, smoke_n=2, n_candidates=1)
@@ -140,10 +140,10 @@ def _loop_cfg(*, reflect: bool):
 
 def _wire(paths, tmp_path: Path, cfg, store, *, client, memory_version: int = 0,
           memory_ids: list[str] | None = None, adopted: list[str] | None = None):
-    from gamer_rsi.loop.runner import EpisodeRunner, RunContext
-    from gamer_rsi.loop.state import init_state
-    from gamer_rsi.loop.trajectory import TrajectoryWriter
-    from gamer_rsi.sandbox.api import EpisodeConfig
+    from dice_ratchet.loop.runner import EpisodeRunner, RunContext
+    from dice_ratchet.loop.state import init_state
+    from dice_ratchet.loop.trajectory import TrajectoryWriter
+    from dice_ratchet.sandbox.api import EpisodeConfig
 
     write_harness(tmp_path, version=0)
     state = init_state("r-loop-mem", k=int(cfg.k), seeds=[_TRAIN_SEED],

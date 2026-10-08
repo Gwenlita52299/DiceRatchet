@@ -1,12 +1,12 @@
 # MOD-01 env-rules 技术 PRD
 
 > 版本：v1.0（2026-09-30 17:21 按 Spec v1.3 整体重写，见 §17）· 状态：待评审 · 所属里程碑：M0
-> 上游：[模块拆分Spec-GameRSI.md](../模块拆分Spec-GameRSI.md) v1.3（冲突以 Spec 为准）· 规则事实来源：[GAME-00](GAME-00-webgame-PRD.md) / [GAME-01](GAME-01-kernel-contract.md) / [GAME-02](GAME-02-content-tables.md) v1.2 与 `src/game/kernel`
+> 上游：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md) v1.3（冲突以 Spec 为准）· 规则事实来源：[GAME-00](GAME-00-webgame-PRD.md) / [GAME-01](GAME-01-kernel-contract.md) / [GAME-02](GAME-02-content-tables.md) v1.2 与 `src/game/kernel`
 > 定位：**GAME 内核的纯 Python 等价移植**。本模块不定义任何游戏规则；规则、数值、配表都引用 GAME。v0.1 中基于旧《Dicey Dungeons》模型的内容（floors/HP/block/levelup/`configs/enemies.yaml`/shaped reward 表）已全部废弃。
 
 ## 1. 背景与目标
 
-GameRSI 的智能体侧（MOD-02～08）全部用 Python，而游戏本体已经用 JS 实现并验收（`src/game`，零依赖）。训练若经 HTTP 调用 JS 会引入进程边界和延迟，也会让确定性审计依赖网络栈；因此需要一份**逐位等价**的 Python 内核，供 `SandboxEnv` 在进程内调用。
+DiceRatchet 的智能体侧（MOD-02～08）全部用 Python，而游戏本体已经用 JS 实现并验收（`src/game`，零依赖）。训练若经 HTTP 调用 JS 会引入进程边界和延迟，也会让确定性审计依赖网络栈；因此需要一份**逐位等价**的 Python 内核，供 `SandboxEnv` 在进程内调用。
 
 **唯一目标**：给定同一份配表、同一个 config 和同一个动作序列，Python 内核每一步的 `obsDigest`、`rngDigest`、`stateDigest` 都与 JS 内核**逐字节相等**。
 
@@ -45,7 +45,7 @@ GameRSI 的智能体侧（MOD-02～08）全部用 Python，而游戏本体已经
 | MOD-02 | `GameEngine.create/reduce/legal_actions/observe/digest` | 构造 `SandboxEnv`；agent 只能经 MOD-02 触达 |
 | MOD-04 | `GameEngine.play_hints`（经 MOD-02 `SandboxEnv.hints()` 转发） | 启发式 fallback |
 | MOD-08 | 经 MOD-02 调用 | 基线、评估 |
-| 开发者 / CI | `python -m gamer_rsi env selftest`、`pytest tests/golden` | 对拍 |
+| 开发者 / CI | `python -m dice_ratchet env selftest`、`pytest tests/golden` | 对拍 |
 
 ## 4. 功能需求（FR-01-x）
 
@@ -92,12 +92,12 @@ GameRSI 的智能体侧（MOD-02～08）全部用 Python，而游戏本体已经
   - `observe` p95 ≤ 1 ms。
   - 相对单个 LLM 决策（约 3 s）可以忽略不计。
 - **NFR-01-3 零依赖**：只用标准库。
-- **NFR-01-4 隔离**：不 import `gamer_rsi` 的其他子包（除 `infra.errors`），由 MOD-09 guards 强制。
+- **NFR-01-4 隔离**：不 import `dice_ratchet` 的其他子包（除 `infra.errors`），由 MOD-09 guards 强制。
 
 ## 6. 接口契约
 
 ```python
-# gamer_rsi/env/engine.py
+# dice_ratchet/env/engine.py
 KERNEL_VERSION: Final = "kernel-1.0.0"
 OBS_SCHEMA: Final = "obs-1.0.0"
 ACTION_KINDS: Final[tuple[str, ...]]      # 同 JS ACTION_KINDS（17 个，含 abandon_run）
@@ -119,9 +119,9 @@ def allowed_stage_counts(tables: Tables) -> list[int]: ...                    # 
 def digest(value: Any) -> str: ...                                            # "sha256:<64hex>"
 def state_hash(state: GameState) -> str: ...                                  # = digest(state)
 
-# gamer_rsi/env/loader.py
+# dice_ratchet/env/loader.py
 def load_tables(content_dir: Path = GAME_CONTENT_DIR) -> Tables: ...
-GAME_CONTENT_DIR: Final = Path("src/game/content")                            # 可由 GAMERSI_ENV__CONTENT_DIR 覆盖
+GAME_CONTENT_DIR: Final = Path("src/game/content")                            # 可由 DICERATCHET_ENV__CONTENT_DIR 覆盖
 
 GameState = dict[str, Any]         # 结构同 GAME-01 §2 GameState（camelCase 键）
 Tables = Mapping[str, Any]         # 只读；load_tables 返回深度冻结视图
@@ -131,7 +131,7 @@ Tables = Mapping[str, Any]         # 只读；load_tables 返回深度冻结视�
 
 ## 7. 数据模型与存储
 
-- **不自建数据模型**：`GameState`、`Observation`、`Action` 的结构全部由 GAME-01 §2/§5 与 GAME-00 §9.4 定义。Python 侧用 `TypedDict` 做类型提示（`gamer_rsi/env/types.py`），由 GAME-01 生成。
+- **不自建数据模型**：`GameState`、`Observation`、`Action` 的结构全部由 GAME-01 §2/§5 与 GAME-00 §9.4 定义。Python 侧用 `TypedDict` 做类型提示（`dice_ratchet/env/types.py`），由 GAME-01 生成。
 - **配表**：只读 `src/game/content/*.json`，不复制、不转换。`content_hash = digest(tables)` 记入 `config.json`（MOD-09）。
 - **持久化**：本模块不写盘；续跑所需的状态快照是 `GameState` dict 本身（可 JSON 序列化），由 MOD-06 保存。
 
@@ -197,12 +197,12 @@ pytest tests/golden/test_random_walk.py
 
 | 门 | MOD-01 的 DoD |
 |---|---|
-| G1 | `gamer_rsi/env/` 行覆盖 ≥ 90%（JS 侧为 95.8%） |
+| G1 | `dice_ratchet/env/` 行覆盖 ≥ 90%（JS 侧为 95.8%） |
 | G2 | T-04 全部通过；golden 只读，禁止 Python 侧生成替代快照 |
 | G3 | T-08 通过 |
 | G4 | 本模块不产出 agent 可见内容；MOD-02 投影测试覆盖 `seed/rng` 键 |
 | G5 | `types.py` 与 GAME-01 §2 字段一致性由脚本检查 |
-| G6 | `python -m gamer_rsi env selftest --seed 1` 与 `pytest tests/golden -q` 可直接复制执行 |
+| G6 | `python -m dice_ratchet env selftest --seed 1` 与 `pytest tests/golden -q` 可直接复制执行 |
 | M0 | T-04/T-05/T-09 通过，并与 MOD-02 `SandboxEnv` 联调完成一局默认局 |
 
 ## 13. 指标与埋点
@@ -235,8 +235,8 @@ JS 内核约 2,780 行，逐位移植并对拍：
 | 5 | golden 对拍、差分对拍脚本、性能调优 | 1.5 |
 | | **合计** | **7.0** |
 
-**实际交付（M0）**：2026-10-03 提交 `98ded4a`（`gamer_rsi/env/` 全量移植 + golden 对拍）。
-本项目**未单独记工**，「实际人日」无法从仓库证据还原；按提交时间窗折算 ≤ 1 人日，与估算 7.0 人日的偏差 ≥ 85%（排期 §7 的 20% 阈值被触发，已在 [排期 §8](../项目排期-GameRSI.md) 记录）。
+**实际交付（M0）**：2026-10-03 提交 `98ded4a`（`dice_ratchet/env/` 全量移植 + golden 对拍）。
+本项目**未单独记工**，「实际人日」无法从仓库证据还原；按提交时间窗折算 ≤ 1 人日，与估算 7.0 人日的偏差 ≥ 85%（排期 §7 的 20% 阈值被触发，已在 [排期 §8](../项目排期-DiceRatchet.md) 记录）。
 T-01～T-10 全部通过（T-08 于 2026-10-03 由验收补齐为 pytest 用例），证据见 [M0 验收报告](../reviews/2026-10-03-M0验收报告.md)。M1 起按排期 §7 逐任务记录实际人日。
 
 ## 16. 开放问题

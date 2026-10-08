@@ -16,10 +16,10 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.evolve import proposer as P
-from gamer_rsi.evolve.errors import HoldoutLeakError
-from gamer_rsi.evolve.schemas import EvidenceBundle, HarnessSnapshot
-from gamer_rsi.infra.errors import E
+from dice_ratchet.evolve import proposer as P
+from dice_ratchet.evolve.errors import HoldoutLeakError
+from dice_ratchet.evolve.schemas import EvidenceBundle, HarnessSnapshot
+from dice_ratchet.infra.errors import E
 
 from evolve_support import make_config
 

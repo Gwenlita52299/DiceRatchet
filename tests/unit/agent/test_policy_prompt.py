@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.agent import EpisodeContext, PolicyAgent
-from gamer_rsi.agent.prompts.assembler import (DEFAULT_TEMPLATE_PATH, FIXED_TEMPLATE_PATH,
+from dice_ratchet.agent import EpisodeContext, PolicyAgent
+from dice_ratchet.agent.prompts.assembler import (DEFAULT_TEMPLATE_PATH, FIXED_TEMPLATE_PATH,
                                                PromptContext, PromptTemplateError,
                                                ReflectionItem, check_placeholders,
                                                load_template)
-from gamer_rsi.agent.prompts.assembler import MemoryItem, assemble_prompt, sha256_of
-from gamer_rsi.infra.errors import E, InfraError
+from dice_ratchet.agent.prompts.assembler import MemoryItem, assemble_prompt, sha256_of
+from dice_ratchet.infra.errors import E, InfraError
 
 
 def _ctx(**overrides):
@@ -185,7 +185,7 @@ def test_fr_04_5_bundle_records_source_ids():
 
 
 def test_baseline_fixed_prompt_uses_frozen_template(harness_dir):
-    from gamer_rsi.infra.config import PolicyConfig
+    from dice_ratchet.infra.config import PolicyConfig
 
     agent = PolicyAgent(PolicyConfig(mode="baseline_fixed_prompt"), harness_dir=harness_dir)
     spec = agent.template_spec
@@ -194,7 +194,7 @@ def test_baseline_fixed_prompt_uses_frozen_template(harness_dir):
 
 
 def test_harness_template_assembles_with_legal_actions(harness_dir):
-    from gamer_rsi.infra.config import PolicyConfig
+    from dice_ratchet.infra.config import PolicyConfig
 
     agent = PolicyAgent(PolicyConfig(), harness_dir=harness_dir)
     spec = agent.template_spec
@@ -204,7 +204,7 @@ def test_harness_template_assembles_with_legal_actions(harness_dir):
 
 
 def test_agent_emits_template_error_code_on_fallback(tmp_path, cfg):
-    from gamer_rsi.infra.config import PolicyConfig
+    from dice_ratchet.infra.config import PolicyConfig
 
     bad = PolicyConfig(template_path=str(tmp_path / "missing.md"))
     agent = PolicyAgent(bad, harness_dir=tmp_path)

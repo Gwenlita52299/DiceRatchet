@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
-from gamer_rsi.memory import SituationKey, similarity
-from gamer_rsi.memory.store import _evidence_ok, _wilson_interval
+from dice_ratchet.memory import SituationKey, similarity
+from dice_ratchet.memory.store import _evidence_ok, _wilson_interval
 
 DO_LESSON = "净化值低时应该先放光盾，再考虑输出。"
 AVOID_LESSON = "不要让魔化骰进入攻击槽，否则会被反打。"
@@ -123,7 +123,7 @@ def test_auto_supersede_off_by_default_but_rule_recorded(store_factory, make_can
 
 def test_supersede_when_evidence_is_sufficient(mem_entry) -> None:
     """证据门槛：n_ref ≥ min_refs 且 Wilson 95% CI 不重叠 + 胜率差 ≥ 0.15。"""
-    from gamer_rsi.infra.config import MemoryConfig
+    from dice_ratchet.infra.config import MemoryConfig
 
     cfg = MemoryConfig()
     new = mem_entry(n_ref=8, n_adopted=8, n_win_adopted=8, n_not_adopted=0,

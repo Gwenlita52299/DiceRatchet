@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from gamer_rsi.env import GameEngine, load_tables
+from dice_ratchet.env import GameEngine, load_tables
 
 _GOLDEN = Path(__file__).resolve().parents[2] / "src/game/tests/golden"
 _BUDGET_US = 2000.0  # 2 ms

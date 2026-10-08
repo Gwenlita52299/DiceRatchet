@@ -1,0 +1,82 @@
+# DiceRatchet 决策 prompt（内置兜底模板）
+
+你是《DiceRatchet》骰子 roguelike 的决策 agent。**只输出一个 JSON 对象**，不要输出任何
+解释性文字、Markdown 围栏或多余字段。
+
+## 任务
+你在玩《DiceRatchet》——一款单机骰子构筑 Roguelike。目标：在有限生命（hearts）内打通
+`stageCount` 关，最终击败 Boss。
+
+规则要点（公开信息）：
+- 战斗为回合制。`phase=player_turn` 时，你用手骰（hand）打进骰槽（slots）结算效果；
+  打完自己想打的牌后必须显式 `end_turn`，否则本回合不会结束。
+- 骰子有学派（school）与克制箭头（arrow）：`up` 表示克制当前敌人，`down` 表示被克制。
+- 魔化骰（isCorrupt / corruptionValue>0）会污染结算，可用 `purify` 净化、
+  技能重掷，或直接 `discard_die` 弃掉。
+- 非战斗阶段（map/shop/event/treasure/forge/shrine/rest/relic_swap）每次只做一个选择。
+- 德性（virtue）归零或生命归零即失败；星屑（starShards）是商店货币。
+
+决策原则：优先保证生存（护盾/回复/净化），再追求输出；只提交「可选动作」列表里出现过的
+动作与 id；无法判断时选择 `end_turn`（战斗内）或列表中的第一个动作。
+
+
+## 运行环境
+- harness_version: 7
+- 可用工具:
+- rank_actions(obs, candidates, memory) -> list[dict]
+
+## 当前观测
+phase=player_turn stage=1/6 ch=1 turn=1 diff=hard decision=1
+player: hearts=2/2 virtue=24/24 ward=0 shards=0 school=neutral purify=0 abilities=warrior_rerollx1,warrior_focusx1,warrior_purifyx0
+hand(3):
+  - die=d-0002 def=die_strike school=neutral risk=safe face=5 kind=purge value=7 label=蓄力斩 7 corrupt=no
+  - die=d-0007 def=die_strike school=neutral risk=safe face=5 kind=purge value=7 label=蓄力斩 7 corrupt=no
+  - die=d-0005 def=die_mend school=neutral risk=safe face=2 kind=mend value=3 label=修复 3 corrupt=no
+slots(5):
+  - slot=slot_1 kind=attack constraint=any effect=purge bonus=0 disabled=no
+  - slot=slot_2 kind=attack constraint=ge:3 effect=purge bonus=1 disabled=no
+  - slot=slot_3 kind=defense constraint=any effect=ward bonus=0 disabled=no
+  - slot=slot_4 kind=heal constraint=even effect=mend bonus=1 disabled=no
+  - slot=slot_5 kind=utility constraint=any effect=any bonus=0 disabled=no
+enemies(1):
+  - enemy=e-00 def=mon_verdant_slime school=verdant hp=7/7 ward=0 phase=1 taunt=自然 · 黏滑的腐殖体 status=- intent=kind=purge value=1 school=verdant arrow=eq slot=e_slot_0;kind=ward value=3 school=verdant arrow=eq slot=e_slot_1
+legal: discard_die,end_turn,play_face,use_ability
+map:
+  stage=1 row=0 node=n-01-0-0 path=[n-01-0-0]
+  node=n-01-0-0 kind=battle visited=yes reachable=no edges=[n-01-1-0] preview=enemies=[腐生史莱姆] schools=[verdant] arrow=eq
+  node=n-01-0-1 kind=battle visited=no reachable=no edges=[n-01-1-0,n-01-1-1] preview=enemies=[腐生史莱姆] schools=[verdant] arrow=eq
+  node=n-01-0-2 kind=battle visited=no reachable=no edges=[n-01-1-1] preview=enemies=[腐生史莱姆] schools=[verdant] arrow=eq
+  node=n-01-1-0 kind=battle visited=no reachable=no edges=[] preview=enemies=[腐生史莱姆] schools=[verdant] arrow=eq
+  node=n-01-1-1 kind=battle visited=no reachable=no edges=[] preview=enemies=[腐生史莱姆,游荡咒火] schools=[verdant,arcana] arrow=eq
+
+
+## 当前可选动作
+{"dieId":"d-0001","kind":"play_face","slotId":"slot_1","targetId":"e-00"}
+{"dieId":"d-0002","kind":"discard_die"}
+{"kind":"end_turn"}
+
+## 近期反思
+[r-0009] 本局第 2 关因护盾不足掉 2 心。
+[r-0004] 第 1 关商店买了遗物，收益一般。
+[r-0001] 开局地图选了精英节点，风险偏高。
+
+## 策略记忆
+[m-0002] 低德性时优先净化，避免自魔化。
+[m-0007] 克制箭头 up 的攻击骰收益更高。
+[m-0011] 打空手骰后立即 end_turn，避免浪费回合。
+
+## 额外约束
+- error_code: E_ACTION_ILLEGAL
+- error_detail: 上一次动作不在合法集合内
+
+## 输出格式（严格遵守）
+{"reasoning": "不超过 2 句", "plan": [{"kind": "play_face", "dieId": "d-0001", "slotId": "slot_1", "targetId": "e-00"}]}
+
+- `phase=player_turn`：`plan` 为 1..12 个动作，按执行顺序排列；执行期间若离开玩家回合，
+  剩余动作会被丢弃。
+- 其它 phase：`plan` 恰好 1 个动作。
+- `kind` 只能取以下之一：
+  play_face / discard_die / purify / use_ability / end_turn / map_choose / shop_buy /
+  shop_refresh / shop_remove / shop_leave / event_choose / treasure_pick / forge_pick /
+  shrine_choose / rest_choose / relic_swap
+- 所有 id 必须逐字来自上面的观测，不得虚构。

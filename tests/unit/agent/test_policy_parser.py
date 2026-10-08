@@ -7,9 +7,9 @@ import time
 
 import pytest
 
-from gamer_rsi.agent.parser import (REQUIRED_FIELDS, canonical_action, parse_llm_output,
+from dice_ratchet.agent.parser import (REQUIRED_FIELDS, canonical_action, parse_llm_output,
                                     validate_schema, validate_semantic, validate_syntax)
-from gamer_rsi.infra.errors import E
+from dice_ratchet.infra.errors import E
 
 GOOD = '{"reasoning":"a","plan":[{"kind":"end_turn"}]}'
 
@@ -206,7 +206,7 @@ def test_max_plan_len_enforced():
 
 @pytest.mark.parametrize("kind,required", sorted(REQUIRED_FIELDS.items()))
 def test_required_field_table_matches_schema_kinds(kind, required):
-    from gamer_rsi.agent.parser import allowed_kinds
+    from dice_ratchet.agent.parser import allowed_kinds
 
     assert kind in allowed_kinds()
     if not required:
@@ -224,6 +224,6 @@ def test_required_field_table_matches_schema_kinds(kind, required):
 
 
 def test_all_schema_kinds_are_covered_by_required_table():
-    from gamer_rsi.agent.parser import allowed_kinds
+    from dice_ratchet.agent.parser import allowed_kinds
 
     assert set(allowed_kinds()) == set(REQUIRED_FIELDS)
