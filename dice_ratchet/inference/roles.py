@@ -67,11 +67,15 @@ def _arm_spec(arms: Mapping[str, Any], arm: str) -> dict[str, Any]:
 # 角色 → model_id 解析（纯配置，不需要注册表）
 # =====================================================================
 
-def role_model_ids(cfg: Any) -> dict[str, str]:
-    """三角色最终生效的 ``model_id``（只读配置，不碰注册表，不校验模型是否存在）。
+def _resolve_role(cfg: Any, role: str) -> tuple[str, str]:
+    """``(model_id, 来源层)`` —— **唯一的优先级实现**（下面两个入口共用，避免漂移）。
 
-    给 MOD-08 归档（``model_hash`` / ``model_backend``）与埋点用：它们只需要「配置说要
-    用哪个 id」，真正的可用性由 MOD-03 在加载时 fail-closed。
+    优先级（高 → 低）::
+
+        experiment.roles.<role>  >  experiment.arms[arm].<role>  >  models.<role>
+                                 >  inference.model_id
+
+    空字符串 = 未绑定，继续向下继承。未知臂在这里 fail-closed（不静默当空差分）。
     """
     exp = getattr(cfg, "experiment", None)
     models = getattr(cfg, "models", None)
@@ -85,33 +89,29 @@ def role_model_ids(cfg: Any) -> dict[str, str]:
             hint=f"合法臂：{', '.join(sorted(arms))}（空字符串 = 不选臂）")
     overrides = dict(getattr(exp, "roles", {}) or {}) if exp is not None else {}
     arm_roles = _arm_spec(arms, arm)
-    out: dict[str, str] = {}
-    for role in ROLE_NAMES:
-        for candidate in (overrides.get(role), arm_roles.get(role),
-                          getattr(models, role, None) if models is not None else None):
-            if _clean(candidate):
-                out[role] = _clean(candidate)
-                break
-        else:
-            out[role] = default_id
-    return out
+    layers: tuple[tuple[Any, str], ...] = (
+        (overrides.get(role), "experiment.roles"),
+        (arm_roles.get(role), f"experiment.arms.{arm}"),
+        (getattr(models, role, None) if models is not None else None, "models"),
+    )
+    for candidate, source in layers:
+        if _clean(candidate):
+            return _clean(candidate), source
+    return default_id, "inference.model_id"
+
+
+def role_model_ids(cfg: Any) -> dict[str, str]:
+    """三角色最终生效的 ``model_id``（只读配置，不碰注册表，不校验模型是否存在）。
+
+    给 MOD-08 归档（``model_hash`` / ``model_backend``）与埋点用：它们只需要「配置说要
+    用哪个 id」，真正的可用性由 MOD-03 在加载时 fail-closed。
+    """
+    return {role: _resolve_role(cfg, role)[0] for role in ROLE_NAMES}
 
 
 def _binding_source(cfg: Any, role: str) -> str:
     """记录该角色绑定来自哪一层（provenance 要能说清楚「谁定的」）。"""
-    exp = getattr(cfg, "experiment", None)
-    models = getattr(cfg, "models", None)
-    overrides = dict(getattr(exp, "roles", {}) or {}) if exp is not None else {}
-    arm = _clean(getattr(exp, "arm", ""))
-    arms = dict(getattr(exp, "arms", {}) or {}) if exp is not None else {}
-    arm_roles = _arm_spec(arms, arm)
-    if _clean(overrides.get(role)):
-        return "experiment.roles"
-    if _clean(arm_roles.get(role)):
-        return f"experiment.arms.{arm}"
-    if models is not None and _clean(getattr(models, role, None)):
-        return "models"
-    return "inference.model_id"
+    return _resolve_role(cfg, role)[1]
 
 
 @dataclass(frozen=True)
