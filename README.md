@@ -110,10 +110,16 @@ MOD-04/06/07/08 的业务代码不动，也不出现 `from mlx_lm import ...` / 
 | C0 / C1 | DeepSeek API | DeepSeek API | 固定 / 演化 | 全量外部模型对照 |
 
 ```bash
-# 只改配置切臂（也可以 DICERATCHET_EXPERIMENT__ARM=B1 / DICERATCHET_MODELS__PROPOSER=deepseek-chat）
-python -m dice_ratchet loop run --set experiment.arm=B1 ...
+# 方式一：改 configs/default.yaml 的 experiment.arm / models.* / experiment.roles
+# 方式二：DICERATCHET_* 环境变量（B-30 的 __ 分层；CLI 目前只有 8 个显式覆盖键，没有通用 --set）
+export DICERATCHET_EXPERIMENT__ARM=B1                    # 等价于 experiment.arm: B1
+export DICERATCHET_MODELS__PROPOSER=deepseek-chat        # 只钉 proposer，其余角色不动
 export DEEPSEEK_API_KEY=...        # 只从环境变量读；key 绝不进 harness/、run JSON 或 Git
+python -m dice_ratchet loop run --agent llm --seeds train:1000-1029 --k 30 --hitl --run-id <loop_run_id>
 ```
+
+臂与角色绑定都是**静态实验决定**：它们不进 `harness/config.json` 白名单（MOD-07 不能自己改实验臂），
+但会进 `config_hash`，所以换臂后必须换 run-id。
 
 每个 run 落 `runs/<run_id>/models_provenance.json`：三角色各自的 model_id / provider / backend /
 model_revision / online / `api_key_present`（只记布尔），加上臂、harness 模式与 `config_hash`。
