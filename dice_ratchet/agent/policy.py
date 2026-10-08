@@ -14,10 +14,7 @@
 
 from __future__ import annotations
 
-import concurrent.futures
-import asyncio
 import json
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Mapping, Protocol, Sequence, runtime_checkable
@@ -28,6 +25,11 @@ from dice_ratchet.infra.errors import E, InfraError
 from dice_ratchet.sandbox import audit as sandbox_audit
 from dice_ratchet.sandbox.api import SandboxEnv, StepResult
 from dice_ratchet.sandbox.projection import obs_digest, render_compact
+
+# Issue #1：统一同步客户端契约与实现下沉到 MOD-03 ``inference/client.py``（避免 MOD-03
+# 反向 import MOD-04）。这里 re-export，名字/签名/行为完全不变。
+from ..inference.client import (BackendInferenceClient, InferenceClient,  # noqa: F401
+                                client_for_role, coerce_client, role_model_id)
 
 from .heuristic import heuristic_policy_explained
 from .parser import (canonical_action, decision_schema_dict, parse_llm_output,
@@ -132,117 +134,11 @@ class EpisodeContext:
 
 
 @runtime_checkable
-class InferenceClient(Protocol):
-    """MOD-04 → MOD-03 的同步门面（真实实现在 ``BackendInferenceClient``）。"""
-
-    def generate_json(self, messages: Sequence[Any], schema: Mapping[str, Any], *,
-                      mode: str, sampling: Mapping[str, Any], seed: int) -> Any: ...
-
-
-@runtime_checkable
 class MemoryReader(Protocol):
     """MOD-04 → MOD-05 的只读检索门面（Spec §4.7）。"""
 
     def retrieve(self, obs: Mapping[str, Any], *, top_k: int, token_budget: int,
                  tick: int) -> Any: ...
-
-
-#: 持久后台事件循环（``_run_sync`` 用）。MOD-03 的 ``BackendManager`` 在内部缓存
-#: ``asyncio.Lock`` / ``Semaphore``，它们一旦在某个 loop 上被 await 就与该 loop 绑定；
-#: 若每次调用都 ``asyncio.run()`` 新建 loop，第二次调用即 ``bound to a different event
-#: loop``。因此所有同步调用共用一个常驻 loop（M1 验收 F1 的实跑路径依赖这一点）。
-_LOOP_LOCK = threading.Lock()
-_LOOP: asyncio.AbstractEventLoop | None = None
-_LOOP_THREAD: threading.Thread | None = None
-
-
-def _background_loop() -> asyncio.AbstractEventLoop:
-    global _LOOP, _LOOP_THREAD
-    with _LOOP_LOCK:
-        if _LOOP is not None and not _LOOP.is_closed():
-            return _LOOP
-        loop = asyncio.new_event_loop()
-        thread = threading.Thread(target=loop.run_forever, name="dice-ratchet-inference",
-                                  daemon=True)
-        thread.start()
-        _LOOP, _LOOP_THREAD = loop, thread
-        return loop
-
-
-def _run_sync(coro: Any) -> Any:
-    """在同步上下文中执行 MOD-03 的协程（CLI/loop 均为同步编排）。
-
-    - 已在事件循环内（如被异步调用方驱动）→ 丢到一次性线程里，避免嵌套 ``run_until_complete``；
-    - 否则 → 提交到常驻后台 loop，保证 MOD-03 的锁/信号量始终绑在同一个 loop 上。
-    """
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run_coroutine_threadsafe(coro, _background_loop()).result()
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool: # pragma: no cover
-        return pool.submit(lambda: asyncio.run(coro)).result()
-
-
-class BackendInferenceClient:
-    """把 MOD-03 的异步后端适配为 MOD-04 需要的同步 ``InferenceClient``。
-
-    ``backend`` 可以是 ``Backend``（``generate_json(messages, schema, **kw)``）或
-    ``BackendManager``（``generate_json(model_id, messages, schema, **kw)``，需给 ``model_id``）。
-    """
-
-    def __init__(self, backend: Any, *, model_id: str | None = None,
-                 total_timeout_ms: int | None = None, max_attempts: int | None = None) -> None:
-        self.backend = backend
-        self.model_id = model_id
-        self.total_timeout_ms = total_timeout_ms
-        self.max_attempts = max_attempts
-
-    def generate_json(self, messages: Sequence[Any], schema: Mapping[str, Any], *,
-                      mode: str, sampling: Mapping[str, Any], seed: int) -> Any:
-        kwargs = dict(sampling)
-        kwargs["seed"] = int(seed)
-        if self.total_timeout_ms is not None:
-            kwargs["total_timeout_ms"] = int(self.total_timeout_ms)
-        if self.max_attempts is not None:
-            kwargs["max_attempts"] = int(self.max_attempts)
-        if self.model_id is not None:
-            coro = self.backend.generate_json(self.model_id, list(messages), schema, **kwargs)
-        else:
-            coro = self.backend.generate_json(list(messages), schema, **kwargs)
-        return _run_sync(coro)
-
-
-def coerce_client(llm: Any, *, model_id: str | None = None) -> Any:
-    """把 MOD-03 的后端对象自动适配为同步 ``InferenceClient``。
-
-    - ``BackendManager``（``registry/session`` 形状）→ 需要 ``model_id``（显式参数、
-      对象属性或 ``config.model_id``）；拿不到即 fail-fast，避免把 ``messages`` 误传给
-      ``model_id`` 形参。
-    - 单个 ``Backend``（有 ``name`` / ``model_id``）→ 直接包装。
-    - 其它对象按鸭子类型原样返回（测试用假 client 走这条路径）。
-    """
-    if llm is None:
-        return None
-    try: # pragma: no cover - 依赖 MOD-03 类型
-        from dice_ratchet.inference import BackendManager
-
-        if isinstance(llm, BackendManager):
-            resolved = model_id or getattr(llm, "model_id", None) \
-                or getattr(getattr(llm, "config", None), "model_id", None)
-            if not resolved:
-                raise InfraError(
-                    E.E_LLM_BACKEND_ERROR,
-                    "BackendManager 需要显式 model_id 才能适配为 MOD-04 的 InferenceClient",
-                    hint="用 BackendInferenceClient(manager, model_id='qwen3-8b-q4') 构造，"
-                         "或在 manager.config.model_id 中配置")
-            return BackendInferenceClient(llm, model_id=str(resolved))
-    except InfraError:
-        raise
-    except Exception: # noqa: BLE001 - 导入失败时按鸭子类型处理
-        return llm
-    if hasattr(llm, "name") and hasattr(llm, "model_id"):
-        return BackendInferenceClient(llm)
-    return llm
 
 
 # ----------------------------------------------------------------------
@@ -259,7 +155,8 @@ class PolicyAgent:
                  forbidden: Mapping[str, str] | None = None,
                  scanner: Any | None = None) -> None:
         self.cfg = cfg
-        self.llm = coerce_client(llm)
+        # Issue #1：注入的可能是 RoleModelProvider（组合根装配）→ 这里取 **policy** 角色。
+        self.llm = coerce_client(llm, role="policy")
         self.memory = memory
         self.harness_dir = Path(harness_dir)
         self._guard = guard

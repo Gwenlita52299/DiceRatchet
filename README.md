@@ -92,6 +92,36 @@ python -m dice_ratchet loop run --run-id <loop_run_id> --resume                 
 python -m dice_ratchet eval report --run-id <eval_run_id> --split heldout --baseline all   # 期望退出码 0
 ```
 
+## 模型角色与实验臂（配置切换，Issue #1）
+
+三个模型角色 —— `policy`（游戏决策）、`reflection`（局末反思）、`proposer`（harness 修改提案）——
+都只经 MOD-03 的统一 `InferenceClient` 取模型。**换模型、换角色组合、切对照臂全部只改配置**，
+MOD-04/06/07/08 的业务代码不动，也不出现 `from mlx_lm import ...` / `from openai import ...`。
+
+优先级（高 → 低）：`experiment.roles.<role>` > `experiment.arms[arm]` > `models.<role>` > `inference.model_id`。
+空字符串表示「继承下一层」，所以 `--model mock`（写的是 `inference.model_id`）在 A 臂下仍一次覆盖全部角色。
+
+六个实验臂（[configs/default.yaml](configs/default.yaml) 的 `experiment.arms`，臂定义计入 `config_hash` → 换臂即换 run-id 族）：
+
+| Arm | 决策 / 反思 | Proposer | Harness | 用途 |
+|---|---|---|---|---|
+| A0 / A1 | Qwen3-8B | Qwen3-8B | 固定 / 演化 | Qwen 主线 baseline 与 RSI 主实验臂 |
+| B0 / B1 | Qwen3-8B | DeepSeek API | 固定 / 演化 | 「proposer 能力」对照 |
+| C0 / C1 | DeepSeek API | DeepSeek API | 固定 / 演化 | 全量外部模型对照 |
+
+```bash
+# 只改配置切臂（也可以 DICERATCHET_EXPERIMENT__ARM=B1 / DICERATCHET_MODELS__PROPOSER=deepseek-chat）
+python -m dice_ratchet loop run --set experiment.arm=B1 ...
+export DEEPSEEK_API_KEY=...        # 只从环境变量读；key 绝不进 harness/、run JSON 或 Git
+```
+
+每个 run 落 `runs/<run_id>/models_provenance.json`：三角色各自的 model_id / provider / backend /
+model_revision / online / `api_key_present`（只记布尔），加上臂、harness 模式与 `config_hash`。
+DeepSeek 侧另有审计：`runs/<run_id>/llm_api/` 按 request hash 存 prompt hash / sampling /
+response hash / usage / 成本估算；同一请求而响应变化时**不覆盖旧证据**，另存变体并记
+`llm.nondeterministic`（`E_LLM_NONDETERMINISTIC`）。离线复现用 `inference.api_mode=replay`
+（只读历史响应，缺记录即报错，不冒充新样本）。
+
 ## CI 门禁
 
 门禁是**一条脚本**，本地与 CI 跑的是同一份（Spec §9 G1–G6 与 INV-1/INV-6 的可执行化）：

@@ -225,7 +225,8 @@ def reflect(summary: EpisodeSummary, *, client: Any, template: Path | str,
     （FR-06-4）。可预期的失败（超时 / schema 不符 / 模板缺失）以 ``InfraError`` /
     ``TimeoutError`` 抛出，调用方用 ``reason_of()`` 映射成 ``E_*`` 后同样降级。
     """
-    from ..agent.policy import coerce_client
+    # Issue #1：反思是独立的模型角色（reflection），不再假定与 policy 同一个模型。
+    from ..inference.client import coerce_client
     from ..memory import ReflectionEntry, validate_reflection_entry
 
     template_path = Path(template)
@@ -242,7 +243,7 @@ def reflect(summary: EpisodeSummary, *, client: Any, template: Path | str,
     # held-out/test seed 喂给模型。
     _scan_reflection_prompt(prompt, seed=int(summary.seed))
 
-    llm = coerce_client(client)
+    llm = coerce_client(client, role="reflection")
     causes = failure_causes()
     result = _call_with_timeout(
         lambda: llm.generate_json(

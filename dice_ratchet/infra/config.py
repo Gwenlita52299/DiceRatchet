@@ -12,6 +12,8 @@
     sandbox.*            -> env.sandbox.*        （MOD-02）
     policy.*             -> agent.policy.*       （MOD-04）
     inference.*          -> InferenceConfig      （MOD-03）
+    models.*             -> ModelRolesConfig     （MOD-03：角色 → model_id 绑定，Issue #1）
+    experiment.*         -> ExperimentConfig     （MOD-03/06：实验臂与角色覆盖，Issue #1）
     memory.*             -> MemoryConfig         （MOD-05）
     loop.*               -> LoopConfig           （MOD-06）
     evolve.*             -> EvolveConfig         （MOD-07）
@@ -39,8 +41,10 @@ from .errors import E, InfraError
 
 __all__ = [
     "AppConfig", "EnvConfig", "EpisodeConfig", "SandboxConfig", "AgentConfig",
-    "PolicyConfig", "InferenceConfig", "MemoryConfig", "LoopConfig", "EvolveConfig",
+    "PolicyConfig", "InferenceConfig", "ModelRolesConfig", "ExperimentConfig",
+    "MemoryConfig", "LoopConfig", "EvolveConfig",
     "EvalConfig", "InfraConfig", "SeedsProtocol",
+    "MODEL_ROLES", "EXPERIMENT_ARMS", "ARM_HARNESS_MODES",
     "load_config", "load_seeds", "load_models", "config_hash", "canonical_json",
     "derive_seed", "artifact_hash", "flatten_config", "apply_overrides",
     "harness_overridden_keys", "env_applied_keys", "full_config",
@@ -262,11 +266,20 @@ class InferenceConfig:
     skip_hash_check: bool = False # 对应 DICERATCHET_INFERENCE_SKIP_HASH=1；CI 必须 false
     llama_server_startup_timeout_ms: int = 60000
     llama_server_port: int = 0 # 0 = 自动分配空闲端口
+    # ---- API provider（deepseek 等在线后端；Issue #1「DeepSeek API 适配要求」）----------
+    #: ``live`` 真调 API；``replay`` 只从 ``api_replay_dir`` 读历史响应（复现/调试，
+    #: 不得冒充新的独立实验样本）。Qwen 主线与两者无关，始终可离线运行。
+    api_mode: str = "live"
+    api_replay_dir: str = "" # api_mode=replay 时必须非空
+    api_record_dir: str = "llm_api" # 相对 run 目录：请求/响应 hash、usage、成本
+    api_record_enabled: bool = True # 关掉只影响审计工件，不影响调用
+    api_connect_timeout_ms: int = 10000 # 单次 HTTP 连接/读取超时
+    api_max_retries: int = 2 # 传输层有限重试（429/5xx/超时）；schema 修复重试仍归 MOD-03 三级策略
 
     def validate(self) -> None:
         _check("inference.model_id", self.model_id, str)
         _check("inference.mode", self.mode, str, choices={"train", "eval"})
-        _check("inference.backend", self.backend, str, choices={"mlx", "llama", "mock"})
+        _check("inference.backend", self.backend, str, choices={"mlx", "llama", "mock", "deepseek"})
         _check("inference.ram_budget_gb", self.ram_budget_gb, float, minv=1.0)
         _check("inference.max_attempts", self.max_attempts, int, minv=1, maxv=5)
         _check("inference.max_tokens", self.max_tokens, int, minv=1, maxv=8192)
@@ -274,12 +287,129 @@ class InferenceConfig:
                choices={"reject", "truncate"})
         _check("inference.train_temperature_min", self.train_temperature_min, float,
                minv=0.0, maxv=1.2)
+        _check("inference.api_mode", self.api_mode, str, choices={"live", "replay"})
+        _check("inference.api_max_retries", self.api_max_retries, int, minv=0, maxv=5)
+        _check("inference.api_connect_timeout_ms", self.api_connect_timeout_ms, int, minv=100)
+        _check("inference.api_record_dir", self.api_record_dir, str)
+        if self.api_mode == "replay" and not self.api_replay_dir:
+            raise InfraError(E.E_IO_CONFIG_INVALID,
+                             "inference.api_mode=replay 时 inference.api_replay_dir 必须非空",
+                             hint="指向含 <request_hash>.json 的历史响应目录")
         if self.mode == "eval" and self.seed is None:
             raise InfraError(E.E_IO_CONFIG_INVALID,
                              "inference.mode=eval 时 inference.seed 必须非空（INV-6/B-14）")
         if self.skip_hash_check:
             raise InfraError(E.E_IO_CONFIG_INVALID,
                              "inference.skip_hash_check=true 仅限本地调试，CI 必须 false")
+
+
+#: 模型角色（Issue #1 §2）：policy / reflection / proposer。
+#: 三个角色都必须经 MOD-03 的统一 ``InferenceClient`` 取模型，不得各自绑定具体后端。
+MODEL_ROLES: Final[tuple[str, ...]] = ("policy", "reflection", "proposer")
+
+#: harness 演化开关在臂注册表里的取值（Issue #1 §1 的 Harness 列）。
+ARM_HARNESS_MODES: Final[tuple[str, ...]] = ("fixed", "evolve")
+
+#: 六个实验臂（Issue #1 §1）。``arms`` 只描述「相对 ``models`` 段的差异」，因此
+#: A0/A1 不需要任何角色覆盖（全部继承 ``inference.model_id``）。
+EXPERIMENT_ARMS: Final[tuple[str, ...]] = ("A0", "A1", "B0", "B1", "C0", "C1")
+
+
+def _default_arms() -> dict[str, dict[str, str]]:
+    """六个实验臂的代码默认值（与 ``configs/default.yaml`` 的 ``experiment.arms`` 等价）。
+
+    臂是**差分**：未列出的角色继承 ``models.<role>`` → ``inference.model_id``。这样
+    ``--model mock``（离线冒烟）在 A0/A1 下仍能一次覆盖全部角色（既有语义不破），
+    而 B/C 臂显式钉住 proposer / policy 的 DeepSeek 绑定（明确的实验意图不得被静默覆盖）。
+    """
+    qwen = {"policy": "", "reflection": "", "proposer": ""}
+    return {
+        "A0": {**qwen, "harness": "fixed"},
+        "A1": {**qwen, "harness": "evolve"},
+        "B0": {**qwen, "proposer": "deepseek-chat", "harness": "fixed"},
+        "B1": {**qwen, "proposer": "deepseek-chat", "harness": "evolve"},
+        "C0": {"policy": "deepseek-chat", "reflection": "deepseek-chat",
+               "proposer": "deepseek-chat", "harness": "fixed"},
+        "C1": {"policy": "deepseek-chat", "reflection": "deepseek-chat",
+               "proposer": "deepseek-chat", "harness": "evolve"},
+    }
+
+
+@dataclass(frozen=True)
+class ModelRolesConfig:
+    """角色 → ``model_id`` 绑定（Issue #1 §2「建议配置形态」的第一种）。
+
+    空字符串 = 继承 ``inference.model_id``。这条继承规则是**刻意保留**的：CLI
+    ``--model`` 写的是 ``inference.model_id``，它在「角色显式绑定」之外一次覆盖全部角色，
+    所以 ``--model mock`` 的离线冒烟语义不变；而配置里显式写了角色键，就是明确的绑定意图，
+    优先级高于 ``--model``。
+    """
+
+    policy: str = ""
+    reflection: str = ""
+    proposer: str = ""
+
+    def validate(self) -> None:
+        for role in MODEL_ROLES:
+            _check(f"models.{role}", getattr(self, role), str)
+
+
+@dataclass(frozen=True)
+class ExperimentConfig:
+    """实验臂（Issue #1 §1 / §2 的第二种配置形态）。
+
+    优先级（高 → 低）::
+
+        experiment.roles.<role>  >  experiment.arms[experiment.arm].<role>
+                                 >  models.<role>  >  inference.model_id
+
+    ``arm=""`` 表示不选臂，只用 ``models`` / ``inference.model_id`` 绑定（冒烟与自定义
+    对照用）。``arms[arm].harness`` 只登记该臂的 harness 是否演化：本段**只做登记与
+    校验**，不改 MOD-06 的演化开关（那是 Issue #1 任务 6 的范围）。
+    """
+
+    arm: str = "A1"
+    arms: dict[str, dict[str, str]] = field(default_factory=_default_arms)
+    roles: dict[str, str] = field(default_factory=dict)
+
+    def validate(self) -> None:
+        _check("experiment.arm", self.arm, str)
+        if self.arm and self.arm not in self.arms:
+            raise InfraError(
+                E.E_IO_CONFIG_INVALID,
+                f"experiment.arm={self.arm!r} 不在 experiment.arms 内",
+                hint=f"合法臂：{', '.join(sorted(self.arms))}（空字符串 = 不选臂）")
+        for arm_id, spec in self.arms.items():
+            if not isinstance(spec, dict):
+                raise InfraError(E.E_IO_CONFIG_INVALID,
+                                 f"experiment.arms.{arm_id} 必须是对象")
+            unknown = set(spec) - set(MODEL_ROLES) - {"harness"}
+            if unknown:
+                raise InfraError(
+                    E.E_IO_CONFIG_INVALID,
+                    f"experiment.arms.{arm_id} 含未知键：{', '.join(sorted(unknown))}",
+                    hint=f"合法键：{', '.join(MODEL_ROLES)}, harness")
+            harness = str(spec.get("harness", ""))
+            if harness not in ARM_HARNESS_MODES:
+                raise InfraError(
+                    E.E_IO_CONFIG_INVALID,
+                    f"experiment.arms.{arm_id}.harness={harness!r} 非法",
+                    hint=f"合法值：{', '.join(ARM_HARNESS_MODES)}")
+            for role in MODEL_ROLES:
+                _check(f"experiment.arms.{arm_id}.{role}", str(spec.get(role, "")), str)
+        for role in self.roles:
+            if role not in MODEL_ROLES:
+                raise InfraError(
+                    E.E_IO_CONFIG_INVALID,
+                    f"experiment.roles 含未知角色：{role!r}",
+                    hint=f"合法角色：{', '.join(MODEL_ROLES)}")
+            _check(f"experiment.roles.{role}", self.roles[role], str)
+
+    def harness_mode(self) -> str:
+        """当前臂登记的 harness 模式（``fixed`` / ``evolve``；未选臂时回落到 ``evolve``）。"""
+        if not self.arm:
+            return "evolve"
+        return str(self.arms.get(self.arm, {}).get("harness", "evolve"))
 
 
 @dataclass(frozen=True)
@@ -543,6 +673,8 @@ class AppConfig:
     env: EnvConfig = field(default_factory=EnvConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
     inference: InferenceConfig = field(default_factory=InferenceConfig)
+    models: ModelRolesConfig = field(default_factory=ModelRolesConfig)
+    experiment: ExperimentConfig = field(default_factory=ExperimentConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     loop: LoopConfig = field(default_factory=LoopConfig)
     evolve: EvolveConfig = field(default_factory=EvolveConfig)
@@ -559,6 +691,8 @@ class AppConfig:
         self.env.validate()
         self.agent.validate()
         self.inference.validate()
+        self.models.validate()
+        self.experiment.validate()
         self.memory.validate()
         self.loop.validate()
         self.evolve.validate()
@@ -1012,6 +1146,7 @@ def _from_dict(merged: Mapping[str, Any]) -> AppConfig:
 
 _SECTION_TYPES: Final[dict[str, type]] = {
     "env": EnvConfig, "agent": AgentConfig, "inference": InferenceConfig,
+    "models": ModelRolesConfig, "experiment": ExperimentConfig,
     "memory": MemoryConfig, "loop": LoopConfig, "evolve": EvolveConfig,
     "evals": EvalConfig, "infra": InfraConfig,
 }

@@ -95,3 +95,37 @@ models:
     family: mock
     params_b: 0.0
     notes: 冒烟与单测用的确定性假后端
+
+  # Issue #1：外部 proposer / 全量对照臂（B0/B1/C0/C1）用的 DeepSeek API 模型。
+  # - provider=api + online=true：run provenance 必须如实记为在线调用，不许记成本地；
+  # - api_key_env 只登记**变量名**，key 本体绝不进 harness/、run JSON、Git 或 prompt；
+  # - api_supports_seed=false：DeepSeek 不承诺跨时间严格确定性，因此 sampling 照记、
+  #   响应按 request hash 归档并比对 response hash（变化即标记 llm.nondeterministic）；
+  # - 单价为登记值（USD / 1k tokens），只用于报告里的成本估算，不参与任何判定。
+  # 离线单测/CI 用 mock transport 或 api_mode=replay，不触网（见 MOD-03 deepseek_backend.py）。
+  deepseek-chat:
+    backend: deepseek
+    provider: api
+    online: true
+    weights_path: null
+    quantization: none
+    context_length: 65536 # DeepSeek 上下文窗口（登记值；API 侧真实上限由服务方裁决）
+    kv_cache_bits: 8
+    resident_gb_est: 0.0 # 不占本地内存
+    kv_gb_per_1k_tokens: 0.0
+    max_inflight: 2 # 评估模式下 BackendManager 仍强制 1
+    supports_grammar: false # 无 GBNF；走 response_format=json_object + jsonschema 校验
+    supports_json_mode: true
+    weights_sha256: null
+    api_base: https://api.deepseek.com/v1
+    api_model: deepseek-chat
+    api_key_env: DEEPSEEK_API_KEY
+    api_supports_seed: false
+    model_revision: "" # 服务方未提供显式 revision；实际值取每次响应的 model 字段
+    cost_per_1k_input_usd: 0.00027
+    cost_per_1k_output_usd: 0.0011
+    default_sampling: { temperature: 0.0, top_p: 1.0, top_k: 0, repetition_penalty: 1.0 }
+    perf_budget: { p50_latency_ms: 3000, p95_latency_ms: 12000, min_tok_per_s: 8 }
+    family: deepseek
+    params_b: 0.0
+    notes: 外部 proposer / 全量对照（Issue #1 臂 B0/B1/C0/C1）；需要 DEEPSEEK_API_KEY，Qwen 主线不依赖它

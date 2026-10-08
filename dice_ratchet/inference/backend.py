@@ -803,13 +803,19 @@ class BackendManager:
     # ---- 生成（FR-03-04）----------------------------------------------------------
     async def generate_json(self, model_id: str, messages: Sequence[Message],
                             schema: Mapping[str, Any], **kwargs: Any) -> GenerationResult:
-        """门面级三级 JSON 生成（PRD §8 伪代码的真实控制流）。"""
+        """门面级三级 JSON 生成（PRD §8 伪代码的真实控制流）。
+
+        ``mode`` 可按调用覆盖（缺省 ``self.mode``）：MOD-04 的同一个 agent 在训练局用
+        ``train`` 口径、在评估局用 ``eval`` 口径（B-14 的收紧只在评估口生效），
+        同步门面 ``BackendInferenceClient`` 会把调用方声明的 mode 原样带进来。
+        """
         spec = self.registry.spec(model_id)
         config = self.config
+        mode = str(kwargs.get("mode") or self.mode)
         raw_sampling = {key: kwargs[key] for key in SAMPLING_KEYS if key in kwargs}
         if raw_sampling.get("seed") is None and getattr(config, "seed", None) is not None:
             raw_sampling["seed"] = config.seed
-        sampling = validate_sampling(raw_sampling, mode=self.mode) # 越界即抛，零埋点
+        sampling = validate_sampling(raw_sampling, mode=mode) # 越界即抛，零埋点
         max_tokens = int(kwargs.get("max_tokens", getattr(config, "max_tokens", 256)))
         max_attempts = int(kwargs.get("max_attempts", getattr(config, "max_attempts", 3)))
         backoff_ms = int(kwargs.get("retry_backoff_ms", getattr(config, "retry_backoff_ms", 200)))
@@ -837,7 +843,7 @@ class BackendManager:
                     backend=backend, messages=messages_used, schema=schema, grammar=grammar,
                     sampling=sampling, max_tokens=max_tokens, max_attempts=max_attempts,
                     backoff_ms=backoff_ms, deadline=deadline, now_ms=self._now_ms,
-                    sleep=self._sleep, ctx=ctx, mode=self.mode,
+                    sleep=self._sleep, ctx=ctx, mode=mode,
                     call_id=self._next_call_id(), record_sink=self._record_sink,
                     emit=self.infra.emit, json_mode=True, truncated=truncated,
                     stop=kwargs.get("stop"), resident_gb=spec.resident_gb_est,
@@ -857,10 +863,11 @@ class BackendManager:
         """自由文本生成（反思 / 记忆 / 候选改进，PRD §3）：一次尝试、无 schema。"""
         spec = self.registry.spec(model_id)
         config = self.config
+        mode = str(kwargs.get("mode") or self.mode)
         raw_sampling = {key: kwargs[key] for key in SAMPLING_KEYS if key in kwargs}
         if raw_sampling.get("seed") is None and getattr(config, "seed", None) is not None:
             raw_sampling["seed"] = config.seed
-        sampling = validate_sampling(raw_sampling, mode=self.mode)
+        sampling = validate_sampling(raw_sampling, mode=mode)
         max_tokens = int(kwargs.get("max_tokens", getattr(config, "max_tokens", 256)))
         messages_used, _ = self.guard_context(spec, messages, max_tokens)
         limit = self.effective_max_inflight(spec)
@@ -888,7 +895,7 @@ class BackendManager:
                 self._inflight -= 1
         record = make_call_record(
             call_id=self._next_call_id(), model_id=backend.model_id, backend=backend.name,
-            mode=self.mode, ctx=ctx, digest=out.prompt_digest,
+            mode=mode, ctx=ctx, digest=out.prompt_digest,
             prompt_tokens=out.usage.prompt_tokens,
             completion_tokens=out.usage.completion_tokens, max_tokens=max_tokens,
             temperature=sampling["temperature"], top_p=sampling["top_p"],
@@ -950,8 +957,14 @@ class BackendManager:
             if spec.backend == "llama_server":
                 return LlamaServerBackend(infra=self.infra, config=self.config)
             return LlamaCppBackend(infra=self.infra, config=self.config)
+        if spec.backend == "deepseek":
+            # Issue #1：API 后端与本地后端在 BackendManager 眼里完全同形 —— 三级 JSON
+            # 策略、schema 校验、修复重试、预算门禁、埋点全部复用，不另起一套。
+            from .deepseek_backend import DeepSeekAPIAdapter
+            return DeepSeekAPIAdapter(infra=self.infra, config=self.config)
         raise InferenceError(E.E_LLM_UNAVAILABLE,
-                             f"未知 backend={spec.backend!r}（合法：mlx/llama_cpp/llama_server/mock）")
+                             f"未知 backend={spec.backend!r}"
+                             "（合法：mlx/llama_cpp/llama_server/mock/deepseek）")
 
     def _estimate_tokens(self, messages: Sequence[Message]) -> int:
         return estimate_prompt_tokens(messages, chars_per_token=self._chars_per_token)

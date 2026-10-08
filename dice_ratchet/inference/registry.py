@@ -21,10 +21,14 @@ from ..infra.errors import E, InfraError
 from ..infra.io import validate as _validate_schema
 from .errors import InferenceError
 
-__all__ = ["BackendName", "ModelSpec", "ModelRegistry", "DEFAULT_REGISTRY_PATH",
-           "load_registry", "build_registry", "estimate_required_gb", "BUDGET_BUFFER_GB"]
+__all__ = ["BackendName", "ModelProviderName", "ModelSpec", "ModelRegistry",
+           "DEFAULT_REGISTRY_PATH", "load_registry", "build_registry",
+           "estimate_required_gb", "BUDGET_BUFFER_GB"]
 
-BackendName = Literal["mlx", "llama_cpp", "llama_server", "mock"]
+BackendName = Literal["mlx", "llama_cpp", "llama_server", "mock", "deepseek"]
+
+#: 模型提供方（Issue #1 §2）：``local`` = 本地权重/进程；``api`` = 远程 API。
+ModelProviderName = Literal["local", "api"]
 
 #: 注册表默认路径（PRD §9 ``inference.registry_path``）。
 DEFAULT_REGISTRY_PATH: Final[str] = "configs/models.yaml"
@@ -55,11 +59,40 @@ class ModelSpec:
     fallback_backend: BackendName | None = None
     server_args: list[str] = field(default_factory=list)
     notes: str = ""
+    # ---- Issue #1：把「模块接口」与「具体模型」解耦所需的描述性字段 --------------------
+    #: ``local`` / ``api``（决定 run provenance 里的 provider 与 online 标记）
+    provider: ModelProviderName = "local"
+    #: 显式在线标记：API 模式必须为 True（不许把远程调用记成本地）
+    online: bool = False
+    #: 模型族与参数量（报告分维度用；仅登记，不参与任何判定）
+    family: str = ""
+    params_b: float = 0.0
+    #: 服务方发布的版本号（若提供）；API 响应里的 ``model`` 字段会覆盖它作为实际 revision
+    model_revision: str = ""
+    #: API 连接参数（``provider=api`` 时使用；key 只从 api_key_env 指向的环境变量读）
+    api_base: str = ""
+    api_model: str = ""
+    api_key_env: str = ""
+    #: 服务方是否支持可复现采样参数（DeepSeek 不承诺跨时间确定性 → 默认 False）
+    api_supports_seed: bool = False
+    #: 成本估算（USD / 1k tokens；仅登记与报告，不参与判定）
+    cost_per_1k_input_usd: float = 0.0
+    cost_per_1k_output_usd: float = 0.0
 
     @property
     def has_weights(self) -> bool:
-        """是否有需要落盘校验的权重（``mock`` 后端为 False）。"""
+        """是否有需要落盘校验的权重（``mock`` / ``api`` 后端为 False）。"""
         return bool(self.weights_path)
+
+    def cost_usd(self, *, prompt_tokens: int, completion_tokens: int) -> float:
+        """按登记单价估算一次调用成本（USD，保留 9 位；报告用，不参与判定）。
+
+        保留 9 位而不是 6 位：单次调用常在 1e-5 USD 量级，6 位会把 0.0000107 抹成
+        0.000011（约 3% 误差），长跑的成本汇总会系统性偏高。
+        """
+        return round(
+            prompt_tokens / 1000.0 * self.cost_per_1k_input_usd
+            + completion_tokens / 1000.0 * self.cost_per_1k_output_usd, 9)
 
     def required_gb(self, *, max_inflight: int | None = None,
                     context_length: int | None = None,
@@ -190,13 +223,21 @@ def _pick(entry: Mapping[str, Any], defaults: Mapping[str, Any], key: str,
 def _build_spec(model_id: str, entry: Mapping[str, Any], defaults: Mapping[str, Any], *,
                 registry_fallback: Any) -> ModelSpec:
     weights_sha256 = entry.get("weights_sha256") or ""
+    backend = str(entry.get("backend"))
     fallback_backend = entry.get("fallback_backend", registry_fallback)
     server_args = entry.get("server_args") or []
     if not isinstance(server_args, (list, tuple)):
         raise InferenceError(E.E_LLM_UNAVAILABLE, f"模型 {model_id} 的 server_args 必须是数组")
+    # provider 缺省由 backend 推导（deepseek → api），并据此定 online；显式值优先。
+    provider = str(_pick(entry, defaults, "provider", "api" if backend == "deepseek"
+                         else "local"))
+    if provider not in ("local", "api"):
+        raise InferenceError(E.E_LLM_UNAVAILABLE,
+                             f"模型 {model_id} 的 provider={provider!r} 非法（local/api）")
+    online = bool(_pick(entry, defaults, "online", provider == "api"))
     return ModelSpec(
         model_id=model_id,
-        backend=str(entry.get("backend")), # type: ignore[arg-type]
+        backend=backend, # type: ignore[arg-type]
         weights_path=str(entry.get("weights_path") or ""),
         weights_sha256=str(weights_sha256),
         quantization=str(_pick(entry, defaults, "quantization", "unknown")),
@@ -213,6 +254,17 @@ def _build_spec(model_id: str, entry: Mapping[str, Any], defaults: Mapping[str, 
         fallback_backend=(str(fallback_backend) if fallback_backend else None), # type: ignore[arg-type]
         server_args=[str(a) for a in server_args],
         notes=str(entry.get("notes") or ""),
+        provider=provider, # type: ignore[arg-type]
+        online=online,
+        family=str(_pick(entry, defaults, "family", "")),
+        params_b=float(_pick(entry, defaults, "params_b", 0.0)),
+        model_revision=str(entry.get("model_revision") or ""),
+        api_base=str(_pick(entry, defaults, "api_base", "")),
+        api_model=str(_pick(entry, defaults, "api_model", "")),
+        api_key_env=str(_pick(entry, defaults, "api_key_env", "")),
+        api_supports_seed=bool(_pick(entry, defaults, "api_supports_seed", False)),
+        cost_per_1k_input_usd=float(_pick(entry, defaults, "cost_per_1k_input_usd", 0.0)),
+        cost_per_1k_output_usd=float(_pick(entry, defaults, "cost_per_1k_output_usd", 0.0)),
     )
 
 

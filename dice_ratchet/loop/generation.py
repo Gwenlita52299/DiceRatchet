@@ -605,7 +605,9 @@ class LoopOrchestrator:
             return None
         try:
             summary = reflect_mod.summarize_episode(record, window=self._recent())
-            entry = reflect_mod.reflect(summary, client=self._client(), template=template,
+            # Issue #1：反思走 **reflection** 角色（可能不是 policy 的模型）。
+            reflection_client = self._role_client("reflection")
+            entry = reflect_mod.reflect(summary, client=reflection_client, template=template,
                                         timeout_s=float(getattr(self.config,
                                                                 "reflect_timeout_s", 60.0)))
             if entry is None:
@@ -615,7 +617,7 @@ class LoopOrchestrator:
             reflect_mod.write_reflection_record(
                 self.paths, record=reflect_mod.ok_record(
                     record=record, entry=entry,
-                    llm={"model": getattr(self._client(), "model_id", None),
+                    llm={"model": getattr(reflection_client, "model_id", None),
                          "latency_ms": latency_ms},
                     template_sha256=template_sha))
             state.counters.reflections_ok += 1
@@ -654,10 +656,19 @@ class LoopOrchestrator:
             memory.add_reflection(entry, provenance=provenance)
 
     def _client(self) -> Any:
-        """反思用的 MOD-03 客户端（由组合根注入到 runner 上；缺失则降级）。"""
+        """注入的 MOD-03 客户端或其**角色提供者**（由组合根注入到 runner 上；缺失则降级）。"""
         return (getattr(self.runner, "client", None)
                 or getattr(self.runner, "llm", None)
                 or getattr(self.run_ctx, "client", None))
+
+    def _role_client(self, role: str) -> Any:
+        """按角色取客户端（Issue #1）：注入角色提供者时按角色解析，否则原样返回。
+
+        鸭子类型（``client_for``）而非 import 类型：MOD-06 不需要知道 MOD-03 的提供者类。
+        """
+        from ..inference.client import client_for_role
+
+        return client_for_role(self._client(), role)
 
     def _recent(self) -> list[RecordedEpisode]:
         """最近 ``reflect_context_window`` 局的摘要（NFR-06-7：不累积轨迹）。

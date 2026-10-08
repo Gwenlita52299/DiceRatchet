@@ -30,7 +30,9 @@ def test_shipped_registry_is_typed():
     assert registry.registry_version == 1
     assert registry.ram_budget_gb == 20.0
     assert registry.fallback_backend == "mock"
-    assert set(registry.ids()) == {"qwen3-8b-q4", "qwen3-30b-a3b-q4", "mock"}
+    # Issue #1：新增 deepseek-chat（外部 proposer / 全量对照臂 B0/B1/C0/C1 用）
+    assert set(registry.ids()) == {"qwen3-8b-q4", "qwen3-30b-a3b-q4", "mock",
+                                   "deepseek-chat"}
 
     eight = registry.spec("qwen3-8b-q4")
     assert isinstance(eight, ModelSpec)

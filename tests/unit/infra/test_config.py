@@ -549,3 +549,66 @@ def test_numeric_getattr_fallbacks_for_timeouts_are_canonical():
             assert expected.replace("_", "") in compact, \
                 f"{module.__name__} 的 {key} 兜底不是 {expected}：{hit}"
 
+
+
+# ---- Issue #1：模型角色（models.*）与实验臂（experiment.*）--------------------------
+
+def test_models_and_experiment_env_overrides(monkeypatch):
+    # 角色绑定与臂都能只用配置切换（--model 之外的两条路：环境变量 / YAML）
+    monkeypatch.setenv("DICERATCHET_MODELS__PROPOSER", "deepseek-chat")
+    monkeypatch.setenv("DICERATCHET_EXPERIMENT__ARM", "B1")
+    cfg = load_config(config_dir=CONFIGS)
+    assert cfg.models.proposer == "deepseek-chat"
+    assert cfg.experiment.arm == "B1"
+    # 角色/臂都计入 config_hash（换臂 = 换 run-id 族）
+    assert cfg.models.proposer in json.dumps(cfg_mod.full_config(cfg), ensure_ascii=False)
+
+
+def test_experiment_arm_must_exist():
+    cfg = AppConfig()
+    with pytest.raises(InfraError) as exc:
+        cfg_mod.AppConfig(
+            experiment=cfg_mod.ExperimentConfig(arm="Z9", arms=cfg.experiment.arms)).validate()
+    assert exc.value.code == E.E_IO_CONFIG_INVALID
+    assert "Z9" in exc.value.message
+
+
+def test_experiment_arms_reject_unknown_keys_and_harness():
+    arms = dict(AppConfig().experiment.arms)
+    arms["A0"] = {**arms["A0"], "judge": "x"}
+    with pytest.raises(InfraError) as exc:
+        AppConfig(experiment=cfg_mod.ExperimentConfig(arm="A0", arms=arms)).validate()
+    assert exc.value.code == E.E_IO_CONFIG_INVALID and "judge" in exc.value.message
+
+    arms = dict(AppConfig().experiment.arms)
+    arms["A0"] = {**arms["A0"], "harness": "sometimes"}
+    with pytest.raises(InfraError) as exc:
+        AppConfig(experiment=cfg_mod.ExperimentConfig(arm="A0", arms=arms)).validate()
+    assert exc.value.code == E.E_IO_CONFIG_INVALID and "harness" in exc.value.message
+
+
+def test_experiment_role_overrides_reject_unknown_role():
+    with pytest.raises(InfraError) as exc:
+        AppConfig(experiment=cfg_mod.ExperimentConfig(
+            arm="A1", roles={"judge": "qwen3-8b-q4"})).validate()
+    assert exc.value.code == E.E_IO_CONFIG_INVALID and "judge" in exc.value.message
+
+
+def test_harness_config_cannot_override_experiment(tmp_path):
+    # 臂/角色绑定是静态实验决定：harness/config.json 白名单不接受 experiment.* / models.*
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    (harness / "config.json").write_text('{"experiment.arm": "C1"}', encoding="utf-8")
+    with pytest.raises(InfraError) as exc:
+        load_config(config_dir=CONFIGS, harness_config=harness / "config.json")
+    assert exc.value.code == E.E_IO_CONFIG_INVALID
+
+
+def test_inference_api_mode_config():
+    # api_mode=replay 必须给 replay 目录（fail-closed）
+    with pytest.raises(InfraError) as exc:
+        cfg_mod.InferenceConfig(api_mode="replay").validate()
+    assert exc.value.code == E.E_IO_CONFIG_INVALID
+    with pytest.raises(InfraError):
+        cfg_mod.InferenceConfig(api_mode="sometimes").validate()
+    cfg_mod.InferenceConfig(api_mode="replay", api_replay_dir="runs/x/llm_api").validate()
