@@ -39,10 +39,10 @@ CONFIGS = REPO / "configs"
 EXPECTED_ARMS: dict[str, tuple[str, str, str]] = {
     "A0": ("qwen3-8b-q4", "qwen3-8b-q4", "qwen3-8b-q4"),
     "A1": ("qwen3-8b-q4", "qwen3-8b-q4", "qwen3-8b-q4"),
-    "B0": ("qwen3-8b-q4", "qwen3-8b-q4", "deepseek-chat"),
-    "B1": ("qwen3-8b-q4", "qwen3-8b-q4", "deepseek-chat"),
-    "C0": ("deepseek-chat", "deepseek-chat", "deepseek-chat"),
-    "C1": ("deepseek-chat", "deepseek-chat", "deepseek-chat"),
+    "B0": ("qwen3-8b-q4", "qwen3-8b-q4", "deepseek-flash"),
+    "B1": ("qwen3-8b-q4", "qwen3-8b-q4", "deepseek-flash"),
+    "C0": ("deepseek-flash", "deepseek-flash", "deepseek-flash"),
+    "C1": ("deepseek-flash", "deepseek-flash", "deepseek-flash"),
 }
 
 
@@ -188,11 +188,11 @@ def test_provenance_restores_three_roles(cfg, tmp_path, monkeypatch):
     assert set(roles) == set(ROLE_NAMES)
     assert roles["policy"]["model_id"] == "qwen3-8b-q4"
     assert roles["policy"]["provider"] == "local" and roles["policy"]["online"] is False
-    assert roles["proposer"]["model_id"] == "deepseek-chat"
+    assert roles["proposer"]["model_id"] == "deepseek-flash"
     assert roles["proposer"]["provider"] == "api"
     assert roles["proposer"]["backend"] == "deepseek"
     assert roles["proposer"]["online"] is True
-    assert roles["proposer"]["api_model"] == "deepseek-chat"
+    assert roles["proposer"]["api_model"] == "deepseek-flash"
     assert roles["proposer"]["api_key_env"] == "DEEPSEEK_API_KEY"
     assert roles["proposer"]["api_key_present"] is True
     # 绝不落盘 key 本体
@@ -200,9 +200,12 @@ def test_provenance_restores_three_roles(cfg, tmp_path, monkeypatch):
 
 
 def test_provenance_records_api_key_absent(cfg, tmp_path, monkeypatch):
+    # 环境变量与本地密钥文件都指向"没有 key"：显式用不存在的文件，隔离开发者本机 .env
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
-    payload = run_provenance(_with_arm(cfg, "C1"), resolve_role_bindings(_with_arm(cfg, "C1")),
-                             run_id="r-prov2")
+    cfg2 = _with_arm(cfg, "C1")
+    cfg2 = replace(cfg2, inference=replace(cfg2.inference,
+                                          api_key_file=str(tmp_path / "no-such.env")))
+    payload = run_provenance(cfg2, resolve_role_bindings(cfg2), run_id="r-prov2")
     assert payload["roles"]["policy"]["api_key_present"] is False
     assert payload["api_mode"] == "live"
 
@@ -229,6 +232,6 @@ def test_provider_client_role_aware_via_coerce(cfg):
     from dice_ratchet.inference.client import coerce_client, role_model_id
 
     provider = RoleModelProvider(_with_arm(cfg, "B1"), run_id="r-2", runs_root="/tmp/dr-roles")
-    assert coerce_client(provider, role="proposer").model_id == "deepseek-chat"
+    assert coerce_client(provider, role="proposer").model_id == "deepseek-flash"
     assert coerce_client(provider).model_id == "qwen3-8b-q4" # 缺省 policy
-    assert role_model_id(provider, "proposer") == "deepseek-chat"
+    assert role_model_id(provider, "proposer") == "deepseek-flash"

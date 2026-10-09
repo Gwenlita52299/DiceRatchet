@@ -642,7 +642,8 @@ class BackendManager:
                  clock: Callable[[], float] | None = None,
                  sleep: Callable[[float], Any] | None = None,
                  record_sink: Callable[[InferenceCallRecord], None] | None = None,
-                 chars_per_token: float = CHARS_PER_TOKEN) -> None:
+                 chars_per_token: float = CHARS_PER_TOKEN,
+                 runs_root: Path | str | None = None) -> None:
         self.registry = registry if registry is not None else load_registry(registry_path)
         self.mode = mode
         self.config = config
@@ -658,6 +659,10 @@ class BackendManager:
         self._sleep = sleep or asyncio.sleep
         self._record_sink = record_sink
         self._chars_per_token = float(chars_per_token)
+        #: API 后端的审计工件落点（``runs/<run_id>/<api_record_dir>``）。不传则由适配器
+        #: 回落到 ``Path("runs")`` 并记 ``llm.api.record_dir_fallback`` 事件 —— 曾经因为
+        #: 这里没往下传，审计记录落到了仓库根的 runs/ 而不是 run 目录（真跑时发现）。
+        self._runs_root = Path(runs_root) if runs_root else None
         self._backends: dict[str, Backend] = {}
         self._states: dict[str, str] = {}
         self._last_errors: dict[str, str | None] = {}
@@ -961,7 +966,8 @@ class BackendManager:
             # Issue #1：API 后端与本地后端在 BackendManager 眼里完全同形 —— 三级 JSON
             # 策略、schema 校验、修复重试、预算门禁、埋点全部复用，不另起一套。
             from .deepseek_backend import DeepSeekAPIAdapter
-            return DeepSeekAPIAdapter(infra=self.infra, config=self.config)
+            return DeepSeekAPIAdapter(infra=self.infra, config=self.config,
+                                      runs_root=self._runs_root)
         raise InferenceError(E.E_LLM_UNAVAILABLE,
                              f"未知 backend={spec.backend!r}"
                              "（合法：mlx/llama_cpp/llama_server/mock/deepseek）")

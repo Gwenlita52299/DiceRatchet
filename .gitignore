@@ -27,6 +27,13 @@ models/
 # 本地生成的动画讲解 HTML（大文件，不入库）
 *-动画讲解.html
 
+# 本地 API key 文件（Issue #1：真跑 B/C 臂用；key 绝不入库、绝不进 run 工件）
+# 注意：infra.git_ops 把 `git status --porcelain` 的任何输出都算「worktree 不干净」，
+# 未跟踪文件也在内 —— 所以这条必须存在，否则 .env 会让 MOD-07 拒绝演化。
+.env
+.env.*
+!.env.example
+
 # Python test artifacts
 .coverage
 coverage.xml

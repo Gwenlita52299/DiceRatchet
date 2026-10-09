@@ -20,7 +20,6 @@ model_id / provider / backend / model_revision / online，以及臂与 config_ha
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Literal, Mapping
@@ -30,6 +29,7 @@ from .backend import BackendManager, InfraBridge, InfraFacade, NullInfra
 from .client import BackendInferenceClient
 from .errors import InferenceError
 from .registry import ModelRegistry, ModelSpec, load_registry
+from .secrets import env_file_path, lookup_api_key
 
 __all__ = [
     "ModelRole", "ROLE_NAMES", "RoleBinding", "RoleModelProvider",
@@ -130,8 +130,10 @@ class RoleBinding:
     context_length: int
     supports_grammar: bool
     supports_json_mode: bool
-    #: key 是否已在环境中（只记布尔，绝不落盘 key 本身）
+    #: key 是否可用（环境变量或本地密钥文件）；只记布尔，绝不落盘 key 本身
     api_key_present: bool = False
+    #: key 来源：``environment`` / ``env_file`` / ``missing``（同样是「在哪」，不是 key）
+    api_key_source: str = "missing"
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -144,6 +146,7 @@ class RoleBinding:
             "api_model": self.api_model,
             "api_key_env": self.api_key_env,
             "api_key_present": bool(self.api_key_present),
+            "api_key_source": str(self.api_key_source),
             "source": self.source,
             "context_length": int(self.context_length),
             "supports_grammar": bool(self.supports_grammar),
@@ -152,7 +155,7 @@ class RoleBinding:
 
 
 def _binding_for(role: str, model_id: str, spec: ModelSpec, source: str, *,
-                 api_key_present: bool) -> RoleBinding:
+                 api_key_source: str) -> RoleBinding:
     return RoleBinding(
         role=role, model_id=model_id, provider=spec.provider, backend=spec.backend,
         online=bool(spec.online), model_revision=spec.model_revision,
@@ -160,7 +163,7 @@ def _binding_for(role: str, model_id: str, spec: ModelSpec, source: str, *,
         source=source, context_length=int(spec.context_length),
         supports_grammar=bool(spec.supports_grammar),
         supports_json_mode=bool(spec.supports_json_mode),
-        api_key_present=bool(api_key_present))
+        api_key_present=(api_key_source != "missing"), api_key_source=api_key_source)
 
 
 def resolve_role_bindings(cfg: Any, *, registry: ModelRegistry | None = None,
@@ -173,6 +176,7 @@ def resolve_role_bindings(cfg: Any, *, registry: ModelRegistry | None = None,
         path = str(getattr(getattr(cfg, "inference", None), "registry_path",
                            "configs/models.yaml"))
     reg = registry if registry is not None else load_registry(path)
+    file_path = env_file_path(getattr(cfg, "inference", None))
     out: dict[str, RoleBinding] = {}
     for role in ROLE_NAMES:
         model_id = ids[role]
@@ -183,7 +187,7 @@ def resolve_role_bindings(cfg: Any, *, registry: ModelRegistry | None = None,
                 hint="在 configs/default.yaml 的 models 段显式绑定，或设置 inference.model_id",
                 retryable=False)
         spec = reg.spec(model_id) # 未知 id → E_LLM_UNAVAILABLE（fail-closed）
-        key_present = False
+        key_source = "missing"
         if spec.provider == "api":
             if not spec.api_key_env:
                 raise InferenceError(
@@ -191,9 +195,11 @@ def resolve_role_bindings(cfg: Any, *, registry: ModelRegistry | None = None,
                     f"模型 {model_id!r} 的 provider=api，但注册表没有登记 api_key_env",
                     hint="在 configs/models.yaml 该模型下补 api_key_env（只登记变量名）",
                     retryable=False)
-            key_present = bool(os.environ.get(spec.api_key_env))
+            # 只查注册表声明的那个名字；真实环境变量优先，其次 inference.api_key_file。
+            ref = lookup_api_key(spec.api_key_env, env_file=file_path)
+            key_source = ref.source
         out[role] = _binding_for(role, model_id, spec, _binding_source(cfg, role),
-                                 api_key_present=key_present)
+                                 api_key_source=key_source)
     return out
 
 
@@ -280,7 +286,9 @@ class RoleModelProvider:
                 mode=self._mode, # type: ignore[arg-type]
                 ram_budget_gb=float(getattr(inference, "ram_budget_gb", 20.0)),
                 infra=self._infra, config=inference, registry=self.registry,
-                record_sink=self._record_sink)
+                record_sink=self._record_sink,
+                # API 后端（deepseek）的审计工件必须落在本 run 的目录里
+                runs_root=self.runs_root)
         return self._manager
 
     def binding(self, role: str) -> RoleBinding:

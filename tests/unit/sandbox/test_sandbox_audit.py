@@ -146,6 +146,35 @@ def test_own_train_seed_is_not_a_leak(build_run, tmp_path):
     assert result.verdict == A.VERDICT_CLEAN
 
 
+def test_timing_fields_in_events_are_not_seed_leaks(build_run, tmp_path):
+    """机器耗时字段不作 seed 扫描（2026-10-08 CI parity 随机失败的回归）。
+
+    ``eval.seed_done`` 会带 ``dur_s``/``episode_s``/``cpu_s``，MOD-06/07 另发
+    ``wall_ms``/``elapsed_s``/``elapsed_ms``。耗时的小数部分落在 heldout 区间
+    （``episode_s=2.2083`` → 2083）时曾被判 critical：**同一提交本地通过、CI 失败**，
+    因为整件事取决于墙钟数值。
+    """
+    built = build_run(tmp_path, run_id="r-timing")
+    rows = [
+        {"event": "eval.seed_done", "ts": FIXED, "seed": 1000, "steps": 40,
+         "decisions": 12, "dur_s": 2.2072, "episode_s": 2.2083, "cpu_s": 2.2072},
+        {"event": "memory.retrieve", "ts": FIXED, "elapsed_ms": 2072.8,
+         "tokens": 12, "wall_ms": 2072, "elapsed_s": 2.2072},
+    ]
+    (built.root / "events.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+    result = A.run_audit(built.root, generated_at=FIXED)
+    assert result.leak_counts.get("seed_leak", 0) == 0
+    assert result.verdict == A.VERDICT_CLEAN
+    # 反例：同一批事件里，内容字段带 heldout seed 仍必须抓到（白名单不能变成盲区）
+    rows[0]["reason"] = "泄漏面：heldout seed 2083"
+    (built.root / "events.jsonl").write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+    dirty = A.run_audit(built.root, generated_at=FIXED)
+    assert dirty.leak_counts.get("seed_leak", 0) >= 1
+    assert dirty.verdict == A.VERDICT_CRITICAL
+
+
 def test_canary_in_log_is_critical(build_run, tmp_path):
     built = build_run(tmp_path, run_id="r-canary")
     text = built.episode_path.read_text(encoding="utf-8")

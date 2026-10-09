@@ -120,6 +120,19 @@ LOG_NON_CONTENT_KEYS: Final[frozenset[str]] = frozenset({
     # 不承载文本。
     "duration_us", "duration_ms", "duration_s", "dur_s", "dur_ms",
     "latency_ms", "latency_us",
+    # 2026-10-08（CI 深门实测）：``eval.seed_done`` 还带 ``episode_s``/``cpu_s``，
+    # MOD-06/07/05 另发 ``wall_ms``/``elapsed_s``/``elapsed_ms``。**任何以秒/毫秒为单位的
+    # 浮点耗时，小数部分都有约 2% 的概率落进 2000–2099/9000–9099**
+    # （``episode_s=2.2083`` → 2083 命中 heldout）⇒ 审计按耗时碰运气刷 critical 假阳性，
+    # 本次就是它让 CI parity 作业随机失败（同一提交本地复跑通过）。
+    # 白名单只按「代码里真实 emit 的键」逐个登记，**不做后缀通配**：通配会顺带放过
+    # ``*_s`` 结尾的内容字段，那是真泄漏面。
+    "episode_s", "cpu_s", "elapsed_s", "elapsed_ms", "wall_ms", "total_timeout_ms",
+    # 枚举口径（2026-10-08）：把 `runs/*/events.jsonl` 与 `runs/*/episodes/**/*.jsonl`
+    # 里**真实出现过**的「`_s`/`_ms`/`_us`/`_ns` 结尾 + 数值」字段全量扫了一遍，
+    # 上面这批覆盖了全部；`seed_timeout_s` 是唯一的纯预算字段（当前值 900 不触发，
+    # 但换成 2072 这类 4 位数就会）——一并登记，避免下次又靠运气。
+    "seed_timeout_s",
     # 计数与规模：机器累加器
     "n", "n_workers", "n_dropped", "degraded_n", "steps", "decisions",
     "fields", "dropped_hidden", "missing_optional",

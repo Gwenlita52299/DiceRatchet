@@ -78,7 +78,16 @@ def _build_registry() -> dict[str, EventSpec]:
     # ---- llm（MOD-03）--------------------------------------------------------------
     for ev, req in [("call", frozenset({"model_id", "latency_ms"})),
                     ("degrade", frozenset({"code"})),
-                    ("oom", frozenset({"code"}))]:
+                    ("oom", frozenset({"code"})),
+                    # Issue #1：API provider（deepseek）的调用与取证事件。审计工件落在
+                    # runs/<run_id>/llm_api/，事件侧只记 hash / usage / 成本 / 来源。
+                    ("api.call", frozenset({"model_id", "request_hash", "response_hash",
+                                            "latency_ms", "api_key_source"})),
+                    ("nondeterministic", frozenset({"code", "request_hash", "response_hash",
+                                                    "previous_response_hash"})),
+                    ("api.key_file_permissions", frozenset({"path"})),
+                    ("api.record_failed", frozenset({"code", "path"})),
+                    ("api.record_dir_fallback", frozenset({"path"}))]:
         entries.append(_spec("llm", ev, "MOD-03 推理后端事件", req))
     # ---- policy（MOD-04）-----------------------------------------------------------
     for ev, req in [("decision", frozenset({"episode_key", "source"})),

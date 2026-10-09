@@ -106,27 +106,67 @@ MOD-04/06/07/08 的业务代码不动，也不出现 `from mlx_lm import ...` / 
 | Arm | 决策 / 反思 | Proposer | Harness | 用途 |
 |---|---|---|---|---|
 | A0 / A1 | Qwen3-8B | Qwen3-8B | 固定 / 演化 | Qwen 主线 baseline 与 RSI 主实验臂 |
-| B0 / B1 | Qwen3-8B | DeepSeek API | 固定 / 演化 | 「proposer 能力」对照 |
-| C0 / C1 | DeepSeek API | DeepSeek API | 固定 / 演化 | 全量外部模型对照 |
+| B0 / B1 | Qwen3-8B | `deepseek-flash` | 固定 / 演化 | 「proposer 能力」对照 |
+| C0 / C1 | `deepseek-flash` | `deepseek-flash` | 固定 / 演化 | 全量外部模型对照 |
+
+外部模型是 **`deepseek-flash`**（DeepSeek-V4.1-Flash，1M 上下文）：2026-10-08 实测
+`GET https://api.deepseek.com/v1/models` 只有 `deepseek-flash` 与 `deepseek-v4-pro`，
+原登记名 `deepseek-chat` 已下线（见 [configs/models.yaml](configs/models.yaml)）。
+后者的 `deepseek-v4-pro` 已登记但未被任何臂使用，供后续「proposer 能力 vs 成本」对照直接切。
+成本按官方定价登记为**人民币 + 高峰档上界**，审计里记 `cost_estimate{amount,currency,basis}`；
+未登记单价的模型记 `null`（不拿 0 冒充免费）。
+
+**flash 必须显式关闭思考模式**（`api_thinking: disabled`）：该模型默认开思考模式，思维链会把
+`max_tokens` 吃光、`content` 返回空串，于是每次都靠 MOD-03 的修复重试才拿到 JSON —— 白花一次调用。
+实测（同一 probe）：开思考 895 输入/166 输出 token、墙钟 3459 ms、`attempts=2`；
+关思考 215/109 token、869 ms、`attempts=1`。官方文档也印证：思考模式忽略 `temperature`，
+非思考模式下 `temperature` 才生效，正是 B-14 需要的确定性口径。
 
 ```bash
 # 方式一：改 configs/default.yaml 的 experiment.arm / models.* / experiment.roles
 # 方式二：DICERATCHET_* 环境变量（B-30 的 __ 分层；CLI 目前只有 8 个显式覆盖键，没有通用 --set）
 export DICERATCHET_EXPERIMENT__ARM=B1                    # 等价于 experiment.arm: B1
-export DICERATCHET_MODELS__PROPOSER=deepseek-chat        # 只钉 proposer，其余角色不动
-export DEEPSEEK_API_KEY=...        # 只从环境变量读；key 绝不进 harness/、run JSON 或 Git
+export DICERATCHET_MODELS__PROPOSER=deepseek-flash        # 只钉 proposer，其余角色不动
 python -m dice_ratchet loop run --agent llm --seeds train:1000-1029 --k 30 --hitl --run-id <loop_run_id>
 ```
+
+### API key：本地密钥文件（不入库）
+
+真跑 B/C 臂需要 `DEEPSEEK_API_KEY`。除了 `export`，也可以放在仓库根一个**被 .gitignore 忽略**的
+`.env` 里（省得每次 export）：
+
+```bash
+cp .env.example .env && chmod 600 .env    # 然后把 key 粘到 DEEPSEEK_API_KEY= 后面
+```
+
+语义（实现在 [dice_ratchet/inference/secrets.py](dice_ratchet/inference/secrets.py)）：
+
+- **真实环境变量优先**：已经 `export` 时以环境变量为准，文件不覆盖；
+- **只读注册表声明的那个名字**（`configs/models.yaml` 的 `api_key_env`，当前是 `DEEPSEEK_API_KEY`）——
+  文件里其它行一律无效，包括 `DICERATCHET_*`，所以这个文件**不能用来偷改配置**；
+- **不改进程环境**：只做查找，绝不 `os.environ.update(...)`，受限子进程与 `config.json` 的环境快照都看不到它；
+- key 只进内存：不写 `harness/`、run JSON、事件或日志；审计与 provenance 只记来源
+  （`api_key_source: environment | env_file | missing`）与「是否可用」的布尔值；
+- 文件对同组/其他用户可读时记一条 `llm.api.key_file_permissions` 告警（建议 `chmod 600`）；
+- 想只用环境变量：把 `inference.api_key_file` 设为空字符串。
+
+`.gitignore` 里必须有 `.env` 这条：`infra.git_ops` 把 `git status --porcelain` 的任何输出都算
+「worktree 不干净」（未跟踪文件也在内），否则 MOD-07 会直接拒绝演化。
 
 臂与角色绑定都是**静态实验决定**：它们不进 `harness/config.json` 白名单（MOD-07 不能自己改实验臂），
 但会进 `config_hash`，所以换臂后必须换 run-id。
 
 每个 run 落 `runs/<run_id>/models_provenance.json`：三角色各自的 model_id / provider / backend /
-model_revision / online / `api_key_present`（只记布尔），加上臂、harness 模式与 `config_hash`。
+model_revision / online / `api_key_present` / `api_key_source`，加上臂、harness 模式与 `config_hash`。
 DeepSeek 侧另有审计：`runs/<run_id>/llm_api/` 按 request hash 存 prompt hash / sampling /
-response hash / usage / 成本估算；同一请求而响应变化时**不覆盖旧证据**，另存变体并记
-`llm.nondeterministic`（`E_LLM_NONDETERMINISTIC`）。离线复现用 `inference.api_mode=replay`
-（只读历史响应，缺记录即报错，不冒充新样本）。
+response hash / usage / 成本估算 / **响应正文**（`response_text`，记录 v2）；同一请求而响应变化时
+**不覆盖旧证据**，另存变体（`.v<n>.json`）并记 `llm.nondeterministic`（`E_LLM_NONDETERMINISTIC`）。
+离线复现用 `inference.api_mode=replay`（只读历史响应，缺记录**或缺响应正文**即 fail-closed，
+绝不把审计元数据当模型输出，也不冒充新样本）。**实测提醒**（报告 §11）：`deepseek-flash` 在
+`temperature=0.0` 下也不保证跨时间确定 —— 两次同配置真跑之间 9 个逐字节相同的请求拿到
+9 个不同响应，
+所以 A/B/C 对照必须 `n≫1`、按 episode seed 配对，逐位复现只能靠 replay。
+跨 run 比对用只读脚本：`.venv/bin/python scripts/compare_api_runs.py <run_a> <run_b>`。
 
 ## CI 门禁
 

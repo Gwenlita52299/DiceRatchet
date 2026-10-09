@@ -30,9 +30,20 @@ def test_shipped_registry_is_typed():
     assert registry.registry_version == 1
     assert registry.ram_budget_gb == 20.0
     assert registry.fallback_backend == "mock"
-    # Issue #1：新增 deepseek-chat（外部 proposer / 全量对照臂 B0/B1/C0/C1 用）
+    # Issue #1：新增 DeepSeek API 模型（外部 proposer / 全量对照臂 B0/B1/C0/C1 用）。
+    # 2026-10-08 实测 GET /v1/models：该账号只有 deepseek-flash 与 deepseek-v4-pro。
     assert set(registry.ids()) == {"qwen3-8b-q4", "qwen3-30b-a3b-q4", "mock",
-                                   "deepseek-chat"}
+                                   "deepseek-flash", "deepseek-v4-pro"}
+    flash = registry.spec("deepseek-flash")
+    assert flash.backend == "deepseek" and flash.provider == "api" and flash.online is True
+    assert flash.api_model == "deepseek-flash" and flash.api_key_env == "DEEPSEEK_API_KEY"
+    assert flash.context_length == 1_048_576 and flash.supports_json_mode is True
+    # 成本口径：人民币 + 高峰档上界（官方定价页），金额与币种分开记
+    assert flash.cost_registered is True and flash.cost_currency == "CNY"
+    cost = flash.estimate_cost(prompt_tokens=1000, completion_tokens=1000)
+    assert cost == {"amount": 0.01, "currency": "CNY", "basis": "peak"}
+    # 未登记单价的模型 → None（不拿 0 冒充免费）
+    assert registry.spec("mock").estimate_cost(prompt_tokens=1, completion_tokens=1) is None
 
     eight = registry.spec("qwen3-8b-q4")
     assert isinstance(eight, ModelSpec)

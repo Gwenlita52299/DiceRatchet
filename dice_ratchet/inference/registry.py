@@ -75,24 +75,40 @@ class ModelSpec:
     api_key_env: str = ""
     #: 服务方是否支持可复现采样参数（DeepSeek 不承诺跨时间确定性 → 默认 False）
     api_supports_seed: bool = False
-    #: 成本估算（USD / 1k tokens；仅登记与报告，不参与判定）
-    cost_per_1k_input_usd: float = 0.0
-    cost_per_1k_output_usd: float = 0.0
+    #: 思考模式（``"enabled"`` / ``"disabled"`` / ``""`` = 不发送、用服务方默认）。
+    #: 结构化 JSON 流水线应显式 ``disabled``：思考模式会把 ``max_tokens`` 花在
+    #: ``reasoning_content`` 上，导致 ``content`` 为空串（实测 flash 默认开启）。
+    api_thinking: str = ""
+    #: 成本估算（**按 cost_currency 计价的 1k tokens 单价**；仅登记与报告，不参与判定）。
+    #: 注意服务方可能分时段计价：cost_basis 说明登记的是哪一档（如「peak 上界」）。
+    cost_per_1k_input: float = 0.0
+    cost_per_1k_output: float = 0.0
+    cost_currency: str = ""
+    cost_basis: str = ""
+    #: 是否**显式登记**过单价：未登记时 ``estimate_cost`` 返回 ``None``（记 null，不猜 0）
+    cost_registered: bool = False
 
     @property
     def has_weights(self) -> bool:
         """是否有需要落盘校验的权重（``mock`` / ``api`` 后端为 False）。"""
         return bool(self.weights_path)
 
-    def cost_usd(self, *, prompt_tokens: int, completion_tokens: int) -> float:
-        """按登记单价估算一次调用成本（USD，保留 9 位；报告用，不参与判定）。
+    def estimate_cost(self, *, prompt_tokens: int, completion_tokens: int
+                      ) -> dict[str, Any] | None:
+        """按登记单价估算一次调用成本；**未登记即返回 None**（报告里记 null，绝不猜 0）。
 
-        保留 9 位而不是 6 位：单次调用常在 1e-5 USD 量级，6 位会把 0.0000107 抹成
-        0.000011（约 3% 误差），长跑的成本汇总会系统性偏高。
+        返回 ``{"amount": float, "currency": str, "basis": str}``：金额与币种分开记，
+        因为服务方可能按人民币计价、且分高峰/空闲两档（``basis`` 说明登记的是哪一档）。
+        金额保留 9 位而不是 6 位：单次调用常在 1e-5 量级，6 位会把 0.0000107 抹成
+        0.000011（约 3% 误差），长跑汇总会系统性偏高。
         """
-        return round(
-            prompt_tokens / 1000.0 * self.cost_per_1k_input_usd
-            + completion_tokens / 1000.0 * self.cost_per_1k_output_usd, 9)
+        if not self.cost_registered:
+            return None
+        amount = round(
+            prompt_tokens / 1000.0 * self.cost_per_1k_input
+            + completion_tokens / 1000.0 * self.cost_per_1k_output, 9)
+        return {"amount": amount, "currency": self.cost_currency or "unspecified",
+                "basis": self.cost_basis or "unspecified"}
 
     def required_gb(self, *, max_inflight: int | None = None,
                     context_length: int | None = None,
@@ -263,8 +279,13 @@ def _build_spec(model_id: str, entry: Mapping[str, Any], defaults: Mapping[str, 
         api_model=str(_pick(entry, defaults, "api_model", "")),
         api_key_env=str(_pick(entry, defaults, "api_key_env", "")),
         api_supports_seed=bool(_pick(entry, defaults, "api_supports_seed", False)),
-        cost_per_1k_input_usd=float(_pick(entry, defaults, "cost_per_1k_input_usd", 0.0)),
-        cost_per_1k_output_usd=float(_pick(entry, defaults, "cost_per_1k_output_usd", 0.0)),
+        api_thinking=str(_pick(entry, defaults, "api_thinking", "")),
+        cost_per_1k_input=float(_pick(entry, defaults, "cost_per_1k_input", 0.0)),
+        cost_per_1k_output=float(_pick(entry, defaults, "cost_per_1k_output", 0.0)),
+        cost_currency=str(_pick(entry, defaults, "cost_currency", "")),
+        cost_basis=str(_pick(entry, defaults, "cost_basis", "")),
+        # 只有**显式**登记过单价才算「有成本口径」；仅靠 defaults 兜底不算（避免假账）
+        cost_registered=any(k in entry for k in ("cost_per_1k_input", "cost_per_1k_output")),
     )
 
 

@@ -14,10 +14,10 @@
 - 错误映射：401/403 → ``E_LLM_UNAVAILABLE``（不可重试）；400/404/422 → 不可重试；
   408/429/5xx/连接失败 → 可重试（适配器内部做**有限**重试，退避封顶）。
 - 可复现性：记 provider/model_id/实际 model_revision/request hash/prompt hash/
-  sampling/response hash/usage/成本；同一 request hash 而 response hash 变化时，
+  sampling/response hash/usage/成本/响应正文；同一 request hash 而 response hash 变化时，
   **不覆盖旧证据**，另存变体并记 ``llm.nondeterministic``（``E_LLM_NONDETERMINISTIC``）。
-- ``replay``：只从历史响应目录读，缺记录即 fail-closed；replay 结果单独记档，
-  不得冒充新的独立实验样本。
+- ``replay``：只从历史响应目录读，缺记录即 fail-closed；记录缺响应正文同样 fail-closed
+  （不能拿审计 JSON 冒充模型输出）；replay 结果单独记档，不得冒充新的独立实验样本。
 """
 
 from __future__ import annotations
@@ -25,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
 import time
 import urllib.error
 import urllib.request
@@ -39,6 +38,7 @@ from .backend import (BackendHealth, GenerationResult, InfraFacade, LocalBackend
 from .errors import InferenceError
 from .records import prompt_digest
 from .registry import ModelSpec
+from .secrets import env_file_path, lookup_api_key, permissions_warning
 
 __all__ = [
     "DeepSeekAPIAdapter", "ApiRequest", "ApiResponse", "TransportError",
@@ -166,6 +166,10 @@ def build_request_payload(spec: ModelSpec, messages: Sequence[Message], *,
         payload["seed"] = int(sampling["seed"])
     if json_mode and spec.supports_json_mode:
         payload["response_format"] = {"type": "json_object"}
+    if spec.api_thinking in ("enabled", "disabled"):
+        # 思考模式开关（OpenAI 格式的 thinking.type）。结构化 JSON 流水线要显式 disabled：
+        # 默认开启时思维链会吃掉 max_tokens，content 直接返回空串（实测 deepseek-flash）。
+        payload["thinking"] = {"type": spec.api_thinking}
     if stop:
         payload["stop"] = [str(s) for s in stop][:16] # OpenAI 兼容上限 16 条
     return payload
@@ -200,6 +204,7 @@ class DeepSeekAPIAdapter(LocalBackend):
                  transport: Callable[[ApiRequest], ApiResponse] | None = None,
                  sleep: Callable[[float], Any] | None = None,
                  api_key: str | None = None,
+                 api_key_file: Path | str | None = None,
                  replay_dir: Path | str | None = None,
                  runs_root: Path | str | None = None) -> None:
         self._infra: InfraFacade = infra or NullInfra()
@@ -207,6 +212,8 @@ class DeepSeekAPIAdapter(LocalBackend):
         self._transport = transport
         self._sleep = sleep or asyncio.sleep
         self._api_key_override = api_key
+        #: 显式传入优先；``None`` 时按 ``inference.api_key_file`` 解析（默认仓库根 .env）
+        self._api_key_file = Path(api_key_file) if api_key_file is not None else None
         self._replay_dir = Path(replay_dir) if replay_dir else None
         self._runs_root = Path(runs_root) if runs_root else None
         self.model_id: str = ""
@@ -216,6 +223,8 @@ class DeepSeekAPIAdapter(LocalBackend):
         self._last_error_code: str | None = None
         self._supports_json_mode = True
         self._api_mode: str = "live"
+        #: key 的来源（environment / env_file / explicit）——只记来源，不记 key 本身
+        self._api_key_source: str = "missing"
 
     # ---- 生命周期 ---------------------------------------------------------------
     async def load(self, spec: ModelSpec) -> None:
@@ -241,7 +250,9 @@ class DeepSeekAPIAdapter(LocalBackend):
             self._api_key = ""
         else:
             key = self._api_key_override
-            if key is None:
+            if key is not None:
+                self._api_key_source = "explicit"
+            else:
                 env_name = spec.api_key_env
                 if not env_name:
                     raise InferenceError(
@@ -249,13 +260,21 @@ class DeepSeekAPIAdapter(LocalBackend):
                         f"模型 {spec.model_id!r} 未登记 api_key_env（provider=api）",
                         hint="在 configs/models.yaml 该模型下补 api_key_env，例如 DEEPSEEK_API_KEY",
                         retryable=False)
-                key = os.environ.get(env_name, "")
+                file_path = (self._api_key_file if self._api_key_file is not None
+                             else env_file_path(self._config))
+                ref = lookup_api_key(env_name, env_file=file_path)
+                key, self._api_key_source = ref.value, ref.source
+                if ref.present:
+                    self._warn_loose_permissions(ref)
             if not key:
+                file_hint = (f"；也可以把 key 写进本地密钥文件 {self._api_key_file or env_file_path(self._config)}"
+                             f"（已在 .gitignore 内，cp .env.example .env 后 chmod 600）")
                 raise InferenceError(
                     E.E_LLM_UNAVAILABLE,
-                    f"缺少 API key（环境变量 {spec.api_key_env or '<未登记>'} 为空）",
-                    hint=f"export {spec.api_key_env or 'DEEPSEEK_API_KEY'}=<key>；"
-                         "key 只从环境变量读，绝不写入 harness/、run JSON 或 Git",
+                    f"缺少 API key（环境变量 {spec.api_key_env or '<未登记>'} 为空，"
+                    f"本地密钥文件也没有该名字）",
+                    hint=f"export {spec.api_key_env or 'DEEPSEEK_API_KEY'}=<key>{file_hint}；"
+                         "key 只从环境变量或该本地文件读，绝不写入 harness/、run JSON 或 Git",
                     retryable=False)
             self._api_key = key
         self.model_id = spec.model_id
@@ -264,6 +283,7 @@ class DeepSeekAPIAdapter(LocalBackend):
 
     async def unload(self) -> None:
         self._api_key = ""
+        self._api_key_source = "missing"
         self._spec = None
         self._state = "unloaded"
 
@@ -300,7 +320,8 @@ class DeepSeekAPIAdapter(LocalBackend):
         latency_ms = int(round((time.perf_counter() - started) * 1000.0))
         usage = self._usage_of(parsed["usage"], messages, latency_ms=latency_ms)
         audit = {
-            "schema_version": 1,
+            # v2：新增 ``response_text`` / ``response_status``（录制响应正文，replay 才能回放）
+            "schema_version": 2,
             "provider": "api",
             "backend": self.name,
             "model_id": spec.model_id,
@@ -317,16 +338,19 @@ class DeepSeekAPIAdapter(LocalBackend):
             "json_mode": bool(json_mode),
             "usage": {"prompt_tokens": usage.prompt_tokens,
                       "completion_tokens": usage.completion_tokens},
-            "cost_usd": spec.cost_usd(prompt_tokens=usage.prompt_tokens,
-                                      completion_tokens=usage.completion_tokens),
+            # 未登记单价时为 null（不拿 0 冒充"免费"）；金额与币种分开记
+            "cost_estimate": spec.estimate_cost(prompt_tokens=usage.prompt_tokens,
+                                               completion_tokens=usage.completion_tokens),
             "latency_ms": latency_ms,
             "attempts": int(parsed["attempts"]),
             "status": int(response.status),
             "finish_reason": parsed["finish_reason"],
             "api_key_env": spec.api_key_env,
+            "api_key_source": self._api_key_source,
         }
         self._record(audit, request_hash=request_hash, response_hash=audit["response_hash"],
-                     replay=replay)
+                     replay=replay, response_text=response.text,
+                     response_status=int(response.status))
         self._infra.emit("llm.api.call", **{k: v for k, v in audit.items()
                                            if k not in ("sampling", "usage")},
                          temperature=sampling["temperature"], top_p=sampling["top_p"])
@@ -414,6 +438,9 @@ class DeepSeekAPIAdapter(LocalBackend):
 
     def _status_error(self, response: ApiResponse, *, attempts: int) -> InferenceError | None:
         """非 2xx → 映射为 InferenceError；2xx 返回 None。"""
+        spec = self._spec
+        where_file = (self._api_key_file if self._api_key_file is not None
+                      else env_file_path(self._config))
         status = int(response.status)
         if 200 <= status < 300:
             return None
@@ -422,10 +449,15 @@ class DeepSeekAPIAdapter(LocalBackend):
                             if k.lower() == "retry-after"), None)
         detail = {"status": status, "body": snippet, "retry_after": retry_after}
         if status in (401, 403):
+            # 真跑时的第一现场：把「key 从哪来、该改哪」直接说清楚（key 本身仍然打码）。
+            source = {"environment": "环境变量", "env_file": "本地密钥文件",
+                      "explicit": "显式注入"}.get(self._api_key_source, "未知来源")
+            where = (f"{spec.api_key_env or 'DEEPSEEK_API_KEY'}（{source}"
+                     f"{'：' + str(where_file) if where_file else ''}）")
             return InferenceError(E.E_LLM_UNAVAILABLE,
                                   f"API 认证/权限失败（HTTP {status}）：{snippet}",
                                   retryable=False, attempts=attempts, detail=detail,
-                                  hint="检查环境变量里的 API key 是否有效、是否已开通该模型")
+                                  hint=f"检查 {where} 是否有效、是否已开通该模型")
         if status == 404:
             return InferenceError(E.E_LLM_UNAVAILABLE,
                                   f"API 端点/模型不存在（HTTP 404）：{snippet}",
@@ -438,6 +470,15 @@ class DeepSeekAPIAdapter(LocalBackend):
         return InferenceError(E.E_LLM_BACKEND_ERROR,
                               f"API 拒绝请求（HTTP {status}）：{snippet}",
                               retryable=False, attempts=attempts, detail=detail)
+
+    def _warn_loose_permissions(self, ref: Any) -> None:
+        """本地密钥文件对同组/其他用户可读 → 记一条告警事件（不阻断，Spec §8.5）。"""
+        if ref.source != "env_file":
+            return
+        message = permissions_warning(ref.env_file)
+        if message:
+            self._infra.emit("llm.api.key_file_permissions", code=str(E.E_IO_CONFIG_UNKNOWN),
+                             path=str(ref.env_file), reason=message)
 
     def _redact(self, text: str) -> str:
         """把 key 就地打码（错误体/异常串可能回显请求头）。"""
@@ -509,12 +550,24 @@ class DeepSeekAPIAdapter(LocalBackend):
                                  f"replay 记录不可读：{path.name}（{exc}）",
                                  retryable=False) from exc
         raw = record.get("response") if isinstance(record, Mapping) else None
-        text = json.dumps(raw, ensure_ascii=False) if raw is not None else \
-            json.dumps(record, ensure_ascii=False)
-        return ApiResponse(status=200, text=text)
+        text = record.get("response_text") if isinstance(record, Mapping) else None
+        if not isinstance(text, str):
+            if raw is None:
+                # v1 记录只存了哈希，回放不出正文：宁可 fail-closed，也不能把审计 JSON
+                # 当成模型输出（那会静默产生一份"看起来成功"的假样本）。
+                raise InferenceError(
+                    E.E_LLM_UNAVAILABLE,
+                    f"replay 记录缺少响应正文：{path.name}",
+                    retryable=False,
+                    hint="schema_version=1 的旧记录只存了哈希、无法回放；"
+                         "请用 api_mode=live 重录（v2 会写入 response_text）")
+            text = json.dumps(raw, ensure_ascii=False)
+        status = record.get("response_status") if isinstance(record, Mapping) else None
+        return ApiResponse(status=int(status) if isinstance(status, int) else 200, text=text)
 
     def _record(self, audit: Mapping[str, Any], *, request_hash: str, response_hash: str,
-                replay: bool) -> None:
+                replay: bool, response_text: str | None = None,
+                response_status: int | None = None) -> None:
         if not bool(getattr(self._config, "api_record_enabled", True)):
             return
         directory = self._record_dir(replay=replay)
@@ -522,6 +575,12 @@ class DeepSeekAPIAdapter(LocalBackend):
             return
         directory.mkdir(parents=True, exist_ok=True)
         payload = dict(audit)
+        # 录制必须带响应正文，否则这份记录不能回放（只存哈希的 v1 就是这样）。
+        # 正文**原样**落盘、不重新序列化：replay 的 response_hash 才能与原始记录逐位相等。
+        if response_text is not None:
+            payload["response_text"] = response_text
+        if response_status is not None:
+            payload["response_status"] = int(response_status)
         base = directory / f"{request_hash.replace(':', '_')}.json"
         try:
             if not base.exists():
@@ -552,6 +611,13 @@ class DeepSeekAPIAdapter(LocalBackend):
         run_id = self._infra.run_id()
         if not run_id:
             return None
-        root = self._runs_root if self._runs_root is not None else Path("runs")
+        root = self._runs_root
+        if root is None:
+            # 没拿到 runs_root（例如测试直接构造适配器）：如实记一条事件，别静默落到
+            # 仓库根 —— 真跑时 ring 里的审计记录落错地方会让成本/hash 对不上。
+            root = Path("runs")
+            self._infra.emit("llm.api.record_dir_fallback", path=str(root), run_id=str(run_id),
+                             reason="未传入 runs_root：审计工件回落到仓库根 runs/")
+        root = Path(root)
         name = str(getattr(self._config, "api_record_dir", "llm_api") or "llm_api")
         return root / run_id / (f"{name}_replay" if replay else name)

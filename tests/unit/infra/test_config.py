@@ -555,10 +555,10 @@ def test_numeric_getattr_fallbacks_for_timeouts_are_canonical():
 
 def test_models_and_experiment_env_overrides(monkeypatch):
     # 角色绑定与臂都能只用配置切换（--model 之外的两条路：环境变量 / YAML）
-    monkeypatch.setenv("DICERATCHET_MODELS__PROPOSER", "deepseek-chat")
+    monkeypatch.setenv("DICERATCHET_MODELS__PROPOSER", "deepseek-flash")
     monkeypatch.setenv("DICERATCHET_EXPERIMENT__ARM", "B1")
     cfg = load_config(config_dir=CONFIGS)
-    assert cfg.models.proposer == "deepseek-chat"
+    assert cfg.models.proposer == "deepseek-flash"
     assert cfg.experiment.arm == "B1"
     # 角色/臂都计入 config_hash（换臂 = 换 run-id 族）
     assert cfg.models.proposer in json.dumps(cfg_mod.full_config(cfg), ensure_ascii=False)

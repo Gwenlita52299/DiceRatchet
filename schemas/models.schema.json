@@ -41,8 +41,10 @@
         "api_base": { "type": "string" },
         "api_key_env": { "type": "string" },
         "api_supports_seed": { "type": "boolean" },
-        "cost_per_1k_input_usd": { "type": "number", "minimum": 0 },
-        "cost_per_1k_output_usd": { "type": "number", "minimum": 0 }
+        "cost_per_1k_input": { "type": "number", "minimum": 0 },
+        "cost_per_1k_output": { "type": "number", "minimum": 0 },
+        "cost_currency": { "type": "string" },
+        "cost_basis": { "type": "string" }
       }
     },
     "perf_budget": {
@@ -113,8 +115,14 @@
           "type": "boolean",
           "description": "服务方是否接受 seed 参数（不承诺跨时间严格确定性，见 Issue #1「可复现性」）"
         },
-        "cost_per_1k_input_usd": { "type": "number", "minimum": 0 },
-        "cost_per_1k_output_usd": { "type": "number", "minimum": 0 }
+        "api_thinking": {
+          "enum": ["enabled", "disabled", ""],
+          "description": "思考模式开关（OpenAI 格式 thinking.type）；空串 = 不发送、用服务方默认"
+        },
+        "cost_per_1k_input": { "type": "number", "minimum": 0 },
+        "cost_per_1k_output": { "type": "number", "minimum": 0 },
+        "cost_currency": { "type": "string" },
+        "cost_basis": { "type": "string" }
       }
     }
   }
