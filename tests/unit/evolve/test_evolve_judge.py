@@ -215,18 +215,20 @@ def test_c4_short_circuits_before_c5():
 # =====================================================================
 
 #: C5 的边界口径用**显式 cfg** 钉住，不与 `configs/default.yaml` 的默认值耦合。
-#: 默认值已于 2026-10-07 按 Spec §3.1 实测标定为 0.35/0.25/0.15（B-40），且 M3 还会改成
-#: 相对门（B-41）——本组用例只验「阈值比较」这一层逻辑，另外用
-#: ``test_c5_defaults_match_calibration`` 单独守默认值。
+#: 默认值已于 2026-10-07 按 Spec §3.1 实测标定为 0.35/0.25/0.15（B-40）；**2026-10-09 起
+#: truncation 不再是绝对门**（Spec v2.0 B-44，用户裁决 ②+③）：C5 = illegal/fallback 绝对门
+#: + truncation 相对门 `candidate ≤ parent + truncation_tol`。本组用例只验「阈值比较」这一层
+#: 逻辑，另外用 ``test_c5_defaults_match_calibration`` 单独守默认值。
 _C5_BOUNDS = {"max_illegal_rate": 0.05, "max_fallback_rate": 0.10,
-              "max_truncation_rate": 0.05}
+              "truncation_tol": 0.05}
 
 @pytest.mark.parametrize("field,value,ok", [
     ("illegal_rate", 0.05, True),      # 恰好等于上限
     ("illegal_rate", 0.11, False),     # PRD §11-5 的示例
     ("fallback_rate", 0.10, True),
     ("fallback_rate", 0.11, False),
-    ("truncation_rate", 0.05, True),
+    # truncation 走相对门；PARENT 的 truncation_rate=0.0，tol=0.05 ⇒ 门 = 0.05
+    ("truncation_rate", 0.05, True),   # 恰好等于 parent + tol
     ("truncation_rate", 0.06, False),
 ])
 def test_c5_thresholds(field, value, ok):
@@ -253,10 +255,63 @@ def test_c5_defaults_match_calibration():
 
     改这三个默认值必须同步 Spec §8.6 / MOD-07 PRD §8.2+§9 / `configs/default.yaml`
     （后者另有 `tests/unit/infra/test_config.py` 的「dataclass 默认 == default.yaml」守门）。
+
+    **2026-10-09（Spec v2.0 B-44）**：第三项由绝对门 `max_truncation_rate=0.15` 改为
+    相对门容差 `truncation_tol=0.05`；`hasattr` 断言防止绝对门被重新引入。
     """
     cfg = make_config()
     assert (cfg.max_illegal_rate, cfg.max_fallback_rate,
-            cfg.max_truncation_rate) == (0.35, 0.25, 0.15)
+            cfg.truncation_tol) == (0.35, 0.25, 0.05)
+    assert not hasattr(cfg, "max_truncation_rate"), "C5 的 truncation 绝对门已废弃（F28）"
+
+
+# =====================================================================
+# C5 的 truncation 相对门（Spec v2.0 B-44；缺陷 F28 的回归护栏）
+# =====================================================================
+
+def test_c5_truncation_is_relative_to_parent_not_absolute():
+    """F28 回归：parent 自身 truncation 高（DeepSeek hard×6 实测 0.30）时不得全拒。
+
+    旧的绝对门 `truncation_rate ≤ 0.15` 会把 parent 与每个候选一起 reject，
+    使闭环静默锁死（harness/versions/ 永不出现新版本）。
+    """
+    parent = FakeArm(arm="parent", win_rate=0.30, n=40, truncation_rate=0.30)
+    verdict = _verdict(parent=parent, heldout=heldout_dict(truncation_rate=0.30))
+    assert verdict.decision == "accept", verdict.reason
+
+
+@pytest.mark.parametrize("cand,parent,ok", [
+    (0.30, 0.30, True),    # 与 parent 持平（F28 的核心场景）
+    (0.35, 0.30, True),    # 恰好等于 parent + tol
+    (0.36, 0.30, False),   # 超出 tol 一档
+    (0.10, 0.00, False),   # parent 无截断时，候选 0.10 仍超 0.00 + 0.05
+    (0.05, 0.00, True),    # 边界
+    (0.60, 0.90, True),    # parent 更差时相对门放行（相对门的已知放宽，M3 再评估 backstop）
+])
+def test_c5_truncation_relative_boundary(cand, parent, ok):
+    verdict = _verdict(parent=FakeArm(arm="parent", win_rate=0.30, n=40,
+                                      truncation_rate=parent),
+                       heldout=heldout_dict(truncation_rate=cand))
+    assert _trace_of(verdict)["C5"]["passed"] is ok, verdict.reason
+
+
+def test_c0_rejects_when_parent_lacks_truncation_rate():
+    """truncation 相对门需要 parent 的 truncation_rate；缺它必须 fail-closed 记 C0，
+    不能静默跳过门（跳过 = C5 对 truncation 失去诊断力）。"""
+
+    class _NoTruncationParent:
+        class _Metrics:
+            def as_dict(self):  # noqa: D102
+                return {"n": 40, "win_rate": 0.30, "illegal_rate": 0.0,
+                        "fallback_rate": 0.0}
+
+        metrics = _Metrics()
+
+    verdict = _verdict(parent=_NoTruncationParent())
+    assert verdict.decision == "reject"
+    assert verdict.error_code == str(E.E_EVOLVE_JUDGE_FAILED)
+    assert verdict.reason.startswith("C0:incomplete_report")
+    assert "truncation_rate" in _trace_of(verdict)["C0"]["detail"]
 
 
 # =====================================================================

@@ -54,9 +54,18 @@ _SMOKE_MAX_ILLEGAL_RATE: float = 0.30
 _SMOKE_MAX_FALLBACK_RATE: float = 0.30
 
 #: C5 阈值（Spec v1.3 P-25 结案：不再用回合数）。
+#:
+#: **2026-10-09（Spec v2.0 B-44，用户裁决 ②+③）**：C5 由「三项绝对门」改为
+#: 「``illegal`` / ``fallback`` 绝对门 + ``truncation`` **相对门**」。
+#: 理由：``truncation_rate`` 是**局型 × 策略强度**的合成属性（同一 run 里 heuristic 0.00、
+#: DeepSeek hard×6 0.30），而 ``illegal``/``fallback`` 是 agent 的能力/遵从属性。
+#: 把三者一起按一个臂标定，换臂（8B → DeepSeek）后 truncation 绝对门会 reject 每个候选，
+#: 把闭环静默锁死（缺陷 F28，见 docs/tasks/2026-10-06-M2开工检查单.md §8.2）。
 _C5_ILLEGAL: float = 0.05
 _C5_FALLBACK: float = 0.10
-_C5_TRUNCATION: float = 0.05
+#: ``truncation`` 相对门容差：``candidate ≤ parent + tol``。
+#: 0.05 = n=40 下的 2 局（粒度 1/40 = 0.025），与 ``evolve.win_rate_tol`` 同依据（D-3）。
+_C5_TRUNCATION_TOL: float = 0.05
 
 
 # =====================================================================
@@ -218,6 +227,15 @@ def judge(cand_report: CandidateReport, parent_report: Any, *, cfg: Any,
         return _fail("C0", "incomplete_report", code=str(E.E_EVOLVE_JUDGE_FAILED),
                      cand=cand_report, generation=generation, trace=trace)
 
+    # C5 的 truncation 是**相对门**（2026-10-09 B-44），因此 parent 的 truncation_rate
+    # 与 win_rate 一样是**前置完备性**的一部分：缺它就无法求值 → fail-closed 记 C0，
+    # 而不是静默跳过门（跳过会让 C5 对 truncation 失去诊断力）。
+    parent_truncation = metric_of(parent_report, "truncation_rate", None)
+    if parent_truncation is None:
+        trace[-1] = condition_trace_entry("C0", False, "parent heldout 缺 truncation_rate")
+        return _fail("C0", "incomplete_report", code=str(E.E_EVOLVE_JUDGE_FAILED),
+                     cand=cand_report, generation=generation, trace=trace)
+
     # ---- C1 主指标不降（tol=0.05，D-3）---------------------------------------------
     win = float(heldout.get("win_rate") or 0.0)
     tol = float(getattr(cfg, "win_rate_tol", 0.05))
@@ -272,23 +290,28 @@ def judge(cand_report: CandidateReport, parent_report: Any, *, cfg: Any,
                      generation=generation, trace=trace)
 
     # ---- C5 合法性与健壮性 ----------------------------------------------------------
+    # 2026-10-09（B-44，用户裁决 ②+③）：illegal / fallback 保留**绝对门**（能力/遵从属性，
+    # 有跨臂的绝对意义）；truncation 改**相对门** `candidate ≤ parent + tol`（局型 × 策略
+    # 强度的合成属性，绝对门会随臂错位 —— 缺陷 F28）。parent 的 truncation_rate 已在 C0
+    # 处校验非 None。
     illegal = float(heldout.get("illegal_rate") or 0.0)
     fallback = float(heldout.get("fallback_rate") or 0.0)
     truncation = float(heldout.get("truncation_rate") or 0.0)
     max_illegal = float(getattr(cfg, "max_illegal_rate", _C5_ILLEGAL))
     max_fallback = float(getattr(cfg, "max_fallback_rate", _C5_FALLBACK))
-    max_truncation = float(getattr(cfg, "max_truncation_rate", _C5_TRUNCATION))
-    c5_ok = (illegal <= max_illegal and fallback <= max_fallback
-             and truncation <= max_truncation)
+    truncation_tol = float(getattr(cfg, "truncation_tol", _C5_TRUNCATION_TOL))
+    truncation_ok = truncation <= parent_truncation + truncation_tol
+    c5_ok = (illegal <= max_illegal and fallback <= max_fallback and truncation_ok)
     trace.append(condition_trace_entry(
         "C5", c5_ok,
         f"illegal={illegal:.4f}≤{max_illegal} fallback={fallback:.4f}≤{max_fallback} "
-        f"truncation={truncation:.4f}≤{max_truncation}",
+        f"truncation={truncation:.4f}≤parent {parent_truncation:.4f}+tol {truncation_tol}",
         value={"illegal_rate": illegal, "fallback_rate": fallback,
-               "truncation_rate": truncation},
+               "truncation_rate": truncation,
+               "parent_truncation_rate": parent_truncation},
         threshold={"max_illegal_rate": max_illegal,
                    "max_fallback_rate": max_fallback,
-                   "max_truncation_rate": max_truncation}))
+                   "truncation_tol": truncation_tol}))
     if not c5_ok:
         return _fail("C5", "illegal/fallback/truncation",
                      code=str(E.E_EVOLVE_ILLEGAL_RATE), cand=cand_report,

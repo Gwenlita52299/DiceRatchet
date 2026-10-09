@@ -480,7 +480,7 @@ def run(self, seeds=None, *, resume=False):
     st.phase = "done"; save_state(st); return summarize(st)</code></pre>
 
   <h4>并发时序（FR-06-14）</h4>
-  <p>评估一律经 MOD-08 <code>evaluate_arm()</code> 执行：局级并发 <code>eval_concurrency</code>（默认 2），所有局共享同一个 <code>BackendManager</code> 串行推理队列（P-10），每局有独立的 <code>SandboxEnv</code> 与 <code>memory.frozen(v)</code> 只读视图。评估局<b>不写</b> <code>scoreboard.json</code> 主台账，只写 <code>episodes/&lt;split&gt;/</code>（Spec P-15 已采纳）。<b>并发只能掩盖 env 与 IO 的开销，不能缩短推理瓶颈</b>；耗时按 Spec §8.6 估算。</p>
+  <p>评估一律经 MOD-08 <code>evaluate_arm()</code> 执行：局级并发 <code>eval_concurrency</code>（默认 2），所有局共享同一个 <code>BackendManager</code> 串行推理队列（P-10），每局有独立的 <code>SandboxEnv</code> 与 <code>memory.frozen(v)</code> 只读视图（<b>v1.4 / Spec v2.2 B-46</b>：这句原先只是<b>意图</b>——代码曾把<b>同一个</b> <code>SandboxEnv</code> 交给 <code>n_workers=2</code> 的两局并发驱动，观测串局 ⇒ <code>illegal_rate</code> ≈0.285 / <code>fallback_rate</code> ≈0.29（缺陷 F30）；现已改为每局经 <code>env_factory</code> 新建、局末 <code>close()</code>，并有 <code>tests/integration/test_loop_env_isolation.py</code> 护栏）。评估局<b>不写</b> <code>scoreboard.json</code> 主台账，只写 <code>episodes/&lt;split&gt;/</code>（Spec P-15 已采纳）。<b>并发只能掩盖 env 与 IO 的开销，不能缩短推理瓶颈</b>；耗时按 Spec §8.6 估算。</p>
 </section>
 
 <!-- ================= 9 ================= -->
@@ -668,8 +668,10 @@ def run(self, seeds=None, *, resume=False):
     <tr><td>v1.0</td><td>2026-09-30</td><td>首版</td></tr>
     <tr><td>v1.1</td><td>2026-09-30 17:21</td><td>按 Spec v1.3 与 MOD PRD 评审修订：单局循环改为调用 <code>play_decision</code>，终止只看 MOD-02 的 terminated/truncated，删除 <code>max_steps=120</code> 与自有的 illegal_streak（P0-2/5）；对 MOD-04/05 的调用签名改为 Spec §4.7（P1-1/2）；轨迹路径与 <code>episode_key</code> 改为 <code>e-{seed}-g{gen}-{arm}</code>（P1-10）；成本闸门按 <code>E_gen</code> 公式统一计算，并作为全系统唯一上限（P0-3、P1-8）；评估改为局级并发 + 共享推理队列，委托 MOD-08（P1-9）；新增 gen-000 基线与逻辑时钟 tick；错误码、退出码、CLI、事件名对齐 MOD-09 注册表（P1-11～14）</td></tr>
     <tr><td>v1.2</td><td>2026-09-30 17:49</td><td>seed 取用规则回填为 Spec B-36；HITL 挂起语义以 Spec §4.5 B-32 为准</td></tr>
+    <tr><td>v1.3</td><td>2026-10-09</td><td><b>新增 §9.0「模型角色与实验臂」</b>（对齐 Spec v2.0 B-42/B-43/B-44）：本模块<b>不自己装配模型</b>，<code>loop run --agent llm</code> 的客户端由组合根经 <code>RoleModelProvider</code> 注入，<code>experiment.arm</code> 对闭环生效；登记 M2 主力臂 <code>C1</code>（三角色全 <code>deepseek-flash</code>）与成本口径（本地 8B 19.6 min/局 ≈37 h/代；API 臂 2.09–2.52 min/局 ≈4.0–4.8 h/代、≈¥84–100/代）；登记缺陷 <b>F28 的「静默性」</b>（C5 全拒也 `generation += 1`、退出码 0 ⇒ 跑完 N 代≠有产出）与 <b>F29</b>（臂的 <code>harness</code> 字段无消费者，<code>C0</code> 与 <code>C1</code> 当前行为等价）</td></tr>
+    <tr><td>v1.4</td><td>2026-10-09</td><td><b>新增 §9.1「评估局的环境隔离」</b>（对齐 Spec v2.2 B-46，处置缺陷 <b>F30</b>，登记残留 F31）。<code>evaluate_arm(n_workers=2)</code> 驱动同一个 runner，而 <code>SandboxEnv</code> 是有状态单实例 ⇒ 两局 <code>reset</code>/<code>step</code> 交错、观测串局 ⇒ 模型按别的局的相位出动作 ⇒ 非法 ⇒ 重试耗尽 ⇒ fallback（实测 <code>illegal_rate</code> ≈0.285 / <code>fallback_rate</code> ≈0.29，同臂同 seed 的 <code>play</code> 路径为 0.032 / 0.000）。落地：<code>loop/cli.py</code> 改注入 <code>env_factory</code>（每局 <code>episode_id=key</code>、局末 <code>close()</code>，与 MOD-08 <code>SandboxRunner</code> 同构）；护栏 <code>tests/integration/test_loop_env_isolation.py</code> 从组合根装配，断言 <code>runner.env is None</code> 且 <code>n_workers=1</code> 与 <code>=2</code> 逐字段一致（含 <code>seq_hash</code>），修复前 <b>5/5 稳定失败</b>。这与 FR-06-14「评估局并发时 MOD-04 不可共享实例」是同一条理由</td></tr>
   </table>
-  <blockquote>本页事实均取自 <code>docs/prd/MOD-06-loop-PRD.md</code> v1.2。上游 Spec（<code>模块拆分Spec-DiceRatchet.md</code>）是唯一事实来源，冲突时以 Spec 为准。</blockquote>
+  <blockquote>本页事实均取自 <code>docs/prd/MOD-06-loop-PRD.md</code> v1.4。上游 Spec（<code>模块拆分Spec-DiceRatchet.md</code>）是唯一事实来源，冲突时以 Spec 为准。</blockquote>
 </section>
 
 <footer>来源：docs/prd/MOD-06-loop-PRD.md · DiceRatchet 模块讲解系列 · 2026-10-04</footer>

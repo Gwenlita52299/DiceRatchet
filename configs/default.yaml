@@ -258,7 +258,17 @@ evolve:
   #   记录见 docs/reviews/2026-10-07-M2-S31-full-agent基线实测.md。
   max_illegal_rate: 0.35
   max_fallback_rate: 0.25
-  max_truncation_rate: 0.15
+  # 2026-10-09（Spec v2.0 B-44，用户裁决 ②+③）：C5 由「三项绝对门」改为
+  #   「illegal / fallback 绝对门 + truncation **相对门**」。
+  # 原 max_truncation_rate: 0.15 已**删除**：它按本地 8B（实测 truncation_rate 0.10）标定，
+  #   换成 DeepSeek 臂（M2 主力臂 C1）后 hard×6 实测 **0.30 > 0.15**，会 reject 每一个候选，
+  #   把闭环**静默锁死**（缺陷 F28，见 docs/tasks/2026-10-06-M2开工检查单.md §8.2）。
+  # 为什么只有 truncation 改相对门：truncation_rate 是「局型 × 策略强度」的合成属性
+  #   （同一 run 内 heuristic 0.00、DeepSeek hard×6 0.30、8B hard×6 0.10），
+  #   不像 illegal/fallback 那样有跨臂的绝对意义。
+  # tol = 0.05 的 n=40 口径：heldout 粒度 1/40 = 0.025，0.05 = 容忍 2 局的噪声，
+  #   与 evolve.win_rate_tol 同一依据（D-3）。
+  truncation_tol: 0.05
   hitl: true
   gate_timeout_hours: 24
   propose_max_retries: 2

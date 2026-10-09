@@ -1,6 +1,6 @@
 # DiceRatchet 模块拆分 Spec
 
-> 版本：v1.9（2026-10-07，D-2 的 medium × 6 基线实测回填 §8.6 + 登记 F26/F27，见 §12/changelog）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
+> 版本：v2.2（2026-10-09，**F30 处置**：MOD-06 `EpisodeRunner` 改为**每局一个 `SandboxEnv`**（注入 `env_factory`），修掉 `n_workers=2` 下的评估串局；见 §8.6、§11.1h B-46、§12/changelog）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
 > 上游：[项目计划-DiceRatchet.md](../项目计划-DiceRatchet.md) · [RSI调研纪要.md](../RSI调研纪要.md)
 > 游戏本体：`docs/prd/GAME-00/01/02`（规则、观测、动作的游戏侧事实来源，B-09）
 > 下游：`docs/prd/MOD-*.md`（每个模块的技术 PRD 必须与本文件一致；冲突时以本文件为准）
@@ -340,6 +340,9 @@ python -m dice_ratchet guards check [--root PATH]         # MOD-09（P-20）
 | MOD-06 → MOD-04 | `PolicyAgent.reset(ctx: EpisodeContext) -> None` | 每局开始 |
 | MOD-06 → MOD-04 | `PolicyAgent.play_decision(env: SandboxEnv, obs: Observation, *, ctx: EpisodeContext) -> DecisionResult` | 执行一个决策点（含计划、重试、fallback），返回 `steps: list[StepRecord]`、`source`、`attempts`、`llm: LLMCallMeta\|None`、`memory_ids`、`adopted_memory_ids`、`prompt_hash`、`last: StepResult` |
 | MOD-04 → MOD-03 | `InferenceClient.generate_json(prompt, *, schema, mode, sampling, seed) -> JsonResult` | `mode ∈ train/eval` |
+| 组合根 → MOD-04/06/07 | `RoleModelProvider.client_for(role) -> InferenceClient`（`role ∈ policy/reflection/proposer`） | 三角色的模型绑定**全部来自配置**；MOD-04/06/07 只做鸭子类型解析（`coerce_client`/`client_for_role`），不 import 提供者类型（B-42） |
+| 全部 → MOD-03 | `inference.roles.resolve_role_bindings(cfg) -> RoleBinding` · `role_model_ids(cfg) -> dict[role, model_id]` · `run_provenance(cfg, run_id) -> dict` | 优先级 `experiment.roles.<role>` > `experiment.arms[arm].<role>` > `models.<role>` > `inference.model_id`；未知角色/未知臂/空 `model_id` 一律 fail-closed（不静默降级）；落 `runs/<run_id>/models_provenance.json` |
+| 全部 → MOD-03 | `inference.secrets.lookup_api_key(model_spec) -> str` | `api_key_env` 只登记**变量名**；真值取自真实环境变量或本地 `.env`（`.env` 被 gitignore，绝不入 `harness/`、run JSON、事件或 Git） |
 | MOD-04 → MOD-05 | `MemoryStore.retrieve(obs, *, top_k, token_budget, tick: int) -> list[MemoryHit]` | `tick` 为逻辑时钟（训练局序号），不用墙钟 |
 | MOD-06 → MOD-05 | `MemoryStore.add_reflection(entry: ReflectionEntry, *, provenance: Provenance) -> str` · `record_usage(episode_key, memory_ids, outcome, *, adopted_ids, tick) -> None` · `snapshot(version: int) -> Path` · `frozen(version) -> MemoryView` | 评估局只用 `frozen` 只读视图 |
 | MOD-06 → MOD-03 | `loop.reflect.reflect(summary: EpisodeSummary, *, client, template) -> ReflectionEntry` | 反思归 MOD-06；`ReflectionEntry` schema 归 MOD-05 |
@@ -467,7 +470,7 @@ docs/        模块拆分Spec-DiceRatchet.md  prd/  README.md
 
 **默认局**：`EpisodeConfig(difficulty="hard", stage_count=6, toggles=全开, character="warrior")`，即第 1–2 章，以第 6 关 Boss 收尾。
 
-**bring-up 口径（2026-10-06，M2 开工 D-2 裁决）**：默认局仍是 hard × 6（M3 主口径），但 M2 的闭环联调与 §3.2 冒烟改用 `difficulty="medium", stage_count=6, toggles=全开`（run 级 override，不改 `configs/default.yaml` 的默认值）。**可执行的 override 写法是环境变量**（B-30：`__` 分层；M1 的 CLI 没有通用 `--set`，只有 `--k/--generations/--hitl/--model/--mode/--seed/--timeout-ms/--log-level`）：
+**bring-up 口径（2026-10-06 M2 开工 D-2 裁决；2026-10-09 **B-45 复核确认**）**：默认局仍是 hard × 6（M3 主口径），但 M2 的闭环联调与 §3.2 冒烟改用 `difficulty="medium", stage_count=6, toggles=全开`（run 级 override，不改 `configs/default.yaml` 的默认值）。**2026-10-09 复核**：该口径在对 `C1`（DeepSeek）臂上**有了第二重理由**——`medium × 6` 实测 `truncation_rate = 0.00`（`hard × 6` 是 0.30，会撞内核回合上限），且该局型上 API 臂的 `win_rate` 有方差（80% vs 启发式 70%）。**可执行的 override 写法是环境变量**（B-30：`__` 分层；M1 的 CLI 没有通用 `--set`，只有 `--k/--generations/--hitl/--model/--mode/--seed/--timeout-ms/--log-level`）：
 
 ```bash
 DICERATCHET_ENV__EPISODE__DIFFICULTY=medium <cmd>   # 等价于 --set env.episode.difficulty=medium
@@ -551,6 +554,54 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 - **成本口径（若 bring-up 用 medium × 6）**：`D`（`decisions_llm`）均值 **83.7**（hard 97.1，−13.8%）、单局墙钟 **15.44 min**（hard 19.6–19.9 min，−22%）⇒ `E_gen=114` 局 ≈ **29.3 h/代**。**M3 主口径仍是 hard × 6，故 37 h/代 不变**；本行只用于 bring-up 的成本估算。
 - **前置缺陷（F26，已修 `cf934fc`）**：`baseline`/`play` 曾**完全忽略** `env.episode.*`（`SandboxRunner` 落到 `EpisodeConfig()` 的代码默认 hard × 6），使第一次 medium 补测与 hard × 6 逐位相同。**本行的数字是修复后重跑的**；M1 归档未受影响（代码默认恰等于当时配置默认）。溯源缺口另见 F27：逐臂归档 `baselines/*.json` 与 `registry.csv` 不记录 episode 口径。
 - **待裁决（D-2 再调）**：检查单原文给的两条路都需重新评估——**medium × 10 对启发式只有 24.0%（比 hard × 6 更难），大概率让 8B 的胜率地板更深**；若目标是让 8B 的 `win_rate` 离开地板，应测**对启发式已到天花板、但对 8B 可能落在中段的 3 关局型**（`hard × 3` 启发式 97.0%、`medium × 3`/`easy × 3` 100.0%），或按 D-3 的结论直接**放弃 win_rate 轴、全用连续指标**。
+
+**✅ 2026-10-09 臂与成本口径回填（N1 裁决：M2 闭环先在 DeepSeek 臂上跑；依据 [Issue #1 落地报告](tasks/2026-10-08-issue-1-角色解耦落地报告.md) 与 [M2 开工检查单 §8](tasks/2026-10-06-M2开工检查单.md)）**：
+
+- **实验臂（`experiment.arm`）成为一等配置**：六个臂只做**角色差分**，`harness` 字段只**登记**该臂的 harness 是否演化；空串 = 该角色不绑定、继续向下继承。臂定义计入 `config_hash` ⇒ 换臂即换 run-id 族（F10），六臂产物不会互相污染。
+  - ⚠️ **已知限制 F29（2026-10-09 复检登记）**：`harness` 字段**只做登记**——`ExperimentConfig.harness_mode()` 的唯一消费者是 provenance（`roles.py` 把它写进 `models_provenance.json`），**没有任何代码据此开关演化**。即 **`C0`（fixed）与 `C1`（evolve）当前行为等价**：选 `C0` 跑闭环照样会演化 harness。强制「fixed 臂不演化」属 Issue #1 任务 6（**未做**）。因此本节的「主力臂 = `C1`」在**行为上**等价于「把三角色钉到 `deepseek-flash`」；引用臂名时不要据此推断 harness 被冻结。
+
+- **✅ 缺陷 F30（MOD-06 评估并发污染单个 `SandboxEnv`）—— 2026-10-09 已修（方案 A；本版登记 B-46）**：§3.2 冒烟（`C1` + `medium×6`）跑到 5/40 局时被主动中止——gen-000 基线读数 `fallback_rate≈0.29` / `illegal_rate≈0.285`，而同臂/同模型/同难度/同 seed、**同一时间窗并发**的 `play` 路径是 `0.000` / `0.032`（⇒ 差在代码路径，不在模型）。**根因**：`evaluate_arm(n_workers=cfg.evals.n_workers=2)` 用两个线程驱动**同一个** `EpisodeRunner`，而它只持有一个 `SandboxEnv` 实例且 `close_env=False`；`SandboxEnv` 承载全部局状态，两局的 `reset`/`step` 交错 ⇒ 观测串局 ⇒ 模型按**别的局**的相位出动作（典型签名：战斗阶段出现 `map_choose`，而当前合法 kind 只有 `discard_die/end_turn/play_face/use_ability`）⇒ 语义非法 ⇒ 重试耗尽 ⇒ fallback。对照 MOD-08 的 `SandboxRunner` 在 `run_episode` 内**每局新建 env**，故 `play` 干净。**危害等级**：污染的是**被测量的量本身**（比 F28 的门错位更靠上游），且完全静默（无报错、退出码 0）。**修复**：`loop/cli.py` 由 `env=<共享实例>, close_env=False` 改为注入 `env_factory=_env_factory(cfg)`（每局 `episode_id=key`、局末 `close()`，与 `SandboxRunner` 同构）；构造代价 1.1 ms/局。**护栏**：`tests/integration/test_loop_env_isolation.py` 从组合根装配，断言 `runner.env is None` 且 `n_workers=1` 与 `=2` 的逐局结果**逐字段一致**（含 `seq_hash`）；`git stash` 掉修复后 **5/5 稳定失败**，签名即 F30。独立复现（H1 全 40 局、`heuristic` 臂）：共享 env **13/40 局有非法动作、0/40 胜**；每局新 env **0/40、18/40 = 45.0%**（与 `greedy_counter` hard×6 **45.5%** 一致）。
+  - **影响范围（别扩大也别缩小）**：只污染 **MOD-06 `loop run` 自己的评估口**。C0 臂既有实测（`runs/r-c0-hard6-h1n10/`、`runs/r-c0-medium6-h1n10/` 的 `play-llm` 轨迹）走的是 MOD-08 `SandboxRunner`（每局新 env、`n_workers=1`）⇒ **未被污染**，B-45 与 D-2 的证据基础成立。
+  - ⚠️ **残留 F31（低危，未修）**：`loop/runner.py:446-448`/`:219` 局末 `state.counters.illegal_actions` / `llm_timeouts` / `io_retries += …` 是跨线程读改写，`n_workers=2` 下理论丢更新；这三个计数器在 `dice_ratchet/` 内**零读取点**（不进门禁/裁决），仅影响 `state.json` 的上报值。
+
+| 臂 | policy | reflection | proposer | harness | 用途 |
+|---|---|---|---|---|---|
+| `A0` | —（继承 `inference.model_id`） | — | — | fixed | 本地 8B 基线对照 |
+| `A1`（**默认**） | — | — | — | evolve | 本地 8B 闭环 |
+| `B0` | — | — | deepseek-flash | fixed | 只换 proposer |
+| `B1` | — | — | deepseek-flash | evolve | proposer 对照 |
+| `C0` | deepseek-flash | deepseek-flash | deepseek-flash | fixed | 全 API 对照 |
+| **`C1`** | deepseek-flash | deepseek-flash | deepseek-flash | evolve | **M2 闭环主力臂（N1 裁决，2026-10-09）** |
+
+- **角色绑定优先级（唯一实现 `inference/roles.py::_resolve_role`）**：`experiment.roles.<role>` > `experiment.arms[arm].<role>` > `models.<role>` > `inference.model_id`。未知臂/未知角色/空 `model_id`/注册表里没有的模型/`provider=api` 但未登记 key 环境变量 → **fail-closed**（绝不静默降级到别的模型）。三角色各自落 `runs/<run_id>/models_provenance.json`（`model_id`/`provider`/`backend`/`model_revision`/`online`/`api_key_present` + 臂 + `harness` 模式 + `config_hash`）。臂绑定经组合根注入，**MOD-04/06/07 都拿得到**（`loop run --agent llm` 与 MOD-07 提案走同一个 `RoleModelProvider`）。
+- **`backend: deepseek`（MOD-03 新增后端）**：`provider=api` 的外部模型。注册表新增 `deepseek-flash` 与 `deepseek-v4-pro`（实测该账号/接口版本**没有** `deepseek-chat`，旧名已下线）。三条硬口径：① `api_supports_seed=false`——DeepSeek **不承诺跨时间确定性**（实测字节相同的请求 9 次返回 9 个不同响应）⇒ 采样照记、响应按 request hash 归档、变化即标 `llm.nondeterministic`；② `api_thinking: disabled`——flash 默认开思考模式会把 `max_tokens` 吃在思维链上、`content` 返空，导致每次白花一次调用；③ key 只经 `inference/secrets.py` 从真实环境变量或本地 `.env` 读（**真实环境变量优先**），**只进内存**，绝不入 `harness/`、run JSON、事件或 Git。
+- **2026-10-08/09 实测（`C0` 臂，H1 子集 seed 2000–2009，n=10，`temperature=0.0`）**：
+
+| 臂 / 局型 | `win_rate` | CI95 | `mean_stages_cleared` | `mean_decisions` | `illegal_rate` | `fallback_rate` | `truncation_rate` |
+|---|---|---|---|---|---|---|---|
+| `C0` DeepSeek · **medium × 6** | **8/10 = 80.0%** | [49.0%, 94.3%] | 5.6/6 | 98.3 | 0.0316 | 0.0 | 0.00 |
+| `C0` DeepSeek · **hard × 6** | **1/10 = 10.0%** | [1.8%, 40.4%] | 4.3/6 | 124.5 | 0.0291 | 0.0008 | **0.30** |
+| `heuristic` · medium × 6 | 70.0% | [39.7%, 89.2%] | 5.7/6 | 97.1 | 0.0 | 0.0 | 0.00 |
+| `heuristic` · hard × 6 | 40.0% | [16.8%, 68.7%] | 5.4/6 | 104.1 | 0.0 | 0.0 | 0.00 |
+
+  同 run 内 `random` 两难度均 0/10；全部 `status=200` / `degraded_n=0` / `fallback_decisions=0` / `n_dropped=0`。**注意**：`hard × 6 = 10%` 这一行**与 8B 的结论相反**——`win_rate` 在 API 臂上**有**方差（8B 在两难度上都是 0.0%）。`hard × 6` 的 `truncation_rate=0.30` 来自 **3/10 局撞内核单场战斗回合上限**（`src/game/kernel/combat.js:460` → `state.truncationReason='E_KERNEL_TURN_LIMIT'`，`maxTurnsPerBattle=60`），是**局型 × 策略强度**的合成值而非纯局型属性（同 run 的 `heuristic` 为 0.00）。
+
+- **成本模型按臂分列（实测；`play` 相位墙钟 = 第三个 `eval.start` → 最后一个事件）**：
+
+| 臂 / 局型 | 单局墙钟 | 后端调用（n=10） | 花费 | `E_gen = 114 局/代` |
+|---|---|---|---|---|
+| 本地 8B（`m1-real-h1n10b`，上方全部定价的依据） | 19.6 min | 1,551 | 0（本地） | **≈37 h/代** |
+| **`C0`/`C1` DeepSeek · hard × 6** | **2.52 min** | 1,360 | ¥0.879/局 | **≈4.8 h/代 ≈ ¥100/代** |
+| **`C0`/`C1` DeepSeek · medium × 6** | **2.09 min** | 1,080 | ¥0.733/局 | **≈4.0 h/代 ≈ ¥84/代** |
+
+  ⇒ **上方「19.6 min/局 / 37 h/代」只对本地 8B 成立**。API 臂下 `E_gen` 的约束由**墙钟转为 API 花费/限流**（快约 8×）。连带结论：`inference.cache_prompt`（KV 前缀复用）对 API 臂**无收益**（无本地 prefill），只对本地臂有效。
+- **✅ 缺陷 F28（C5 绝对门与臂耦合）—— 2026-10-09 已处置（用户裁决 ②+③，登记 B-45）**：C5 的三阈值原按**本地 8B** 实测标定（B-40），而 M2 主力臂同日改为 `C1`（DeepSeek）。复算：`hard × 6` 的 `truncation_rate = 0.30 > 门 0.15` ⇒ **C5 会 reject 每一个候选**（`reject` / `C5:illegal/fallback/truncation` / `E_EVOLVE_ILLEGAL_RATE`），闭环形式上跑通、实则一个候选都留不下——**正是 §3.1 要防的失败模式，只是从 illegal 轴搬到了 truncation 轴**；同时 illegal/fallback 两门反向松了约 10×（0.03 vs 0.35、0.00 vs 0.25）。
+  - **③ 门结构（本次落地）**：**C5 = `illegal` / `fallback` 绝对门（0.35 / 0.25）+ `truncation` 相对门** `candidate.truncation_rate ≤ parent.truncation_rate + evolve.truncation_tol`，**`truncation_tol = 0.05`**（n=40 的 2 局，同 `win_rate_tol` 的依据 D-3）。**绝对门 `max_truncation_rate` 已从 `configs/default.yaml` 与 `EvolveConfig` 中删除**（不是改成 0.35 —— 重标会在下次换臂时重演 F28）。理由：`truncation` 是**局型 × 策略强度**的合成属性（同 run 内 `heuristic` 0.00、DeepSeek hard×6 0.30、8B hard×6 0.10），不像 `illegal`/`fallback` 那样有跨臂的绝对意义。
+  - **配套 fail-closed**：相对门需要 `parent.truncation_rate`，故它进 **C0 前置完备性检查**——parent 缺该字段记 `C0:incomplete_report` 并 reject，**不静默跳门**（跳过会让 C5 对 truncation 失去诊断力）。
+  - **② 局型**：bring-up / §3.2 冒烟用 `medium × 6`（实测 truncation = 0.00，`win_rate` 有方差 80% vs 70%）；默认局仍 `hard × 6`。
+  - **已知放宽（诚实边界）**：相对门是**对称**放宽——parent 自身截断率很高时，候选只要不比它差就放行（如 parent = 0.90 时候选 0.60 也过）。本轮**不设绝对 backstop**（按裁决「只对 illegal+fallback 设绝对门」）；该行为已由参数化用例显式钉住，M3 标定 `tol` 时再评估是否补 backstop。
+  - **落点**：`evolve/judge.py`（`_C5_TRUNCATION_TOL` + C0 parent 校验）、`infra/config.py` / `configs/default.yaml`（键替换）、`tests/unit/evolve/test_evolve_judge.py`（3 组新护栏）、MOD-07 PRD §8.2/§8.2.1/§8.2.2/§9、`docs/html/MOD-07-evolve.html`。
+- **D-2 难度口径随之重开**：2026-10-07 的「medium × 6 对 M2 没有信号」只对 8B 成立；对 `C1` 臂实测 **medium × 6 = 80% vs hard × 6 = 10%**，两难度**都有**方差（对照启发式 70% / 40%）。D-2 需按当前臂重裁（检查单 §8.5 R3）。
 
 ---
 
@@ -677,6 +728,26 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 | B-40 | [§3.1 实测](reviews/2026-10-07-M2-S31-full-agent基线实测.md) | **C5 三阈值按实测先松开**：`max_illegal_rate` 0.05→**0.35**、`max_fallback_rate` 0.10→**0.25**、`max_truncation_rate` 0.05→**0.15**。依据：full `PolicyAgent` 实测 0.3016 / 0.2146 / 0.10（原门超限 6.03× / 2.15× / 2.00×，会 reject 每个候选）。**写明「先松开、M3 再收紧」**，并声明副作用（C5 临时成为非约束门） | §8.6、MOD-07 §8.2/§9、`configs/default.yaml`、`config.py` |
 | B-41 | [§3.1 实测](reviews/2026-10-07-M2-S31-full-agent基线实测.md) | **C5 的 M3 收紧路径 = 绝对门改相对门**：`candidate.<metric> ≤ parent.<metric> + tol`（illegal/fallback/truncation 同构），保留抓退化的诊断力；`tol` 待 §3.2 冒烟产出第一批 train/heldout 配对后标定。**禁止用「把 B-40 的值改回 0.05」来收紧** | §8.6、MOD-07 §8.2 |
 
+### 11.1f v2.0 已回填（2026-10-09，实验臂/角色解耦 + DeepSeek 后端 + M2 闭环臂裁决）
+
+| # | 来源 | 决策 | 回填位置 |
+|---|---|---|---|
+| B-42 | [Issue #1 落地报告](tasks/2026-10-08-issue-1-角色解耦落地报告.md) | **三角色解耦 + 实验臂成为一等配置**：`policy`/`reflection`/`proposer` 只依赖统一 `InferenceClient` 契约，绑定全部来自配置（优先级 `experiment.roles.<role>` > `experiment.arms[arm].<role>` > `models.<role>` > `inference.model_id`，唯一实现 `_resolve_role`，fail-closed）；新增 `experiment.arm` 与六臂 `A0/A1/B0/B1/C0/C1`（只做角色差分，`harness` 字段只登记是否演化）；臂定义计入 `config_hash`（换臂即换 run-id 族）。新增 MOD-03 `backend: deepseek`（`provider=api`、`api_supports_seed=false`、`api_thinking=disabled`、`inference/secrets.py` 的 `.env` 读取、`models_provenance.json` 三角色溯源） | §4.7、§8.6、MOD-03 §6/§7、MOD-06/MOD-07 |
+| B-43 | M2 开工检查单 §8（N1 裁决，用户） | **M2 闭环主力臂 = `C1`（policy/reflection/proposer 全 `deepseek-flash` + `harness: evolve`）**。理由：API 臂单局 2.09–2.52 min（本地 8B 19.6 min）⇒ `E_gen=114` ≈ 4.0–4.8 h/代、≈¥84–100/代，闭环能在当晚跑通；且 `win_rate` 在 API 臂上有方差（medium×6 = 80% / hard×6 = 10%），而 8B 两难度都是 0.0%。**成本口径随之由墙钟转为 API 花费/限流** | §8.6 |
+| B-44 | M2 开工检查单 §8（复检） | **登记 F28：C5 绝对门与臂耦合**——C5 三阈值按本地 8B 标定（B-40），换臂后 `hard×6` 的 `truncation_rate=0.30 > 0.15` 会 reject 每个候选（illegal/fallback 反向松约 10×）。**处置候选**（按当前臂重标 / bring-up 用 medium×6 / truncation 并入相对门）；同时 D-2 难度口径按当前臂**重开** | §8.6、MOD-07 §8.2、[检查单 §8.5](tasks/2026-10-06-M2开工检查单.md) |
+
+### 11.1g v2.1 已回填（2026-10-09，F28 的处置：C5 truncation 改相对门 + bring-up 用 medium × 6）
+
+| # | 来源 | 决策 | 回填位置 |
+|---|---|---|---|
+| B-45 | M2 开工检查单 §8（N2 裁决，用户选 **②+③**） | **C5 由「三项绝对门」改为「`illegal`/`fallback` 绝对门 + `truncation` 相对门」**：`candidate.truncation_rate ≤ parent.truncation_rate + evolve.truncation_tol`，**`truncation_tol = 0.05`**（n=40 的 2 局，同 `win_rate_tol` 依据）；**绝对门 `max_truncation_rate` 删除**（重标会在下次换臂时重演 F28）。**配套 fail-closed**：`parent.truncation_rate` 进 C0 前置完备性检查，缺则 `C0:incomplete_report`（不静默跳门）。**② 局型**：bring-up / §3.2 冒烟用 `medium × 6`（实测 truncation = 0.00、`win_rate` 有方差 80% vs 70%），默认局仍 `hard × 6`。**已知放宽**：相对门对称放宽（parent 0.90 时候选 0.60 也过），本轮不设绝对 backstop，M3 标定 `tol` 时再评估 | §8.6、MOD-07 §8.2/§8.2.1/§8.2.2/§9、`evolve/judge.py`、`infra/config.py`、`configs/default.yaml`、`tests/unit/evolve/test_evolve_judge.py`、`docs/html/MOD-07-evolve.html` |
+
+### 11.1h v2.2 已回填（2026-10-09，F30 的处置：MOD-06 改为每局一个 `SandboxEnv`）
+
+| # | 来源 | 决策 | 回填位置 |
+|---|---|---|---|
+| B-46 | M2 开工检查单 §10（F30 现场；用户选**方案 A**） | **MOD-06 的 `EpisodeRunner` 不得跨评估局共享 `SandboxEnv`**：`loop run` 的装配由 `env=<单个实例>, close_env=False` 改为注入 **`env_factory`**（每局 `_make_env(cfg, episode_id=key)`，由 `_resolve_env` 的 owned 路径在局末 `close()`），与 MOD-08 `SandboxRunner` 的既有做法同构。理由：`evaluate_arm(n_workers=2)` 用多线程驱动同一 runner，而 `SandboxEnv` 是有状态单实例 ⇒ `reset`/`step` 交错、观测串局（实测 `illegal_rate` 0.285 / `fallback_rate` 0.29，同臂 `play` 路径为 0.032 / 0.000）。**配套护栏**：`tests/integration/test_loop_env_isolation.py`（结构面 + 行为面「`n_workers=1` 与 `=2` 逐字段一致」）。**同源约束**：这与 FR-06-14「评估局并发时 MOD-04 不可共享实例」是同一条理由，只是此前只落到了 `policy` 上；`env` 与 `policy` 都必须**按局**实例化。另登记**残留 F31**（局末 `state.counters.*` 的跨线程读改写，仅影响上报值） | §8.6、MOD-06 PRD §9.1、`loop/cli.py`、`tests/integration/test_loop_env_isolation.py` |
+
 ### 11.2 待裁决
 
 （无。v1.4 起，新的 PRD 临时决策登记到这里，编号从 P-31 开始。）
@@ -699,3 +770,6 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 | v1.7 | 2026-10-06 | **M2 开工 D-1/D-2/D-3 裁决回填**（依据 [M2 开工检查单](tasks/2026-10-06-M2开工检查单.md) §2，登记 B-37..B-39）：§8.6 新增「2026-10-06 M2 开工定价」条目与「bring-up 口径」段。① **D-1**：`loop.max_episodes_per_generation` 170→**120**、`C`（`loop.n_candidates`=`evolve.n_candidates`）2→**1**、`S`（`smoke_n` 两处）5→**2**、`H` 保持 **40** → `E_gen=114` 局（≈37 h/代）；写明 `smoke_n` 无自动校验、`H` 的 `(1+C)` 支臂边际成本为 +10 H = +6.5 h/代（纠正检查单的 +3.3 h）。② **D-2**：难度**混合裁决**——默认局保持 hard × 6，M2 联调/冒烟用 medium × 6 bring-up（run 级 override，`configs/default.yaml` 默认值不动）；hard × 6 的 `fixed_prompt` 基线 win_rate=0.0% ⇒ M3 判据改用 `mean_stages_cleared`/`mean_battles_won`；medium × 6 的基线率与 `D` 列为待实测。③ **D-3**：`H=40`、`n_rep=1` 保持不变（改为 M3 前一次性确定性验证 + 既有的 `n_rep=3` 升级路径），`evolve.win_rate_tol` 0.0→**0.05**、`gap_threshold` 保持 0.15；并以精确配对 McNemar / 配对 bootstrap 的功效计算证明 **n=40 的 win_rate 只能判 ≥15pp**，4–5pp 量级增益改由 `mean_stages_cleared`（Δ=0.30 关 = 6 关制的 5.0pp，power 0.66–0.97）承担。同步改 `configs/default.yaml` 与 `dice_ratchet/infra/config.py` 的对应默认值 |
 | v1.8 | 2026-10-07 | **M2 开工检查单 §3.1 实测回填与 C5 标定（裁决 A+C，登记 B-40/B-41；明细见 [§3.1 实测报告](reviews/2026-10-07-M2-S31-full-agent基线实测.md)）**。① **实测**：full `PolicyAgent` 在 H1 子集（seed 2000–2009，n=10，eval 模式，`runs/m2-s31-full-baseline/`）测得 `illegal_rate` **0.3016**、`fallback_rate` **0.2146**、`truncation_rate` **0.10**、`win_rate` 0.0（CI [0.000, 0.2775]）、`mean_stages_cleared` 3.00，`n=10 / degraded_n=0 / n_dropped=0`，墙钟 3.51 h——与 `fixed_prompt` 基线（0.3021 / 0.1810 / 0.0）同量级且 fallback/truncation 更差。② **裁定 A（先松开）**：`evolve.max_illegal_rate` 0.05→**0.35**、`max_fallback_rate` 0.10→**0.25**、`max_truncation_rate` 0.05→**0.15**（原门超限 6.03×/2.15×/2.00×，会 reject 每个候选 → M2 判据不可能达成）；副作用（C5 临时成为非约束门）已在正文写明。③ **裁定 C（M3 收紧）**：绝对门改**相对门** `candidate.<metric> ≤ parent.<metric> + tol`（登记的 B-41），`tol` 待 §3.2 冒烟产出配对后标定；禁止用「改回 0.05」收紧。④ **根因判定**：离线复现 2,220 个决策点的提示词组装——F13 压缩渲染 **0 次触发**（最大 `token_estimate` 2,694 < 3,072）、非法尝试 **65.2% 是 `play_face`** 配对问题、`grammar_used` **1,892/1,892 = false**（MLX 无语法约束）⇒ 0.30 属 8B 能力/遵从问题，不是渲染或契约缺陷；压到门内需语法约束解码（MOD-03）或提示词改造，**不作为 M2 前置**。⑤ §11 新增 11.1e，并给 P-25 行加「数值已被 B-40 取代」注记 |
 | v1.9 | 2026-10-07 | **D-2 的 medium × 6 基线实测回填（§8.6 新增条目 + 基线表新增 medium × 6 行）**。① **实测**（`runs/m2-d2-medium6-h1n10/`，H1 子集 seed 2000–2009，n=10，同源三臂）：`random` 0/10；`heuristic` **7/10 = 70.0%**；`fixed_prompt` **0/10 = 0.0%**、`mean_stages_cleared` **2.50**、`mean_battles_won` 4.80、`illegal_rate` 0.2829、墙钟 **2.574 h**；内核侧 `medium × 6` 启发式 **91.0%**（env 步 249/301、决策点 92/103）。② **判定：medium × 6 未达成 D-2 的目的**——对 8B 的 `win_rate` 仍是地板（0.0%，与 hard × 6 相同），`mean_stages_cleared` 只 2.40→2.50，`mean_battles_won` 反而 6.10→4.80；检查单的检验条款只写了天花板侧，实际失败在地板侧。可用信号仅剩连续指标（D-3 已指定的轴）。③ **成本**：`D` 均值 83.7（hard 97.1）、单局 15.44 min（hard 19.6–19.9 min）⇒ 若 bring-up 用 medium × 6 则 `E_gen=114` ≈ **29.3 h/代**；**M3 主口径仍 hard × 6，37 h/代不变**。④ **登记两个缺陷**：**F26**（`baseline`/`play` 完全忽略 `env.episode.*`，已修 `cf934fc` + 回归用例）——第一次 medium 补测因此与 hard 逐位相同，本版数字是修复后重跑的；**F27**（逐臂归档 `baselines/*.json` 与 `registry.csv` 不记录 episode 口径，D-2 引入两个局型族后溯源只能靠 run-id 约定，待裁决是否补 `episode_config_hash`）。⑤ **D-2 再调待裁决**：medium × 10 对启发式仅 24.0%（比 hard × 6 更难，大概率加深地板）；备选是测 3 关局型（`hard × 3` 启发式 97.0%）或按其结论放弃 win_rate 轴 |
+| v2.0 | 2026-10-09 | **实验臂/角色解耦 + DeepSeek API 后端回填，并落定 M2 闭环主力臂（登记 B-42/B-43/B-44、缺陷 F28）**。① **§4.7 新增三条签名**：组合根注入的 `RoleModelProvider.client_for(role)`、`inference.roles.resolve_role_bindings` / `role_model_ids` / `run_provenance`、`inference.secrets.lookup_api_key`。② **§8.6 新增「2026-10-09 臂与成本口径」条目**：六臂 `A0/A1/B0/B1/C0/C1` 的角色差分表与 `harness` 字段语义、角色绑定四级优先级（fail-closed）、`backend: deepseek` 的三条硬口径（`api_supports_seed=false`／`api_thinking=disabled`／key 只进内存）、`C0` 臂 H1 n=10 的实测四行（**medium×6 = 80%、hard×6 = 10%**；对照启发式 70% / 40%）、以及**按臂分列的成本表**。③ **B-43（N1 裁决）**：**M2 闭环主力臂 = `C1`**（三角色全 `deepseek-flash` + `harness: evolve`）——API 臂单局 2.09–2.52 min（本地 8B 19.6 min）⇒ `E_gen=114` ≈ **4.0–4.8 h/代 ≈ ¥84–100/代**；**成本约束由墙钟转为 API 花费/限流**，且 `inference.cache_prompt`（KV 前缀复用）对 API 臂**无收益**（只对本地臂有效）。上方「19.6 min/局 / 37 h/代」从此**只对本地 8B 成立**。④ **F28（新登记，处置待裁决）**：**C5 绝对门与臂耦合**——B-40 的三阈值（0.35/0.25/0.15）是按本地 8B 标定的，换到 `C1` 后 `hard×6` 的 `truncation_rate=0.30 > 0.15` 会 **reject 每一个候选**（`E_EVOLVE_ILLEGAL_RATE`，已用真实 `judge()` 复现），而 illegal/fallback 反向松了约 10×。即 §3.1 的「静默锁死闭环」风险**未被消除，只是从 illegal 轴搬到 truncation 轴**。⑤ **D-2 随之重开**：「medium × 6 对 M2 没有信号」只对 8B 成立；`C1` 臂上两难度都有方差。⑥ **F29（新登记）**：臂的 `harness: fixed/evolve` 字段**只做登记、无消费者**（`harness_mode()` 只进 provenance）⇒ **`C0` 与 `C1` 当前行为等价**；强制「fixed 臂不演化」属 Issue #1 任务 6（未做），引用臂名时不得据此推断 harness 被冻结 |
+| v2.1 | 2026-10-09 | **处置 F28：C5 的 `truncation` 由绝对门改为相对门（登记 B-45；用户裁决 ②+③）**。① **③ 门结构**：**C5 = `illegal` / `fallback` 绝对门（0.35 / 0.25）+ `truncation` 相对门** `candidate.truncation_rate ≤ parent.truncation_rate + evolve.truncation_tol`，**`truncation_tol = 0.05`**（n=40 的 2 局，同 `win_rate_tol` 的依据 D-3）。**绝对门 `max_truncation_rate` 从 `configs/default.yaml` 与 `EvolveConfig` 中删除**（而非重标成 0.35——重标会在下次换臂时重演 F28）；理由：`truncation` 是**局型 × 策略强度**的合成属性（同 run 内 `heuristic` 0.00、DeepSeek hard×6 0.30、8B hard×6 0.10），不像 `illegal`/`fallback` 那样有跨臂的绝对意义。② **配套 fail-closed**：相对门依赖 `parent.truncation_rate`，故它进 **C0 前置完备性检查**——parent 缺该字段记 `C0:incomplete_report` 并 reject，**不静默跳门**（跳过会让 C5 对 truncation 失去诊断力）。③ **② 局型**：bring-up / §3.2 冒烟复核确认用 `medium × 6`（实测 truncation = 0.00、`win_rate` 有方差 80% vs 启发式 70%）；默认局仍 `hard × 6`。④ **已知放宽（诚实边界）**：相对门是**对称**放宽——parent 自身截断率很高时，候选只要不比它差就放行（如 parent = 0.90 时候选 0.60 也过）；本轮**不设绝对 backstop**，该行为已由参数化用例显式钉住，M3 标定 `tol` 时再评估。⑤ **落点**：`evolve/judge.py`（`_C5_TRUNCATION_TOL` + C0 parent 校验）、`infra/config.py` / `configs/default.yaml`（键替换）、`tests/unit/evolve/test_evolve_judge.py`（3 组新回归护栏 + 默认值护栏含 `not hasattr(max_truncation_rate)`）、MOD-07 PRD §8.2/§8.2.1/§8.2.2/§9 与 `docs/html/MOD-07-evolve.html`（v0.5） |
+| v2.2 | 2026-10-09 | **处置 F30：MOD-06 的 `EpisodeRunner` 改为每局一个 `SandboxEnv`（登记 B-46；用户选方案 A）**。① **现场**：§3.2 冒烟（`C1` + `medium×6`）在 **5/40 局**被主动中止——gen-000 基线 `fallback_rate≈0.29` / `illegal_rate≈0.285`，而同臂/同模型/同难度/同 seed、**同一时间窗并发**的 `play` 路径是 `0.000`/`0.032`（⇒ 差在代码路径，不在模型）。**根因**：`evaluate_arm(n_workers=cfg.evals.n_workers=2)` 用两个线程驱动**同一个** `EpisodeRunner`，而它只持有一个 `SandboxEnv`（`close_env=False`）；`SandboxEnv` 承载全部局状态 ⇒ 两局 `reset`/`step` 交错、观测串局 ⇒ 模型按**别的局**的相位出动作（典型签名：战斗阶段出现 `map_choose`）⇒ 语义非法 ⇒ 重试耗尽 ⇒ fallback。② **修复**：`loop/cli.py` 由 `env=<共享实例>, close_env=False` 改为注入 `env_factory=_env_factory(cfg)`（每局 `episode_id=key`、局末 `close()`，与 MOD-08 `SandboxRunner` 同构）；构造代价实测 1.1 ms/局。③ **护栏**：`tests/integration/test_loop_env_isolation.py` 从组合根装配，断言 `runner.env is None` 且 `n_workers=1` 与 `=2` 逐字段一致（含 `seq_hash`）；`git stash` 掉修复后 **5/5 稳定失败**，签名即 F30。独立复现（H1 全 40 局、`heuristic` 臂）：共享 env **13/40 局有非法动作、0/40 胜**；每局新 env **0/40、18/40 = 45.0%**（对上 `greedy_counter` hard×6 45.5%）。④ **影响范围澄清**：只污染 **MOD-06 `loop run` 自己的评估口**；C0 臂既有实测走 `play-llm`（MOD-08 `SandboxRunner`，每局新 env、`n_workers=1`）⇒ **未被污染**，B-45 与 D-2 的证据基础成立。⑤ **门禁**：`scripts/ci_gate.sh` 全绿（G1–G5 + G3 跨 `PYTHONHASHSEED` 确定性），**1870 passed / 2 skipped**（较修前 1868 增 2 条新用例）。⑥ **残留 F31（登记，本轮未修）**：`loop/runner.py:446-448`/`:219` 局末 `state.counters.illegal_actions/llm_timeouts/io_retries += …` 是跨线程读改写，`n_workers=2` 下理论丢更新；这三个计数器在 `dice_ratchet/` 内**零读取点**，仅影响 `state.json` 上报值 |

@@ -24,7 +24,7 @@ RSI（Recursive Self-Improvement，递归自我改进）的公开讨论大多停
 | M0 环境 | MOD-09 骨架、MOD-01 Python 移植、MOD-02 沙箱 | ✅ 2026-10-03 验收通过（[报告](docs/reviews/2026-10-03-M0验收报告.md)）：5 组 golden 逐行对拍、200 局差分 0 分歧、heuristic 差 0.0pp、G1–G6 全过 |
 | M1 基线 | MOD-03 本地推理：后端契约 + 三级 JSON 修复 + 内存预算/并发限流 + 聚合指标 | ✅ 代码落地（`tests/unit/inference` / `tests/integration/test_inference_*` / `tests/golden/inference`）；真实 8B 200 条跑批待权重落盘（`inference robustness`） |
 | M1 基线 | 决策策略（MOD-04）+ 三基线 | 计划 → 2027-01-14 |
-| M2 闭环 | 反思记忆（MOD-05）+ 闭环编排（MOD-06）+ harness 自进化（MOD-07） | ✅ 代码落地：`tests/unit/{memory,loop,evolve}` + `tests/integration/{test_loop_*,evolve}`；真实 8B 端到端跑代待 M2 冒烟（检查单 §3.2） |
+| M2 闭环 | 反思记忆（MOD-05）+ 闭环编排（MOD-06）+ harness 自进化（MOD-07） | ✅ 代码落地：`tests/unit/{memory,loop,evolve}` + `tests/integration/{test_loop_*,evolve}`；主力臂已定（`C1` = 三角色全 `deepseek-flash`，Spec v2.2 B-43/B-45/B-46）、C5 的门已按该臂改造（`truncation` 改相对门）；**端到端跑代仍未做**（检查单 §3.2） |
 | M3 测量 | held-out 裁判、消融、多样性、test 终检 | 计划 → 2027-04-22 |
 
 ## 系统结构
@@ -40,7 +40,7 @@ RSI（Recursive Self-Improvement，递归自我改进）的公开讨论大多停
 | L2 进化 | MOD-06 loop · MOD-07 evolve | 闭环编排、断点续跑与成本闸门；harness 候选生成、held-out 裁判、版本化与回滚 |
 | L3 测量与工程 | MOD-08 evals · MOD-09 infra | 基线、指标、坍缩监控与消融；配置、事件、CLI、守卫、git |
 
-一局游戏的默认设定是 hard 难度 × 6 关：启发式 bot 的通关率 45.5%，中位数 232 env 步 / 96 个决策点（n=200，seed 1–200；复现命令见 Spec §8.6）。每代共 **114 局**（训练 30 局 + parent 与 1 个候选的冒烟 2 局与 held-out 40 局；2026-10-06 D-1 定稿），按真实 8B 实测单价 19.6 min/局约 **37 小时/代**。详见 [Spec §8.6](docs/模块拆分Spec-DiceRatchet.md)。
+一局游戏的默认设定是 hard 难度 × 6 关：启发式 bot 的通关率 45.5%，中位数 232 env 步 / 96 个决策点（n=200，seed 1–200；复现命令见 Spec §8.6）。每代共 **114 局**（训练 30 局 + parent 与 1 个候选的冒烟 2 局与 held-out 40 局；2026-10-06 D-1 定稿）。**每代耗时按臂分列**：本地 8B（MLX）实测单价 **19.6 min/局 ⇒ ≈37 小时/代**；**当前 M2 闭环主力臂 `C1`（三角色全 `deepseek-flash`）实测 2.09–2.52 min/局 ⇒ ≈4.0–4.8 小时/代、约 ¥84–100/代**（2026-10-09 裁决，Spec v2.0 B-43）——API 臂下真正的瓶颈是花费而不是墙钟。详见 [Spec §8.6](docs/模块拆分Spec-DiceRatchet.md)。
 
 ### 七条不变量
 

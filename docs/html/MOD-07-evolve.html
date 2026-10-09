@@ -96,11 +96,11 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
   <h2>演化引擎 —— 让 agent 改写自己的 harness，由环境 ground-truth 决定去留</h2>
   <p>RSI 闭环中最危险的一段：MOD-06 每 K 局（默认 30）触发一次演化周期，MOD-07 负责生成候选改动、在 train 上冒烟、在 heldout 上正式评估，再用一张六项判定表决定 accept 还是 reject。设计重心不是"生成更聪明的改动"，而是在结构上掐死自我确认环路。</p>
   <div class="badges">
-    <span class="badge">版本 v0.4</span>
+    <span class="badge">版本 v0.5</span>
     <span class="badge">状态：待评审</span>
     <span class="badge">里程碑：M2 → M3</span>
     <span class="badge">作者：DiceRatchet 技术文档</span>
-    <span class="badge">日期：2026-10-07</span>
+    <span class="badge">日期：2026-10-09</span>
   </div>
 </header>
 
@@ -354,7 +354,7 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
     <tr><td>C2</td><td>至少一指标显著提升</td><td><code>paired.significant == True and paired.direction == "up"</code>，<code>metric ∈ {win_rate, mean_stages_cleared, mean_hearts_left}</code>，方法与口径全部由 MOD-08 <code>compare_paired</code> 决定（胜率用 McNemar，连续量用配对 bootstrap B=10000）</td><td><code>C2:no_significant_gain</code> / <span class="tag err">E_EVOLVE_NO_GAIN</span></td></tr>
     <tr><td>C3</td><td>增益真实性</td><td><code>train.win_rate - heldout.win_rate &lt;= cfg.evolve.gap_threshold</code>（0.15，对齐 Spec §4.5 <code>gap_threshold</code>）</td><td><code>C3:gap {gap}&gt;{thr}</code> / <span class="tag err">E_EVOLVE_OVERFIT_SUSPECT</span></td></tr>
     <tr><td>C4</td><td>无坍缩</td><td><code>diversity.collapse_flag == False and diversity.entropy_slope &gt;= cfg.evolve.min_entropy_slope</code>（−0.01；Spec 示例 −0.004 属通过区间）</td><td><code>C4:collapse</code> / <span class="tag err">E_EVOLVE_COLLAPSE</span></td></tr>
-    <tr><td>C5</td><td>合法性与健壮性</td><td><code>illegal_rate ≤ 0.35</code> 且 <code>fallback_rate ≤ 0.25</code> 且 <code>truncation_rate ≤ 0.15</code>（<b>2026-10-07 按 Spec §3.1 实测标定</b>，原 0.05/0.10/0.05 会 reject 每个候选；<b>先松开、M3 改相对门 <code>candidate ≤ parent + tol</code> 收紧</b>，见 Spec B-40/B-41 与 MOD-07 §8.2.1）</td><td><code>C5:illegal/fallback/truncation</code> / <span class="tag err">E_EVOLVE_ILLEGAL_RATE</span></td></tr>
+    <tr><td>C5</td><td>合法性与健壮性</td><td><code>illegal_rate ≤ 0.35</code> 且 <code>fallback_rate ≤ 0.25</code>（<b>绝对门</b>，2026-10-07 按 Spec §3.1 实测标定，原 0.05/0.10 会 reject 每个候选）且 <code>truncation_rate ≤ parent.truncation_rate + truncation_tol</code>（<b>相对门</b>，<code>tol=0.05</code>；<b>2026-10-09 Spec v2.0 B-44 用户裁决 ②+③</b>——原绝对门 0.15 按本地 8B 标定，换 DeepSeek 臂后 <code>hard×6</code> 实测 0.30 &gt; 0.15 会全拒候选、把闭环静默锁死，缺陷 F28，见 MOD-07 §8.2.2）</td><td><code>C5:illegal/fallback/truncation</code> / <span class="tag err">E_EVOLVE_ILLEGAL_RATE</span></td></tr>
   </table>
   <p><code>accept ⟺ C0∧C1∧C2∧C3∧C4∧C5</code>。多候选全通过时取 <code>(C2 delta 最大, candidate_id 最小)</code> 为 winner，其余记 <code>reject/reason="superseded"</code>（不计失败、无错误码）。</p>
   <h4>8.3 HITL 时序</h4>
@@ -390,7 +390,8 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
     <tr><td><code>evolve.min_heldout_n</code> / <code>evolve.win_rate_tol</code></td><td>int / float</td><td>20 / 0.0</td><td>C0 门槛 / C1 允许下降幅度</td></tr>
     <tr><td><code>evolve.alpha</code></td><td>float</td><td>0.05</td><td>C2 显著性水平（方法归 MOD-08）</td></tr>
     <tr><td><code>evolve.gap_threshold</code> / <code>evolve.min_entropy_slope</code></td><td>float</td><td>0.15 / −0.01</td><td>C3 <code>win_rate_gap</code> 阈值 / C4 熵斜率下限</td></tr>
-    <tr><td><code>evolve.max_illegal_rate</code> / <code>evolve.max_fallback_rate</code> / <code>evolve.max_truncation_rate</code></td><td>float</td><td><b>0.35 / 0.25 / 0.15</b></td><td>C5 上限（2026-10-07 实测标定，先松开；M3 由相对门收紧）</td></tr>
+    <tr><td><code>evolve.max_illegal_rate</code> / <code>evolve.max_fallback_rate</code></td><td>float</td><td><b>0.35 / 0.25</b></td><td>C5 的<b>绝对门</b>（2026-10-07 实测标定，先松开）</td></tr>
+    <tr><td><code>evolve.truncation_tol</code></td><td>float</td><td><b>0.05</b></td><td>C5 的 <b>truncation 相对门</b>容差：<code>candidate.truncation_rate ≤ parent.truncation_rate + tol</code>（0.05 = n=40 的 2 局；2026-10-09 Spec v2.0 B-44 裁决 ②+③，原绝对门 <code>max_truncation_rate</code> 已删除 —— 缺陷 F28）</td></tr>
     <tr><td><code>evolve.hitl</code> / <code>evolve.gate_timeout_hours</code></td><td>bool / int</td><td>true / 24</td><td>人在环门开关 / 超时 → 保守回滚</td></tr>
     <tr><td><code>evolve.propose_max_retries</code></td><td>int</td><td>2</td><td>JSON-schema 失败重试（在 MOD-03 <code>generate_json</code> 之上再包一层）；成本上限改由 MOD-06 <code>loop.max_episodes_per_generation</code> 统一控制</td></tr>
     <tr><td><code>evolve.evolvable_keys</code></td><td>list[str]</td><td><code>["retrieval.top_k","sampling.temperature","prompt.show_intent"]</code></td><td><code>config_patch</code> 白名单键</td></tr>
@@ -526,6 +527,8 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
     <tr><td>v0.1</td><td>2026-09-30</td><td>首版</td></tr>
     <tr><td>v0.2</td><td>2026-09-30 17:21</td><td>按 Spec v1.3 与 MOD PRD 评审修订：MOD-08/MOD-02 调用改为 Spec §4.7 签名（P1-3/16）；显著性方法归 MOD-08（P1-4）；report 改为引用唯一 schema，本模块只填写决策段（P1-5/6）；删除 <code>train_eval_seeds</code>（与训练块重叠，P1-7）；成本算术改正、候选数默认 2（P1-8、Spec §8.6）；parent 与候选共用冻结记忆快照；冒烟 seed 改为本代训练块末尾；补充 <code>better()</code> 定义；C5 改为 illegal/fallback/truncation；git 改为只打 tag <code>harness-v{N}</code>（P1-15）；M3 追加「≥1 次 accept」防止退化通过</td></tr>
     <tr><td>v0.3</td><td>2026-09-30 17:49</td><td>P-17/P-26/P-27 裁决回填为 Spec B-29/B-32/B-33；开放问题 2、4 部分结案</td></tr>
+    <tr><td>v0.4</td><td>2026-10-07</td><td><b>C5 按实测标定 + M3 相对门设计</b>（Spec v1.8 B-40/B-41）：C5 三阈值 0.05/0.10/0.05 → <b>0.35/0.25/0.15</b>（full <code>PolicyAgent</code> 实测 0.3016/0.2146/0.10，原门超限 6.03×/2.15×/2.00×，会 reject 每个候选；「先松开、M3 再收紧」并声明副作用）；新增 §8.2.1（M3 收紧路径 = 绝对门改相对门 <code>candidate ≤ parent + tol</code>）；§9 顺带补齐 D-1 滞后（<code>evolve.n_candidates</code> 2→1、<code>evolve.smoke_n</code> 5→2）</td></tr>
+    <tr><td>v0.5</td><td>2026-10-09</td><td><b>C5 的 truncation 改相对门（Spec v2.0 B-44，用户裁决 ②+③）</b>：C5 = <code>illegal</code>/<code>fallback</code> <b>绝对门</b> + <code>truncation</code> <b>相对门</b> <code>candidate ≤ parent + truncation_tol</code>（<code>tol=0.05</code>）；删除绝对门 <code>max_truncation_rate</code>，新增 §9 的 <code>evolve.truncation_tol</code>。起因：该绝对门按本地 8B（实测 0.10）标定，而 M2 主力臂已裁决为 <code>C1</code>（DeepSeek），<code>hard×6</code> 实测 <code>truncation_rate=0.30 &gt; 0.15</code> ⇒ 会 reject 每一个候选、把闭环静默锁死（<b>缺陷 F28</b>；已用真实 <code>judge()</code> 复现）。同时登记 <code>parent</code> 缺 <code>truncation_rate</code> 时 <b>fail-closed 记 C0</b>（不静默跳门）</td></tr>
   </table>
 </section>
 
