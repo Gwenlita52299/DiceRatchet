@@ -1,6 +1,6 @@
 # DiceRatchet 模块拆分 Spec
 
-> 版本：v1.9（2026-10-07，D-2 的 medium × 6 基线实测回填 §8.6 + 登记 F26/F27，见 §12/changelog）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
+> 版本：v2.0（2026-10-09，**实验臂/角色解耦 + DeepSeek API 后端回填**，并落定 M2 闭环主力臂为 `C1`；见 §8.6 新增条目、§11.1f B-42/B-43/B-44、§12/changelog）· 状态：已评审 · 定位：**模块边界与接口的唯一事实来源（Single Source of Truth）**
 > 上游：[项目计划-DiceRatchet.md](../项目计划-DiceRatchet.md) · [RSI调研纪要.md](../RSI调研纪要.md)
 > 游戏本体：`docs/prd/GAME-00/01/02`（规则、观测、动作的游戏侧事实来源，B-09）
 > 下游：`docs/prd/MOD-*.md`（每个模块的技术 PRD 必须与本文件一致；冲突时以本文件为准）
@@ -340,6 +340,9 @@ python -m dice_ratchet guards check [--root PATH]         # MOD-09（P-20）
 | MOD-06 → MOD-04 | `PolicyAgent.reset(ctx: EpisodeContext) -> None` | 每局开始 |
 | MOD-06 → MOD-04 | `PolicyAgent.play_decision(env: SandboxEnv, obs: Observation, *, ctx: EpisodeContext) -> DecisionResult` | 执行一个决策点（含计划、重试、fallback），返回 `steps: list[StepRecord]`、`source`、`attempts`、`llm: LLMCallMeta\|None`、`memory_ids`、`adopted_memory_ids`、`prompt_hash`、`last: StepResult` |
 | MOD-04 → MOD-03 | `InferenceClient.generate_json(prompt, *, schema, mode, sampling, seed) -> JsonResult` | `mode ∈ train/eval` |
+| 组合根 → MOD-04/06/07 | `RoleModelProvider.client_for(role) -> InferenceClient`（`role ∈ policy/reflection/proposer`） | 三角色的模型绑定**全部来自配置**；MOD-04/06/07 只做鸭子类型解析（`coerce_client`/`client_for_role`），不 import 提供者类型（B-42） |
+| 全部 → MOD-03 | `inference.roles.resolve_role_bindings(cfg) -> RoleBinding` · `role_model_ids(cfg) -> dict[role, model_id]` · `run_provenance(cfg, run_id) -> dict` | 优先级 `experiment.roles.<role>` > `experiment.arms[arm].<role>` > `models.<role>` > `inference.model_id`；未知角色/未知臂/空 `model_id` 一律 fail-closed（不静默降级）；落 `runs/<run_id>/models_provenance.json` |
+| 全部 → MOD-03 | `inference.secrets.lookup_api_key(model_spec) -> str` | `api_key_env` 只登记**变量名**；真值取自真实环境变量或本地 `.env`（`.env` 被 gitignore，绝不入 `harness/`、run JSON、事件或 Git） |
 | MOD-04 → MOD-05 | `MemoryStore.retrieve(obs, *, top_k, token_budget, tick: int) -> list[MemoryHit]` | `tick` 为逻辑时钟（训练局序号），不用墙钟 |
 | MOD-06 → MOD-05 | `MemoryStore.add_reflection(entry: ReflectionEntry, *, provenance: Provenance) -> str` · `record_usage(episode_key, memory_ids, outcome, *, adopted_ids, tick) -> None` · `snapshot(version: int) -> Path` · `frozen(version) -> MemoryView` | 评估局只用 `frozen` 只读视图 |
 | MOD-06 → MOD-03 | `loop.reflect.reflect(summary: EpisodeSummary, *, client, template) -> ReflectionEntry` | 反思归 MOD-06；`ReflectionEntry` schema 归 MOD-05 |
@@ -552,6 +555,45 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 - **前置缺陷（F26，已修 `cf934fc`）**：`baseline`/`play` 曾**完全忽略** `env.episode.*`（`SandboxRunner` 落到 `EpisodeConfig()` 的代码默认 hard × 6），使第一次 medium 补测与 hard × 6 逐位相同。**本行的数字是修复后重跑的**；M1 归档未受影响（代码默认恰等于当时配置默认）。溯源缺口另见 F27：逐臂归档 `baselines/*.json` 与 `registry.csv` 不记录 episode 口径。
 - **待裁决（D-2 再调）**：检查单原文给的两条路都需重新评估——**medium × 10 对启发式只有 24.0%（比 hard × 6 更难），大概率让 8B 的胜率地板更深**；若目标是让 8B 的 `win_rate` 离开地板，应测**对启发式已到天花板、但对 8B 可能落在中段的 3 关局型**（`hard × 3` 启发式 97.0%、`medium × 3`/`easy × 3` 100.0%），或按 D-3 的结论直接**放弃 win_rate 轴、全用连续指标**。
 
+**✅ 2026-10-09 臂与成本口径回填（N1 裁决：M2 闭环先在 DeepSeek 臂上跑；依据 [Issue #1 落地报告](tasks/2026-10-08-issue-1-角色解耦落地报告.md) 与 [M2 开工检查单 §8](tasks/2026-10-06-M2开工检查单.md)）**：
+
+- **实验臂（`experiment.arm`）成为一等配置**：六个臂只做**角色差分**，`harness` 字段只**登记**该臂的 harness 是否演化；空串 = 该角色不绑定、继续向下继承。臂定义计入 `config_hash` ⇒ 换臂即换 run-id 族（F10），六臂产物不会互相污染。
+  - ⚠️ **已知限制 F29（2026-10-09 复检登记）**：`harness` 字段**只做登记**——`ExperimentConfig.harness_mode()` 的唯一消费者是 provenance（`roles.py` 把它写进 `models_provenance.json`），**没有任何代码据此开关演化**。即 **`C0`（fixed）与 `C1`（evolve）当前行为等价**：选 `C0` 跑闭环照样会演化 harness。强制「fixed 臂不演化」属 Issue #1 任务 6（**未做**）。因此本节的「主力臂 = `C1`」在**行为上**等价于「把三角色钉到 `deepseek-flash`」；引用臂名时不要据此推断 harness 被冻结。
+
+| 臂 | policy | reflection | proposer | harness | 用途 |
+|---|---|---|---|---|---|
+| `A0` | —（继承 `inference.model_id`） | — | — | fixed | 本地 8B 基线对照 |
+| `A1`（**默认**） | — | — | — | evolve | 本地 8B 闭环 |
+| `B0` | — | — | deepseek-flash | fixed | 只换 proposer |
+| `B1` | — | — | deepseek-flash | evolve | proposer 对照 |
+| `C0` | deepseek-flash | deepseek-flash | deepseek-flash | fixed | 全 API 对照 |
+| **`C1`** | deepseek-flash | deepseek-flash | deepseek-flash | evolve | **M2 闭环主力臂（N1 裁决，2026-10-09）** |
+
+- **角色绑定优先级（唯一实现 `inference/roles.py::_resolve_role`）**：`experiment.roles.<role>` > `experiment.arms[arm].<role>` > `models.<role>` > `inference.model_id`。未知臂/未知角色/空 `model_id`/注册表里没有的模型/`provider=api` 但未登记 key 环境变量 → **fail-closed**（绝不静默降级到别的模型）。三角色各自落 `runs/<run_id>/models_provenance.json`（`model_id`/`provider`/`backend`/`model_revision`/`online`/`api_key_present` + 臂 + `harness` 模式 + `config_hash`）。臂绑定经组合根注入，**MOD-04/06/07 都拿得到**（`loop run --agent llm` 与 MOD-07 提案走同一个 `RoleModelProvider`）。
+- **`backend: deepseek`（MOD-03 新增后端）**：`provider=api` 的外部模型。注册表新增 `deepseek-flash` 与 `deepseek-v4-pro`（实测该账号/接口版本**没有** `deepseek-chat`，旧名已下线）。三条硬口径：① `api_supports_seed=false`——DeepSeek **不承诺跨时间确定性**（实测字节相同的请求 9 次返回 9 个不同响应）⇒ 采样照记、响应按 request hash 归档、变化即标 `llm.nondeterministic`；② `api_thinking: disabled`——flash 默认开思考模式会把 `max_tokens` 吃在思维链上、`content` 返空，导致每次白花一次调用；③ key 只经 `inference/secrets.py` 从真实环境变量或本地 `.env` 读（**真实环境变量优先**），**只进内存**，绝不入 `harness/`、run JSON、事件或 Git。
+- **2026-10-08/09 实测（`C0` 臂，H1 子集 seed 2000–2009，n=10，`temperature=0.0`）**：
+
+| 臂 / 局型 | `win_rate` | CI95 | `mean_stages_cleared` | `mean_decisions` | `illegal_rate` | `fallback_rate` | `truncation_rate` |
+|---|---|---|---|---|---|---|---|
+| `C0` DeepSeek · **medium × 6** | **8/10 = 80.0%** | [49.0%, 94.3%] | 5.6/6 | 98.3 | 0.0316 | 0.0 | 0.00 |
+| `C0` DeepSeek · **hard × 6** | **1/10 = 10.0%** | [1.8%, 40.4%] | 4.3/6 | 124.5 | 0.0291 | 0.0008 | **0.30** |
+| `heuristic` · medium × 6 | 70.0% | [39.7%, 89.2%] | 5.7/6 | 97.1 | 0.0 | 0.0 | 0.00 |
+| `heuristic` · hard × 6 | 40.0% | [16.8%, 68.7%] | 5.4/6 | 104.1 | 0.0 | 0.0 | 0.00 |
+
+  同 run 内 `random` 两难度均 0/10；全部 `status=200` / `degraded_n=0` / `fallback_decisions=0` / `n_dropped=0`。**注意**：`hard × 6 = 10%` 这一行**与 8B 的结论相反**——`win_rate` 在 API 臂上**有**方差（8B 在两难度上都是 0.0%）。`hard × 6` 的 `truncation_rate=0.30` 来自 **3/10 局撞内核单场战斗回合上限**（`src/game/kernel/combat.js:460` → `state.truncationReason='E_KERNEL_TURN_LIMIT'`，`maxTurnsPerBattle=60`），是**局型 × 策略强度**的合成值而非纯局型属性（同 run 的 `heuristic` 为 0.00）。
+
+- **成本模型按臂分列（实测；`play` 相位墙钟 = 第三个 `eval.start` → 最后一个事件）**：
+
+| 臂 / 局型 | 单局墙钟 | 后端调用（n=10） | 花费 | `E_gen = 114 局/代` |
+|---|---|---|---|---|
+| 本地 8B（`m1-real-h1n10b`，上方全部定价的依据） | 19.6 min | 1,551 | 0（本地） | **≈37 h/代** |
+| **`C0`/`C1` DeepSeek · hard × 6** | **2.52 min** | 1,360 | ¥0.879/局 | **≈4.8 h/代 ≈ ¥100/代** |
+| **`C0`/`C1` DeepSeek · medium × 6** | **2.09 min** | 1,080 | ¥0.733/局 | **≈4.0 h/代 ≈ ¥84/代** |
+
+  ⇒ **上方「19.6 min/局 / 37 h/代」只对本地 8B 成立**。API 臂下 `E_gen` 的约束由**墙钟转为 API 花费/限流**（快约 8×）。连带结论：`inference.cache_prompt`（KV 前缀复用）对 API 臂**无收益**（无本地 prefill），只对本地臂有效。
+- **🔴 遗留缺陷 F28（C5 绝对门与臂耦合，处置待裁决）**：C5 的三阈值是 **2026-10-07 按本地 8B 实测**标定的（B-40），而 M2 主力臂已于 N1 改为 `C1`（DeepSeek）。按当前臂实测值复算：`hard × 6` 的 `truncation_rate = 0.30 > 门 0.15` ⇒ **C5 会 reject 每一个候选**（`reject` / `C5:illegal/fallback/truncation` / `E_EVOLVE_ILLEGAL_RATE`），闭环形式上跑通、实则一个候选都留不下——**正是 §3.1 要防的失败模式，只是从 illegal 轴搬到了 truncation 轴**；同时 illegal/fallback 两门反向松了约 10×（0.03 vs 0.35、0.00 vs 0.25）。**处置候选**：① 按当前臂重标 ② bring-up 改用 `medium × 6`（实测 truncation = 0.00）③ C5 只留 illegal+fallback 绝对门、truncation 并入 M3 相对门（B-41）。**在裁决前不得据此宣称 M2 准入完成**。
+- **D-2 难度口径随之重开**：2026-10-07 的「medium × 6 对 M2 没有信号」只对 8B 成立；对 `C1` 臂实测 **medium × 6 = 80% vs hard × 6 = 10%**，两难度**都有**方差（对照启发式 70% / 40%）。D-2 需按当前臂重裁（检查单 §8.5 R3）。
+
 ---
 
 ## 9. 质量门（每个模块 PRD 的 DoD 基线）
@@ -677,6 +719,14 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 | B-40 | [§3.1 实测](reviews/2026-10-07-M2-S31-full-agent基线实测.md) | **C5 三阈值按实测先松开**：`max_illegal_rate` 0.05→**0.35**、`max_fallback_rate` 0.10→**0.25**、`max_truncation_rate` 0.05→**0.15**。依据：full `PolicyAgent` 实测 0.3016 / 0.2146 / 0.10（原门超限 6.03× / 2.15× / 2.00×，会 reject 每个候选）。**写明「先松开、M3 再收紧」**，并声明副作用（C5 临时成为非约束门） | §8.6、MOD-07 §8.2/§9、`configs/default.yaml`、`config.py` |
 | B-41 | [§3.1 实测](reviews/2026-10-07-M2-S31-full-agent基线实测.md) | **C5 的 M3 收紧路径 = 绝对门改相对门**：`candidate.<metric> ≤ parent.<metric> + tol`（illegal/fallback/truncation 同构），保留抓退化的诊断力；`tol` 待 §3.2 冒烟产出第一批 train/heldout 配对后标定。**禁止用「把 B-40 的值改回 0.05」来收紧** | §8.6、MOD-07 §8.2 |
 
+### 11.1f v2.0 已回填（2026-10-09，实验臂/角色解耦 + DeepSeek 后端 + M2 闭环臂裁决）
+
+| # | 来源 | 决策 | 回填位置 |
+|---|---|---|---|
+| B-42 | [Issue #1 落地报告](tasks/2026-10-08-issue-1-角色解耦落地报告.md) | **三角色解耦 + 实验臂成为一等配置**：`policy`/`reflection`/`proposer` 只依赖统一 `InferenceClient` 契约，绑定全部来自配置（优先级 `experiment.roles.<role>` > `experiment.arms[arm].<role>` > `models.<role>` > `inference.model_id`，唯一实现 `_resolve_role`，fail-closed）；新增 `experiment.arm` 与六臂 `A0/A1/B0/B1/C0/C1`（只做角色差分，`harness` 字段只登记是否演化）；臂定义计入 `config_hash`（换臂即换 run-id 族）。新增 MOD-03 `backend: deepseek`（`provider=api`、`api_supports_seed=false`、`api_thinking=disabled`、`inference/secrets.py` 的 `.env` 读取、`models_provenance.json` 三角色溯源） | §4.7、§8.6、MOD-03 §6/§7、MOD-06/MOD-07 |
+| B-43 | M2 开工检查单 §8（N1 裁决，用户） | **M2 闭环主力臂 = `C1`（policy/reflection/proposer 全 `deepseek-flash` + `harness: evolve`）**。理由：API 臂单局 2.09–2.52 min（本地 8B 19.6 min）⇒ `E_gen=114` ≈ 4.0–4.8 h/代、≈¥84–100/代，闭环能在当晚跑通；且 `win_rate` 在 API 臂上有方差（medium×6 = 80% / hard×6 = 10%），而 8B 两难度都是 0.0%。**成本口径随之由墙钟转为 API 花费/限流** | §8.6 |
+| B-44 | M2 开工检查单 §8（复检） | **登记 F28：C5 绝对门与臂耦合**——C5 三阈值按本地 8B 标定（B-40），换臂后 `hard×6` 的 `truncation_rate=0.30 > 0.15` 会 reject 每个候选（illegal/fallback 反向松约 10×）。**处置候选**（按当前臂重标 / bring-up 用 medium×6 / truncation 并入相对门）、**未裁决前不得宣称 M2 准入完成**；同时 D-2 难度口径按当前臂**重开** | §8.6、MOD-07 §8.2、[检查单 §8.5](tasks/2026-10-06-M2开工检查单.md) |
+
 ### 11.2 待裁决
 
 （无。v1.4 起，新的 PRD 临时决策登记到这里，编号从 P-31 开始。）
@@ -699,3 +749,4 @@ node src/game/tests/bot-match.js 200 <stageCount> <difficulty> 1 --stats   # n=2
 | v1.7 | 2026-10-06 | **M2 开工 D-1/D-2/D-3 裁决回填**（依据 [M2 开工检查单](tasks/2026-10-06-M2开工检查单.md) §2，登记 B-37..B-39）：§8.6 新增「2026-10-06 M2 开工定价」条目与「bring-up 口径」段。① **D-1**：`loop.max_episodes_per_generation` 170→**120**、`C`（`loop.n_candidates`=`evolve.n_candidates`）2→**1**、`S`（`smoke_n` 两处）5→**2**、`H` 保持 **40** → `E_gen=114` 局（≈37 h/代）；写明 `smoke_n` 无自动校验、`H` 的 `(1+C)` 支臂边际成本为 +10 H = +6.5 h/代（纠正检查单的 +3.3 h）。② **D-2**：难度**混合裁决**——默认局保持 hard × 6，M2 联调/冒烟用 medium × 6 bring-up（run 级 override，`configs/default.yaml` 默认值不动）；hard × 6 的 `fixed_prompt` 基线 win_rate=0.0% ⇒ M3 判据改用 `mean_stages_cleared`/`mean_battles_won`；medium × 6 的基线率与 `D` 列为待实测。③ **D-3**：`H=40`、`n_rep=1` 保持不变（改为 M3 前一次性确定性验证 + 既有的 `n_rep=3` 升级路径），`evolve.win_rate_tol` 0.0→**0.05**、`gap_threshold` 保持 0.15；并以精确配对 McNemar / 配对 bootstrap 的功效计算证明 **n=40 的 win_rate 只能判 ≥15pp**，4–5pp 量级增益改由 `mean_stages_cleared`（Δ=0.30 关 = 6 关制的 5.0pp，power 0.66–0.97）承担。同步改 `configs/default.yaml` 与 `dice_ratchet/infra/config.py` 的对应默认值 |
 | v1.8 | 2026-10-07 | **M2 开工检查单 §3.1 实测回填与 C5 标定（裁决 A+C，登记 B-40/B-41；明细见 [§3.1 实测报告](reviews/2026-10-07-M2-S31-full-agent基线实测.md)）**。① **实测**：full `PolicyAgent` 在 H1 子集（seed 2000–2009，n=10，eval 模式，`runs/m2-s31-full-baseline/`）测得 `illegal_rate` **0.3016**、`fallback_rate` **0.2146**、`truncation_rate` **0.10**、`win_rate` 0.0（CI [0.000, 0.2775]）、`mean_stages_cleared` 3.00，`n=10 / degraded_n=0 / n_dropped=0`，墙钟 3.51 h——与 `fixed_prompt` 基线（0.3021 / 0.1810 / 0.0）同量级且 fallback/truncation 更差。② **裁定 A（先松开）**：`evolve.max_illegal_rate` 0.05→**0.35**、`max_fallback_rate` 0.10→**0.25**、`max_truncation_rate` 0.05→**0.15**（原门超限 6.03×/2.15×/2.00×，会 reject 每个候选 → M2 判据不可能达成）；副作用（C5 临时成为非约束门）已在正文写明。③ **裁定 C（M3 收紧）**：绝对门改**相对门** `candidate.<metric> ≤ parent.<metric> + tol`（登记的 B-41），`tol` 待 §3.2 冒烟产出配对后标定；禁止用「改回 0.05」收紧。④ **根因判定**：离线复现 2,220 个决策点的提示词组装——F13 压缩渲染 **0 次触发**（最大 `token_estimate` 2,694 < 3,072）、非法尝试 **65.2% 是 `play_face`** 配对问题、`grammar_used` **1,892/1,892 = false**（MLX 无语法约束）⇒ 0.30 属 8B 能力/遵从问题，不是渲染或契约缺陷；压到门内需语法约束解码（MOD-03）或提示词改造，**不作为 M2 前置**。⑤ §11 新增 11.1e，并给 P-25 行加「数值已被 B-40 取代」注记 |
 | v1.9 | 2026-10-07 | **D-2 的 medium × 6 基线实测回填（§8.6 新增条目 + 基线表新增 medium × 6 行）**。① **实测**（`runs/m2-d2-medium6-h1n10/`，H1 子集 seed 2000–2009，n=10，同源三臂）：`random` 0/10；`heuristic` **7/10 = 70.0%**；`fixed_prompt` **0/10 = 0.0%**、`mean_stages_cleared` **2.50**、`mean_battles_won` 4.80、`illegal_rate` 0.2829、墙钟 **2.574 h**；内核侧 `medium × 6` 启发式 **91.0%**（env 步 249/301、决策点 92/103）。② **判定：medium × 6 未达成 D-2 的目的**——对 8B 的 `win_rate` 仍是地板（0.0%，与 hard × 6 相同），`mean_stages_cleared` 只 2.40→2.50，`mean_battles_won` 反而 6.10→4.80；检查单的检验条款只写了天花板侧，实际失败在地板侧。可用信号仅剩连续指标（D-3 已指定的轴）。③ **成本**：`D` 均值 83.7（hard 97.1）、单局 15.44 min（hard 19.6–19.9 min）⇒ 若 bring-up 用 medium × 6 则 `E_gen=114` ≈ **29.3 h/代**；**M3 主口径仍 hard × 6，37 h/代不变**。④ **登记两个缺陷**：**F26**（`baseline`/`play` 完全忽略 `env.episode.*`，已修 `cf934fc` + 回归用例）——第一次 medium 补测因此与 hard 逐位相同，本版数字是修复后重跑的；**F27**（逐臂归档 `baselines/*.json` 与 `registry.csv` 不记录 episode 口径，D-2 引入两个局型族后溯源只能靠 run-id 约定，待裁决是否补 `episode_config_hash`）。⑤ **D-2 再调待裁决**：medium × 10 对启发式仅 24.0%（比 hard × 6 更难，大概率加深地板）；备选是测 3 关局型（`hard × 3` 启发式 97.0%）或按其结论放弃 win_rate 轴 |
+| v2.0 | 2026-10-09 | **实验臂/角色解耦 + DeepSeek API 后端回填，并落定 M2 闭环主力臂（登记 B-42/B-43/B-44、缺陷 F28）**。① **§4.7 新增三条签名**：组合根注入的 `RoleModelProvider.client_for(role)`、`inference.roles.resolve_role_bindings` / `role_model_ids` / `run_provenance`、`inference.secrets.lookup_api_key`。② **§8.6 新增「2026-10-09 臂与成本口径」条目**：六臂 `A0/A1/B0/B1/C0/C1` 的角色差分表与 `harness` 字段语义、角色绑定四级优先级（fail-closed）、`backend: deepseek` 的三条硬口径（`api_supports_seed=false`／`api_thinking=disabled`／key 只进内存）、`C0` 臂 H1 n=10 的实测四行（**medium×6 = 80%、hard×6 = 10%**；对照启发式 70% / 40%）、以及**按臂分列的成本表**。③ **B-43（N1 裁决）**：**M2 闭环主力臂 = `C1`**（三角色全 `deepseek-flash` + `harness: evolve`）——API 臂单局 2.09–2.52 min（本地 8B 19.6 min）⇒ `E_gen=114` ≈ **4.0–4.8 h/代 ≈ ¥84–100/代**；**成本约束由墙钟转为 API 花费/限流**，且 `inference.cache_prompt`（KV 前缀复用）对 API 臂**无收益**（只对本地臂有效）。上方「19.6 min/局 / 37 h/代」从此**只对本地 8B 成立**。④ **F28（新登记，处置待裁决）**：**C5 绝对门与臂耦合**——B-40 的三阈值（0.35/0.25/0.15）是按本地 8B 标定的，换到 `C1` 后 `hard×6` 的 `truncation_rate=0.30 > 0.15` 会 **reject 每一个候选**（`E_EVOLVE_ILLEGAL_RATE`，已用真实 `judge()` 复现），而 illegal/fallback 反向松了约 10×。即 §3.1 的「静默锁死闭环」风险**未被消除，只是从 illegal 轴搬到 truncation 轴**。⑤ **D-2 随之重开**：「medium × 6 对 M2 没有信号」只对 8B 成立；`C1` 臂上两难度都有方差。⑥ **F29（新登记）**：臂的 `harness: fixed/evolve` 字段**只做登记、无消费者**（`harness_mode()` 只进 provenance）⇒ **`C0` 与 `C1` 当前行为等价**；强制「fixed 臂不演化」属 Issue #1 任务 6（未做），引用臂名时不得据此推断 harness 被冻结 |

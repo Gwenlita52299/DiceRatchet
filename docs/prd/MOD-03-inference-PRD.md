@@ -1,6 +1,6 @@
 # MOD-03 inference 技术 PRD
 
-> 版本：v1.5（2026-10-06 对齐超时默认值的三层漂移，见 §17）· 状态：草案（待复核）· 所属里程碑：M1
+> 版本：v1.6（2026-10-09 **三角色解耦 + DeepSeek API 后端回填**，对齐 Spec v2.0 B-42；见 §2.1/§7/§9/§17）· 状态：草案（待复核）· 所属里程碑：M1（DeepSeek 后端为 Issue #1 追加）
 > 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（**唯一事实来源**；冲突以 Spec 为准）
 > 上游计划：[../../项目计划-DiceRatchet.md](../../项目计划-DiceRatchet.md) §4 技术栈（Mac M5 24GB / MLX 或 llama.cpp / Qwen3-8B → 27B Q4）、§8 风险（LLM 输出非 JSON）
 > 作者：DiceRatchet 技术文档（MOD-03 负责模块）· 依赖：MOD-09 infra（配置、日志、run_id、CLI）
@@ -19,6 +19,7 @@ MOD-03 是 L1 层唯一的"模型出口"：把 `Mac M5 24GB + 全程离线` 的�
 - `dice_ratchet/inference/llama_backend.py`：`LlamaCppBackend`（`llama-cpp-python` 进程内）与 `LlamaServerBackend`（`llama-server` 子进程 + HTTP + GBNF）。
 - `dice_ratchet/inference/schema.py`：JSON Schema 子集 → GBNF 编译器、`validate()`、修复 prompt 渲染（独占拥有，MOD-04 与 harness 都不得覆盖，Spec v1.4 B-28）；加载 `schemas/decision.schema.json`（Spec v1.3 §4.3 的唯一决策 schema，本模块与 MOD-04 共用，不再各自维护）。
 - `configs/models.yaml` 模型注册表；采样参数管控、超时/取消、重试退避、token/延迟埋点、`E_LLM_*` 错误码与降级信号。
+- **（v1.6 新增，Spec v2.0 B-42）**`dice_ratchet/inference/client.py`（三个角色共用的 `InferenceClient` 统一同步契约 + `BackendInferenceClient`）、`deepseek_backend.py`（`provider=api` 的外部模型后端）、`roles.py`（`RoleModelProvider` / `resolve_role_bindings` / `role_model_ids` / `run_provenance`）、`secrets.py`（`api_key_env` → 环境变量或本地 `.env` 的 key 读取，**只进内存**）。
 
 ### 2.2 范围外（非目标）
 
@@ -217,6 +218,48 @@ models:
 
 **存储落点（均由 MOD-09 写，本模块只产出对象）**：`runs/<run_id>/metrics/llm_calls.jsonl`（每次尝试一行，§13）；`runs/<run_id>/episodes/<split>/<episode_key>.jsonl` 步内嵌 `llm_latency_ms`/`prompt_tokens`/`completion_tokens`/`llm_raw`（Spec §4.5）；配置来源 `configs/models.yaml` + `harness/config.json#inference`，二者均被 `config_hash` 覆盖。无独立数据库。
 
+### 7.1 三角色装配、实验臂与 provenance（v1.6 新增；Spec v2.0 B-42）
+
+**角色**：`policy`（游戏决策）/ `reflection`（局末反思）/ `proposer`（harness 修改提案）三个角色**只依赖 `InferenceClient` 契约**，绑定全部来自配置层。优先级（唯一实现 `roles.py::_resolve_role`，两个入口共用避免漂移）：
+
+```
+experiment.roles.<role>          > experiment.arms[experiment.arm].<role> > models.<role> > inference.model_id
+（手工覆盖，最高）                    （实验臂差分）                            （角色默认）      （兜底，CLI --model 一次覆盖全部角色）
+```
+
+空字符串 = 未绑定，继续向下继承。**fail-closed**：未知角色 / 未知臂 / 空 `model_id` / 注册表里不存在的模型 / `provider=api` 但未登记 key 环境变量 —— 一律显式报错，**绝不静默降级到别的模型**（验收标准 A 第 5 条）。臂定义见 `configs/default.yaml#experiment.arms`（`A0/A1/B0/B1/C0/C1`，六臂只做角色差分；`harness` 字段只**登记**该臂的 harness 是否演化）。
+
+```yaml
+# configs/default.yaml 片段
+models:
+  policy: ""; reflection: ""; proposer: ""   # 空 = 用 inference.model_id
+experiment:
+  arm: A1                                    # 默认臂；M2 闭环主力臂见 Spec §8.6 B-43（= C1）
+  roles: {}                                  # 手工覆盖，优先级最高
+  arms:
+    C1: {policy: deepseek-flash, reflection: deepseek-flash, proposer: deepseek-flash, harness: evolve}
+```
+
+**provenance**：每个 run 落 `runs/<run_id>/models_provenance.json`（原子写），记三角色各自的 `model_id` / `provider` / `backend` / `model_revision` / `online` / `api_key_present`，以及臂、`harness` 模式与 `config_hash`。**key 本体绝不落盘**（`api_key_present` 只是布尔）。装配缓存键含 `config_hash` ⇒ 换臂/换模型必然是新的装配。
+
+**DeepSeek 注册表条目（`provider=api`，Spec §8.6）**：
+
+```yaml
+  deepseek-flash:
+    backend: deepseek; provider: api; online: true
+    context_length: 1048576            # 实测 1M
+    api_base: https://api.deepseek.com/v1; api_model: deepseek-flash
+    api_key_env: DEEPSEEK_API_KEY      # 只登记变量名；真值来自环境变量或 inference.api_key_file
+    api_supports_seed: false           # 不承诺跨时间确定性 → 采样照记 + 响应按 request hash 归档 + 变化标 llm.nondeterministic
+    api_thinking: disabled             # flash 默认开思考模式会吃光 max_tokens 使 content 返空（每次白花一次调用）
+    model_revision: DeepSeek-V4.1-Flash
+    cost_per_1k_input: 0.002; cost_per_1k_output: 0.008; cost_currency: CNY; cost_basis: peak
+    supports_grammar: false            # 无 GBNF，走 response_format=json_object + jsonschema 校验
+    default_sampling: {temperature: 0.0, top_p: 1.0, top_k: 0, repetition_penalty: 1.0}
+```
+
+**成本口径（2026-10-08 实测，人民币、高峰档上界）**：`deepseek-flash` 输入 ¥1/百万 token（缓存未命中）、输出 ¥4/百万；登记的值取**高峰档双倍**（空闲档是它的一半）。`deepseek-v4-pro`（更强更贵：输入 ¥9 / 输出 ¥27）已登记但**当前不被任何臂使用**。
+
 ## 8. 关键流程
 
 ```python
@@ -274,6 +317,9 @@ async def _attempt_loop(spec, messages, schema, grammar, sampling, deadline) -> 
 | `debug_dump_raw` | bool | `false` | 落 `runs/<run_id>/raw/llm/<call_id>.txt`；默认只存 digest |
 | `skip_hash_check` | bool | `false` | 对应 `DICERATCHET_INFERENCE_SKIP_HASH=1`；CI 必须为 false（Q-6） |
 | `llama_server_startup_timeout_ms` / `llama_server_port` | int | `60000` / `0` | 等 server `/health` 就绪（超时 `E_LLM_LOAD_FAILED`）/ `0` = 自动分配空闲端口 |
+| **`api_key_file`**（v1.6 新增） | str | `.env` | 本地密钥文件路径（相对仓库根）。语义：① **真实环境变量优先**，已 `export DEEPSEEK_API_KEY=…` 时本文件不覆盖；② 只读注册表里声明的 `api_key_env` 名字（其余名字一律不生效，**该文件不能用来改配置**）；③ key 只进内存，不写 `harness/`、run JSON、事件或日志；④ 空字符串 = 关闭该文件，只用环境变量。`.env` 被 `.gitignore` 忽略 |
+| **`models.policy` / `models.reflection` / `models.proposer`**（v1.6 新增） | str | `""` | 三角色的默认 `model_id`；空 = 用 `inference.model_id`。优先级见 §7.1 |
+| **`experiment.arm` / `experiment.roles` / `experiment.arms`**（v1.6 新增） | str / map / map | `A1` / `{}` / 六臂 | 实验臂与角色差分；臂定义**计入 `config_hash`** ⇒ 换臂即换 run-id 族（Spec F10），六臂产物不互相污染。详见 §7.1 |
 
 ## 10. 错误处理与降级
 
@@ -427,3 +473,4 @@ Qwen3 思考模式烧光 token 预算、probe prompt 欠约束（详见 [M1 验�
 | v1.3 | 2026-10-06 | **按 M1 验收复核（M-1/M-5）对齐 §11 测试登记**：① 新增单测 `test_cli_smoke.py` 条目——补集成套件观测不到的 `robustness` **未达阈值退出码 1** 分支（集成 `test_inference_cli.py` 已覆盖成功路径；此前单测口径下 `cli.py` 显示 0%，是"不收集 `tests/integration/`"造成的假象，补后 0% → 42%）；并注明「`init_run_dir` 预建 `metrics/`，失败判据是报告文件不存在」这一易错点。② 集成 `test_inference_robustness.py` 条目补「工件必须与当前快照/模板同批产出」——旧工件早于 F13/F23/F25 模板改动，已用当前快照重跑 n=200 覆盖（首答 0.94 → 0.995、`schema_fail_rate` 0.005 → 0.0）。依据 [M1 验收复核 §M-1/§M-5](../reviews/2026-10-05-M1验收复核.md) |
 | v1.5 | 2026-10-06 | **对齐超时默认值的三层漂移**（复核登记 → 已修）：① `InferenceConfig.total_timeout_ms` dataclass 默认 8000 → **120000**（与 `configs/default.yaml` 一致）；② `inference/backend.py` 的同键 `getattr` 兜底 8_000 → **120_000**；③ 连带把 `app.py` / `evals/cli.py` 的 `seed_timeout_s` 兜底（300 / 1800）对齐为 **14400**（`EvalConfig` / `EvalSpec` / YAML 三方原已一致）。依据：`_default_dict()` 取自 dataclass、YAML 逐键覆盖，故改 dataclass 默认**不改变生效值**（仍 120000 / 14400），**`config_hash` 实测不变**（`b6f119ca325e282d`），存量 run 不会 `E_IO_RUN_CONFLICT`；差异只影响「不读 YAML 直接构造配置」的路径。新增守门用例 `tests/unit/infra/test_config.py`（7 条，含源码文本级兜底校验），并做变异验证 |
 | v1.4 | 2026-10-06 | **补记 2026-10-04 的真实模型实测回填**（此前只在 §16 Q-2/Q-6 与配置注释里，变更记录缺一条）：权重 `mlx-community/Qwen3-8B-4bit` 落盘（`weights_sha256=20303070…`）、`resident_gb_est` 5.6 → **4.6077**、`perf_budget` 1500/3000/25 → **5000/6000/10**（原目标实测未达成，按实测重设）、`total_timeout_ms` 8000 ms → **120000 ms**（8 s < 实测 p50，正常决策会被判 `E_LLM_TIMEOUT`）；主快照 n=200 实测 `m1_evidence=true`、首答 0.94、`schema_fail_rate` 0.005、`t_d` p50 5.687 s / p95 11.70 s；并登记只有真实权重能暴露的 **F14**（mlx-lm API 漂移：`load(tokenizer_path=)` / `stream_generate(seed=)` / `mx.metal.*` 改名）、**F15**（Qwen3 思考模式烧光 token 预算 → 显式 `enable_thinking=False`）、**F16**（probe/bench 固定 prompt 欠约束）、**F17**（权重摘要误把 HF 下载缓存算进去）。依据 [M1 验收报告 §12](../reviews/2026-10-04-M1验收报告.md) |
+| v1.6 | 2026-10-09 | **三角色解耦 + DeepSeek API 后端回填**（对齐 Spec v2.0 B-42；依据 [Issue #1 落地报告](../tasks/2026-10-08-issue-1-角色解耦落地报告.md)）。① §2.1 新增四个文件：`client.py`（三角色共用的 `InferenceClient` 同步契约）、`deepseek_backend.py`、`roles.py`（`RoleModelProvider` / `resolve_role_bindings` / `role_model_ids` / `run_provenance`）、`secrets.py`。② **新增 §7.1**：三角色（`policy`/`reflection`/`proposer`）的绑定**全部来自配置**，四级优先级 `experiment.roles.<role>` > `experiment.arms[arm].<role>` > `models.<role>` > `inference.model_id`，**fail-closed**（未知角色/未知臂/空 `model_id`/注册表缺模型/`provider=api` 缺 key 环境变量一律显式报错，绝不静默降级）；每个 run 落 `runs/<run_id>/models_provenance.json`（三角色各自的 `model_id`/`provider`/`backend`/`model_revision`/`online`/`api_key_present` + 臂 + `harness` 模式 + `config_hash`，**key 本体绝不落盘**）。③ 注册表新增 `deepseek-flash`（`provider=api`、`api_supports_seed=false`、`api_thinking=disabled`、`supports_grammar=false` 走 `json_object` + jsonschema）与 `deepseek-v4-pro`（已登记、当前无臂使用）；实测该账号**已无 `deepseek-chat`**（旧名下线）。④ §9 新增三行配置：`api_key_file`（默认 `.env`；真实环境变量优先、只读注册表声明的 `api_key_env`、key 只进内存、空串即关闭）、`models.policy/reflection/proposer`、`experiment.arm/roles/arms`（臂定义计入 `config_hash`）。⑤ **登记两条实测口径**：(a) DeepSeek **不承诺跨时间确定性**——字节相同的请求 9 次返回 9 个不同响应，故 `E_EVAL_NONDETERMINISTIC` 的判据改为按 request hash 比对 response hash；(b) `flash` 默认开思考模式会让 `content` 返空、每次白花一次调用，故结构化流水线显式 `api_thinking: disabled` |

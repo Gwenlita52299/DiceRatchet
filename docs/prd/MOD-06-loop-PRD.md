@@ -1,6 +1,6 @@
 # MOD-06 loop 技术 PRD
 
-> 版本：v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：草案（待评审）· 所属里程碑：M2 · 上游 Spec：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突时以 Spec 为准）· 作者：MOD-06 模块作者
+> 版本：v1.3（2026-10-09 新增 §9.0：模型角色与实验臂对闭环的绑定、M2 主力臂 `C1` 与成本口径、C5 全拒的静默性，见 §17）· 状态：草案（待评审）· 所属里程碑：M2 · 上游 Spec：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突时以 Spec 为准）· 作者：MOD-06 模块作者
 > 代码路径：`dice_ratchet/loop/{runner.py, reflect.py, generation.py}` · 产物路径：`runs/<run_id>/`
 
 ## 1. 背景与目标
@@ -280,6 +280,14 @@ def run(self, seeds=None, *, resume=False):
 
 ## 9. 配置项（键名、类型、默认值、含义）
 
+### 9.0 模型角色与实验臂（v1.3 新增；Spec v2.0 B-42/B-43）
+
+MOD-06 **不自己装配模型**：`loop run --agent llm` 的客户端由**组合根**经 `RoleModelProvider` 注入（`set_inference_client_provider(_role_provider)`），因此 `experiment.arm` 对闭环同样生效——`policy` / `reflection` / `proposer` 三个角色各自按 Spec §4.7 的四级优先级解析（`experiment.roles.<role>` > `experiment.arms[arm].<role>` > `models.<role>` > `inference.model_id`），**fail-closed**。角色装配与 provenance 归 MOD-03（Spec §4.7、MOD-03 §7.1），MOD-06 只做鸭子类型解析（`coerce_client`），不 import 提供者类型。
+
+- **M2 闭环主力臂 = `C1`**（三角色全 `deepseek-flash` + `harness: evolve`；Spec §8.6 B-43）。**成本口径随臂变化**：本地 8B 单局 19.6 min ⇒ `E_gen=114` ≈ 37 h/代；API 臂单局 2.09–2.52 min ⇒ **≈4.0–4.8 h/代、≈¥84–100/代**。`loop.max_episodes_per_generation=120` 与 `E_gen=114` 的**局数**约束不变，但 API 臂下的实际瓶颈是**花费/限流**而非墙钟。
+- **⚠️ F29：臂的 `harness: fixed/evolve` 字段本模块不消费**（Spec v2.0 §8.6）。演化开关由本模块的 `--no-evolve` / 组合根注入的 `_EVOLVE_PROVIDER` 决定，与臂无关 ⇒ **`C0`（fixed）与 `C1`（evolve）当前行为等价**：选 `C0` 跑闭环照样演化。强制「fixed 臂不演化」属 Issue #1 任务 6（未做）。
+- **⚠️ `hard × 6` 上 C5 会全拒（缺陷 F28）**：`truncation_rate=0.30 > 门 0.15`。闭环对全拒**不报错**——本模块按 FR-06-7 对接受与拒绝**同样** `generation += 1` 并回到 `playing`（退出码 0），`loop.budget_exhausted` 之类的信号**不会**触发。因此「跑完 N 代、退出码 0」**不等于**闭环有产出：判定 M2 验收必须查 `harness/versions/` 是否出现新版本与逐代 `decision` 记录（Spec §8.6 F28、MOD-07 §8.2.2）。
+
 | 键 | 类型 | 默认值 | 含义 |
 |---|---|---|---|
 | `loop.k` | int | 30 | 每 K 局训练触发一次演化周期（计划 §5：K=30） |
@@ -425,3 +433,4 @@ def run(self, seeds=None, *, resume=False):
 | v1.0 | 2026-09-30 | 首版 |
 | v1.1 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：单局循环改为调用 `play_decision`，终止只看 MOD-02 的 terminated/truncated，删除 `max_steps=120` 与自有的 illegal_streak（P0-2/5）；对 MOD-04/05 的调用签名改为 Spec §4.7（P1-1/2）；轨迹路径与 `episode_key` 改为 `e-{seed}-g{gen}-{arm}`（P1-10）；成本闸门按 `E_gen` 公式统一计算，并作为全系统唯一上限（P0-3、P1-8）；评估改为局级并发 + 共享推理队列，委托 MOD-08（P1-9）；新增 gen-000 基线与逻辑时钟 tick；错误码、退出码、CLI、事件名对齐 MOD-09 注册表（P1-11～14） |
 | v1.2 | 2026-09-30 17:49 | seed 取用规则回填为 Spec B-36；HITL 挂起语义以 Spec §4.5 B-32 为准 |
+| v1.3 | 2026-10-09 | **新增 §9.0「模型角色与实验臂」**（对齐 Spec v2.0 B-42/B-43/B-44）。① 澄清本模块**不自己装配模型**：`loop run --agent llm` 的客户端由组合根经 `RoleModelProvider` 注入，故 `experiment.arm` 对闭环生效，三角色按 Spec §4.7 的四级优先级 fail-closed 解析（装配细节归 MOD-03 §7.1）。② 登记 **M2 闭环主力臂 = `C1`**（三角色全 `deepseek-flash` + `harness: evolve`）与随之变化的成本口径：本地 8B 19.6 min/局 ⇒ `E_gen=114` ≈ 37 h/代；API 臂 2.09–2.52 min/局 ⇒ **≈4.0–4.8 h/代、≈¥84–100/代**；**局数约束（`max_episodes_per_generation=120`、`E_gen=114`）不变，但瓶颈由墙钟转为 API 花费/限流**。③ 登记 **缺陷 F28 的「静默性」**：`hard × 6` 上 C5 因 `truncation_rate=0.30 > 0.15` 全拒，而本模块按 FR-06-7 对接受与拒绝**同样** `generation += 1` 并回到 `playing`（退出码 0），不会报错 ⇒ **「跑完 N 代、退出码 0」不等于闭环有产出**；判定 M2 验收必须查 `harness/versions/` 新版本与逐代 `decision` 记录。④ 登记 **F29**：臂的 `harness: fixed/evolve` 字段本模块**不消费**（演化开关是 `--no-evolve` / 组合根注入的 `_EVOLVE_PROVIDER`）⇒ **`C0` 与 `C1` 当前行为等价**，选 `C0` 跑闭环照样演化 |

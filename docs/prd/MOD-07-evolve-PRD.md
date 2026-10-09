@@ -1,6 +1,6 @@
 # MOD-07 evolve 技术 PRD
 
-> **版本**：v0.4（2026-10-07 按 Spec v1.8 回填 C5 实测标定与 M3 相对门设计，见 §8.2.1/§17）· **状态**：待评审 · **所属里程碑**：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）· **作者**：DiceRatchet 技术文档 · 日期：2026-10-07
+> **版本**：v0.5（2026-10-09 新增 §8.2.2：C5 的臂相关性 → 登记缺陷 F28 与待裁决的处置，对齐 Spec v2.0 B-44；v0.4 = 2026-10-07 按 Spec v1.8 回填 C5 实测标定与 M3 相对门设计，见 §8.2.1/§17）· **状态**：待评审 · **所属里程碑**：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）· **作者**：DiceRatchet 技术文档 · 日期：2026-10-07
 > **上游 Spec**：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（v1.8，**唯一事实来源**；冲突以 Spec 为准）· **关联不变量**：INV-3/INV-4/INV-5/INV-7
 > **代码位置**：`dice_ratchet/evolve/{proposer,judge,versioning,gate}.py`、`harness/`、`runs/<run_id>/generations/`
 
@@ -248,6 +248,30 @@ parent 与候选在**同一 held-out 篮子、同一预算**下评估（§8.2 C0
 - **实现归属 M3**：新增 `evolve.illegal_tol` / `evolve.fallback_tol` / `evolve.truncation_tol` 三个键，C5 的求值从「绝对比较」改为「parent + tol」；本 PRD 的 §9 配置表与 Spec §8.6 同时在 M3 落地时更新。
 - **保守兜底**：残差门之外**保留**一个宽松绝对上限（即①的 0.35/0.25/0.15）作为 backstop，避免 parent 自身已经很高时残差门被无限放宽。
 
+### 8.2.2 🔴 C5 是「臂相关」的：换臂会让绝对门静默锁死闭环（2026-10-09 复检，缺陷 F28）
+
+> **本节的结论：C5 三个阈值不是被测对象的属性，而是「标定臂 × 局型」的属性。**
+> 2026-10-07 的标定（§8.2.1 的①）用的是**本地 MLX 8B**；而 M2 闭环主力臂已在 2026-10-09 由用户裁决为 **`C1`（三角色全 `deepseek-flash`）**（Spec v2.0 B-43）。
+> 用当前臂的实测值重算，**`hard × 6` 上 C5 会 reject 每一个候选**。
+
+**复现（真实 `judge()` + 真实 `load_config()`，C5 = 0.35/0.25/0.15）**：构造一个 C1–C4 全过、`mean_stages_cleared` 显著 `+0.40` 的候选，只改 `heldout` 段的来源：
+
+| 指标来源（n=40 形态） | illegal | fallback | truncation | `judge()` 判定 |
+|---|---|---|---|---|
+| 本地 8B full-agent（`m2-s31-full-baseline`，**标定依据**） | 0.3016 | 0.2146 | 0.10 | ✅ `accept`（六条全过） |
+| **`C0` DeepSeek · `hard × 6`**（`r-c0-hard6-h1n10`） | 0.0291 | 0.0008 | **0.30** | ❌ `reject` / `C5:illegal/fallback/truncation` / `E_EVOLVE_ILLEGAL_RATE` |
+| `C0` DeepSeek · `medium × 6`（`r-c0-medium6-h1n10`） | 0.0316 | 0.0000 | 0.00 | ✅ `accept` |
+
+**三个可验证的事实**：
+
+1. **illegal / fallback 两个门对 DeepSeek 臂已松了约 10 倍**（0.0291 vs 门 0.35、0.0008 vs 门 0.25）⇒ C5 由「非约束门」进一步退化为**完全无约束门**；B-40 的「先松开」是为 8B 的 0.30/0.21 松的。
+2. **truncation 门反向变紧**：`hard × 6` 上 **3/10 局**撞内核单场战斗回合上限（`src/game/kernel/combat.js:460` → `state.truncationReason='E_KERNEL_TURN_LIMIT'`，`maxTurnsPerBattle=60`），实测 `truncation_rate = 0.30 > 0.15`。被截断的局**计 lose 但不算 dropped**（`n_dropped=0`），所以不会被 `n_dropped` 那一路拦住。该值是**局型 × 策略强度**的合成值（同 run 的 `heuristic` 为 0.00）。
+3. 同一个候选在 8B 数字上 `accept`、在 `C1` 数字上 `reject` ⇒ **C5 判的不是候选退化，而是「用了哪条臂」**。结果正是本 PRD 与检查单 §3.1 要防的「闭环形式上跑通、实则一个候选都留不下」——**它没有被消除，只是从 illegal 轴搬到了 truncation 轴**。
+
+**闭环为什么「静默」**：`reject` 不是错误——MOD-06 `maybe_run_generation` 对接受与拒绝**同样**执行 `generation += 1` 并回到 `playing`（退出码 0，FR-06-7）；MOD-07 照常写 `generations/gen-XXX/{report,decision}.json` 并 emit `evolve.decision(decision="reject")`。因此一个全拒的闭环会**一路跑完所有代数、退出码 0、日志无异常**，但 `harness/versions/` 永不出现新版本、`artifact_hash` 永不变——直到有人去查 decision 记录才会发现。
+
+**处置候选（未裁决，Spec v2.0 B-44）**：① 按当前臂重标（`0.30` → 门 `0.35`，但会再次把 C5 变成非约束门）② bring-up 改用 `medium × 6`（实测 truncation = 0.00，且 API 臂在该局型上 `win_rate` 有方差）③ **C5 只保留 illegal + fallback 的绝对门，把 truncation 并入 §8.2.1 的相对门**（推荐方向：truncation 由局型与策略强度共同决定，本就不适合做跨臂的绝对门）。**在裁决前不得宣称 M2 准入完成**。
+
 ### 8.3 HITL 时序 / 8.4 回滚流程
 
 ```
@@ -269,7 +293,7 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | `evolve.min_heldout_n` / `evolve.win_rate_tol` | int / float | 20 / **0.05** | C0 门槛 / C1 允许下降幅度（2026-10-06 D-3：0.0 → 0.05） |
 | `evolve.alpha` | float | 0.05 | C2 显著性水平（方法归 MOD-08） |
 | `evolve.gap_threshold` / `evolve.min_entropy_slope` | float | 0.15 / −0.01 | C3 `win_rate_gap` 阈值 / C4 熵斜率下限 |
-| `evolve.max_illegal_rate` / `evolve.max_fallback_rate` / `evolve.max_truncation_rate` | float | **0.35 / 0.25 / 0.15** | C5 上限（2026-10-07 §3.1 实测标定：0.05/0.10/0.05 → 本值，先松开；M3 由 §8.2.1 的相对门收紧） |
+| `evolve.max_illegal_rate` / `evolve.max_fallback_rate` / `evolve.max_truncation_rate` | float | **0.35 / 0.25 / 0.15** | C5 上限（2026-10-07 §3.1 实测标定：0.05/0.10/0.05 → 本值，先松开；M3 由 §8.2.1 的相对门收紧）。**⚠️ 2026-10-09：本值随臂失效**——它们标的是本地 8B，而 M2 主力臂是 `C1`（DeepSeek）；`hard × 6` 会因 `truncation=0.30 > 0.15` 全拒，见 §8.2.2 / 缺陷 F28 |
 | `evolve.hitl` / `evolve.gate_timeout_hours` | bool / int | true / 24 | 人在环门开关 / 超时 → 保守回滚 |
 | `evolve.propose_max_retries` | int | 2 | JSON-schema 失败重试（在 MOD-03 `generate_json` 之上再包一层）；成本上限改由 MOD-06 `loop.max_episodes_per_generation` 统一控制 |
 | `evolve.evolvable_keys` | list[str] | `["retrieval.top_k","sampling.temperature","prompt.show_intent"]` | `config_patch` 白名单键 |
@@ -374,3 +398,4 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：MOD-08/MOD-02 调用改为 Spec §4.7 签名（P1-3/16）；显著性方法归 MOD-08（P1-4）；report 改为引用唯一 schema，本模块只填写决策段（P1-5/6）；删除 `train_eval_seeds`（与训练块重叠，P1-7）；成本算术改正、候选数默认 2（P1-8、Spec §8.6）；parent 与候选共用冻结记忆快照；冒烟 seed 改为本代训练块末尾；补充 `better()` 定义；C5 改为 illegal/fallback/truncation；git 改为只打 tag `harness-v{N}`（P1-15）；M3 追加「≥1 次 accept」防止退化通过 |
 | v0.3 | 2026-09-30 17:49 | P-17/P-26/P-27 裁决回填为 Spec B-29/B-32/B-33；开放问题 2、4 部分结案 |
 | v0.4 | 2026-10-07 | **C5 按实测标定 + M3 相对门设计（Spec v1.8 B-40/B-41；依据 [M2 §3.1 实测报告](../../reviews/2026-10-07-M2-S31-full-agent基线实测.md)）**。① §8.2 C5 行与 §9 配置表：`max_illegal_rate`/`max_fallback_rate`/`max_truncation_rate` 0.05/0.10/0.05 → **0.35/0.25/0.15**（full `PolicyAgent` 实测 0.3016/0.2146/0.10，原门超限 6.03×/2.15×/2.00×，会 reject 每个候选；写明是「先松开、M3 再收紧」并声明副作用）。② 新增 **§8.2.1**：M3 的收紧路径是把 C5 从绝对门改为**相对门** `candidate ≤ parent + tol`，含 `tol` 标定方式、M3 新增的三个配置键、以及保留宽松绝对上限作 backstop。③ 顺带补齐 D-1 的表格滞后：§9 的 `evolve.n_candidates` 2→**1**、`evolve.smoke_n` 5→**2**（与 `configs/default.yaml` 及 `config.py` 对齐）。④ 版本头对齐 Spec v1.8 |
+| v0.5 | 2026-10-09 | **新增 §8.2.2：C5 是「臂相关」的 → 登记缺陷 F28 与待裁决的处置**（对齐 Spec v2.0 B-44）。起因：C5 三阈值（§8.2.1 的①）是 2026-10-07 按**本地 8B** 标定的，而 M2 闭环主力臂已于 2026-10-09 由用户裁决为 **`C1`（三角色全 `deepseek-flash`）**（Spec B-43）。用当前臂实测值 + **真实 `judge()`** 复算：`hard × 6` 的 `truncation_rate = 0.30 > 门 0.15` ⇒ **C5 会 reject 每一个候选**（`E_EVOLVE_ILLEGAL_RATE`）；同时 illegal/fallback 反向松了约 10×。① 结论：**C5 的阈值不是被测对象的属性，而是「标定臂 × 局型」的属性**；§3.1 要防的「静默锁死闭环」风险未被消除，只是从 illegal 轴搬到 truncation 轴（`hard × 6` 上 3/10 局撞内核 `maxTurnsPerBattle=60` → `E_KERNEL_TURN_LIMIT`，且被截断的局计 lose 不算 dropped）。② 补记「闭环为什么静默」：`reject` 不是错误，MOD-06 对接受与拒绝同样 `generation += 1` 并回到 `playing`（退出码 0），MOD-07 照常写 decision 记录 ⇒ 全拒的闭环会跑完全部代数、退出码 0、日志无异常，但 `harness/versions/` 永不出现新版本。③ 列出三个处置候选（按当前臂重标 / bring-up 改用 medium×6 / **truncation 并入相对门**）并写明**裁决前不得宣称 M2 准入完成** |
