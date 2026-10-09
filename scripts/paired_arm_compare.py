@@ -3,7 +3,7 @@
 用法::
 
     .venv/bin/python scripts/paired_arm_compare.py <run_id> --split heldout \\
-        --arm-a play-llm --arm-b baseline-heuristic [--arm-b baseline-random ...]
+        --arm-a play-llm [--arm-b baseline-heuristic ...] [--run-b <另一个 run>]
 
 为什么需要它：``eval report`` 把基线率附在扩展量里（各算各的 CI），而**配对**检验要看
 同一 seed 上两个臂的胜负。n=10 时两个 80% / 70% 的 Wilson CI 会大幅重叠，但配对表
@@ -74,19 +74,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--arm-a", default="play-llm", help="默认 play-llm（play --agent llm 的臂名）")
     p.add_argument("--arm-b", action="append", default=None,
                    help="可重复；默认 baseline-heuristic 与 baseline-random")
+    p.add_argument("--run-b", default=None,
+                   help="B 侧取自另一个 run（A/B/C 换臂必然换 run-id，见 F10）；缺省与 A 同 run")
     p.add_argument("--generation", type=int, default=0)
     p.add_argument("--harness-version", type=int, default=0)
     p.add_argument("--verbose", action="store_true", help="逐局打印 seed/胜负/steps")
     args = p.parse_args(argv)
 
+    run_b = args.run_b or args.run_id
     arms_b = args.arm_b or ["baseline-heuristic", "baseline-random"]
     a = _load(args.run_id, args.split, args.arm_a, args.generation, args.harness_version)
     print(f"run={args.run_id} split={args.split} arm={args.arm_a}: {len(a)} 局")
+    label_a = f"{args.arm_a}@{args.run_id}"
     ok = False
     for arm_b in arms_b:
-        b = _load(args.run_id, args.split, arm_b, args.generation, args.harness_version)
-        print(f"\nrun={args.run_id} split={args.split} arm={arm_b}: {len(b)} 局")
-        ok = _compare(args.arm_a, arm_b, a, b, verbose=args.verbose) or ok
+        b = _load(run_b, args.split, arm_b, args.generation, args.harness_version)
+        print(f"\nrun={run_b} split={args.split} arm={arm_b}: {len(b)} 局")
+        ok = _compare(label_a, f"{arm_b}@{run_b}", a, b, verbose=args.verbose) or ok
     return 0 if ok else 1
 
 
