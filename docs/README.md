@@ -21,7 +21,7 @@
 
 > 🔎 **评审入口**：Spec §11。v1.3（2026-09-30 17:21）已按 [MOD PRD 评审](reviews/2026-09-30-MOD-PRD评审.md) 修订；v1.4（2026-09-30 17:49）已确认全部裁决，§11.2 待裁决清零。新的临时决策从 P-31 起登记。跨模块签名以 Spec §4.7 为唯一登记处，「一局」的定义与成本模型见 Spec §8.6。
 >
-> **当前版本**：Spec **v2.0**（2026-10-09；v2.0 = **实验臂/角色解耦 + DeepSeek API 后端回填**：三角色（`policy`/`reflection`/`proposer`）绑定全部来自配置、六臂 `A0/A1/B0/B1/C0/C1`、§8.6 新增按臂分列的成本表，并**落定 M2 闭环主力臂 = `C1`（三角色全 `deepseek-flash`）**——API 臂单局 2.09–2.52 min ⇒ `E_gen=114` ≈ 4.0–4.8 h/代≈¥84–100（本地 8B 是 37 h/代），登记 B-42/B-43/B-44 与**缺陷 F28**（C5 绝对门随臂失效：`hard×6` 的 `truncation_rate=0.30 > 0.15` 会全拒候选，处置待裁决）；v1.9 = D-2 的 medium × 6 基线实测回填 §8.6 并登记 F26/F27；v1.8 = §8.6 回填 M2 §3.1 的 full `PolicyAgent` 实测并按裁决 A+C 标定 C5：**先松开到 0.35/0.25/0.15**、M3 由相对门 `candidate ≤ parent + tol` 收紧，登记 B-40/B-41；v1.6 为 n=10 成本模型回填、v1.7 为 M2 开工 D-1/D-2/D-3）；M1 已验收通过（**含口径限定**：判据 2 的工件已用当前快照重跑刷新，MOD-04 §12 的 `illegal_rate`/`fallback_rate` 归 M3 判定），见 [M1 验收报告](reviews/2026-10-04-M1验收报告.md) 与独立的 [M1 验收复核](reviews/2026-10-05-M1验收复核.md)。
+> **当前版本**：Spec **v2.1**（2026-10-09；**v2.1 = 处置缺陷 F28**：C5 的 `truncation` 由绝对门 0.15 改为**相对门** `candidate ≤ parent + truncation_tol(0.05)`、`illegal`/`fallback` 保留绝对门（0.35/0.25），并复核 bring-up 用 `medium × 6`；登记 B-45，已用真实 `judge()` 复验 `hard×6` 不再全拒。**v2.0 = 实验臂/角色解耦 + DeepSeek API 后端回填**：三角色（`policy`/`reflection`/`proposer`）绑定全部来自配置、六臂 `A0/A1/B0/B1/C0/C1`、§8.6 新增按臂分列的成本表，并**落定 M2 闭环主力臂 = `C1`（三角色全 `deepseek-flash`）**——API 臂单局 2.09–2.52 min ⇒ `E_gen=114` ≈ 4.0–4.8 h/代≈¥84–100（本地 8B 是 37 h/代），登记 B-42/B-43/B-44 与 F28/F29；v1.9 = D-2 的 medium × 6 基线实测回填 §8.6 并登记 F26/F27；v1.8 = §8.6 回填 M2 §3.1 的 full `PolicyAgent` 实测并按裁决 A+C 标定 C5：**先松开到 0.35/0.25/0.15**、M3 由相对门 `candidate ≤ parent + tol` 收紧，登记 B-40/B-41；v1.6 为 n=10 成本模型回填、v1.7 为 M2 开工 D-1/D-2/D-3）；M1 已验收通过（**含口径限定**：判据 2 的工件已用当前快照重跑刷新，MOD-04 §12 的 `illegal_rate`/`fallback_rate` 归 M3 判定），见 [M1 验收报告](reviews/2026-10-04-M1验收报告.md) 与独立的 [M1 验收复核](reviews/2026-10-05-M1验收复核.md)。
 
 ## 模块地图
 
@@ -53,7 +53,7 @@ L0 环境        MOD-01 env-rules    MOD-02 env-sandbox
 | MOD-04 | policy（prompt/解析/工具契约） | L1 | M1 | [PRD](prd/MOD-04-policy-PRD.md) v0.6 |
 | MOD-05 | memory（策略记忆与反思库） | L1 | M2 | [PRD](prd/MOD-05-memory-PRD.md) v1.2 |
 | MOD-06 | loop（闭环编排） | L2 | M2 | [PRD](prd/MOD-06-loop-PRD.md) v1.3 |
-| MOD-07 | evolve（harness 自进化） | L2 | M2–M3 | [PRD](prd/MOD-07-evolve-PRD.md) v0.5 ✅ 代码落地（[README](../dice_ratchet/evolve/README.md)）；C5 标定见 [2026-10-07 §3.1 实测](reviews/2026-10-07-M2-S31-full-agent基线实测.md)，**⚠️ 该标定随臂失效（缺陷 F28）见 PRD §8.2.2** |
+| MOD-07 | evolve（harness 自进化） | L2 | M2–M3 | [PRD](prd/MOD-07-evolve-PRD.md) v0.5 ✅ 代码落地（[README](../dice_ratchet/evolve/README.md)）；C5 = `illegal`/`fallback` 绝对门 + **`truncation` 相对门**（F28 已处置，见 PRD §8.2.2；原标定依据见 [2026-10-07 §3.1 实测](reviews/2026-10-07-M2-S31-full-agent基线实测.md)） |
 | MOD-08 | evals（评估与测量） | L3 | M1–M3 | [PRD](prd/MOD-08-evals-PRD.md) v0.6 |
 | MOD-09 | infra（配置/日志/CLI/守卫） | L3 | M0–M3 | [PRD](prd/MOD-09-infra-PRD.md) v0.3.1 |
 

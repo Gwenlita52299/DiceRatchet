@@ -286,7 +286,8 @@ MOD-06 **不自己装配模型**：`loop run --agent llm` 的客户端由**组�
 
 - **M2 闭环主力臂 = `C1`**（三角色全 `deepseek-flash` + `harness: evolve`；Spec §8.6 B-43）。**成本口径随臂变化**：本地 8B 单局 19.6 min ⇒ `E_gen=114` ≈ 37 h/代；API 臂单局 2.09–2.52 min ⇒ **≈4.0–4.8 h/代、≈¥84–100/代**。`loop.max_episodes_per_generation=120` 与 `E_gen=114` 的**局数**约束不变，但 API 臂下的实际瓶颈是**花费/限流**而非墙钟。
 - **⚠️ F29：臂的 `harness: fixed/evolve` 字段本模块不消费**（Spec v2.0 §8.6）。演化开关由本模块的 `--no-evolve` / 组合根注入的 `_EVOLVE_PROVIDER` 决定，与臂无关 ⇒ **`C0`（fixed）与 `C1`（evolve）当前行为等价**：选 `C0` 跑闭环照样演化。强制「fixed 臂不演化」属 Issue #1 任务 6（未做）。
-- **⚠️ `hard × 6` 上 C5 会全拒（缺陷 F28）**：`truncation_rate=0.30 > 门 0.15`。闭环对全拒**不报错**——本模块按 FR-06-7 对接受与拒绝**同样** `generation += 1` 并回到 `playing`（退出码 0），`loop.budget_exhausted` 之类的信号**不会**触发。因此「跑完 N 代、退出码 0」**不等于**闭环有产出：判定 M2 验收必须查 `harness/versions/` 是否出现新版本与逐代 `decision` 记录（Spec §8.6 F28、MOD-07 §8.2.2）。
+- **⚠️ 全拒是「静默」的（缺陷 F28 的教训，2026-10-09 已处置门本身，但本模块的语义不变）**：`hard × 6` 上原 C5 绝对门会因 `truncation_rate=0.30 > 0.15` 全拒每个候选（已按 Spec v2.1 B-45 改为相对门，见 MOD-07 §8.2.2）。**但「全拒不报错」这一条永远成立**——本模块按 FR-06-7 对接受与拒绝**同样** `generation += 1` 并回到 `playing`（退出码 0），`loop.budget_exhausted` 之类的信号**不会**触发。因此「跑完 N 代、退出码 0」**不等于**闭环有产出：判定 M2 验收必须查 `harness/versions/` 是否出现新版本与逐代 `decision` 记录。
+- **bring-up 口径（②，2026-10-09）**：M2 的联调/冒烟用 `DICERATCHET_EXPERIMENT__ARM=C1 DICERATCHET_ENV__EPISODE__DIFFICULTY=medium`（该局型上 API 臂实测 `truncation_rate = 0.00`、`win_rate` 有方差）；默认局仍 `hard × 6`。
 
 | 键 | 类型 | 默认值 | 含义 |
 |---|---|---|---|

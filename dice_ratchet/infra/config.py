@@ -551,9 +551,17 @@ class EvolveConfig:
     alpha: float = 0.05 # C2 显著性水平
     gap_threshold: float = 0.15 # C3 win_rate_gap 阈值
     min_entropy_slope: float = -0.01 # C4 熵斜率下限
-    max_illegal_rate: float = 0.35 # C5（2026-10-07 §3.1 实测标定：0.05 → 0.35，先松开）
-    max_fallback_rate: float = 0.25 # C5（0.10 → 0.25：实测 0.2146）
-    max_truncation_rate: float = 0.15 # C5（0.05 → 0.15：实测 0.10）
+    max_illegal_rate: float = 0.35 # C5 绝对门（2026-10-07 §3.1 实测标定：0.05 → 0.35，先松开）
+    max_fallback_rate: float = 0.25 # C5 绝对门（0.10 → 0.25：实测 0.2146）
+    # C5 的 truncation 自 2026-10-09 起是**相对门**（Spec v2.0 B-44，用户裁决 ②+③）：
+    # `candidate.truncation_rate ≤ parent.truncation_rate + truncation_tol`。
+    # 原绝对门 max_truncation_rate=0.15 已删除——它按本地 8B（实测 0.10）标定，换成
+    # DeepSeek 臂后 hard×6 实测 0.30 > 0.15，会 reject 每一个候选并**静默锁死闭环**
+    # （缺陷 F28，见 docs/tasks/2026-10-06-M2开工检查单.md §8.2）。原因：truncation 是
+    # 「局型 × 策略强度」的合成属性（同 run 内 heuristic 0.00 / DeepSeek 0.30），
+    # 不像 illegal/fallback 那样有跨臂的绝对意义。
+    # 0.05 = n=40 下的 2 局（粒度 0.025），与 win_rate_tol 同一依据。
+    truncation_tol: float = 0.05
     # 标定依据：full PolicyAgent 在 H1 子集（seed 2000–2009，n=10，eval）实测
     # illegal 0.3016 / fallback 0.2146 / truncation 0.10，与 fixed_prompt 基线同量级，
     # 原阈值下 C5 会 reject 每一个候选（见 docs/reviews/2026-10-07-M2-S31-full-agent基线实测.md）。
@@ -575,6 +583,8 @@ class EvolveConfig:
         _check("evolve.alpha", self.alpha, float, minv=0.0, maxv=1.0)
         _check("evolve.gap_threshold", self.gap_threshold, float, minv=0.0, maxv=1.0)
         _check("evolve.max_illegal_rate", self.max_illegal_rate, float, minv=0.0, maxv=1.0)
+        _check("evolve.max_fallback_rate", self.max_fallback_rate, float, minv=0.0, maxv=1.0)
+        _check("evolve.truncation_tol", self.truncation_tol, float, minv=0.0, maxv=1.0)
 
 
 @dataclass(frozen=True)
