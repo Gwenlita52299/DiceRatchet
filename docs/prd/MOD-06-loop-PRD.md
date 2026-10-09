@@ -1,6 +1,6 @@
 # MOD-06 loop 技术 PRD
 
-> 版本：v1.3（2026-10-09 新增 §9.0：模型角色与实验臂对闭环的绑定、M2 主力臂 `C1` 与成本口径、C5 全拒的静默性，见 §17）· 状态：草案（待评审）· 所属里程碑：M2 · 上游 Spec：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突时以 Spec 为准）· 作者：MOD-06 模块作者
+> 版本：v1.4（2026-10-09 新增 §9.1：评估局的环境隔离——每局一个 `SandboxEnv`，登记缺陷 F30/残留 F31，见 §17）· 状态：草案（待评审）· 所属里程碑：M2 · 上游 Spec：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突时以 Spec 为准）· 作者：MOD-06 模块作者
 > 代码路径：`dice_ratchet/loop/{runner.py, reflect.py, generation.py}` · 产物路径：`runs/<run_id>/`
 
 ## 1. 背景与目标
@@ -314,6 +314,29 @@ MOD-06 **不自己装配模型**：`loop run --agent llm` 的客户端由**组�
 
 配置优先级：CLI 参数 > 环境变量 `DICERATCHET_LOOP_*` > `configs/default.yaml`（Spec §5）。
 
+### 9.1 评估局的环境隔离（v1.4 新增；Spec v2.2 B-46，缺陷 F30）
+
+**约束**：本模块注入 MOD-08 的执行器（`EvalRunnerAdapter` → `EpisodeRunner`）在评估期**不得跨局共享 `SandboxEnv`**——每一局必须拿到**自己的** env 实例，并在局末关闭。
+
+理由与 `policy` 完全同构（FR-06-14 早已规定「评估局并发时 MOD-04 不可共享实例」，但同一句话此前**只落到了 policy 上**）：
+
+- `evaluate_arm` 以 `n_workers = cfg.evals.n_workers`（默认 **2**）驱动**同一个** runner（Spec §4.7 FR-08-25 的注入口）；
+- `SandboxEnv` 是**有状态单实例**（`reset`/`step` 改写 `_state/_env_steps/_decision_index/_illegal_count`…）；
+- 两局的 `reset`/`step` 交错 ⇒ **观测串局** ⇒ 模型按**别的局**的相位出动作 ⇒ 语义非法 ⇒ 重试耗尽 ⇒ fallback。
+
+**实测后果**（`C1` + `medium × 6`，§3.2 冒烟 5/40 局时被发现并中止）：`illegal_rate ≈ 0.285`、`fallback_rate ≈ 0.290`，而同臂/同模型/同难度/同 seed、**同一时间窗并发**的 `play` 路径（MOD-08 `SandboxRunner` **每局新建 env**、`EvalSpec.n_workers=1`）是 `0.032` / `0.000`。⇒ 不是模型或 API 漂移，是**代码路径**。`heuristic` 臂的独立复现（H1 全 40 局）：共享 env **13/40 局出现非法动作、0/40 胜**；每局新 env **0/40、18/40 = 45.0%**（对上 `greedy_counter` hard×6 45.5%）。
+
+**落地**：`loop/cli.py` 不再预建 env，改注入 `env_factory=_env_factory(cfg)`——每局 `_make_env(cfg, episode_id=key)`，由 `EpisodeRunner._resolve_env` 的 `owned` 路径在局末 `close()`（与 MOD-08 `SandboxRunner` 同构）。构造代价实测 **1.1 ms/局**，相对单局墙钟（API 臂 ~125 s）可忽略，故不做配表缓存。
+
+**护栏**（`tests/integration/test_loop_env_isolation.py`，从**组合根** `_build_orchestrator` 装配，断言不变量而非修法）：
+
+1. `runner.env is None` 且 `runner.env_factory is not None`（不得持有跨局复用的实例）；
+2. 同 seed 在 `n_workers=1` 与 `=2` 下**逐字段一致**（`steps`/`decisions`/`illegal_attempts`/`fallback_decisions`/`outcome`/`stages_cleared`/`battles_won`/`truncation_reason`/`seq_hash`），且并发侧 `illegal_attempts == 0`。
+
+`git stash` 掉修复后两条护栏**均失败**，行为用例 **5/5 稳定失败**（非偶发）⇒ 护栏有效。门禁：`scripts/ci_gate.sh` 全绿，**1870 passed / 2 skipped**。
+
+**残留 F31（低危，未修）**：`loop/runner.py:446-448` 与 `:219` 在局末做 `state.counters.illegal_actions` / `llm_timeouts` / `io_retries += …`，是**跨线程读改写**，`n_workers=2` 下理论上丢更新。影响面仅限 `state.json` 的上报计数器——这三个计数器在 `dice_ratchet/` 内**零读取点**，不进门禁、不进裁决。
+
 ## 10. 错误处理与降级（使用 Spec §8 的错误码前缀）
 
 | 触发条件 | 错误码 | MOD-06 行为 | 计入评估样本 |
@@ -435,3 +458,4 @@ MOD-06 **不自己装配模型**：`loop run --agent llm` 的客户端由**组�
 | v1.1 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：单局循环改为调用 `play_decision`，终止只看 MOD-02 的 terminated/truncated，删除 `max_steps=120` 与自有的 illegal_streak（P0-2/5）；对 MOD-04/05 的调用签名改为 Spec §4.7（P1-1/2）；轨迹路径与 `episode_key` 改为 `e-{seed}-g{gen}-{arm}`（P1-10）；成本闸门按 `E_gen` 公式统一计算，并作为全系统唯一上限（P0-3、P1-8）；评估改为局级并发 + 共享推理队列，委托 MOD-08（P1-9）；新增 gen-000 基线与逻辑时钟 tick；错误码、退出码、CLI、事件名对齐 MOD-09 注册表（P1-11～14） |
 | v1.2 | 2026-09-30 17:49 | seed 取用规则回填为 Spec B-36；HITL 挂起语义以 Spec §4.5 B-32 为准 |
 | v1.3 | 2026-10-09 | **新增 §9.0「模型角色与实验臂」**（对齐 Spec v2.0 B-42/B-43/B-44）。① 澄清本模块**不自己装配模型**：`loop run --agent llm` 的客户端由组合根经 `RoleModelProvider` 注入，故 `experiment.arm` 对闭环生效，三角色按 Spec §4.7 的四级优先级 fail-closed 解析（装配细节归 MOD-03 §7.1）。② 登记 **M2 闭环主力臂 = `C1`**（三角色全 `deepseek-flash` + `harness: evolve`）与随之变化的成本口径：本地 8B 19.6 min/局 ⇒ `E_gen=114` ≈ 37 h/代；API 臂 2.09–2.52 min/局 ⇒ **≈4.0–4.8 h/代、≈¥84–100/代**；**局数约束（`max_episodes_per_generation=120`、`E_gen=114`）不变，但瓶颈由墙钟转为 API 花费/限流**。③ 登记 **缺陷 F28 的「静默性」**：`hard × 6` 上 C5 因 `truncation_rate=0.30 > 0.15` 全拒，而本模块按 FR-06-7 对接受与拒绝**同样** `generation += 1` 并回到 `playing`（退出码 0），不会报错 ⇒ **「跑完 N 代、退出码 0」不等于闭环有产出**；判定 M2 验收必须查 `harness/versions/` 新版本与逐代 `decision` 记录。④ 登记 **F29**：臂的 `harness: fixed/evolve` 字段本模块**不消费**（演化开关是 `--no-evolve` / 组合根注入的 `_EVOLVE_PROVIDER`）⇒ **`C0` 与 `C1` 当前行为等价**，选 `C0` 跑闭环照样演化 |
+| v1.4 | 2026-10-09 | **新增 §9.1「评估局的环境隔离」**（对齐 Spec v2.2 B-46；处置缺陷 F30，登记残留 F31）。① **约束**：本模块注入 MOD-08 的执行器**不得跨评估局共享 `SandboxEnv`**——`evaluate_arm(n_workers=cfg.evals.n_workers=2)` 驱动同一个 runner，而 `SandboxEnv` 是有状态单实例 ⇒ 两局 `reset`/`step` 交错、观测串局 ⇒ 模型按别的局的相位出动作 ⇒ 非法 ⇒ 重试耗尽 ⇒ fallback。② **实测**（§3.2 冒烟 5/40 局时发现并中止）：`illegal_rate ≈ 0.285` / `fallback_rate ≈ 0.290`，同臂同 seed 同时间窗的 `play`（`SandboxRunner` 每局新 env、`n_workers=1`）为 `0.032` / `0.000`；`heuristic` 臂复现 H1 全 40 局——共享 env 13/40 局非法、0/40 胜，每局新 env 0/40、18/40 = 45.0%（对上 `greedy_counter` hard×6 45.5%）。③ **落地**：`loop/cli.py` 改注入 `env_factory=_env_factory(cfg)`（每局 `episode_id=key`、局末 `close()`，与 MOD-08 `SandboxRunner` 同构）；构造代价 1.1 ms/局。**这与 FR-06-14「评估局并发时 MOD-04 不可共享实例」是同一条理由**，此前只落到 `policy` 上。④ **护栏**：`tests/integration/test_loop_env_isolation.py` 从组合根装配，断言 `runner.env is None` + `n_workers=1` 与 `=2` 逐字段一致；`git stash` 掉修复后 **5/5 稳定失败**。门禁 **1870 passed / 2 skipped**。⑤ 登记 **F31**（局末 `state.counters.*` 跨线程读改写，仅影响上报值、零读取点，本轮未修） |

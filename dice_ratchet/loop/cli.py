@@ -228,8 +228,7 @@ def _build_orchestrator(paths: RunPaths, cfg: Any, run_id: str,
                          harness_dir=harness_dir,
                          memory_version=int(state.memory_version), memory=memory,
                          client=client)
-    env = _make_env(cfg, episode_id=f"loop-{run_id}")
-    runner = EpisodeRunner(env=env, close_env=False,
+    runner = EpisodeRunner(env_factory=_env_factory(cfg),
                            policy_factory=_policy_factory(cfg, client, agent_kind,
                                                           harness_dir),
                            memory=memory, writer=_build_writer(paths, loop_cfg),
@@ -293,6 +292,24 @@ def _policy_factory(cfg: Any, client: Any, agent_kind: str,
 
     def factory(seed: int, _key: str) -> Any:
         return PolicyAgent(base, llm=client, memory=None, harness_dir=harness_dir)
+
+    return factory
+
+
+def _env_factory(cfg: Any) -> Callable[[int, str], Any]:
+    """每个局一个 ``SandboxEnv``（与 ``_policy_factory`` 同理，FR-06-14 / F30）。
+
+    ``SandboxEnv`` 是**有状态单实例**：``reset``/``step`` 会改写 ``_state``、
+    ``_env_steps``、``_decision_index``、``_illegal_count``… 而 MOD-08 的
+    ``evaluate_arm`` 用 ``n_workers``（默认 2）个线程驱动**同一个** runner。共享一个
+    env 会让两局的 ``reset``/``step`` 交错，观测串局——模型按别的局的相位出动作 →
+    语义非法 → 重试耗尽 → fallback（F30）。故此处按局新建，由
+    ``EpisodeRunner._resolve_env`` 的 owned 路径在局末 ``close()``。
+
+    构造代价实测 ≈1.1 ms/局（主因是配表加载），相对单局墙钟可忽略。
+    """
+    def factory(_seed: int, key: str) -> Any:
+        return _make_env(cfg, episode_id=key)
 
     return factory
 
