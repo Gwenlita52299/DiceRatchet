@@ -12,6 +12,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 # 注意：``dice_ratchet.evolve.__init__`` 会把子模块名 ``judge`` 重绑到同名函数上，
@@ -20,10 +22,11 @@ import pytest
 from dice_ratchet.evolve.judge import (CONDITION_IDS, better, first_failure, judge,
                                     pick_winner, smoke_fast_reject, smoke_seeds_for,
                                     superseded_verdict)
+from dice_ratchet.infra.config import AppConfig
 from dice_ratchet.infra.errors import E
 
-from evolve_support import (FakeArm, heldout_dict, make_candidate, make_config,
-                            make_report, paired_dict)
+from evolve_support import (FakeArm, heldout_dict, make_app_config, make_candidate,
+                            make_config, make_report, paired_dict)
 
 # =====================================================================
 # 基线与辅助
@@ -415,3 +418,74 @@ def test_superseded_verdict_has_no_error_code():
     assert verdict.decision == "reject"
     assert verdict.reason == "superseded"
     assert verdict.error_code is None
+
+
+# =====================================================================
+# F42-C：MOD-07 的每代臂评估必须按配置传 n_workers / n_rep
+# =====================================================================
+#
+# 现场（``runs/m2-s32b-smoke-c1-medium6``，2026-10-10）：``CandidateEvaluator._evaluate_arm``
+# 只传 ``runner``，**不传** ``n_workers``/``n_rep`` ⇒ 落到 ``evaluate_arm`` 的默认
+# ``n_workers=1``，即一代 84 局**串行**跑；而 gen-000 基线走 ``loop/generation.py``
+# 时传的是 ``cfg.evals.n_workers=2``。同一份配置下两条路径的并发度不同。
+#
+# 修复前签名里没有这两个 kwarg（`evaluate_arm` 也收不到）⇒ 下面的 spy 断言会红。
+
+def _spy_evaluate_arm(monkeypatch):
+    """截 ``evaluate_arm`` 的 kwargs（返回 (captured, evaluator)）。"""
+    import sys
+
+    import dice_ratchet.evals as evals_pkg
+    # 父包把 ``evolve.judge`` 重绑到同名函数上：显式从 ``sys.modules`` 取子模块。
+    judge_mod = sys.modules["dice_ratchet.evolve.judge"]
+
+    captured: list[dict] = []
+
+    def fake_evaluate_arm(harness_dir, **kwargs):
+        captured.append({"harness_dir": harness_dir, **kwargs})
+        return FakeArm(arm=kwargs.get("arm", ""), win_rate=0.5, n=2)
+
+    monkeypatch.setattr(evals_pkg, "evaluate_arm", fake_evaluate_arm)
+    cfg = make_app_config(evals=replace(AppConfig().evals,
+                                        n_workers=2,
+                                        determinism=replace(AppConfig().evals.determinism,
+                                                            n_rep=3)))
+    ev = judge_mod.CandidateEvaluator(config=cfg, run_id="r-f42c", generation=1)
+    return captured, ev
+
+
+def test_candidate_evaluator_forwards_n_workers_and_n_rep(monkeypatch):
+    """F42-C：``_evaluate_arm`` 必须把配置里的 ``n_workers``/``n_rep`` 转发给 ``evaluate_arm``。
+
+    反例自检：同一 spy 下断言捕获到的 kwargs **确实**没有落在默认值 1/1 上
+    （``cfg.evals.n_workers=2``、``determinism.n_rep=3``）——若实现只是「恰好等于默认」
+    这条用例也会红，因为它在配置里显式设了非默认值。
+    """
+    captured, ev = _spy_evaluate_arm(monkeypatch)
+    ev._evaluate_arm("harness", split="heldout", basket="H1", arm="parent",
+                     harness_version=0)
+    assert len(captured) == 1
+    kwargs = captured[0]
+    assert kwargs["n_workers"] == 2, (
+        "MOD-07 的每代臂评估没按配置传 n_workers：84 局会串行跑（F42-C）"
+        f"（实际 kwargs={sorted(kwargs)}）")
+    assert kwargs["n_rep"] == 3
+    # 其余调用面不得被顺手改掉（回归护栏）
+    assert kwargs["arm"] == "parent" and kwargs["generation"] == 1
+    assert kwargs["memory_version"] == 0 and kwargs["run_id"] == "r-f42c"
+
+
+def test_candidate_evaluator_defaults_to_serial_when_config_lacks_n_workers(monkeypatch):
+    """配置里没有 ``n_workers``/``determinism`` 时保守回落到串行 1/1，而不是抛错。"""
+    import sys
+
+    import dice_ratchet.evals as evals_pkg
+    judge_mod = sys.modules["dice_ratchet.evolve.judge"]
+
+    captured: list[dict] = []
+    monkeypatch.setattr(evals_pkg, "evaluate_arm",
+                        lambda harness_dir, **kw: captured.append(kw) or None)
+    ev = judge_mod.CandidateEvaluator(config=make_config(), run_id="r-f42c", generation=0)
+    ev._evaluate_arm("harness", split="heldout", basket="H1", arm="parent",
+                     harness_version=0)
+    assert captured[0]["n_workers"] == 1 and captured[0]["n_rep"] == 1

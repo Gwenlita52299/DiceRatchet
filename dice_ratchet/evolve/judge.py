@@ -394,6 +394,14 @@ class CandidateEvaluator:
         kwargs: dict[str, Any] = {}
         if self.runner is not None:
             kwargs["runner"] = _wrap_runner(self.runner)
+        # F42-C：原先**没传** ``n_workers``/``n_rep`` ⇒ 落到 ``evaluate_arm`` 的默认
+        # ``n_workers=1``，即一代 84 局**串行**跑；而 gen-000 基线路径传的是
+        # ``cfg.evals.n_workers=2``（``loop/generation.py``）⇒ 同一份配置下两条路径的
+        # 并发度不同，候选/parent 臂的墙钟与 gen-000 不可比。这里按配置对齐；
+        # **不改任何配置值**，所以 ``config_hash`` 不变。
+        eval_cfg = getattr(self.config, "evals", None)
+        kwargs["n_workers"] = int(getattr(eval_cfg, "n_workers", 1) or 1)
+        kwargs["n_rep"] = int(getattr(getattr(eval_cfg, "determinism", None), "n_rep", 1) or 1)
         return evaluate_arm(
             arm_dir, split=split, basket=basket, memory_version=int(self.memory_version),
             arm=arm, run_id=self.run_id, protocol=self.protocol, config=self.config,
