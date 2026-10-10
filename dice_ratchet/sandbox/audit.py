@@ -141,6 +141,13 @@ LOG_NON_CONTENT_KEYS: Final[frozenset[str]] = frozenset({
     # 复算都依赖它；``spec.seeds`` 也正因此被 M1 验收 F3 误判了 120 条。
     "spec", "basket", "outcome", "dropped", "degraded", "error_code", "error_codes",
     "report_sha256", "low_confidence", "config_hash", "exit_code",
+    # 2026-10-10（F45b，本轮实跑）：``llm.api.call``/``llm.call`` 的**纯遥测**键。
+    # 触发点是 **B-47 刚加的按调用方输出预算** ``max_tokens: 2048`` —— 一个完全合法的
+    # 配置值落进了 heldout 的 2000-2099 区间，于是审计刷 ``seed_leak/critical``、
+    # 判据③（`audit leak` clean）不可达。同类的还有采样浮点（``0.2072`` 的 ``2072``）
+    # 与**哈希串**（十六进制片段里的 4 位数字段：64 位 hex 约 3.7% 概率撞 20XX 区间）。
+    "max_tokens", "reasoning_max_tokens", "temperature", "top_p", "cost_estimate",
+    "request_hash", "response_hash", "prompt_digest",
 })
 
 #: 记忆/反思文件里**非内容**字段（2026-10-06，MOD-05 落地时新增）。
@@ -314,6 +321,57 @@ def _read_jsonl(path: Path, io_errors: list[str]) -> list[dict[str, Any]]:
     return rows
 
 
+def _content_projection(node: Any) -> Any:
+    """把一条记录投影成「只含内容字段」的形态（顶层与一层 ``entry`` 都投影）。
+
+    seed 规则只在**内容**上生效（``MEMORY_NON_CONTENT_KEYS`` 里的时间戳/计数/哈希是
+    机器元数据）；文档类文件必须整份投影后再扫，否则逐行解析失败会绕过豁免（F45a）。
+    """
+    if not isinstance(node, dict):
+        return node
+    projected = {k: v for k, v in node.items() if k not in MEMORY_NON_CONTENT_KEYS}
+    entry = projected.get("entry")
+    if isinstance(entry, dict):
+        projected["entry"] = {k: v for k, v in entry.items()
+                              if k not in MEMORY_NON_CONTENT_KEYS}
+    return projected
+
+
+def _read_json_document(path: Path, io_errors: list[str]) -> Any:
+    """整文件读一个 JSON **文档**（F44：与 JSONL 区分开）。
+
+    MOD-06 的 ``reflections/<episode_key>.json`` 是多行 pretty JSON，按 JSONL 逐行解析会
+    在第 2 行起报 ``Extra data`` ⇒ ``E_ENV_AUDIT_IO`` ⇒ ``audit leak`` 退出码 2。
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        io_errors.append(f"读不到 JSON {path}：{exc}")
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        io_errors.append(f"JSON 损坏 {path}：{exc.msg}")
+        return None
+
+
+def _content_values(node: Any) -> list[str]:
+    """取出一个条目里**会被泄漏的正文**（顶层与一层 ``entry`` 子对象都要看）。
+
+    键集沿用原实现（``text``/``content``/``reflection``/``summary``）；反思记录的正文在
+    ``entry.text``，故必须下探一层——否则 F44 修好 IO 后会「解析成功但什么都没扫到」。
+    """
+    out: list[str] = []
+    for target in (node, node.get("entry") if isinstance(node, dict) else None):
+        if not isinstance(target, dict):
+            continue
+        for key in ("text", "content", "reflection", "summary"):
+            value = target.get(key)
+            if isinstance(value, str) and value:
+                out.append(value)
+    return out
+
+
 def _read_text(path: Path, io_errors: list[str]) -> str:
     try:
         return path.read_text(encoding="utf-8")
@@ -387,12 +445,17 @@ def rebuild_visible_set(run_dir: Path, *, split: str = "train",
     memory_texts: list[str] = []
     for root in (run_dir / "memory", run_dir / "reflections"):
         for path in _iter_text_files(root, ("*.jsonl", "*.json", "*.txt", "*.md")):
-            if path.suffix == ".jsonl" or path.suffix == ".json":
+            # F44（2026-10-10 实跑登记）：**按文件形状分别解析**。原先 `.jsonl` 与 `.json`
+            # 都走 `_read_jsonl`，而 MOD-06 的 `reflections/<episode_key>.json` 是**多行
+            # pretty JSON**（实测 51 行）⇒ 第 2 行起 `Extra data` ⇒ `E_ENV_AUDIT_IO` ⇒
+            # `audit leak` 退出码 2。即**任何含反思的 `loop run` 都无法让审计 clean**，
+            # 而「`audit leak` clean」正是 §3.2 的判据③。
+            if path.suffix == ".jsonl":
                 for row in _read_jsonl(path, errors):
-                    for key in ("text", "content", "reflection", "summary"):
-                        value = row.get(key)
-                        if isinstance(value, str) and value:
-                            memory_texts.append(value)
+                    memory_texts.extend(_content_values(row))
+            elif path.suffix == ".json":
+                # 单文档 JSON 整文件解析；反思正文嵌在 `entry.text`，故取值要下探一层。
+                memory_texts.extend(_content_values(_read_json_document(path, errors)))
             else:
                 memory_texts.append(_read_text(path, errors))
 
@@ -787,24 +850,43 @@ def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "tr
             for path in _iter_text_files(root, ("*.jsonl", "*.json", "*.txt", "*.md")):
                 rel = _rel(path, run_dir)
                 text = _read_text(path, io_errors)
+                # F45a（2026-10-10 实跑登记）：`.json` 在这里是**多行 JSON 文档**
+                # （MOD-06 的 `reflections/<episode_key>.json` 实测 51 行），逐行
+                # `json.loads` 必失败 ⇒ `row=None` ⇒ 既有的 `MEMORY_NON_CONTENT_KEYS`
+                # 豁免被**绕过** ⇒ 第 5 行的 `created_at` 年份 `2026` 被当成 seed 泄漏
+                # （实测 3 条 critical 假阳性）。故文档类改为「整文档解析 + 只投影内容
+                # 字段」且**只扫一次**；JSONL 仍逐行（豁免机制在那边本来就有效）。
+                is_document = path.suffix == ".json"
+                seed_scanned_doc = False
                 for line_no, line in enumerate(text.splitlines(), start=1):
                     step = max(0, line_no - 1)
                     # seed 规则只扫内容字段（见 MEMORY_NON_CONTENT_KEYS：ISO 年份 2026
                     # 撞 heldout 区间）；其余规则仍扫原始行。
-                    seed_text = line
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        row = None
-                    if isinstance(row, dict):
-                        seed_text = json.dumps(
-                            {k: v for k, v in row.items()
-                             if k not in MEMORY_NON_CONTENT_KEYS},
-                            ensure_ascii=False, sort_keys=True)
-                    record(scan_text(seed_text, forbidden=seed_tokens, surface="memory",
-                                     episode_id=path.stem, step=step,
-                                     evidence_chars=evidence_chars,
-                                     line_ref=f"{rel}:{line_no}"))
+                    if is_document:
+                        if not seed_scanned_doc:
+                            doc = _read_json_document(path, io_errors)
+                            record(scan_text(
+                                json.dumps(_content_projection(doc),
+                                           ensure_ascii=False, sort_keys=True),
+                                forbidden=seed_tokens, surface="memory",
+                                episode_id=path.stem, step=0,
+                                evidence_chars=evidence_chars, line_ref=rel))
+                            seed_scanned_doc = True
+                    else:
+                        seed_text = line
+                        try:
+                            row = json.loads(line)
+                        except json.JSONDecodeError:
+                            row = None
+                        if isinstance(row, dict):
+                            seed_text = json.dumps(
+                                {k: v for k, v in row.items()
+                                 if k not in MEMORY_NON_CONTENT_KEYS},
+                                ensure_ascii=False, sort_keys=True)
+                        record(scan_text(seed_text, forbidden=seed_tokens, surface="memory",
+                                         episode_id=path.stem, step=step,
+                                         evidence_chars=evidence_chars,
+                                         line_ref=f"{rel}:{line_no}"))
                     record(scan_text(line, forbidden=other_tokens, surface="memory",
                                      episode_id=path.stem, step=step,
                                      evidence_chars=evidence_chars,

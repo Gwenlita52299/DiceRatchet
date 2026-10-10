@@ -108,6 +108,66 @@ def test_load_forbidden_seeds_from_configs(repo_root):
     assert all(v == "seed" for v in seeds.values())
 
 
+# ---- F44/F45：反思是多行 JSON 文档，且机器元数据不得刷假阳性 -----------------------
+
+def _write_reflection(root: Path, body: dict) -> None:
+    refdir = Path(root) / "reflections"
+    refdir.mkdir(parents=True, exist_ok=True)
+    (refdir / "e-001000-g000-train.json").write_text(
+        json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def test_f44_multiline_reflection_json_is_not_read_as_jsonl(build_run, tmp_path):
+    """F44：``reflections/<key>.json`` 是多行 pretty JSON，不得按 JSONL 逐行解析。
+
+    实测（2026-10-10 实跑）：51 行的反思文件让审计第 2 行起报 ``Extra data`` ⇒
+    ``E_ENV_AUDIT_IO`` ⇒ ``audit leak`` 退出码 2 ⇒ **任何含反思的 `loop run` 都无法
+    让判据③（`audit leak` clean）成立**。
+    """
+    built = build_run(tmp_path, run_id="r-f44")
+    _write_reflection(built.root, {"entry": {"text": "优先处理护卫",
+                                             "created_at": "2026-10-09T16:34:13Z"},
+                                   "episode_key": "e-001000-g000-train"})
+
+    result = A.run_audit(built.root, generated_at=FIXED)
+
+    assert result.io_errors == (), f"多行 JSON 不得被当 JSONL：{result.io_errors}"
+    # F45a：`created_at` 的年份 2026 撞 heldout 区间，但它是机器元数据 ⇒ 不算泄漏
+    assert result.leak_counts.get("seed_leak") is None, result.findings
+    assert result.verdict == A.VERDICT_CLEAN
+
+
+def test_f45_real_leak_in_reflection_body_is_still_caught(build_run, tmp_path):
+    """F45a 的反面：正文里的 heldout seed 字面量**仍必须**被抓（修复不得把审计变瞎）。"""
+    built = build_run(tmp_path, run_id="r-f45")
+    _write_reflection(built.root, {"entry": {"text": "历史最优 seed=2013 的策略",
+                                             "created_at": "2026-10-09T16:34:13Z"}})
+
+    result = A.run_audit(built.root, generated_at=FIXED)
+
+    assert result.io_errors == ()
+    assert result.leak_counts.get("seed_leak") == 1, result.findings
+    assert result.verdict == A.VERDICT_CRITICAL
+
+
+def test_f45b_token_budget_in_events_is_not_a_seed_leak(build_run, tmp_path):
+    """F45b：事件里的**按调用方输出预算**（B-47 的 ``max_tokens: 2048``）不是泄漏面。
+
+    这是 F37 的修复**引入**的假阳性：一个完全合法的配置值落进 heldout 的 2000–2099
+    区间，于是审计刷 ``seed_leak/critical``。同类的还有采样浮点与哈希串片段。
+    """
+    built = build_run(tmp_path, run_id="r-f45b")
+    (built.root / "events.jsonl").write_text(json.dumps({
+        "event": "llm.api.call", "model_id": "deepseek-flash", "max_tokens": 2048,
+        "temperature": 0.2072, "request_hash": "sha256:" + "a" * 32 + "2026" + "b" * 28,
+        "ts": "2026-10-10T00:00:00Z", "run_id": built.root.name,
+    }, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    result = A.run_audit(built.root, generated_at=FIXED)
+
+    assert result.leak_counts.get("seed_leak") is None, result.findings
+
+
 # ---- FR-02-19 run_audit：verdict / 退出码 / 报告 -----------------------------------
 
 def test_clean_run_audit_is_clean(build_run, tmp_path):

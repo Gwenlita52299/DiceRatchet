@@ -222,3 +222,76 @@ def test_generations_csv_columns_are_fixed(tmp_path):
     from dice_ratchet.evals.harness import GENERATIONS_COLUMNS
 
     assert tuple(header) == GENERATIONS_COLUMNS
+
+# =====================================================================
+# F43：台账每代一行（upsert）、重算不覆盖已裁决的代
+# =====================================================================
+
+def _row(generation: int, *, decision: str, n: int, win: float) -> dict:
+    from dice_ratchet.evals.harness import generations_row_from_report
+
+    return generations_row_from_report({
+        "generation": generation, "harness_version": generation, "parent_version": 0,
+        "decision": decision,
+        "heldout": {"basket": "H1", "n": n, "win_rate": win, "win_rate_ci95": [0.5, 0.7]},
+        "diversity": {"entropy_slope": 0.0, "collapse_flag": False},
+        "gain_realism": {"win_rate_gap": 0.0, "verdict": "null"},
+    })
+
+
+def test_f43_generations_csv_upserts_one_row_per_generation(tmp_path):
+    """F43：同代重复写入只留**一行**（两个写入方：MOD-07 与 ``eval report``）。"""
+    from dice_ratchet.evals.harness import append_generations_csv
+
+    append_generations_csv(tmp_path, _row(1, decision="reject", n=40, win=0.6))
+    append_generations_csv(tmp_path, _row(1, decision="pending", n=117, win=0.65))
+    append_generations_csv(tmp_path, _row(2, decision="reject", n=40, win=0.7))
+
+    import csv
+
+    rows = list(csv.DictReader(
+        (tmp_path / "metrics" / "generations.csv").open(encoding="utf-8")))
+    assert [r["generation"] for r in rows] == ["1", "2"], "每代恰好一行且按代排序"
+    gen1 = rows[0]
+    assert gen1["decision"] == "reject", "已裁决的 decision 不得被重算的 pending 覆盖"
+    assert gen1["n"] == "117", "指标列由后写入方（重算）刷新"
+
+
+def test_f43_recompute_report_goes_to_sidecar(tmp_path):
+    """F43：``eval report`` 不得覆盖 MOD-07 已裁决的 ``report.json``。"""
+    import json
+
+    from dice_ratchet.evals.cli import _write_report_preserving_verdict
+    from dice_ratchet.evals.harness import generation_report_path
+
+    target = generation_report_path(tmp_path, 1)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"decision": "reject", "candidates": [{"x": 1}]}),
+                      encoding="utf-8")
+
+    path, _sha = _write_report_preserving_verdict(
+        tmp_path, 1, {"decision": "pending", "generation": 1}, existing_decided="reject")
+
+    assert path.name == "report.eval.json", "已裁决的代 → sidecar"
+    assert json.loads(target.read_text(encoding="utf-8"))["decision"] == "reject"
+
+    # 未裁决（或缺失）时行为不变：仍走正式写入路径（桩掉写入，只验分支选择）
+    import dice_ratchet.evals.cli as cli
+    from dice_ratchet.evals.harness import generation_report_path as grp
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(cli, "write_generation_report",
+                        lambda root, gen, rep, **kw: (grp(root, gen), "sha256:x"))
+    try:
+        path2, _ = _write_report_preserving_verdict(
+            tmp_path, 2, {"decision": "pending", "generation": 2}, existing_decided=None)
+    finally:
+        monkeypatch.undo()
+    assert path2.name == "report.json"
+
+
+def test_f43_row_builder_matches_fixed_columns():
+    """行构造器产出的键集必须与 ``GENERATIONS_COLUMNS`` 逐字一致（防两处行定义漂移）。"""
+    from dice_ratchet.evals.harness import GENERATIONS_COLUMNS
+
+    assert tuple(_row(1, decision="reject", n=1, win=0.0).keys()) == GENERATIONS_COLUMNS

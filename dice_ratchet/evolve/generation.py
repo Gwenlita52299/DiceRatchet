@@ -501,10 +501,24 @@ def _finish_report(*, result: GenerationResult, run_ctx: Any, cfg: Any,
                            cfg=cfg, run_id=run_id, run_root=run_root,
                            protocol=protocol, gen=gen, parent_version=parent_version)
     try:
-        from dice_ratchet.evals import write_generation_report
+        from dice_ratchet.evals import append_generations_csv, write_generation_report
+        from dice_ratchet.evals.harness import generations_row_from_report
 
+        app_cfg = ctx_app_config(run_ctx, cfg)
         path, _sha = write_generation_report(run_root, gen, report)
         result.report_path = str(path)
+        # F43：本代行由**写报告的一方**追写 `metrics/generations.csv`（B-06 固定列）。
+        # 原先只有 `eval report` 会写它，而那条路径会把重算结果写进**同一个**
+        # `generations/gen-NNN/report.json`（decision 变 "pending"）⇒ 判据②（csv 可复算）
+        # 只能靠破坏判据①（本模块刚写下的决策记录）来满足。
+        # 台账是附属产物：失败**不阻塞**裁决落盘，但必须可观测（`evolve.ledger`）。
+        try:
+            append_generations_csv(run_root, generations_row_from_report(report, cfg=app_cfg))
+            events.emit("evolve.ledger", generation=int(gen), status="ok")
+        except Exception as exc: # noqa: BLE001 - 附属台账失败不阻塞裁决
+            events.emit("evolve.ledger", generation=int(gen), status="failed",
+                        error_code=str(getattr(exc, "code", E.E_IO_WRITE)),
+                        detail=str(exc)[:200])
     except InfraError as exc:
         # MOD-08 报告段不可用：降级为 MOD-07 自产的最小合法报告（不静默丢弃）
         events.emit("evolve.decision", gen=gen, candidate_id="", decision="reject",

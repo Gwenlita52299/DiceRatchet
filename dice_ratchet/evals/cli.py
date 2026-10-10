@@ -16,7 +16,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Final, Mapping, Sequence
 
 from dice_ratchet.infra import cli as infra_cli
 from dice_ratchet.infra.config import load_config
@@ -28,9 +28,9 @@ from .ablation import ablation_path, run_ablation
 from .baselines import BASELINE_KINDS, baseline_arm, baselines_dir, run_baseline
 from .diversity import (CollapseConfig, collapse_check, distinct_sequence_ratio,
                         js_divergence, kind_distribution, slot_distribution)
-from .harness import (EvalSpec, append_generations_csv, evaluate_arm, generation_report_path,
-                      load_episode_results, run_eval, utc_now, write_ext_metrics,
-                      write_generation_report, write_plots_data)
+from .harness import (VERDICT_DECISIONS, EvalSpec, append_generations_csv, evaluate_arm,
+                      generation_report_path, load_episode_results, run_eval, utc_now,
+                      write_ext_metrics, write_generation_report, write_plots_data)
 from .metrics import (aggregate, bootstrap_seed, judge_gain, mcnemar_exact_p, power_note,
                       render_report_sections)
 
@@ -245,7 +245,8 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
         heldout=heldout, train=train, gain=gain, diversity=diversity, ablation=None,
         decision="baseline" if generation == 0 else "pending", decided_by="auto",
         reason="eval report（从轨迹重算）", extra={"power_note": power_note(heldout.n)})
-    path, sha = write_generation_report(paths.root, generation, report)
+    path, sha = _write_report_preserving_verdict(
+        paths.root, generation, report, existing_decided=_verdict_of(paths.root, generation))
     _write_plots(paths.root, generation, heldout, diversity)
     ext = _ext_payload(generation, heldout, gain, diversity, eval_cfg, baselines=baseline,
                        provenance=_provenance(cfg, run_id, generation, heldout.basket, proto))
@@ -334,6 +335,42 @@ def _provenance(cfg: Any, run_id: str, generation: int, basket: str,
     return {"config_hash": config_hash(cfg), "seeds_hash": proto.seeds_hash,
             "protocol_hash": seeds_mod.protocol_hash(proto),
             "bootstrap_seed": bootstrap_seed(run_id, generation, basket)}
+
+
+def _verdict_of(run_root: Path | str, generation: int) -> str | None:
+    """读已存在的 ``report.json`` 的 ``decision``（缺失/损坏 → ``None``）。"""
+    path = generation_report_path(run_root, generation)
+    if not path.is_file():
+        return None
+    try:
+        return str(read_json(path).get("decision") or "") or None
+    except InfraError: # pragma: no cover - 损坏报告按「未裁决」处理，不阻塞重算
+        return None
+
+
+def _write_report_preserving_verdict(run_root: Path | str, generation: int,
+                                     report: Mapping[str, Any],
+                                     *, existing_decided: str | None) -> tuple[Path, str]:
+    """写重算报告；**已裁决的代不覆盖** MOD-07 的判决（F43）。
+
+    ``eval report`` 的产物是「从轨迹**重算**」的指标段（``decision`` 恒为
+    ``baseline``/``pending``），而 MOD-07 ``_finish_report`` 已经把该代的**真实判决**
+    写在同一个 ``generations/gen-NNN/report.json``。原先两者**同一路径**，于是
+    「跑 `eval report` 产出 `metrics/generations.csv`（判据②）」必然抹掉「谁采纳了哪个
+    候选（判据①）」——用它自己的话说，满足②只能靠破坏①。
+    现在：已裁决的代写 sidecar ``report.eval.json``（+ ``.sha256``）；未裁决的（含
+    gen-000 基线）维持原路径，行为不变。
+    """
+    from dice_ratchet.infra.io import write_bytes_atomic, write_json_atomic
+
+    if existing_decided in VERDICT_DECISIONS:
+        side = generation_report_path(run_root, generation).with_name("report.eval.json")
+        sha = write_json_atomic(side, dict(report))
+        write_bytes_atomic(side.with_suffix(".sha256"), (sha + "\n").encode("utf-8"))
+        print(f"[{E.E_IO_RUN_CONFLICT}] 该代已由 MOD-07 裁决（decision={existing_decided}）；"
+              f"重算报告改写 {side.name}，不覆盖 report.json", file=sys.stderr)
+        return side, sha
+    return write_generation_report(run_root, generation, report)
 
 
 def _csv_row(generation: int, heldout: Any, diversity: Any, gain: Any, report: Any,

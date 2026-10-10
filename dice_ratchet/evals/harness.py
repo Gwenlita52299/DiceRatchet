@@ -24,6 +24,7 @@ from __future__ import annotations
 import concurrent.futures
 import csv
 import hashlib
+import io
 import json
 import threading
 import time
@@ -55,6 +56,11 @@ __all__ = [
     "write_episode_summaries",
     "GENERATIONS_COLUMNS", "rng_for", "GainVerdictDiversity",
 ]
+
+#: MOD-07 写进 ``generations/gen-NNN/report.json`` 的**真实判决**（§6.3 决策段）。
+#: 用于「重算报告 / 台账不得覆盖已裁决的代」（F43）：``eval report`` 重算出的
+#: ``decision`` 恒为 ``baseline``/``pending``，不能盖掉这三个。
+VERDICT_DECISIONS: Final[tuple[str, ...]] = ("accept", "reject", "rollback")
 
 #: ``metrics/generations.csv`` 的固定列（PRD §13；列定义归 MOD-08，B-06）
 GENERATIONS_COLUMNS: tuple[str, ...] = (
@@ -832,6 +838,56 @@ def heldout_harness_version(parent: ArmResult, winner: ArmResult | None) -> int:
 # 报告落盘（FR-08-17 / FR-08-22 / FR-08-23/24）
 # =====================================================================
 
+def generations_row_from_report(report: Mapping[str, Any], *, cfg: Any = None,
+                                now: Any = None) -> dict[str, Any]:
+    """从**报告字典**（MOD-07 ``generations/gen-NNN/report.json`` 形态）构造 csv 行。
+
+    F43：``metrics/generations.csv`` 原先**只有** ``eval report`` 会写，而那条路径会把重算
+    结果写进**同一个** ``report.json`` ⇒ 判据②（csv 可复算）只能靠破坏判据①（MOD-07 的
+    决策记录）来满足。现在由**写报告的一方**（MOD-07 ``_finish_report``）追写本行，
+    列集与 ``evals/cli.py::_csv_row`` 共用 ``GENERATIONS_COLUMNS``。
+    """
+    from dice_ratchet.infra.config import config_hash
+    from datetime import datetime, timezone
+
+    from dice_ratchet.infra.run import git_short_sha
+
+    heldout = dict(report.get("heldout") or {})
+    diversity = dict(report.get("diversity") or {})
+    gain = dict(report.get("gain_realism") or {})
+    ci = list(heldout.get("win_rate_ci95") or (0.0, 0.0))
+    moment = now or datetime.now(tz=timezone.utc)
+    return {
+        "generation": int(report.get("generation") or 0),
+        "harness_version": report.get("harness_version"),
+        "parent_version": report.get("parent_version"),
+        "split": "heldout",
+        "basket": heldout.get("basket"),
+        "n": heldout.get("n"),
+        "win_rate": heldout.get("win_rate"),
+        "ci_lo": ci[0],
+        "ci_hi": ci[1],
+        "mean_stages_cleared": heldout.get("mean_stages_cleared"),
+        "mean_hearts_left": heldout.get("mean_hearts_left"),
+        "mean_battles_won": heldout.get("mean_battles_won"),
+        "mean_decisions": heldout.get("mean_decisions"),
+        "illegal_rate": heldout.get("illegal_rate"),
+        "fallback_rate": heldout.get("fallback_rate"),
+        "truncation_rate": heldout.get("truncation_rate"),
+        "entropy_mean_norm": heldout.get("entropy_mean_norm"),
+        "entropy_slope": diversity.get("entropy_slope"),
+        "jsd_kind": diversity.get("jsd_kind"),
+        "collapse_flag": diversity.get("collapse_flag"),
+        "win_rate_gap": gain.get("win_rate_gap"),
+        "verdict": gain.get("verdict"),
+        "decision": report.get("decision"),
+        "bootstrap_seed": None,
+        "config_hash": config_hash(cfg) if cfg is not None else None,
+        "git_commit": git_short_sha(),
+        "ts": moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+
+
 def generation_report_path(run_dir: Path | str, generation: int) -> Path:
     return Path(run_dir) / "generations" / f"gen-{int(generation):03d}" / "report.json"
 
@@ -894,16 +950,53 @@ def _round_floats(obj: Any) -> Any:
 
 
 def append_generations_csv(run_dir: Path | str, row: Mapping[str, Any]) -> Path:
-    """每代追加一行 ``metrics/generations.csv``（FR-08-22；列固定见 §13）。"""
+    """写一代一行到 ``metrics/generations.csv``（FR-08-22；列固定见 §13）。
+
+    **每代恰好一行**（F43 的配套）：按 ``generation`` **upsert**，不是无脑追加——因为现在
+    有**两个**写入方（MOD-07 ``_finish_report`` 在代末写它，``eval report`` 也写），无脑
+    追加会给同一代留下两行互相矛盾的数字。
+
+    **已裁决的 ``decision``/``verdict`` 不被覆盖**：MOD-07 写下的判决是判据①的唯一记录，
+    而 ``eval report`` 的重算报告 ``decision`` 恒为 ``baseline``/``pending``。若重算在后，
+    只更新指标列、保留判决列（与 ``evals/cli.py::_write_report_preserving_verdict`` 同口径）。
+    """
     path = Path(run_dir) / "metrics" / "generations.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
-    new = not path.is_file()
-    with path.open("a", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(GENERATIONS_COLUMNS),
-                                extrasaction="ignore")
-        if new:
-            writer.writeheader()
-        writer.writerow({k: _round_floats(row.get(k)) for k in GENERATIONS_COLUMNS})
+    incoming = {k: _round_floats(row.get(k)) for k in GENERATIONS_COLUMNS}
+    generation = str(incoming.get("generation"))
+
+    existing: list[dict[str, Any]] = []
+    if path.is_file():
+        try:
+            with path.open(encoding="utf-8", newline="") as handle:
+                existing = [dict(r) for r in csv.DictReader(handle)]
+        except (OSError, csv.Error): # pragma: no cover - 坏账本按空重建
+            existing = []
+
+    replaced = False
+    for index, prev in enumerate(existing):
+        if str(prev.get("generation")) != generation:
+            continue
+        if str(prev.get("decision") or "") in VERDICT_DECISIONS:
+            incoming["decision"] = prev.get("decision")
+            if prev.get("verdict") not in (None, ""):
+                incoming["verdict"] = prev.get("verdict")
+        existing[index] = incoming
+        replaced = True
+        break
+    if not replaced:
+        existing.append(incoming)
+    existing.sort(key=lambda r: int(r.get("generation") or 0))
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(GENERATIONS_COLUMNS), extrasaction="ignore")
+    writer.writeheader()
+    for r in existing:
+        writer.writerow({k: r.get(k) for k in GENERATIONS_COLUMNS})
+
+    from dice_ratchet.infra.io import write_bytes_atomic
+
+    write_bytes_atomic(path, buf.getvalue().encode("utf-8"))
     return path
 
 

@@ -136,6 +136,7 @@ def _build_registry() -> dict[str, EventSpec]:
         ("hitl_pending", frozenset({"generation"})),
         ("rollback", frozenset({"to_version"})),
         ("cost", frozenset({"episodes_spent", "episodes_cap"})),
+        ("ledger", frozenset({"generation", "status"})),
     ]:
         entries.append(_spec("evolve", ev, "MOD-07 harness 自进化事件", req))
     # ---- eval（MOD-08 PRD §13：eval.start/seed_start/seed_done/report/guard_violation/
