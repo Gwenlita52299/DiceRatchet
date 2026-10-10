@@ -82,16 +82,28 @@ def baseline_arm(kind: str) -> str:
 
 def baseline_protocol(kind: str, *, config: Any = None,
                       harness_dir: Path | str = DEFAULT_HARNESS_DIR) -> str:
-    """基线的「测量协议」标识：``EPISODE_PROTOCOL`` + **冻结提示词模板的摘要**。
+    """基线的「测量协议」标识：``EPISODE_PROTOCOL`` + **冻结提示词模板摘要** + ``seeds_hash``。
 
     F18 的续跑一致性闸要拦住的不只是「逐 env 步 vs 逐决策点」这种代码级语义变化，还包括
     **模板被改过**（F23 一轮里就改过三次）：同一份 run 的局必须来自同一份提示词，
     否则「基线分数」是一锅两套提示词的混合物。
+
+    **F45-2（2026-10-11）：再绑上 seed 协议的 ``seeds_hash``。**
+    ``config_hash`` = ``sha256(canonical_json(AppConfig))``，而 ``SeedsProtocol`` 是**另一个
+    文件**（``configs/seeds.yaml``）⇒ 换种子区间**不改** ``config_hash``；原先的协议串也只含
+    ``EPISODE_PROTOCOL`` + 模板摘要，同样**不含**种子区间。于是换区间后旧（2000–2039）与新
+    （731xxx）的局会被 ``--resume`` / 基线归档**静默混算**：两批 seed 处在两套数字空间，
+    聚合出来的胜率没有物理含义（这正是 §5.3 的「代际隔离闸」）。
     """
     from dice_ratchet.agent.prompts.assembler import FIXED_TEMPLATE_PATH, resolve_path, sha256_of
 
+    seeds_tag = _seeds_protocol_tag()
+
+    def _with_seeds(base: str) -> str:
+        return f"{base}+{seeds_tag}" if seeds_tag else base
+
     if kind != "fixed_prompt":
-        return EPISODE_PROTOCOL
+        return _with_seeds(EPISODE_PROTOCOL)
     policy = getattr(getattr(config, "agent", None), "policy", None)
     configured = str(getattr(policy, "fixed_prompt_path", "") or "") if policy else ""
     path = resolve_path(configured, harness_dir=Path(harness_dir)) if configured else None
@@ -100,8 +112,21 @@ def baseline_protocol(kind: str, *, config: Any = None,
     try:
         digest = sha256_of(Path(path).read_text(encoding="utf-8"))[7:23]
     except OSError: # pragma: no cover - 模板不可读时退化为协议本身
-        return EPISODE_PROTOCOL
-    return f"{EPISODE_PROTOCOL}+{digest}"
+        return _with_seeds(EPISODE_PROTOCOL)
+    return _with_seeds(f"{EPISODE_PROTOCOL}+{digest}")
+
+
+def _seeds_protocol_tag() -> str:
+    """``seeds-<protocol_hash 前 12 位>``（协议不可读 → ``""``，降级为旧口径）。"""
+    try:
+        proto = seeds_mod.validate_protocol(seeds_mod.coerce_protocol(None))
+        digest = proto.seeds_hash or seeds_mod.protocol_hash(proto)
+    except Exception: # noqa: BLE001 - 协议不可读不该阻断基线测量
+        return ""
+    text = str(digest)
+    if text.startswith("sha256:"):
+        text = text[7:]
+    return f"seeds-{text[:12]}"
 
 
 class RandomAgent:

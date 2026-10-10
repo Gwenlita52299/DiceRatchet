@@ -324,7 +324,9 @@ def test_baseline_protocol_binds_the_frozen_template(tmp_path):
     frozen.write_text("观测:\n{{observation}}\n记忆:\n{{memory}}\n", encoding="utf-8")
     other = tmp_path / "other.md"
     other.write_text("观测:\n{{observation}}\n记忆:\n{{memory}}\n（改过）\n", encoding="utf-8")
-    assert baseline_protocol("heuristic", config=cfg) == "episode-protocol-v2"
+    # F45-2：协议串现在含 seed 协议标签（``+seeds-<hash12>``）——换种子区间不得静默混算
+    base_heuristic = baseline_protocol("heuristic", config=cfg)
+    assert base_heuristic.startswith("episode-protocol-v2+seeds-")
     base = baseline_protocol("fixed_prompt", config=cfg)
     assert base.startswith("episode-protocol-v2+")
     a = baseline_protocol("fixed_prompt", config=_with_fixed_path(cfg, frozen))
@@ -342,7 +344,7 @@ def test_resume_refuses_when_the_frozen_template_changed(tmp_path):
     b = tmp_path / "b.md"
     b.write_text("观测:\n{{observation}}\n记忆:\n{{memory}}\n（改过）\n", encoding="utf-8")
     proto_a = "episode-protocol-v2+" + sha256_of(a.read_text(encoding="utf-8"))[7:23]
-    _write_protocol_row(tmp_path, 2000, "baseline-fixed_prompt", proto_a)
+    _write_protocol_row(tmp_path, 731000, "baseline-fixed_prompt", proto_a)
     with pytest.raises(InfraError) as exc:
         run_baseline("fixed_prompt", split="heldout", basket=(2000,), run_id="r-f18e",
                      run_dir=tmp_path, config=_with_fixed_path(cfg, b), protocol=None,

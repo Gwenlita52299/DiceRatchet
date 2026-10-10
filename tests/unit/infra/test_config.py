@@ -360,16 +360,16 @@ def test_eval_mode_requires_seed():
 def test_load_seeds_protocol():
     proto = load_seeds(CONFIGS)
     assert set(proto.splits) == {"train", "heldout", "test"}
-    assert proto.splits["heldout"]["baskets"]["H1"]["start"] == 2000
+    assert proto.splits["heldout"]["baskets"]["H1"]["start"] == 731000
 
 
 def test_seeds_overlap_rejected(tmp_path):
     bad = tmp_path / "seeds.yaml"
     bad.write_text(
         "version: 1\nhash_algo: sha256\nsplits:\n"
-        "  train: {start: 1000, end: 2050}\n" # 与 H1 重叠
-        "  heldout: {baskets: {H1: {start: 2000, end: 2039}}}\n"
-        "  test: {start: 9000, end: 9099}\n", encoding="utf-8")
+        "  train: {start: 1000, end: 731050}\n" # 与 H1 重叠
+        "  heldout: {baskets: {H1: {start: 731000, end: 731039}}}\n"
+        "  test: {start: 947000, end: 947099}\n", encoding="utf-8")
     with pytest.raises(InfraError) as exc:
         load_seeds(tmp_path)
     assert exc.value.code == E.E_EVAL_SEED_OVERLAP

@@ -415,12 +415,31 @@ def _ext_payload(generation: int, heldout: Any, gain: Any, diversity: Any,
 
 def _provenance(cfg: Any, run_id: str, generation: int, basket: str,
                 proto: seeds_mod.SeedProtocol) -> dict[str, Any]:
-    """NFR-08-03：``config_hash`` / ``seeds_hash`` / ``bootstrap_seed`` 全部入档。"""
+    """NFR-08-03：``config_hash`` / ``seeds_hash`` / ``bootstrap_seed`` 全部入档。
+
+    F45-2：额外记 ``seeds_protocol_id``（协议版本）与 ``seeds_protocol_tag``（与局行里的
+    ``protocol`` 同一口径）。``config_hash`` **不含** seeds（``SeedsProtocol`` 是独立文件），
+    所以没有这两个字段就无法回答「这条数字是哪套 seed 区间产出的」。
+    """
     from dice_ratchet.infra.config import config_hash
 
     return {"config_hash": config_hash(cfg), "seeds_hash": proto.seeds_hash,
+            "seeds_protocol_id": str(getattr(proto, "version", "") or ""),
+            "seeds_protocol_tag": _seeds_protocol_tag(proto),
             "protocol_hash": seeds_mod.protocol_hash(proto),
             "bootstrap_seed": bootstrap_seed(run_id, generation, basket)}
+
+
+def _seeds_protocol_tag(proto: Any) -> str:
+    """``seeds-<hash 前 12 位>``（与 ``baselines._seeds_protocol_tag`` 同口径）。"""
+    try:
+        digest = getattr(proto, "seeds_hash", None) or seeds_mod.protocol_hash(proto)
+    except Exception: # noqa: BLE001 - 协议不可读不阻断报告落盘
+        return ""
+    text = str(digest)
+    if text.startswith("sha256:"):
+        text = text[7:]
+    return f"seeds-{text[:12]}"
 
 
 def _verdict_of(run_root: Path | str, generation: int) -> str | None:

@@ -15,8 +15,13 @@ from dice_ratchet.memory import (MemoryEntry, MemoryIsolationError, MemoryStore,
                               Provenance, ReflectionEntry, extract_candidates)
 from dice_ratchet.sandbox.honeypot import current_canary
 
-HELD_OUT_SEED = 2001       # heldout H1 篮子 2000–2039
-TEST_SEED = 9001           # test 池 9000–9099
+#: F45-2（2026-10-11）起 heldout/test 在**六位**端口空间（731000-731099 / 947000-947099）；
+#: 这里从协议里取值，避免以后再换区间时靠「改测试里的魔法数字」跟上。
+from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol  # noqa: E402
+
+_PROTO = validate_protocol(coerce_protocol(None))
+HELD_OUT_SEED = _PROTO.splits["heldout"].baskets["H1"].start + 1   # H1 的第 2 个 seed
+TEST_SEED = _PROTO.splits["test"].start + 1                        # test 池的第 2 个 seed
 TRAIN_SEED = 1042
 
 
@@ -241,7 +246,8 @@ def test_reflection_text_with_heldout_seed_has_no_candidate_leak(
     """抽取器本身不做判断（拦截归 I2）；此处只锁「抽取不会凭空产出 seed 文本」。"""
     candidates = extract_candidates(make_reflection(text="先放盾再输出。"), None)
     for candidate in candidates:
-        assert "2000" not in candidate.lesson and "9000" not in candidate.lesson
+        assert str(HELD_OUT_SEED) not in candidate.lesson
+        assert str(TEST_SEED) not in candidate.lesson
 
 
 # ---- G4：与 MOD-02 审计器的端到端一致性 -----------------------------------------------
@@ -266,7 +272,7 @@ def audit_run(tmp_path, config_dir):
 def test_g4_audit_leak_is_clean_on_memory_run(audit_run) -> None:
     """PRD §12 G4：写入记忆 + 快照后，``audit leak`` 必须 0 告警。
 
-    回归点：``created_at`` 的年份 2026 落在 heldout H1（2000–2039）区间，若 memory
+    回归点：``created_at`` 的年份 2026 曾落在 heldout H1 的旧四位区间（2000–2039），若 memory
     面按原始行扫 seed，会把每个时间戳都判成泄漏（实测 7 条 critical 假阳性）。
     """
     root, cfg, config_dir = audit_run

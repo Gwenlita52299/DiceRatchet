@@ -12,23 +12,30 @@ splits:
     expose_to: [prompt, memory, reflection] # 训练 seed 可见于 agent
   heldout:
     expose_to: [] # heldout seed 不得出现在任何 agent 可见出口
+    # F45-2（2026-10-11）：heldout/test 全部移到**六位**端口空间。
+    # 理由：原先四位（2000–2099 / 9000–9099）与耗时（`duration_us=2072.8`）、
+    # token 预算（`max_tokens=2048`）、ISO 年份（`2026`）、秒级浮点（`dur_s=3.9022`）
+    # 共用一个数字空间 ⇒「数字串相等即泄漏」这条规则**不健全**，只能靠两张人工死名单
+    # 豁免，实测 12 个键撞上、总命中 118,646 次（其中 `ts` 的年份 2026 占 94%）。
+    # 六位区间（731xxx / 947xxx）避开常见预算/时长/日历字面量，正则 `[0-9]{3,6}` 无需放宽。
+    # ⚠️ 代价：已归档的 v2 证据（旧四位区间）与新协议**不可比**，见 MOD-08 PRD §4/§9。
     baskets:
-      H1: {start: 2000, end: 2039, role: generation_judge} # 代际裁判
-      H2: {start: 2040, end: 2079, role: ablation_final}   # 消融
-      H3: {start: 2080, end: 2099, role: reserve}          # 预留
+      H1: {start: 731000, end: 731039, role: generation_judge} # 代际裁判
+      H2: {start: 731040, end: 731079, role: ablation_final}   # 消融
+      H3: {start: 731080, end: 731099, role: reserve}          # 预留
   test:
-    start: 9000
-    end: 9099
+    start: 947000
+    end: 947099
     role: final_acceptance
     locked: true
     unlock_policy: single_use_per_milestone
 
 exposure_guard:
   destinations_forbidden: [prompt, memory, reflection]
-  numeric_scan: true # 文本中 4 位数字 token 落 2000-2099 / 9000-9099 即告警
-  forbidden_tokens: [heldout, H1, H2, H3, "2000-2099", "9000-9099"]
+  numeric_scan: true # 文本中 3–6 位数字 token 落 731000-731099 / 947000-947099 即告警
+  forbidden_tokens: [heldout, H1, H2, H3, "731000-731099", "947000-947099"]
 
 # 由 CLI 生成、CI 校验；改动必须同步更新并在 PR 说明
 # 生成/校验命令：python -m dice_ratchet eval diversity（协议校验）或
 #   python -c "from dice_ratchet.evals.seeds import load_protocol, protocol_hash; print(protocol_hash(load_protocol('configs')))"
-seeds_hash: "sha256:2ba235a71a12396aa734b1f96b478133aad81944abeeaffbdfbf8f3063313c75"
+seeds_hash: "sha256:686b2618330db5eb8291c1810499dc07fc47a956da5711803015bbb09ec2e904"

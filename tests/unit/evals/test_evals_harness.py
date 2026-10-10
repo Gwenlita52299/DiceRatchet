@@ -23,7 +23,9 @@ from dice_ratchet.evals.diversity import CollapseConfig, collapse_check
 from evals_support import FakeRunner, make_result
 
 _PROTO = S.default_protocol()
-_SEEDS = tuple(range(2000, 2012))
+# F45-2：heldout H1 已是六位端口空间（731000-731039），从协议取起点
+_H1_START = S.default_protocol().splits["heldout"].baskets["H1"].start
+_SEEDS = tuple(range(_H1_START, _H1_START + 12))
 
 
 def _spec(**kw):
@@ -53,7 +55,7 @@ def test_results_sorted_by_seed():
 
 def test_dropped_counted_as_lose_and_flagged_low_confidence():
     outcomes = {seed: "win" for seed in _SEEDS}
-    runner = FakeRunner(outcomes, fail_seeds=[2000, 2001])
+    runner = FakeRunner(outcomes, fail_seeds=[_H1_START, _H1_START + 1])
     result = run_eval(_spec(), runner=runner, protocol=_PROTO)
     assert result.metrics.n == len(_SEEDS)
     assert result.metrics.n_dropped == 2
@@ -65,7 +67,7 @@ def test_dropped_counted_as_lose_and_flagged_low_confidence():
 
 
 def test_degraded_excluded_from_n():
-    runner = FakeRunner(default="win", degraded_seeds=[2000, 2001])
+    runner = FakeRunner(default="win", degraded_seeds=[_H1_START, _H1_START + 1])
     result = run_eval(_spec(), runner=runner, protocol=_PROTO)
     assert result.metrics.n == len(_SEEDS) - 2
     assert result.metrics.degraded_n == 2
@@ -84,7 +86,7 @@ def test_budget_marks_remaining_dropped():
 
 def test_run_eval_rejects_cross_split_seeds():
     with pytest.raises(InfraError) as exc:
-        run_eval(_spec(seeds=(1000, 2000)), runner=FakeRunner(), protocol=_PROTO)
+        run_eval(_spec(seeds=(1000, _H1_START)), runner=FakeRunner(), protocol=_PROTO)
     assert exc.value.code == E.E_EVAL_SEED_OVERLAP
 
 
@@ -108,7 +110,8 @@ def test_bootstrap_same_rng_seed_is_bit_identical():
 
 
 def test_report_sha_is_stable_and_mismatch_raises(tmp_path):
-    rows = [make_result(2000 + i, outcome="win" if i % 2 else "lose") for i in range(10)]
+    rows = [make_result(_H1_START + i, outcome="win" if i % 2 else "lose")
+            for i in range(10)]
     heldout = aggregate(rows, basket="H1")
     train = aggregate(rows, split="train", basket="train_window")
     gain = judge_gain(train=train, heldout=heldout)
@@ -131,7 +134,8 @@ def test_report_sha_is_stable_and_mismatch_raises(tmp_path):
 # ---- T-14 报告 schema round-trip ---------------------------------------------------
 
 def test_report_schema_round_trip(tmp_path):
-    rows = [make_result(2000 + i, outcome="win" if i % 2 else "lose") for i in range(40)]
+    rows = [make_result(_H1_START + i, outcome="win" if i % 2 else "lose")
+            for i in range(40)]
     heldout = aggregate(rows, basket="H1")
     train = aggregate(rows, split="train", basket="train_window")
     diversity = collapse_check(curves=[list(heldout.action_entropy_curve)],
@@ -159,7 +163,7 @@ def test_evaluate_arm_with_injected_runner():
                        generation=1, harness_version=1)
     assert isinstance(arm, ArmResult)
     assert arm.metrics.n == len(_SEEDS)
-    assert arm.by_seed()[2000].seed == 2000
+    assert arm.by_seed()[_H1_START].seed == _H1_START
     assert arm.seeds == _SEEDS
 
 
@@ -167,7 +171,7 @@ def test_evaluate_arm_default_basket_is_full_h1():
     arm = evaluate_arm(Path("harness"), split="heldout", basket="H1", memory_version=0,
                        arm="parent", run_id="r-1", protocol=_PROTO,
                        runner=FakeRunner(), generation=1, harness_version=1)
-    assert arm.metrics.n == 40 and arm.seeds[0] == 2000
+    assert arm.metrics.n == 40 and arm.seeds[0] == _H1_START
 
 
 def test_compare_paired_mcnemar_and_bootstrap():
@@ -191,10 +195,10 @@ def test_compare_paired_mcnemar_and_bootstrap():
 
 
 def test_compare_paired_requires_shared_seeds():
-    a = evaluate_arm(Path("harness"), split="heldout", basket=[2000, 2001],
+    a = evaluate_arm(Path("harness"), split="heldout", basket=[_H1_START, _H1_START + 1],
                      memory_version=0, arm="a", run_id="r", protocol=_PROTO,
                      runner=FakeRunner(), generation=1)
-    b = evaluate_arm(Path("harness"), split="heldout", basket=[2010, 2011],
+    b = evaluate_arm(Path("harness"), split="heldout", basket=[_H1_START + 10, _H1_START + 11],
                      memory_version=0, arm="b", run_id="r", protocol=_PROTO,
                      runner=FakeRunner(), generation=1)
     with pytest.raises(InfraError) as exc:

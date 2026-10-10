@@ -23,7 +23,13 @@ from dice_ratchet.infra.errors import E
 
 from evolve_support import make_config
 
-SEED_2013 = 2013 # H1 篮子内的 heldout seed（configs/seeds.yaml: H1=2000–2039）
+#: H1 篮子内的 heldout seed（F45-2 起 H1 = 731000–731039；从协议取，避免魔法数字漂移）。
+from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol  # noqa: E402
+
+_PROTO = validate_protocol(coerce_protocol(None))
+SEED_2013 = _PROTO.splits["heldout"].baskets["H1"].start + 13
+SEED_2014 = SEED_2013 + 1
+TEST_SEED_9001 = _PROTO.splits["test"].start + 1
 
 
 # =====================================================================
@@ -41,7 +47,7 @@ def _bundle(*, memory=(), traj=(), reflect=(), tags=None, version=3) -> Evidence
 
 def test_source_tags_outside_whitelist_rejected():
     with pytest.raises(HoldoutLeakError) as excinfo:
-        _bundle(tags=("harness:current", "heldout:2000"))
+        _bundle(tags=("harness:current", "heldout:731000"))
     assert str(excinfo.value.code) == str(E.E_EVAL_INV5_LEAK)
 
 
@@ -70,10 +76,10 @@ def test_non_train_split_in_memory_and_reflection_raises():
 # =====================================================================
 
 @pytest.mark.parametrize("text", [
-    "heldout seed 2013 的表现最好",
-    "seed=2013",
-    "2013", # 整值 token
-    "scores: 2013,2014",
+    f"heldout seed {SEED_2013} 的表现最好",
+    f"seed={SEED_2013}",
+    f"{SEED_2013}", # 整值 token
+    f"scores: {SEED_2013},{SEED_2014}",
 ])
 def test_seed_literal_is_leak(text):
     bundle = _bundle(reflect=[{"split": "train", "lesson": text}])
@@ -83,10 +89,10 @@ def test_seed_literal_is_leak(text):
 
 
 @pytest.mark.parametrize("text", [
-    "20130",      # 整值 token 的右边界
-    "x2013y",     # 左右都不是数字（但 2013 是独立 token！）
-    "12013",
-    "20135",
+    f"{SEED_2013}0",   # 整值 token 的右边界
+    f"x{SEED_2013}y",  # 左右都不是数字（但它是独立 token！）
+    f"1{SEED_2013}",
+    f"{SEED_2013}5",
 ])
 def test_seed_token_boundaries(text):
     """``20130`` / ``12013`` / ``20135`` 不误报。
@@ -95,7 +101,7 @@ def test_seed_token_boundaries(text):
     ``(?<!\\d)2013(?!\\d)`` 属**命中**——只有"与其它数字相邻"才排除。
     """
     bundle = _bundle(reflect=[{"split": "train", "lesson": text}])
-    if text == "x2013y":
+    if text == f"x{SEED_2013}y":
         with pytest.raises(HoldoutLeakError):
             P.assert_no_holdout_leak(bundle, cfg=make_config())
     else:
@@ -109,7 +115,7 @@ def test_train_seed_literal_is_not_leak():
 
 
 def test_test_seed_literal_is_leak():
-    bundle = _bundle(memory=[{"split": "train", "text": "test 池 9001 不可见"}])
+    bundle = _bundle(memory=[{"split": "train", "text": f"test 池 {TEST_SEED_9001} 不可见"}])
     with pytest.raises(HoldoutLeakError):
         P.assert_no_holdout_leak(bundle, cfg=make_config())
 
@@ -123,8 +129,8 @@ def test_forbidden_labels_are_leak(word):
 
 def test_evolve_config_can_narrow_the_scan():
     """``evolve.heldout_seeds`` 显式给出时，扫描集合按它收敛（仍含注册表）。"""
-    cfg = make_config(heldout_seeds="heldout:2000-2039")
-    bundle = _bundle(reflect=[{"split": "train", "lesson": "2013"}])
+    cfg = make_config(heldout_seeds=f"heldout:{_PROTO.splits['heldout'].baskets['H1'].start}-{_PROTO.splits['heldout'].baskets['H1'].end}")
+    bundle = _bundle(reflect=[{"split": "train", "lesson": f"{SEED_2013}"}])
     with pytest.raises(HoldoutLeakError):
         P.assert_no_holdout_leak(bundle, cfg=cfg)
 

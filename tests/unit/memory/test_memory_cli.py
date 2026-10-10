@@ -12,6 +12,10 @@ from dice_ratchet.infra.config import load_config
 from dice_ratchet.infra.errors import E, InfraError, error_code_of
 from dice_ratchet.infra.run import RunPaths
 from dice_ratchet.memory import MemoryStore
+
+from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol
+_PROTO = validate_protocol(coerce_protocol(None))
+_HELDOUT_SEED = _PROTO.splits["heldout"].baskets["H1"].start + 1
 from dice_ratchet.memory import cli as mem_cli
 
 LESSON = "净化值低于 25% 时先把光盾骰放进防御槽，再考虑输出。"
@@ -146,7 +150,8 @@ def test_cmd_verify_full_detects_leak(seeded) -> None:
     store = MemoryStore(seeded[0], seeded[1].memory, config_dir=Path("configs"),
                         run_id="r-cli")
     entry = store.entries()[0]
-    leaked = entry.with_updates(lesson="第 2001 局的清扫要先挡。")
+    leaked = entry.with_updates(
+        lesson=f"第 {_HELDOUT_SEED} 局的清扫要先挡。")
     store._replace(leaked)    # 刷新行缓存（模拟旧快照载入）
     store._compact()          # 落到 active 文件，供新进程/新 store 复检（I3）
     with pytest.raises(InfraError) as exc:

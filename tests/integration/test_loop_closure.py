@@ -30,6 +30,10 @@ _ENV = {
     "DICERATCHET_ENV__EPISODE__STAGE_COUNT": "3",
 }
 
+from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol
+_H1_START = validate_protocol(coerce_protocol(None)).splits["heldout"].baskets["H1"].start
+_H1_SEEDS = (_H1_START, _H1_START + 1, _H1_START + 2)
+
 
 def _run_cli(tmp_path: Path, argv: list[str], *, timeout: float = 300.0
              ) -> tuple[int, str, str]:
@@ -366,6 +370,8 @@ def test_nfr06_3_orchestration_overhead_per_step(tmp_path):
     """假依赖下编排层的单步开销（落盘 + 记账）应远低于 5 ms（NFR-06-3）。"""
     from fakes import FakeEnv, FakePolicy                     # noqa: PLC0415
     from loop_support import build_runner                     # noqa: PLC0415
+
+
     from dice_ratchet.loop.state import init_state               # noqa: PLC0415
 
     env = FakeEnv(steps_to_terminate=200)
@@ -412,7 +418,7 @@ def test_gen000_baseline_report_is_written(tmp_path, monkeypatch):
     ctx.memory_version = 0
 
     report_path = write_gen000_baseline(ctx, harness_version=0,
-                                        basket=(2000, 2001, 2002), runner=runner)
+                                        basket=_H1_SEEDS, runner=runner)
     assert report_path is not None and report_path.is_file()
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["decision"] == "baseline"
@@ -421,7 +427,7 @@ def test_gen000_baseline_report_is_written(tmp_path, monkeypatch):
     assert (tmp_path / "r-loop-test" / "episodes" / "heldout").glob("*.jsonl")
     heldout = sorted(p.name for p in
                      (tmp_path / "r-loop-test" / "episodes" / "heldout").glob("*.jsonl"))
-    assert heldout == [f"e-{s:06d}-g000-parent.jsonl" for s in (2000, 2001, 2002)]
+    assert heldout == [f"e-{s:06d}-g000-parent.jsonl" for s in _H1_SEEDS]
 
 
 def test_gen000_baseline_is_idempotent(tmp_path, monkeypatch):
@@ -439,7 +445,7 @@ def test_gen000_baseline_is_idempotent(tmp_path, monkeypatch):
     target = tmp_path / "r-loop-test" / "generations" / "gen-000"
     target.mkdir(parents=True, exist_ok=True)
     (target / "report.json").write_text('{"decision": "baseline"}', encoding="utf-8")
-    assert write_gen000_baseline(ctx, basket=(2000,), runner=runner) == target / "report.json"
+    assert write_gen000_baseline(ctx, basket=(_H1_START,), runner=runner) == target / "report.json"
     # 没有触发任何评估局（篮子被忽略、文件未重写）
     assert json.loads((target / "report.json").read_text(encoding="utf-8")) == {
         "decision": "baseline"}

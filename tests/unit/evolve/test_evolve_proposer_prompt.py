@@ -14,6 +14,9 @@ from typing import Any
 
 import pytest
 
+from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol
+_HELDOUT_SEED = validate_protocol(coerce_protocol(None)).splits["heldout"].baskets["H1"].start + 13
+
 from dice_ratchet.evolve import proposer as P
 from dice_ratchet.evolve.errors import HoldoutLeakError, ProposeFailedError
 from dice_ratchet.evolve.schemas import EvidenceBundle, HarnessSnapshot
@@ -301,7 +304,7 @@ def test_parse_proposal_payload_rejects_bad_shapes(payload):
 
 def test_propose_propagates_holdout_leak():
     """INV-5 是致命错误：``propose`` 不吞它，交由上层中止本代（PRD §10）。"""
-    bundle = _bundle(reflect=[{"split": "train", "lesson": "2013 最好"}])
+    bundle = _bundle(reflect=[{"split": "train", "lesson": f"{_HELDOUT_SEED} 最好"}])
     with pytest.raises(HoldoutLeakError):
         P.propose(bundle, cfg=make_config(), rng_seed=7, client=_two_candidate_llm())
 

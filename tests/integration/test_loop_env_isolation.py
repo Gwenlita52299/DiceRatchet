@@ -27,8 +27,11 @@ from dice_ratchet.loop import cli as loop_cli
 from dice_ratchet.loop.runner import EvalRunnerAdapter
 from loop_support import REPO_ROOT
 
+from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol
+_H1_START = validate_protocol(coerce_protocol(None)).splits["heldout"].baskets["H1"].start
+
 #: 6 局 = 3 轮「2 个 worker 同时在飞」，足以暴露交错（现场 40 局里 13 局被污染）。
-SEEDS = (2000, 2001, 2002, 2003, 2004, 2005)
+SEEDS = tuple(range(_H1_START, _H1_START + 6))
 
 #: 逐局一致性要比对的字段。刻意不只看胜负：6 局尺度上，污染常常只表现为
 #: 非法动作／步数塌缩／``decisionIndex`` 取自另一个环境状态，胜负反而可能不变。
@@ -104,7 +107,7 @@ def test_concurrency_does_not_change_per_episode_results(tmp_path, monkeypatch):
 
 
 #: 3 局 = 1 轮「2 个 worker 同时在飞」+ 1 局收尾：足以暴露「并发改变聚合」。
-_EQUIV_SEEDS = (2000, 2001, 2002)
+_EQUIV_SEEDS = tuple(range(_H1_START, _H1_START + 3))
 
 
 def test_n_workers_equivalence_of_evaluate_arm_on_the_production_path(tmp_path, monkeypatch):
