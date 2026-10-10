@@ -1,6 +1,7 @@
 # MOD-07 evolve 技术 PRD
 
-> **版本**：v0.6（2026-10-10 **新增 §6.5：提案输入与补丁应用的硬口径**——处置 F37（按调用方给输出预算）/F38（内联可改文件正文）/F39（容忍行偏移、不容忍 fuzz）/F40（prompt 必须列出校验器规则）/F41（冒烟臂 `-smoke` 的 `episode_key`）；见 §17）。
+> **版本**：v0.7（2026-10-10 **新增 §6.6：accept/rollback 的失败自清与失败口径**——处置 F47-C2/D：失败时删掉本次新建的快照（否则顶掉版本号并留下可被 load/rollback 取用的幻影版本）、版本冲突也失败保守、基础设施失败记 `decision="error_reject"` 且 `report.json` 不得写成 `accept`；见 §17）
+> **历史版本**：v0.6（2026-10-10 **新增 §6.5：提案输入与补丁应用的硬口径**——处置 F37（按调用方给输出预算）/F38（内联可改文件正文）/F39（容忍行偏移、不容忍 fuzz）/F40（prompt 必须列出校验器规则）/F41（冒烟臂 `-smoke` 的 `episode_key`）；见 §17）。
 > **历史版本**：v0.5（2026-10-09 **处置缺陷 F28**：C5 的 `truncation` 由绝对门 0.15 改为**相对门** `candidate ≤ parent + truncation_tol(0.05)`，`illegal`/`fallback` 保留绝对门；新增 §8.2.2、更新 §8.2/§8.2.1/§9，对齐 Spec v2.0 B-44 用户裁决 ②+③；v0.4 = 2026-10-07 按 Spec v1.8 回填 C5 实测标定与 M3 相对门设计，见 §8.2.1/§17）· **状态**：待评审 · **所属里程碑**：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）· **作者**：DiceRatchet 技术文档 · **日期**：2026-10-09
 > **上游 Spec**：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（v1.8，**唯一事实来源**；冲突以 Spec 为准）· **关联不变量**：INV-3/INV-4/INV-5/INV-7
 > **代码位置**：`dice_ratchet/evolve/{proposer,judge,versioning,gate}.py`、`harness/`、`runs/<run_id>/generations/`
@@ -190,6 +191,45 @@ runs/<run_id>/generations/gen-{N}/    # report.json  gate.json  decision.jsonl +
 `cand-{id}-smoke`，MOD-09 的 `episode_key` 登记模式必须允许 `-smoke` 后缀——否则冒烟局**每一行**
 轨迹都失败、该局 dropped（轨迹文件 0 行）⇒ `n_dropped/n = 1.0` ⇒ `low_confidence` ⇒
 `E_EVAL_INSUFFICIENT_N` ⇒ `smoke_fast_reject` ⇒ **每个候选在冒烟关即死，本模块永远产不出新版本**。
+
+### 6.6 accept / rollback 的失败自清与失败口径（v0.7 新增；F47-C2 / F47-D）
+
+**① 失败不得留下本次新建的快照（F47-C2，Spec B-57）**：`accept()` 在建完不可变快照
+（`harness/versions/v{N}/`）**之后**才做 git 提交；提交失败时原先只 `_restore()` 恢复**工作区**，
+而 `_rollback_files` 有意跳过 `versions/`（保护不可变快照）⇒ 本次刚建的那一个被留下。
+`rollback()` 同形（`new_snap`）。修法：`_discard_new_snapshot(created_snap)`——**只删调用方明确
+记录为「本次新建」的路径**，历史快照与回滚目标（`rollback()` 的 `snap` 是**只读目标**）绝不删。
+
+**残留的实际危害（2026-10-10 更正开发期的一处推断）**：`next_version = max(指针, 现有版本目录)+1`，
+所以残留目录**不会**让后续 accept 抛 `VersionConflictError`（它会跳号），真实危害有两条，均已
+用用例钉住：**① 顶掉一个版本号**（版本序列出现永远填不上的空洞）；**② 留下一个可被
+`load_version` / `rollback` 取用的「幻影版本」**——它没有账本记录、`git_commit` 为空，是对
+「不可变已采纳版本」语义的伪造。
+
+**② 版本冲突也必须失败保守**：`except VersionConflictError` 原先直接 `raise`（不回滚工作区），
+而此前 `apply_unified_diff` 已经把候选写进生效工件 ⇒ 冲突会留下「已改内容 + 旧指针」的静默错位。
+改为先 `_restore()` 再抛。
+
+**③ 基础设施失败 ≠ 裁判拒绝（F47-D，Spec B-58）**：accept/rollback 抛 `InfraError`
+（如 `E_EVOLVE_GIT_FAILED`）时记 `decision="error_reject"`（沿用 MOD-06 `_call_evolve` 的既有词汇），
+并加入 MOD-08 的 `VERDICT_DECISIONS`（重算台账不得覆盖）。**原先报告是自相矛盾的**：
+`_finish_report` 写 `decision="reject"`，而 `build_decision_sections()` 只看 gate 状态——此时
+gate 仍是 `approved` ⇒ **`report.json` 写 `decision="accept"`，磁盘上却没有新版本**（幻影 accept）。
+实测探针（修复前）：`outcome.decision='reject'`、`error_code='E_EVOLVE_GIT_FAILED'`、
+`report.decision='accept'`、`versions=['v0']`。修法：`_build_report()` 在 `result.decision ==
+"error_reject"` 时以 result 为准覆写 `decision`/`reason`，使报告与 `evolve.decision` 事件同口径。
+
+**④ 提交前门禁的位置**：`commit_harness()` 内部的 `worktree_clean_check()` 只是**兜底**——它
+位于整代花费之后。真正的「演化前门禁」由 MOD-06 在 `loop run` 起跑处调用（MOD-06 §9.3、
+MOD-09 FR-09-20）。本模块保留该兜底检查，并保证它失败时不留 staged 残留（MOD-09 FR-09-14）。
+
+**护栏**：`tests/unit/evolve/test_evolve_versioning.py::
+test_accept_git_failure_leaves_no_snapshot_and_can_retry`（含「残留 → 跳号 + 幻影可 load」反例
+自检与「清理后重试成功」正例）、`::test_rollback_git_failure_leaves_no_snapshot`、
+`tests/unit/evolve/test_evolve_generation.py::test_f47_accept_infra_failure_is_recorded_as_error_reject`
+（含 `build_decision_sections` 的 gate 分支反例自检）。修复前：前两条分别断言
+`['v0','v1'] == ['v0']`、`['v0','v1','v2'] == ['v0','v1']` 失败；第三条
+`assert 'reject' == 'error_reject'` 失败。
 
 ## 7. 数据模型与存储
 
@@ -454,4 +494,5 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | v0.4 | 2026-10-07 | **C5 按实测标定 + M3 相对门设计（Spec v1.8 B-40/B-41；依据 [M2 §3.1 实测报告](../../reviews/2026-10-07-M2-S31-full-agent基线实测.md)）**。① §8.2 C5 行与 §9 配置表：`max_illegal_rate`/`max_fallback_rate`/`max_truncation_rate` 0.05/0.10/0.05 → **0.35/0.25/0.15**（full `PolicyAgent` 实测 0.3016/0.2146/0.10，原门超限 6.03×/2.15×/2.00×，会 reject 每个候选；写明是「先松开、M3 再收紧」并声明副作用）。② 新增 **§8.2.1**：M3 的收紧路径是把 C5 从绝对门改为**相对门** `candidate ≤ parent + tol`，含 `tol` 标定方式、M3 新增的三个配置键、以及保留宽松绝对上限作 backstop。③ 顺带补齐 D-1 的表格滞后：§9 的 `evolve.n_candidates` 2→**1**、`evolve.smoke_n` 5→**2**（与 `configs/default.yaml` 及 `config.py` 对齐）。④ 版本头对齐 Spec v1.8 |
 | v0.5 | 2026-10-09 | **处置缺陷 F28：C5 的 truncation 改相对门（Spec v2.0 B-44，用户裁决 ②+③）**。起因：§8.2.1 的阈值是按**本地 8B** 标定的，而 M2 闭环主力臂同日被裁决为 **`C1`（三角色全 `deepseek-flash`）**（Spec B-43）——用当前臂实测值 + **真实 `judge()`** 复算，`hard × 6` 的 `truncation_rate = 0.30 > 门 0.15` ⇒ **C5 会 reject 每一个候选**（`E_EVOLVE_ILLEGAL_RATE`），而 MOD-06 对接受与拒绝同样 `generation += 1` 且退出码 0 ⇒ **闭环静默锁死**（`harness/versions/` 永不出现新版本）。① **新增 §8.2.2**：记录复现表（8B 数字 `accept` vs DeepSeek 数字 `reject`）、三个可验证事实、以及「闭环为什么静默」。② **③（门结构）**：**C5 = `illegal`/`fallback` 绝对门（0.35/0.25）+ `truncation` 相对门** `candidate ≤ parent + truncation_tol`；**删除绝对门 `max_truncation_rate`**，新增 `evolve.truncation_tol = 0.05`（n=40 的 2 局，同 `win_rate_tol` 依据）。③ **新增 fail-closed 语义**：相对门需要 `parent.truncation_rate`，故它与 `win_rate` 一样进 **C0 前置完备性检查**——parent 缺该字段时记 `C0:incomplete_report` 并 reject，**不静默跳门**。④ **②（局型）**：bring-up / §3.2 冒烟改用 **`medium × 6`**（DeepSeek 臂实测 truncation = 0.00，`win_rate` 有方差 80% vs 启发式 70%）；默认局仍 `hard × 6`。⑤ **同步更新的落点**：`evolve/judge.py`（`_C5_TRUNCATION_TOL` + C0 parent 校验）、`infra/config.py` 与 `configs/default.yaml`（键替换）、`tests/unit/evolve/test_evolve_judge.py`（3 组新回归护栏 + 默认值护栏含 `not hasattr(max_truncation_rate)`）、Spec §8.6、本 HTML 版与检查单 §8。⑥ **诚实边界**：相对门是对称放宽（parent 自身很高时候选不比它差就放行，如 parent=0.90 时候选 0.60 也过），本轮**不设绝对 backstop**；该行为已被参数化用例显式钉住，M3 标定 `tol` 时再评估 |
 | v0.5 | 2026-10-09 | **新增 §8.2.2：C5 是「臂相关」的 → 登记缺陷 F28 与待裁决的处置**（对齐 Spec v2.0 B-44）。起因：C5 三阈值（§8.2.1 的①）是 2026-10-07 按**本地 8B** 标定的，而 M2 闭环主力臂已于 2026-10-09 由用户裁决为 **`C1`（三角色全 `deepseek-flash`）**（Spec B-43）。用当前臂实测值 + **真实 `judge()`** 复算：`hard × 6` 的 `truncation_rate = 0.30 > 门 0.15` ⇒ **C5 会 reject 每一个候选**（`E_EVOLVE_ILLEGAL_RATE`）；同时 illegal/fallback 反向松了约 10×。① 结论：**C5 的阈值不是被测对象的属性，而是「标定臂 × 局型」的属性**；§3.1 要防的「静默锁死闭环」风险未被消除，只是从 illegal 轴搬到 truncation 轴（`hard × 6` 上 3/10 局撞内核 `maxTurnsPerBattle=60` → `E_KERNEL_TURN_LIMIT`，且被截断的局计 lose 不算 dropped）。② 补记「闭环为什么静默」：`reject` 不是错误，MOD-06 对接受与拒绝同样 `generation += 1` 并回到 `playing`（退出码 0），MOD-07 照常写 decision 记录 ⇒ 全拒的闭环会跑完全部代数、退出码 0、日志无异常，但 `harness/versions/` 永不出现新版本。③ 列出三个处置候选（按当前臂重标 / bring-up 改用 medium×6 / **truncation 并入相对门**）并写明**裁决前不得宣称 M2 准入完成** |
+| v0.7 | 2026-10-10 | **新增 §6.6：accept/rollback 的失败自清与失败口径（F47-C2/D，对齐 Spec v2.5 B-57/B-58）**。① **失败自清**：`accept()` 在建完快照后失败（git 提交失败）时，原先只 `_restore()` 恢复工作区，`_rollback_files` 又会跳过 `versions/` ⇒ 本次新建的快照被留下；`rollback()` 同形。改为删掉**本次新建**的那一个（`_discard_new_snapshot(created_snap)`；回滚目标 `snap` 只读、绝不删）。**开发期更正**：残留的危害不是「后续 accept 抛 `VersionConflictError`」（`next_version = max(指针, 现有目录)+1` 会跳号），而是**顶掉一个版本号** + 留下**可被 `load_version`/`rollback` 取用的幻影版本**（无账本、`git_commit` 空）——两条都有反例用例。② **版本冲突也失败保守**：`except VersionConflictError` 原先直接 `raise`，而 diff 已写进生效工件 ⇒ 留下「已改内容 + 旧指针」；改为先 `_restore()`。③ **失败口径分离**：accept/rollback 抛 `InfraError` 时记 `decision="error_reject"`（加入 MOD-08 `VERDICT_DECISIONS`）。原先 `_finish_report` 写 `reject` 而 `build_decision_sections` 只看 gate（此时 `approved`）⇒ **report 写 `accept` 却没有新版本**（幻影 accept）。实测探针：`outcome.decision='reject'` / `report.decision='accept'` / `versions=['v0']`；修法是 `_build_report` 在 `error_reject` 时以 result 覆写 decision/reason。④ 明确 `commit_harness` 内部的门禁只是**兜底**（位于整代花费之后），真正的「演化前门禁」在 MOD-06 §9.3 / MOD-09 FR-09-20。 |
 | v0.6 | 2026-10-10 | **新增 §6.5：提案输入与补丁应用的硬口径（F37–F41，对齐 Spec v2.3 B-47..B-50）**。本轮是**闭环首次真正跑通提案→补丁→冒烟→裁判**，五个缺陷依次暴露（全部只在「测试不走的参数组合」里，被 1700+ 条全绿用例掩护）：① **F37** 提案沿用 `inference.max_tokens=256` ⇒ 响应一律截断 → 报成 `E_LLM_SCHEMA_INVALID` → **0 候选**；改为按调用方给预算（2048），**否掉**全局抬高路线。② **F38** prompt 只给 harness 文件的 sha256、不给正文 ⇒ 模型对没见过的文件写 diff ⇒ `E_EVOLVE_PATCH_INVALID`；改为内联可改文件正文（`HarnessSnapshot.contents`，schema 1.1.0）。③ **F39** `_apply_hunks` 只认声明行号 ⇒ 上下文逐字正确但偏 +9 的真实候选被判无效；改为 ±200 行逐字定位（容忍 offset、不做 fuzz、歧义即拒）。④ **F40** `evolvable_keys` 从未进 prompt（`config_patch` 盲猜即作废）、rationale 上限只在 schema 的 `maxLength`（API 不强制）⇒ 改为 prompt 明列 + 上限取自 schema（单一事实来源）。⑤ **F41** 冒烟臂 `parent-smoke`/`cand-{id}-smoke` 不在 `episode_key` 登记模式里 ⇒ 冒烟局 0 行轨迹 ⇒ `E_EVAL_INSUFFICIENT_N` ⇒ **每个候选在冒烟关即死**；已三处同步（MOD-09 §6.2 / `infra/logging.py` / `schemas/trajectory_line.schema.json`）。**修好后的首个真实候选**走到完整裁判链并**被合法拒绝**（`C2:no_significant_gain`、`delta=0.0,p=1.0`）⇒ 据此**改写 §3.2 验收判据**为「机制性失败为零」（Spec B-51，用户裁决）。 |

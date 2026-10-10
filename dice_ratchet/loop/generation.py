@@ -32,8 +32,8 @@ from .state import (QueueLog, RunState, Scoreboard, init_state, load_state, lock
                     save_state, scoreboard_path, queue_path, utc_now)
 
 __all__ = ["EvolveOutcome", "LoopOrchestrator", "RunSummary", "SignalGuard",
-           "episodes_per_generation", "load_or_init_state", "maybe_run_generation",
-           "write_gen000_baseline"]
+           "ensure_evolution_worktree_clean", "episodes_per_generation",
+           "load_or_init_state", "maybe_run_generation", "write_gen000_baseline"]
 
 #: MOD-03 实测 ``t_d`` p50（Spec §8.6 n=10 实测：7.46 s；p95 10.13 s）。
 _TD_P50_S: float = 7.46
@@ -403,6 +403,34 @@ def write_gen000_baseline(run_ctx: RunContext, *, harness_version: int = 0,
     report["reason"] = "harness v0 基线（gen-000，FR-06-13a）"
     write_generation_report(paths.root, 0, report)
     return report_path
+
+
+# =====================================================================
+# 演化起跑前的 git 门禁（F47-A）
+# =====================================================================
+
+def ensure_evolution_worktree_clean(run_ctx: Any) -> bool:
+    """演化**起跑前**拒绝脏工作区（FR-09-14「演化前门禁」的真正落点，F47-A）。
+
+    为什么必须在这里：MOD-07 的同一判据原先只长在 ``commit_harness`` 内部，即
+    **整代跑完、即将落版本时**——脏工作区会白花一整代（实测 3.75 h / ≈¥47），
+    失败还被 ``_finish_report`` 记成 ``decision="reject"``，看起来像「候选不达标」。
+    本函数把它前移到**任何推理调用之前**，之后由 MOD-07 的提交前检查兜底。
+
+    **只由 CLI 边界调用**（``cmd_loop_run``，含 ``--resume``）且仅在 ``evolve_fn`` 非空
+    时——保护的是「版本落盘」这件事。不放进 ``LoopOrchestrator.run()`` 的内部：那会让
+    程序化嵌入（含测试与本地带未提交改动的诊断）一律被拦；``--no-evolve``/``loop
+    smoke`` 不产版本，也不拦。
+
+    仓库根取 ``harness_dir`` 的父目录（与 MOD-07 ``_repo_root`` 同规则；``git status
+    --porcelain`` 的路径是仓库根相对的，故子目录调用结果一致）。
+    返回是否真的检查过：``False`` = 不在 git worktree 内 → 降级跳过（Spec §8.5），
+    否则脏工作区抛 ``E_IO_GIT_DIRTY``（退出码 5）。
+    """
+    from ..infra import git_ops
+
+    harness = Path(getattr(run_ctx, "harness_dir", "harness"))
+    return bool(git_ops.preflight_worktree_clean(harness.resolve().parent))
 
 
 # =====================================================================

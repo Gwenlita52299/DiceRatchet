@@ -1,6 +1,6 @@
 # MOD-06 loop 技术 PRD
 
-> 版本：v1.5（2026-10-10 新增 §9.2：`--resume` 必须能重入未完成的周期边界（F34：空队列曾静默 `phase=done`，见 §17））· 状态：草案（待评审）· 所属里程碑：M2 · 上游 Spec：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突时以 Spec 为准）· 作者：MOD-06 模块作者
+> 版本：v1.6（2026-10-10 新增 §9.3：演化起跑前的 git 门禁（F47-A：同一判据原只长在 accept 的提交前检查里，脏工作区要等整代跑完才拒），见 §17）· 历史版本：v1.5（新增 §9.2：`--resume` 必须能重入未完成的周期边界，F34）· 状态：草案（待评审）· 所属里程碑：M2 · 上游 Spec：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突时以 Spec 为准）· 作者：MOD-06 模块作者
 > 代码路径：`dice_ratchet/loop/{runner.py, reflect.py, generation.py}` · 产物路径：`runs/<run_id>/`
 
 ## 1. 背景与目标
@@ -358,6 +358,40 @@ MOD-07 产物存在性）保证不重复触发，且空队列下 `cycle_index` �
 ——伪造崩溃现场后断言 `evolve_fn` 恰调 1 次、`generation` 0→1、`evolving_cycle` 清空、再次
 resume 不重复触发。修复前该用例失败。
 
+### 9.3 演化起跑前的 git 门禁（v1.6 新增；F47-A）
+
+**约束**：`loop run` 在**会演化**（`evolve_fn is not None`）时，必须在**任何推理调用与
+gen-000 基线之前**通过 MOD-09 的工作区干净性判据；脏 → `E_IO_GIT_DIRTY`（退出码 4）。
+
+**缺陷（F47-A，2026-10-10 实测）**：MOD-09 的 `worktree_clean_check()` 被 PRD 与 docstring
+称为「**演化前**门禁」，但**唯一调用点**在 `commit_harness()` 内部 —— 那是 accept 的第 3 步，
+即 propose / 冒烟 / parent heldout / 候选 heldout / 裁判**全部付完之后**。`dice_ratchet/loop/*.py`
+里没有任何 git 检查，所以脏工作区拦不住起跑：本次实跑一代 = **3.75 h / ≈¥47**。
+更糟的是失败口径：`_finish_report` 把它记成 `decision="reject"`（与「候选不显著」同形），
+而 `build_decision_sections` 只看 gate 状态（此时 `approved`）⇒ 报告实际写
+**`decision="accept"` 而磁盘上没有新版本**（幻影 accept，见 MOD-07 §6.6）。
+
+**修法**：`cmd_loop_run` 在 `_build_orchestrator()` 之后、`write_gen000_baseline()` 之前调用
+`ensure_evolution_worktree_clean(run_ctx)`（`loop/generation.py`，转发到
+`git_ops.preflight_worktree_clean(harness_dir 的父目录)`）。仓库根取 `harness_dir` 的父目录，
+与 MOD-07 `_repo_root` 同规则（`git status --porcelain` 的路径是仓库根相对的，子目录调用结果一致）。
+
+**范围界定（有意为之，勿扩大）**：
+
+- **只拦会落版本的 run**：`--no-evolve` 与 `loop smoke`（`--no-evolve` + 启发式）**不拦**——
+  否则本地带未提交改动时连零成本诊断都做不了；
+- **不放进 `LoopOrchestrator.run()` 内部**：那会让程序化嵌入、测试装配、本地未提交改动的
+  诊断一律被拦；门禁属于 **CLI 边界**（也是 `init_run_dir` / `_build_orchestrator` 所在层）；
+- **非 git 路径 → 降级跳过**（返回 `False`，Spec §8.5），临时目录里的 run 照常；
+- `--resume` 与 HITL 续跑都走 `cmd_loop_run`，因此**都被覆盖**。
+
+**护栏**：`tests/unit/loop/test_loop_cli.py::test_cli_run_aborts_on_dirty_worktree_before_any_spend`
+（脏工作区 → 退出码 4、**零次推理调用**、`generations/gen-000/` 不存在 ⇒ 基线也没开跑）、
+`test_cli_smoke_is_not_gated_by_worktree`（范围界定）、
+`test_ensure_evolution_worktree_clean_helper`（干净/脏/非 git 三分支）。
+修复前第一条断言 `0 == 4` 失败。为此 `tests/integration/test_loop_closure.py` 的 3 条编排用例
+改用**仓库外**的 harness 拷贝（`--harness-dir`），使它们不依赖宿主工作区是否干净。
+
 ## 10. 错误处理与降级（使用 Spec §8 的错误码前缀）
 
 | 触发条件 | 错误码 | MOD-06 行为 | 计入评估样本 |
@@ -481,3 +515,4 @@ resume 不重复触发。修复前该用例失败。
 | v1.3 | 2026-10-09 | **新增 §9.0「模型角色与实验臂」**（对齐 Spec v2.0 B-42/B-43/B-44）。① 澄清本模块**不自己装配模型**：`loop run --agent llm` 的客户端由组合根经 `RoleModelProvider` 注入，故 `experiment.arm` 对闭环生效，三角色按 Spec §4.7 的四级优先级 fail-closed 解析（装配细节归 MOD-03 §7.1）。② 登记 **M2 闭环主力臂 = `C1`**（三角色全 `deepseek-flash` + `harness: evolve`）与随之变化的成本口径：本地 8B 19.6 min/局 ⇒ `E_gen=114` ≈ 37 h/代；API 臂 2.09–2.52 min/局 ⇒ **≈4.0–4.8 h/代、≈¥84–100/代**；**局数约束（`max_episodes_per_generation=120`、`E_gen=114`）不变，但瓶颈由墙钟转为 API 花费/限流**。③ 登记 **缺陷 F28 的「静默性」**：`hard × 6` 上 C5 因 `truncation_rate=0.30 > 0.15` 全拒，而本模块按 FR-06-7 对接受与拒绝**同样** `generation += 1` 并回到 `playing`（退出码 0），不会报错 ⇒ **「跑完 N 代、退出码 0」不等于闭环有产出**；判定 M2 验收必须查 `harness/versions/` 新版本与逐代 `decision` 记录。④ 登记 **F29**：臂的 `harness: fixed/evolve` 字段本模块**不消费**（演化开关是 `--no-evolve` / 组合根注入的 `_EVOLVE_PROVIDER`）⇒ **`C0` 与 `C1` 当前行为等价**，选 `C0` 跑闭环照样演化 |
 | v1.4 | 2026-10-09 | **新增 §9.1「评估局的环境隔离」**（对齐 Spec v2.2 B-46；处置缺陷 F30，登记残留 F31）。① **约束**：本模块注入 MOD-08 的执行器**不得跨评估局共享 `SandboxEnv`**——`evaluate_arm(n_workers=cfg.evals.n_workers=2)` 驱动同一个 runner，而 `SandboxEnv` 是有状态单实例 ⇒ 两局 `reset`/`step` 交错、观测串局 ⇒ 模型按别的局的相位出动作 ⇒ 非法 ⇒ 重试耗尽 ⇒ fallback。② **实测**（§3.2 冒烟 5/40 局时发现并中止）：`illegal_rate ≈ 0.285` / `fallback_rate ≈ 0.290`，同臂同 seed 同时间窗的 `play`（`SandboxRunner` 每局新 env、`n_workers=1`）为 `0.032` / `0.000`；`heuristic` 臂复现 H1 全 40 局——共享 env 13/40 局非法、0/40 胜，每局新 env 0/40、18/40 = 45.0%（对上 `greedy_counter` hard×6 45.5%）。③ **落地**：`loop/cli.py` 改注入 `env_factory=_env_factory(cfg)`（每局 `episode_id=key`、局末 `close()`，与 MOD-08 `SandboxRunner` 同构）；构造代价 1.1 ms/局。**这与 FR-06-14「评估局并发时 MOD-04 不可共享实例」是同一条理由**，此前只落到 `policy` 上。④ **护栏**：`tests/integration/test_loop_env_isolation.py` 从组合根装配，断言 `runner.env is None` + `n_workers=1` 与 `=2` 逐字段一致；`git stash` 掉修复后 **5/5 稳定失败**。门禁 **1870 passed / 2 skipped**。⑤ 登记 **F31**（局末 `state.counters.*` 跨线程读改写，仅影响上报值、零读取点，本轮未修） |
 | v1.5 | 2026-10-10 | **新增 §9.2：`--resume` 必须能重入未完成的周期边界（F34，对齐 Spec v2.3）**。① 实测：`--resume` 一个「队列已空、周期边界崩溃」的 run 会返回 **退出码 0 / `phase=done`**，但 `generation` 不动、`evolving_cycle` 悬着 ⇒ 静默成功（零成本探针实测，见 §9.2）。② 修法：队列排空后补一次 `maybe_run_generation`（其 docstring 本就定义了该重入语义），靠 `cycle_due` 的幂等键防重复。③ 护栏：`test_f34_resume_reenters_boundary_when_queue_empty`（修复前失败）。 |
+| v1.6 | 2026-10-10 | **新增 §9.3：演化起跑前的 git 门禁（F47-A，对齐 Spec v2.5 B-56）**。① 实测：MOD-09 的 `worktree_clean_check()` 虽被称为「演化前门禁」，但唯一调用点在 `commit_harness()` 内部 = accept 第 3 步 ⇒ 脏工作区要等**整代跑完**才拒（3.75 h / ≈¥47），且失败被记成 `decision="error_reject"` 之前还是 `reject`/`accept` 混用（见 MOD-07 §6.6）。② 修法：`cmd_loop_run` 在 `_build_orchestrator()` 之后、`write_gen000_baseline()` **之前**调 `ensure_evolution_worktree_clean(run_ctx)`（→ `git_ops.preflight_worktree_clean`），非 git 路径降级跳过、脏 → `E_IO_GIT_DIRTY`（退出码 4）。③ **范围界定**：只拦会落版本的 run（`--no-evolve`/`loop smoke` 不拦），且不放进 `LoopOrchestrator.run()` 内部——否则程序化嵌入、测试、本地未提交改动的诊断一律被拦；`--resume`/HITL 续跑都走同一 CLI 入口，已被覆盖。④ 护栏 3 条（脏 → 退出码 4 + 零推理调用 + 基线未开跑 / smoke 不拦 / 助手三分支），修复前第一条 `assert 0 == 4` 失败；`tests/integration/test_loop_closure.py` 的 3 条编排用例改用仓库外 harness 拷贝以保持与宿主工作区无关。 |

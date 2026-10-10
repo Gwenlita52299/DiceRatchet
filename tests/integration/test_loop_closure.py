@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -41,6 +42,22 @@ def _run_cli(tmp_path: Path, argv: list[str], *, timeout: float = 300.0
 
 def _run_dir(tmp_path: Path, run_id: str) -> Path:
     return tmp_path / "runs" / run_id
+
+
+def _isolated_harness(tmp_path: Path) -> Path:
+    """把仓库 ``harness/`` 拷到 ``tmp_path``（**git worktree 之外**）并返回路径。
+
+    F47-A 之后，会演化的 ``loop run`` 在起跑前要求 git 工作区干净；而本文件的用例
+    跑真实子进程、注册真实 MOD-07 provider，若沿用仓库内的 ``harness/``，就会让
+    「宿主工作区是否干净」决定用例成败（本地带未提交改动即失败）。指向仓库外的拷贝后，
+    起跑前门禁按 Spec §8.5「非 git 路径 → 降级跳过」处理，用例回到只验编排契约。
+    门禁本身由 ``tests/unit/loop/test_loop_cli.py`` 与
+    ``tests/unit/infra/test_git_ops.py`` 直接覆盖。
+    """
+    dst = tmp_path / "harness"
+    if not dst.is_dir():
+        shutil.copytree(_REPO / "harness", dst)
+    return dst
 
 
 def _state(tmp_path: Path, run_id: str) -> dict:
@@ -238,7 +255,8 @@ set_evolve_provider(provider)
 """
     proc = _run_with_hook(tmp_path, stub, "t16", [
         "loop", "run", "--agent", "heuristic", "--seeds", "train:1000-1002",
-        "--k", "3", "--generations", "1", "--no-reflect", "--no-baseline"])
+        "--k", "3", "--generations", "1", "--no-reflect", "--no-baseline",
+        "--harness-dir", str(_isolated_harness(tmp_path))])
     assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
 
     state = _state(tmp_path, "t16")
@@ -271,7 +289,8 @@ set_evolve_provider(provider)
 """
     proc = _run_with_hook(tmp_path, stub, "t16b", [
         "loop", "run", "--agent", "heuristic", "--seeds", "train:1000-1002",
-        "--k", "3", "--generations", "1", "--no-reflect", "--no-baseline"])
+        "--k", "3", "--generations", "1", "--no-reflect", "--no-baseline",
+        "--harness-dir", str(_isolated_harness(tmp_path))])
     assert proc.returncode == 0, proc.stderr
     state = _state(tmp_path, "t16b")
     assert state["generation"] == 1
@@ -458,7 +477,8 @@ def provider(cfg, runner, run_ctx):
 set_evolve_provider(provider)
 """
     base = ["loop", "run", "--agent", "heuristic", "--seeds", "train:1000-1002",
-            "--k", "3", "--generations", "1", "--no-reflect", "--no-baseline", "--hitl"]
+            "--k", "3", "--generations", "1", "--no-reflect", "--no-baseline", "--hitl",
+            "--harness-dir", str(_isolated_harness(tmp_path))]
     proc = _run_with_hook(tmp_path, stub, "t9", base)
     assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
     state = _state(tmp_path, "t9")

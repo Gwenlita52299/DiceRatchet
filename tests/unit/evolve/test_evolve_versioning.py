@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
 from dice_ratchet.evolve import versioning as V
 from dice_ratchet.evolve.errors import VersionConflictError
 from dice_ratchet.evolve.schemas import Candidate, Verdict
-from dice_ratchet.infra.errors import E
+from dice_ratchet.infra.errors import E, InfraError
 
 from evolve_support import context_for, make_candidate, prompt_diff, write_harness
 
@@ -134,6 +135,98 @@ def test_accept_ledger_is_written(tmp_path):
     ledger = json.loads(ctx.ledger_path(1).read_text(encoding="utf-8"))
     assert ledger["gen-001"]["action"] == "accept"
     assert ledger["gen-001"]["ref"]["version"] == 1
+
+
+# =====================================================================
+# F47-C2：失败自清（不留快照 ⇒ 不毒化版本号）
+# =====================================================================
+
+def _git_failure(monkeypatch, *, code=E.E_IO_GIT_DIRTY):
+    """让 ``commit_harness`` 以「脏工作区」失败（``commit_harness_version`` 会包成
+    ``GitFailedError``）；``tag_version`` 一并打桩，避免 tmp 目录不是 git 仓库。"""
+    from dice_ratchet.infra import git_ops
+
+    def _boom(repo, version, message):
+        raise InfraError(code, "git worktree 不干净（1 项），拒绝演化")
+
+    monkeypatch.setattr(git_ops, "git_available", lambda repo=Path("."): True)
+    monkeypatch.setattr(git_ops, "commit_harness", _boom)
+    monkeypatch.setattr(git_ops, "tag_version", lambda repo, version: f"harness-v{version}")
+
+
+def _git_success(monkeypatch):
+    from dice_ratchet.infra import git_ops
+
+    monkeypatch.setattr(git_ops, "git_available", lambda repo=Path("."): True)
+    monkeypatch.setattr(git_ops, "commit_harness", lambda repo, version, message: "a" * 40)
+    monkeypatch.setattr(git_ops, "tag_version", lambda repo, version: f"harness-v{version}")
+
+
+def test_accept_git_failure_leaves_no_snapshot_and_can_retry(tmp_path, monkeypatch):
+    """F47-C2：accept 在建完快照**之后**才失败 ⇒ 必须删掉那一个快照。
+
+    残留快照的**实际**危害（见反例自检，2026-10-10 实测口径）：``next_version`` =
+    ``max(指针, 现有目录) + 1``，所以残留目录不会引发 ``VersionConflictError``，而是
+    ①**顶掉一个版本号**（版本序列出现永远填不上的空洞）；
+    ②成为一个**能被 ``load_version`` / ``rollback`` 取用的幻影版本**——它没有账本记录、
+    ``git_commit`` 为空，是对「不可变已采纳版本」这一语义的伪造。
+    """
+    from dice_ratchet.evolve.errors import GitFailedError
+
+    harness = write_harness(tmp_path)
+    ctx = context_for(tmp_path, harness=harness)
+    cand = make_candidate(diff=prompt_diff(added="新增约束：先清护卫"))
+    before = (harness / "prompts" / "decision.md").read_text(encoding="utf-8")
+
+    _git_failure(monkeypatch)
+    with pytest.raises(GitFailedError):
+        _accept(cand, harness, ctx, generation=1)
+
+    assert sorted(p.name for p in (harness / "versions").iterdir()) == ["v0"], \
+        "失败不得留下本次新建的快照"
+    assert json.loads((harness / "version.json").read_text(encoding="utf-8"))["version"] == 0
+    assert (harness / "prompts" / "decision.md").read_text(encoding="utf-8") == before, \
+        "失败必须恢复生效工件（PRD §10 失败保守）"
+
+    # ---- 反例自检：残留快照不是无害垃圾（证明上面那条清理断言是承重的）------------
+    stray = harness / "versions" / "v1"
+    shutil.copytree(harness / "versions" / "v0", stray)
+    payload = json.loads((stray / "version.json").read_text(encoding="utf-8"))
+    payload["version"] = 1
+    (stray / "version.json").write_text(json.dumps(payload), encoding="utf-8")
+    assert V.next_version(harness) == 2, "残留快照会顶掉版本号 v1（序列空洞）"
+    phantom = V.load_version(1, harness=harness)
+    assert phantom.version == 1 and not phantom.git_commit, "幻影版本可被 load 到（伪造记录）"
+    shutil.rmtree(stray)
+
+    # ---- 正例：清理干净后同一代重试成功，版本号从 v1 起连续 ----------------------
+    _git_success(monkeypatch)
+    ref = _accept(cand, harness, ctx, generation=1)
+    assert ref.version == 1 and ref.parent == 0
+    assert sorted(p.name for p in (harness / "versions").iterdir()) == ["v0", "v1"]
+
+
+def test_rollback_git_failure_leaves_no_snapshot(tmp_path, monkeypatch):
+    """F47-C2（回滚侧）：``rollback()`` 新建的快照同样必须在失败时删掉。
+
+    注意区分两个名字：``snap`` 是**回滚目标**（只读，绝不能删），``new_snap`` 才是本次新建。
+    """
+    from dice_ratchet.evolve.errors import GitFailedError
+
+    harness = write_harness(tmp_path)
+    ctx = context_for(tmp_path, harness=harness)
+    _accept(make_candidate(diff=prompt_diff(added="v1 改动")), harness, ctx, generation=1)
+    before = sorted(p.name for p in (harness / "versions").iterdir()) # ["v0", "v1"]
+    assert before == ["v0", "v1"]
+
+    _git_failure(monkeypatch)
+    with pytest.raises(GitFailedError):
+        V.rollback(0, run_id=ctx.run_id, reason="人工回滚", decided_by="human",
+                   cfg=ctx, harness=harness, generation=2)
+
+    assert sorted(p.name for p in (harness / "versions").iterdir()) == before, \
+        "回滚失败不得留下本次新建的快照（也不得误删回滚目标）"
+    assert json.loads((harness / "version.json").read_text(encoding="utf-8"))["version"] == 1
 
 
 # =====================================================================

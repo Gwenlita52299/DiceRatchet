@@ -478,9 +478,13 @@ def _finish_report(*, result: GenerationResult, run_ctx: Any, cfg: Any,
                 result.accepted = accepted
                 result.decision = "accept"
             except InfraError as exc:
+                # F47-D：**基础设施失败 ≠ 裁判拒绝**。原先这里写 `decision="reject"`，
+                # 于是一次 `E_EVOLVE_GIT_FAILED`（如脏工作区）在报告与台账里长得跟
+                # 「候选不显著、合法拒绝」一模一样，且退出码仍为 0 ⇒ 按 §3.2 判据算合格。
+                # 沿用 ``loop._call_evolve`` 已确立的词汇：保守拒绝、不更新 harness。
                 result.error_code = str(exc.code)
                 result.reason = str(exc)
-                result.decision = "reject"
+                result.decision = "error_reject"
         elif gate_state.status in ("rejected", "timeout"):
             reason = gate_state.reason or ("hitl_timeout" if gate_state.status == "timeout"
                                            else "human_rollback")
@@ -489,10 +493,11 @@ def _finish_report(*, result: GenerationResult, run_ctx: Any, cfg: Any,
                                         decided_by=gate_state.resolved_by or "human",
                                         cfg=ctx, harness=harness, generation=gen,
                                         now=now)
-            except InfraError as exc: # pragma: no cover - 回滚失败：保守记 reject
+                result.decision = "rollback"
+            except InfraError as exc: # pragma: no cover - 回滚失败：保守记 error_reject
                 result.error_code = str(exc.code)
                 result.reason = str(exc)
-            result.decision = "rollback"
+                result.decision = "error_reject" # 回滚没做成：不得记成 "rollback"
         else:
             result.decision = "pending"
 
@@ -562,6 +567,13 @@ def _build_report(*, result: GenerationResult, app_cfg: Any, cfg: Any, run_id: s
             metrics = {}
     sections = versioning_mod.build_decision_sections(gen, result.reports, result.winner,
                                                       result.gate_state)
+    # F47-D：``build_decision_sections`` 只看 gate 状态，而 accept/rollback **失败**时
+    # gate 仍是 "approved"/"rejected" ⇒ 它会写出 ``decision="accept"`` 而磁盘上
+    # ``harness/versions/`` 里没有新版本（**幻影 accept**），与 ``result.decision``
+    # （``error_reject``）以及 ``evolve.decision`` 事件自相矛盾。以 result 为准。
+    if str(result.decision) == "error_reject":
+        sections["decision"] = "error_reject"
+        sections["reason"] = str(result.reason or result.error_code or "")
     if metrics:
         report = {**metrics, **sections}
     else:

@@ -295,3 +295,24 @@ def test_f43_row_builder_matches_fixed_columns():
     from dice_ratchet.evals.harness import GENERATIONS_COLUMNS
 
     assert tuple(_row(1, decision="reject", n=1, win=0.0).keys()) == GENERATIONS_COLUMNS
+
+
+def test_f47_error_reject_is_a_verdict_and_survives_recompute(tmp_path):
+    """F47-D：``error_reject``（基础设施失败）也是 MOD-07 的真实判决。
+
+    它是「阈值内但落版本失败」的唯一可见信号，因此 ``eval report`` 的重算（``pending``）
+    不得把它盖掉——否则 §3.2 的「机制性失败为零」判据就没有依据可查。
+    """
+    import csv
+
+    from dice_ratchet.evals.harness import VERDICT_DECISIONS, append_generations_csv
+
+    assert "error_reject" in VERDICT_DECISIONS
+    append_generations_csv(tmp_path, _row(1, decision="error_reject", n=0, win=0.0))
+    append_generations_csv(tmp_path, _row(1, decision="pending", n=117, win=0.65))
+
+    rows = list(csv.DictReader(
+        (tmp_path / "metrics" / "generations.csv").open(encoding="utf-8")))
+    assert len(rows) == 1
+    assert rows[0]["decision"] == "error_reject", "重算不得覆盖基础设施失败判决"
+    assert rows[0]["n"] == "117", "指标列仍由后写入方刷新"

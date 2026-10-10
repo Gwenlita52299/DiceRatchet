@@ -481,3 +481,67 @@ def test_f32_full_generation_without_harness_kwarg(tmp_path, stub_pairing):
 
     assert outcome is not None
     assert _read_report(run_root, 1)["decision"] in ("accept", "reject")
+
+
+# =====================================================================
+# F47-D：基础设施失败 ≠ 裁判拒绝
+# =====================================================================
+
+def test_f47_accept_infra_failure_is_recorded_as_error_reject(tmp_path, stub_pairing,
+                                                              monkeypatch):
+    """accept 抛 ``InfraError``（如 ``E_EVOLVE_GIT_FAILED``：脏工作区）时必须记为
+    ``decision="error_reject"``，不得写成 ``"reject"``，更不得写成 ``"accept"``。
+
+    原先有两个自相矛盾的口径：
+    - ``_finish_report`` 写 ``decision="reject"``（长得跟「候选不显著」一模一样）；
+    - ``build_decision_sections`` 只看 gate 状态，而此时 gate 是 ``approved``
+      ⇒ **report.json 写 ``decision="accept"``**，而磁盘上 ``harness/versions/``
+      里根本没有新版本（幻影 accept）。事件流与报告因此互相打脸。
+
+    本用例同时钉住两点：报告口径 = ``error_reject``；``evolve.decision`` 事件一致。
+    """
+    from dice_ratchet.infra import events
+    from dice_ratchet.infra.errors import InfraError
+
+    harness, _evolve, _app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+    ev = ScriptedEvaluator(heldout=FakeArm(win_rate=0.40), paired=_paired(delta=0.10))
+    versions_before = sorted(p.name for p in (harness / "versions").iterdir())
+    calls: list[int] = []
+
+    def _boom(*args, **kwargs):
+        calls.append(1)
+        raise InfraError(E.E_EVOLVE_GIT_FAILED, "脏工作区：拒绝提交 harness")
+
+    monkeypatch.setattr(GEN.versioning_mod, "accept", _boom)
+
+    seen_events = tmp_path / "events.jsonl"
+    events.bind(seen_events, str(run_ctx.run_id))
+    try:
+        outcome = _run(run_ctx, state, evaluator=ev, client=_one_candidate_llm())
+    finally:
+        events.unbind()
+    seen = [json.loads(line) for line in seen_events.read_text(encoding="utf-8").splitlines()
+            if line.strip()]
+
+    # 前置：候选真的过了六道门 —— ``accept`` 只在 ``gate.status == "approved"`` 时被调用
+    assert calls, "accept 必须被调用过（否则本用例考的不是这条路径）"
+
+    # 反例自检：只看 gate 状态（= 修复前的口径）确实会推出 "accept"（幻影 accept 的来源）
+    phantom = GEN.versioning_mod.build_decision_sections(
+        1, [], None,
+        GEN.versioning_mod.gate_state_for(generation=1, status="approved",
+                                          harness_version=0, parent_version=0))
+    assert phantom["decision"] == "accept", "反例：gate=approved 会被推成 accept"
+
+    assert outcome.decision == "error_reject"
+    assert str(outcome.error_code) == str(E.E_EVOLVE_GIT_FAILED)
+
+    report = _read_report(run_root, 1)
+    assert report["decision"] == "error_reject", "基础设施失败不得写成 accept/reject"
+    assert sorted(p.name for p in (harness / "versions").iterdir()) == versions_before, \
+        "失败时不得留下版本目录"
+
+    decisions = [row for row in seen if row["event"] == "evolve.decision"]
+    assert decisions and decisions[-1]["decision"] == "error_reject", \
+        "事件流与报告必须同口径"

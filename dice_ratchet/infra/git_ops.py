@@ -1,7 +1,11 @@
 """git 操作封装（FR-09-14）。
 
-- ``worktree_clean_check()``：演化前门禁，脏 → ``E_IO_GIT_DIRTY``。
+- ``worktree_clean_check()``：工作区干净性判据，脏 → ``E_IO_GIT_DIRTY``。
+- ``preflight_worktree_clean()``：**起跑前**门禁（F47-A）——MOD-06 在演化开始前调用，
+  使脏工作区在**任何推理调用之前**失败（原先唯一的调用点在 ``commit_harness`` 内部，
+  即整代跑完之后，白花一整代且被记成「候选被拒」）。
 - ``commit_harness(version, message)``：提交 ``harness/``，信息格式 ``harness(v{N}): {msg}``。
+  **先门禁后暂存**（F47-C1）：失败时不留 staged 残留。
 - ``tag_version(N)``：打轻量 tag ``harness-v{N}``（已存在则跳过；不建同名分支，避免
   ``refname is ambiguous``）。
 - ``rollback_to(N)``：``git checkout harness-v{N} -- harness/`` 恢复工件目录。
@@ -18,8 +22,9 @@ from typing import Sequence
 from . import events
 from .errors import E, InfraError
 
-__all__ = ["git_available", "worktree_clean_check", "commit_harness",
-           "tag_version", "rollback_to", "harness_tag", "git_run", "HARNESS_DIR"]
+__all__ = ["git_available", "worktree_clean_check", "preflight_worktree_clean",
+           "commit_harness", "tag_version", "rollback_to", "harness_tag", "git_run",
+           "HARNESS_DIR"]
 
 HARNESS_DIR: str = "harness"
 
@@ -87,6 +92,38 @@ def _is_skipped(line: str, allow: tuple[str, ...]) -> bool:
     return any(path == a or path.startswith(a.rstrip("/") + "/") for a in allow)
 
 
+def _unstage(repo: Path) -> None:
+    """把 ``harness/`` 从索引里撤出（**只动索引**，不碰工作区）。
+
+    用于 ``commit_harness`` 的失败路径（F47-C1）：门禁拒绝时不得留下 staged 残留。
+    ``git reset -- <pathspec>`` 在无 HEAD（空仓库）时会失败，故 ``check=False``；
+    撤索引失败不覆盖原始异常（调用方正在 except 里）。
+    """
+    try:
+        git_run(["reset", "--quiet", "--", HARNESS_DIR], repo, check=False)
+    except InfraError: # pragma: no cover - git 已不可用：原始异常更重要
+        pass
+
+
+def preflight_worktree_clean(repo: Path = Path("."), *,
+                             allow: Sequence[str] = ()) -> bool:
+    """**跑批/演化起跑前**的工作区门禁（F47-A：FR-09-14 的「演化前门禁」）。
+
+    与 ``commit_harness`` 内部的同名检查是**同一判据、不同时机**：那份在整代跑完、
+    即将落版本时才触发，脏工作区会白白花掉一整代（实测 3.75 h / ≈¥47）并在报告里
+    表现为「候选被拒」。本函数把它前移到**任何推理调用之前**。
+
+    返回是否真的检查过：``False`` = 该路径不在 git worktree 内（git 不可用/临时目录），
+    按 Spec §8.5「可观测性缺失 → 降级」跳过，不阻断 run。
+
+    ``allow`` 语义同 ``worktree_clean_check``（前缀白名单）。
+    """
+    if not git_available(repo):
+        return False
+    worktree_clean_check(repo, allow=allow)
+    return True
+
+
 def commit_harness(repo: Path, version: int, message: str) -> str:
     """提交 ``harness/``，返回 40 位 commit sha。"""
     repo = Path(repo)
@@ -96,15 +133,22 @@ def commit_harness(repo: Path, version: int, message: str) -> str:
                          f"harness 目录不存在：{harness}",
                          hint="先初始化 harness/（MOD-07 versioning 负责）")
     full_msg = f"harness(v{version}): {message}"
-    # 先暂存 harness/，再以 allow=harness/ 做门禁：放行即将提交的本目录改动，
-    # 但工作区其余任何改动仍阻断演化
-    git_run(["add", HARNESS_DIR], repo)
-    worktree_clean_check(repo, allow=(HARNESS_DIR,))
-    # 空提交保护：无变化时 git commit --allow-empty 保留版本动作
-    result = git_run(["diff", "--cached", "--quiet"], repo, check=False)
-    args = ["commit", "-m", full_msg] if result.returncode != 0 else \
-        ["commit", "--allow-empty", "-m", full_msg]
-    git_run(args, repo)
+    # 门禁**先于**暂存（F47-C1）：``git add`` 会把 harness/ 写进索引，而门禁失败时
+    # 原先只在 accept 侧恢复**工作区**文件，索引里的 staged 条目无人清理 ⇒ 一次脏工作区
+    # 会留下 staged 残留（实测 ``MM harness/decision.md``）。
+    # 以 allow=harness/ 放行即将提交的本目录改动，但工作区其余任何改动仍阻断演化。
+    try:
+        worktree_clean_check(repo, allow=(HARNESS_DIR,))
+        git_run(["add", HARNESS_DIR], repo)
+        # 空提交保护：无变化时 git commit --allow-empty 保留版本动作
+        result = git_run(["diff", "--cached", "--quiet"], repo, check=False)
+        args = ["commit", "-m", full_msg] if result.returncode != 0 else \
+            ["commit", "--allow-empty", "-m", full_msg]
+        git_run(args, repo)
+    except InfraError:
+        # 本函数不得留下索引残留（否则门禁失败会污染调用方的后续操作）
+        _unstage(repo)
+        raise
     sha = git_run(["rev-parse", "HEAD"], repo).stdout.strip()
     events.emit("evolve.version", from_version=version - 1, to_version=version,
                 git_commit=sha, action="commit")

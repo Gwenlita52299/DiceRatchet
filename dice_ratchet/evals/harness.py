@@ -59,8 +59,11 @@ __all__ = [
 
 #: MOD-07 写进 ``generations/gen-NNN/report.json`` 的**真实判决**（§6.3 决策段）。
 #: 用于「重算报告 / 台账不得覆盖已裁决的代」（F43）：``eval report`` 重算出的
-#: ``decision`` 恒为 ``baseline``/``pending``，不能盖掉这三个。
-VERDICT_DECISIONS: Final[tuple[str, ...]] = ("accept", "reject", "rollback")
+#: ``decision`` 恒为 ``baseline``/``pending``，不能盖掉这几个。
+#: ``error_reject`` 是 F47-D 新增的**基础设施失败**判决（accept/rollback 抛
+#: ``InfraError``：git 提交失败、版本号冲突…）：它与「候选不达标」必须区分开，
+#: 否则一次脏工作区在报告里长得像一次合法拒绝。
+VERDICT_DECISIONS: Final[tuple[str, ...]] = ("accept", "reject", "rollback", "error_reject")
 
 #: ``metrics/generations.csv`` 的固定列（PRD §13；列定义归 MOD-08，B-06）
 GENERATIONS_COLUMNS: tuple[str, ...] = (

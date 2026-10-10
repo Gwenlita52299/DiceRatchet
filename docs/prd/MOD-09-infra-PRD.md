@@ -1,6 +1,7 @@
 # MOD-09 infra 技术 PRD
 
-> 版本：v0.3.1（2026-10-03 修复 `bootstrap_process()` 早发 `infra.run_start`，见 §17；此前误留在 v0.3）· 状态：待评审 · 所属里程碑：M0–M3（L3 工程层，横切全模块）
+> 版本：v0.5（2026-10-10 新增 FR-09-20 起跑前门禁 + `commit_harness` 失败自清，并改写 FR-09-14；处置 F47-A/C1，见 §17）
+> **历史版本**：v0.4（2026-10-10 `episode_key` 的 `arm` 位允许 `-smoke`）· v0.3.1（2026-10-03 修复 `bootstrap_process()` 早发 `infra.run_start`，见 §17；此前误留在 v0.3）· 状态：待评审 · 所属里程碑：M0–M3（L3 工程层，横切全模块）
 > 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源；与本文件冲突时以 Spec 为准）
 > 作者：主代理（MOD-09 owner）· 日期：2026-09-30
 > v0.3 起 Spec §11.2 已清零；新的临时决策按 Spec §11.2 从 P-31 起登记。
@@ -86,7 +87,8 @@ MOD-09 是 Spec §6 依赖矩阵中**唯一不被任何人阻塞、却阻塞所�
 - **FR-09-11 退出码**：`0` 成功（含 HITL 挂起）；`1` 领域失败（如验收不达标）；`2` 配置/环境错误；`3` 模型不可用；`4` 沙箱/守卫违例；`5` IO 落盘失败；`130` 用户 Ctrl-C（与 Spec v1.3 §8.3 一致）。约定写入 `dice_ratchet/infra/exit_codes.py` 并被所有命令复用。
 - **FR-09-12 dry-run 与 resume**：`--dry-run` 对所有命令生效——不调用模型、不写 `runs/`、只打印将执行的动作与配置摘要（stdout 为可解析 JSON）；`--run-id ID --resume` 由 MOD-06 实现语义，本模块负责定位目录、校验 `config_hash` 一致（`config_hash` 不含 harness，所以演化过的 run 也能续跑）、并在 `state.json` 缺失时报 `E_IO_STATE_MISSING`。
 - **FR-09-13 绘图**：`plot_generations(csv_path, out_dir)` 输出 `win_rate.png`、`stages_cleared.png`、`hearts_left.png`、`entropy.png`、`train_heldout_gap.png`（INV-7 口径，Spec v1.3），每图含 `n`、`ci95` 误差棒与数据点标注；无 matplotlib 时降级为 `E_IO_PLOT_UNAVAILABLE` 警告而不失败。
-- **FR-09-14 git 封装**：`worktree_clean_check()` 在有未提交改动时抛 `E_IO_GIT_DIRTY`（演化前门禁）；`commit_harness(version, message)` 提交 `harness/` 并返回 commit sha，提交信息格式 `harness(v{N}): {message}`；`tag_version(N)` 打 `harness-v{N}` 轻量 tag（已存在则跳过；不建同名分支，避免 `refname is ambiguous`）；`rollback_to(N)` 以 `git checkout harness-v{N} -- harness/` 恢复工件目录并返回新 commit sha。
+- **FR-09-14 git 封装**：`worktree_clean_check()` 在工作区不干净时抛 `E_IO_GIT_DIRTY`（退出码 4）；`preflight_worktree_clean(repo, allow=())` 是它的**起跑前**形态（FR-09-20）；`commit_harness(version, message)` 提交 `harness/` 并返回 commit sha，提交信息格式 `harness(v{N}): {message}`——**先门禁后 `git add`**，任何失败都 `git reset -- <harness>` 收尾（F47-C1，不得留下 staged 残留）；`tag_version(N)` 打 `harness-v{N}` 轻量 tag（已存在则跳过；不建同名分支，避免 `refname is ambiguous`）；`rollback_to(N)` 以 `git checkout harness-v{N} -- harness/` 恢复工件目录并返回新 commit sha。
+- **FR-09-20 起跑前门禁（F47-A）**：`preflight_worktree_clean(repo, allow=())` 把同一判据前移到**任何推理调用之前**：非 git worktree → 返回 `False` 并降级跳过（Spec §8.5）；否则脏即抛 `E_IO_GIT_DIRTY`。由 MOD-06 在 `loop run` 起跑处调用（见 MOD-06 §9.3）。**为什么必须有它**：FR-09-14 的判据原先只长在 `commit_harness()` 内部，即 accept 的最后一步——脏工作区要等**整代跑完**才被拒（实测一代 3.75 h / ≈¥47），且 `_finish_report` 会把它记成 `decision="reject"`、`build_decision_sections` 又会按 gate 状态写成 `decision="accept"`（幻影 accept）。
 - **FR-09-15 确定性守卫（AST，非正则）**：`scan_determinism()` 报出 `E_IO_GUARD_RANDOM`（`import random` / `numpy.random.*` 未显式 seed / `time.time()` 参与采样 / `uuid4()` 用于标识 id）、`scan_layer_imports()` 报出 `E_IO_GUARD_LAYER`（`dice_ratchet/agent|memory|loop|evolve|evals/*` 中出现 `import dice_ratchet.env`，违反 INV-1）。白名单注释 `# guard: allow <CODE> reason=...` 可豁免，但会记 `guard_finding` 事件留痕。
 - **FR-09-16 错误码注册表**：`dice_ratchet/infra/errors.py` 集中定义全部 `E_*` 枚举 + 含义表 + 默认退出码映射；禁止其他模块自定义字符串错误码。
 - **FR-09-18 schema 与原子写**：`schemas/*.schema.json` 由本模块登记并提供 `validate(name, obj)`；`write_json_atomic(path, obj)`（tmp + `os.replace`）是 `report.json`、`state.json`、`version.json` 唯一的写入口。
@@ -329,8 +331,10 @@ def log_step(writer, step_result, policy_step, obs):
 ```
 
 ```python
-# 演化前门禁（MOD-07 调用）
-worktree_clean_check()                    # 脏 → E_IO_GIT_DIRTY，拒绝演化
+# 起跑前门禁（MOD-06 在 loop run 起跑处调用，FR-09-20）——任何推理调用之前
+preflight_worktree_clean(repo)            # 脏 → E_IO_GIT_DIRTY（退出码 4）；非 git → False（降级）
+# 提交前门禁（MOD-07 accept 的第 3 步调用，FR-09-14）——兜底，此时钱已经花完
+worktree_clean_check(repo, allow=("harness",))   # 脏 → E_IO_GIT_DIRTY，拒绝演化
 findings = scan_all(Path("dice_ratchet"))    # 候选 harness 落地后、评估前再跑一次
 if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(...)
 ```
@@ -453,4 +457,5 @@ T-09-1～T-09-16 全部落地（`bbdc02e` 起）；证据见 [M0 验收报告](.
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：`config_hash` 不再包含 harness_version，新增 `artifact_hash`（P0-7）；redaction 只作用于 prompt/memory/reflection（P0-7）；事件改为 `<module>.<event>` 注册表并统一落到 `events.jsonl`（P1-11）；轨迹 schema 对齐 §4.5 新字段与 `episode_key` 路径（P1-10）；退出码新增 5（P1-13）；CLI 对齐 §4.6，统一使用 `--run-id`（P1-14）；git tag 改为 `harness-v{N}`（P1-15）；新增 FR-09-18 schema 与原子写、FR-09-19 `runs/` 忽略检查 |
 | v0.3 | 2026-09-30 17:49 | FR-09-1 按 Spec B-26 插入 harness/config.json 层及白名单校验 |
 | v0.3.1 | 2026-10-03 | 修复 `bootstrap_process()` 早发 `infra.run_start`（缺必填 `config_hash`）：`DICERATCHET_DEV=1` 下任何命令都会以退出码 1 失败（用 `guards check` 复现）。改为进程快照由 `cli_init_run()` 的 run_start 记录，并新增 `process_snapshot()`（FR-09-17）；`audit leak` 退出码注释同步为 `0/1/2/4` |
+| v0.5 | 2026-10-10 | **F47-A/C1：`worktree_clean_check` 的「演化前门禁」落点 + `commit_harness` 失败自清（对齐 Spec v2.5 B-56/B-57）**。① 新增 **FR-09-20 `preflight_worktree_clean(repo, allow=())`**：同一判据的**起跑前**形态——非 git worktree 返回 `False` 降级跳过（Spec §8.5），否则脏即抛 `E_IO_GIT_DIRTY`（退出码 4）；由 MOD-06 在 `loop run` 起跑处调用（MOD-06 §9.3）。成因：FR-09-14 的判据原先**唯一**调用点在 `commit_harness()` 内部 = accept 第 3 步 ⇒ 脏工作区要等整代跑完才拒（实测 3.75 h / ≈¥47）。② **`commit_harness` 改为先门禁后 `git add`**，并在失败路径 `git reset --quiet -- harness`（实测旧顺序失败后残留 `MM harness/decision.md` 与 `A  harness/versions/v2/decision.md`）。③ §8 伪代码把两种调用时机分开写清（起跑前 = FR-09-20 / 提交前 = FR-09-14 兜底）。④ 测试：`tests/unit/infra/test_git_ops.py` 新增 4 条（preflight 干净/脏/非 git、失败无 staged 残留 + 旧顺序反例自检、成功路径仍正常暂存）。 |
 | v0.4 | 2026-10-10 | **轨迹 `episode_key` 的 `arm` 位允许 `-smoke` 后缀（F41，对齐 Spec v2.3 B-50）**。MOD-07 FR-07-6 的冒烟臂是 `parent-smoke` / `cand-{id}-smoke`，而登记模式不含该后缀 ⇒ 冒烟局**每一行**轨迹都失败 `E_IO_TRAJECTORY_SCHEMA` → 该局 dropped（轨迹文件 0 行）→ `n_dropped/n = 1.0 > drop_rate_max` → `low_confidence` → `error_codes` 带 `E_EVAL_INSUFFICIENT_N` → `judge.smoke_fast_reject` 返回 `smoke_error:…` ⇒ **每个候选都在冒烟关被淘汰，`harness/versions/` 永不可能有新版本**。该语法在**三处**有副本，本版三处同步：§6.2 的 schema 片段、`infra/logging.py` 的 `_EPISODE_KEY_RE`、`schemas/trajectory_line.schema.json`；前两处加了一致性用例 `test_episode_key_patterns_stay_in_sync` 防再次漂移（F41 的成因就是「写了两遍、只改一处」）。 |
