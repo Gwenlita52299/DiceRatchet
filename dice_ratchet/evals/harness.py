@@ -26,6 +26,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -392,7 +393,8 @@ def _error_code_of(exc: BaseException) -> str:
 # =====================================================================
 
 def episode_result_from_rows(rows: Sequence[Mapping[str, Any]], *, seed: int, split: Split,
-                             generation: int, harness_version: int,
+                             generation: int | None = None,
+                             harness_version: int = 0,
                              arm: str = "") -> EpisodeResult | None:
     """从 ``episodes/<split>/*.jsonl`` 的 ``episode_end`` 行还原一局（无则 ``None``）。
 
@@ -401,6 +403,11 @@ def episode_result_from_rows(rows: Sequence[Mapping[str, Any]], *, seed: int, sp
     ``EpisodeEnd`` 分支落盘（``additionalProperties:false``），只能把 MOD-08 复算多样性
     所需的 ``kind_counts/decision_kinds/slot_counts/seq_hash`` 放在 schema 预留的
     ``^x_`` 扩展位里。两条来源因此产出同一份 ``EpisodeResult``。
+
+    ``generation``（F46-A）：**行里的** ``generation`` 是权威值；``generation`` 形参只在
+    行里缺该字段时兜底（旧工件的调用方通常已从文件名解析出真值）。修复前这里恒用形参，
+    于是 ``eval report --generation 1`` 会把 g000 的局贴上 ``generation=1`` 的标签 ——
+    「跨代混算」正是靠这个覆盖行为逃过所有过滤的。
     """
     end: Mapping[str, Any] | None = None
     for row in rows:
@@ -414,11 +421,15 @@ def episode_result_from_rows(rows: Sequence[Mapping[str, Any]], *, seed: int, sp
             return end[name]
         return end.get(f"x_{name}", default)
 
+    resolved_generation = end.get("generation")
+    if resolved_generation is None:
+        resolved_generation = generation
     outcome = "win" if str(end.get("outcome")) == "win" else "lose"
     truncation = end.get("truncation_reason")
     kind_raw = list(_pick("kind_counts") or [])
     return EpisodeResult(
-        seed=int(end.get("seed", seed)), split=split, generation=int(generation),
+        seed=int(end.get("seed", seed)), split=split,
+        generation=int(resolved_generation or 0),
         harness_version=int(harness_version), outcome=outcome,
         truncation_reason=(str(truncation) if truncation else None),
         stages_cleared=int(end.get("stages_cleared") or 0),
@@ -436,6 +447,34 @@ def episode_result_from_rows(rows: Sequence[Mapping[str, Any]], *, seed: int, sp
         arm=arm, decisions_llm=int(_pick("decisions_llm") or 0))
 
 
+#: ``episodes/<split>/e-{seed:06d}-g{gen:03d}-{arm}.jsonl`` 的文件名（Spec §4.5 B-16）。
+#: F46-A：行里缺 ``generation`` 的旧工件退化为按文件名解析。
+_EPISODE_FILE_RE: Final[re.Pattern[str]] = re.compile(r"-g(\d{3,})-")
+
+
+def _generation_from_name(path: Path) -> int | None:
+    """从 ``e-002000-g001-parent.jsonl`` 解析 ``generation``（判不出 → ``None``）。"""
+    match = _EPISODE_FILE_RE.search(path.stem)
+    return int(match.group(1)) if match else None
+
+
+def _resolve_generation(rows: Sequence[Mapping[str, Any]], path: Path) -> int | None:
+    """一局文件所属的代数：**行里的 ``generation`` 优先**，缺失时解析文件名（F46-A）。
+
+    两者都判不出 → ``None``：调用方必须**跳过**（不得静默混入别的代）。
+    """
+    for row in rows:
+        if row.get("type") == "episode_end":
+            value = row.get("generation")
+            if value is not None:
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    break
+            break
+    return _generation_from_name(path)
+
+
 def load_episode_results(run_dir: Path | str, split: Split, *,
                          generation: int | None = None,
                          harness_version: int = 0,
@@ -448,6 +487,13 @@ def load_episode_results(run_dir: Path | str, split: Split, *,
     住着 ``parent`` / ``candidates`` / ``smoke`` / ``baseline-*`` 四类局，混臂聚合会得出
     一个没有任何物理含义的数字（M1 验收 F5：实测 ``heldout.n=120``、``win_rate=0.30``）。
     返回的 ``EpisodeResult.arm`` 取**行里的** ``arm`` 字段（缺省时回落到请求值）。
+
+    ``generation``（F46-A）同样是**真过滤**：给定 N 时只保留第 N 代的局（行里的
+    ``generation`` 优先，缺失时按文件名 ``-g{gen:03d}-`` 解析；两者都判不出 → 跳过并
+    发 ``evals.generation_unresolved`` 可观测事件）。**不再覆盖**
+    ``EpisodeResult.generation``——修复前 ``eval report --generation 1`` 会把
+    g000-parent(40) + g001-parent(40) + g001-cand(37) 聚成一个 ``n=117``
+    （``win_rate=0.6496``），而真实分布是 parent 40 + 候选 37 两套口径。
     """
     root = Path(run_dir) / "episodes" / split
     if not root.is_dir():
@@ -461,9 +507,15 @@ def load_episode_results(run_dir: Path | str, split: Split, *,
         label = ""
     excluded = {str(a) for a in exclude_arms}
     out: list[EpisodeResult] = []
+    unresolved: list[str] = []
     for path in sorted(root.glob("*.jsonl")):
         rows, _truncated = read_jsonl(path)
         if not rows:
+            continue
+        file_generation = _resolve_generation(rows, path)
+        if generation is not None and file_generation != int(generation):
+            if file_generation is None:
+                unresolved.append(path.name)
             continue
         row_arm = str(rows[0].get("arm") or "")
         if want_arms is not None and row_arm not in want_arms:
@@ -474,12 +526,13 @@ def load_episode_results(run_dir: Path | str, split: Split, *,
         if wanted is not None and seed not in wanted:
             continue
         result = episode_result_from_rows(
-            rows, seed=seed, split=split,
-            generation=int(generation if generation is not None
-                           else rows[0].get("generation") or 0),
+            rows, seed=seed, split=split, generation=file_generation,
             harness_version=int(harness_version), arm=row_arm or label)
         if result is not None:
             out.append(result)
+    if unresolved: # 不静默：判不出代数的旧工件被跳过（F46-A）
+        _emit("evals.generation_unresolved", split=split, generation=int(generation or 0),
+              n=len(unresolved), files=sorted(unresolved)[:10])
     return sorted(out, key=lambda r: r.seed)
 
 
@@ -495,6 +548,9 @@ def read_episode_protocols(run_dir: Path | str, split: Split, *,
     """已落盘各局的「测量协议」标识集合（``baseline --resume`` 的一致性检查用）。
 
     旧版（F22 修复前）的局没有 ``protocol`` 字段，会以 ``""`` 出现——正是要靠它拦住的混算。
+
+    ``generation`` 是**真过滤**（F46-A），口径与 ``load_episode_results`` 一致：行里的
+    ``generation`` 优先，缺失时解析文件名；判不出代数的文件在给定 ``generation`` 时被跳过。
     """
     root = Path(run_dir) / "episodes" / split
     if not root.is_dir():
@@ -506,7 +562,7 @@ def read_episode_protocols(run_dir: Path | str, split: Split, *,
             continue
         if arm and str(rows[0].get("arm") or "") != arm:
             continue
-        if generation is not None and int(rows[0].get("generation") or 0) != int(generation):
+        if generation is not None and _resolve_generation(rows, path) != int(generation):
             continue
         found.add(str(rows[0].get("protocol") or ""))
     return found

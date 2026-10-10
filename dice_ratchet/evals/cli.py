@@ -209,18 +209,42 @@ _BASELINE_ARMS: tuple[str, ...] = tuple(baseline_arm(k) for k in BASELINE_KINDS)
 # =====================================================================
 
 def cmd_eval_report(args: argparse.Namespace) -> int:
-    """从 run 的轨迹重算指标段并落 ``report.json`` + ``report.sha256``（FR-08-17/22/23）。"""
+    """从 run 的轨迹重算指标段并落 ``report.json`` + ``report.sha256``（FR-08-17/22/23）。
+
+    **臂是显式的**（F46-A）。修复前这里 ``exclude_arms=_BASELINE_ARMS`` 之后把该代所有
+    非基线臂（``parent`` + 各候选）聚成**一个** ``heldout``：在真实 run
+    ``runs/m2-s32b-smoke-c1-medium6`` 上 gen-1 得到 ``n=77``（parent 40 + 候选 37），
+    而 MOD-07 的权威报告是 ``heldout.n=40 / win_rate=0.625``（**parent 臂**）+
+    ``candidates[0].heldout.n=37 / win_rate=0.6757``。两个口径都不等于 77。
+    现在：
+
+    - ``--arm <name>``：只看见该臂；
+    - ``--arm all``：**显式**申报的混合池（并在 stdout 与 ext 里标注 ``mixed_pool=true``）；
+    - 缺省：该代 ``report.json`` 里**胜出的候选臂**（``winner``，其 ``decision=accept``）
+      或唯一候选；该代没有候选/候选全被拒时回落到 ``parent``。
+    """
     paths, cfg, run_id = _paths(args)
     split = str(getattr(args, "split", "heldout") or "heldout")
     generation = _generation_of(args, paths.root)
     proto = _protocol(cfg, args.config_dir)
     eval_cfg = cfg.evals
-    results = load_episode_results(paths.root, split, generation=generation,  # type: ignore[arg-type]
-                                   harness_version=generation,
-                                   exclude_arms=_BASELINE_ARMS)
+    pool_results = load_episode_results(paths.root, split, generation=generation,  # type: ignore[arg-type]
+                                        exclude_arms=_BASELINE_ARMS)
+    requested_arm = getattr(args, "arm", None)
+    arm, mixed = _resolve_report_arm(paths.root, generation, pool_results,
+                                     requested=requested_arm)
+    results = pool_results if mixed else [r for r in pool_results if r.arm == arm]
+    if not results:
+        print(f"[{E.E_EVAL_ARM_NOT_ALLOWED}] 第 {generation} 代在 {split} 上没有臂 "
+              f"{arm!r} 的局（已落盘的臂：{_arms_of(pool_results)}）", file=sys.stderr)
     heldout = aggregate(results, split=split, basket=_basket_of(args),  # type: ignore[arg-type]
                         t_max=int(eval_cfg.t_max), min_support=int(eval_cfg.min_support),
                         drop_rate_max=float(eval_cfg.drop_rate_max))
+    # 坍缩判定必须看**该代整池**（`generations_row_from_report` 与 MOD-07 同口径），
+    # 只看单一臂会让「代际」熵曲线退化成单臂曲线。
+    pool_metrics = aggregate(pool_results, split=split, basket=_basket_of(args),  # type: ignore[arg-type]
+                             t_max=int(eval_cfg.t_max), min_support=int(eval_cfg.min_support),
+                             drop_rate_max=float(eval_cfg.drop_rate_max))
     window = seeds_mod.train_window(generation, protocol=proto, window=60)
     train_results = load_episode_results(paths.root, "train", generation=generation,
                                          harness_version=generation, seeds=window,
@@ -228,7 +252,7 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
     train = aggregate(train_results, split="train", basket="train_window",
                       t_max=int(eval_cfg.t_max), min_support=int(eval_cfg.min_support),
                       drop_rate_max=float(eval_cfg.drop_rate_max))
-    diversity = _diversity_from_history(paths.root, generation, cfg, heldout, results)
+    diversity = _diversity_from_history(paths.root, generation, cfg, pool_metrics, pool_results)
     gain = judge_gain(train=train, heldout=heldout,
                       gap_threshold=float(eval_cfg.gap_threshold),
                       alpha=float(eval_cfg.alpha), collapse_flag=diversity.collapse_flag,
@@ -250,13 +274,75 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
     _write_plots(paths.root, generation, heldout, diversity)
     ext = _ext_payload(generation, heldout, gain, diversity, eval_cfg, baselines=baseline,
                        provenance=_provenance(cfg, run_id, generation, heldout.basket, proto))
+    # F46-A：重算口径必须自解释（哪个臂 / 是不是混合池），否则「可复算」再次不可核验。
+    # 不能塞进 report.json：`generation_report.schema.json` 是 `additionalProperties:false`。
+    ext.update({"recomputed_arm": arm, "mixed_pool": bool(mixed),
+                "pool_n": pool_metrics.n, "arms_present": _arms_of(pool_results),
+                "requested_arm": (str(requested_arm) if requested_arm else None)})
     write_ext_metrics(paths.root, generation, ext)
     append_generations_csv(paths.root, _csv_row(generation, heldout, diversity, gain,
                                                 report, cfg, eval_cfg))
+    if mixed:
+        print(f"[{E.E_EVAL_ARM_NOT_ALLOWED}] --arm all：heldout 是**混合池**"
+              f"（n={heldout.n}，臂={_arms_of(pool_results)}），不是单臂口径，禁止当默认口径用",
+              file=sys.stderr)
     print(f"report: {path}")
     print(f"sha256: {sha}")
+    print(f"arm: {arm}{'（混合池，--arm all）' if mixed else ''} n={heldout.n}")
     _print(report)
     return 0
+
+
+def _arms_of(results: Sequence[Any]) -> list[str]:
+    """结果集合里出现过的臂（升序去重）。"""
+    return sorted({str(getattr(r, "arm", "") or "") for r in results})
+
+
+def _resolve_report_arm(run_root: Path, generation: int, pool: Sequence[Any], *,
+                        requested: Any) -> tuple[str, bool]:
+    """``eval report`` 该按哪个臂重算（F46-A）。
+
+    返回 ``(arm, mixed_pool)``。``requested`` 的取值：``None``/``""`` → 自动（该代
+    ``report.json`` 的胜出候选，无则唯一候选，再退 ``parent``）；``"all"`` → 混合池；
+    其它字符串 → 原样使用。
+    """
+    text = str(requested or "").strip()
+    if text.lower() == "all":
+        return "all", True
+    if text:
+        return text, False
+    winner = _winner_arm_of(run_root, generation)
+    present = set(_arms_of(pool))
+    if winner and winner in present:
+        return winner, False
+    if winner: # 胜出臂的局不在这个 split/run 里（例如只跑了 parent）：如实告知调用方
+        print(f"[{E.E_EVAL_ARM_NOT_ALLOWED}] 第 {generation} 代的胜出臂 {winner!r} 在已落盘的"
+              f"局里没有出现（已落盘：{sorted(present)}）；回落到 parent", file=sys.stderr)
+    return "parent", False
+
+
+def _winner_arm_of(run_root: Path | str, generation: int) -> str | None:
+    """从 ``generations/gen-NNN/report.json`` 推出该代的候选臂名（F46-A）。
+
+    ``candidate_id`` → ``cand-<candidate_id>``（与 ``CandidateEvaluator.candidate_arms``
+    的命名一致）。优先取 ``decision="accept"`` 的候选；没有 accept 时取唯一候选
+    （``decision="reject"`` 且 ``reason != "superseded"``）——它仍是该代被评估的候选臂。
+    读不到（无报告/损坏/形状异常）→ ``None``（调用方回落到 ``parent``）。
+    """
+    path = generation_report_path(run_root, generation)
+    if not path.is_file():
+        return None
+    try:
+        data = read_json(path)
+    except InfraError: # pragma: no cover - 损坏报告按「推不出」处理
+        return None
+    candidates = [c for c in (data.get("candidates") or []) if isinstance(c, Mapping)]
+    if not candidates:
+        return None
+    accepted = [c for c in candidates if str(c.get("decision") or "") == "accept"]
+    chosen = accepted[0] if accepted else candidates[0]
+    candidate_id = str(chosen.get("candidate_id") or "")
+    return f"cand-{candidate_id}" if candidate_id else None
 
 
 def _generation_of(args: argparse.Namespace, run_dir: Path) -> int:
@@ -402,12 +488,18 @@ def _csv_row(generation: int, heldout: Any, diversity: Any, gain: Any, report: A
 # =====================================================================
 
 def cmd_eval_diversity(args: argparse.Namespace) -> int:
-    """动作熵 / 坍缩监控（G6；写 ext 与 plots_data）。"""
+    """动作熵 / 坍缩监控（G6；写 ext 与 plots_data）。
+
+    F46-A：`generation` 现在是真过滤（同 ``load_episode_results`` 口径）。``--arm`` 缺省
+    仍是**整池**（坍缩是代际现象，只看单一臂会退化成单臂曲线）；给出具体臂名时只看该臂。
+    """
     paths, cfg, run_id = _paths(args)
     generation = _generation_of(args, paths.root)
-    results = load_episode_results(paths.root, "heldout", generation=generation,
-                                   harness_version=generation,
-                                   exclude_arms=_BASELINE_ARMS)
+    pool_results = load_episode_results(paths.root, "heldout", generation=generation,
+                                        exclude_arms=_BASELINE_ARMS)
+    requested_arm = str(getattr(args, "arm", "") or "").strip()
+    results = ([r for r in pool_results if r.arm == requested_arm]
+               if requested_arm and requested_arm.lower() != "all" else pool_results)
     metrics = aggregate(results, split="heldout", basket="H1",
                         t_max=int(cfg.evals.t_max), min_support=int(cfg.evals.min_support))
     diversity = _diversity_from_history(paths.root, generation, cfg, metrics)

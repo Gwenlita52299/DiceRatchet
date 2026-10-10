@@ -430,6 +430,9 @@ def _add_eval(sub: Any) -> None:
     rep.add_argument("--baseline", default="none", help="none|all|<kind>")
     rep.add_argument("--basket", default="H1", help="seed 篮子（heldout）")
     rep.add_argument("--generation", type=int, default=None, help="代数（默认取最大已存在代）")
+    rep.add_argument("--arm", default=None,
+                     help="臂（默认 = 该代胜出/候选臂；all = 申报的混合池；"
+                          "也可显式给 parent / cand-<id> 等，F46-A）")
     _set_func(rep, _deferred(["eval", "report"], "eval"), ["eval", "report"])
 
     abl = _sp(sp, "ablation", help="消融三臂（FR-08-21）")
@@ -454,6 +457,8 @@ def _add_eval(sub: Any) -> None:
     div = _sp(sp, "diversity", help="动作熵 / 坍缩监控")
     _common_run_id(div)
     div.add_argument("--generation", type=int, default=None)
+    div.add_argument("--arm", default=None,
+                     help="臂（缺省/ all = 该代整池；也可显式给 parent / cand-<id> 等，F46-A）")
     _set_func(div, _deferred(["eval", "diversity"], "eval"), ["eval", "diversity"])
     p.set_defaults(func=None)
 

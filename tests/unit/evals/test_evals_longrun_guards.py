@@ -387,3 +387,162 @@ def test_resume_accepts_same_protocol_and_skips_everything(tmp_path):
                        run_dir=tmp_path, config=cfg, protocol=None, archive=False,
                        resume=True)
     assert arm.pending_seeds == () and arm.metrics.n == 1
+
+
+# =====================================================================
+# F46-A：`generation` 必须是**真过滤**（而不是贴标签）
+# =====================================================================
+#
+# 现场（`runs/m2-s32b-smoke-c1-medium6`，2026-10-10）：`eval report --generation 1`
+# 把 `e-*-g000-parent`(40) + `e-*-g001-parent`(40) + `e-*-g001-cand-*`(37) 聚成一个
+# `n=117 / win_rate=0.6496`；而 MOD-07 的权威报告是 parent 臂 `n=40 / 0.625`、
+# 候选臂 `n=37 / 0.6757`。两层混算：跨代 + 同代跨臂。
+
+def _write_generation_row(tmp_path: Path, seed: int, arm: str, generation: int, *,
+                          outcome: str = "win", with_generation: bool = True) -> Path:
+    """按 `write_episode_summaries` 的真实形状写一局（含 `episode_key` 与 `generation`）。
+
+    ``with_generation=False`` 模拟**旧工件**：行里没有 `generation` 字段，只有文件名带代数。
+    """
+    root = tmp_path / "episodes" / "heldout"
+    root.mkdir(parents=True, exist_ok=True)
+    key = f"e-{seed:06d}-g{generation:03d}-{arm}"
+    row: dict = {"type": "episode_end", "episode_key": key, "seed": seed, "arm": arm,
+                 "split": "heldout", "harness_version": 0, "outcome": outcome,
+                 "stages_cleared": 3, "kind_counts": [1] * 16, "seq_hash": f"s{seed}",
+                 "protocol": "episode-protocol-v2"}
+    if with_generation:
+        row["generation"] = generation
+    path = root / f"{key}.jsonl"
+    path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    return path
+
+
+def test_load_episode_results_filters_by_generation(tmp_path):
+    """跨代过滤：`generation=1` 只看见 g001 的局（parent + 候选各归各的）。"""
+    for seed in (2000, 2001):
+        _write_generation_row(tmp_path, seed, "parent", 0)
+    for seed in (2000, 2001, 2002):
+        _write_generation_row(tmp_path, seed, "parent", 1)
+    for seed in (2000, 2001, 2002):
+        _write_generation_row(tmp_path, seed, "cand-abc", 1)
+
+    # 反例自检：不带过滤的原始读取必须能拿到**跨代跨臂**的全部文件，否则这个 fixture
+    # 根本暴露不了混算（空转的护栏比没有护栏更糟）。
+    everything = load_episode_results(tmp_path, "heldout")
+    assert len(everything) == 8
+    assert sorted({r.generation for r in everything}) == [0, 1]
+    assert sorted({r.arm for r in everything}) == ["cand-abc", "parent"]
+
+    gen1 = load_episode_results(tmp_path, "heldout", generation=1)
+    assert len(gen1) == 6
+    assert {r.generation for r in gen1} == {1}
+    assert sorted({r.arm for r in gen1}) == ["cand-abc", "parent"]
+    # 修复前：generation 只用来贴标签 ⇒ 这里会是 8（g000 的 2 局被贴上 gen=1）
+    assert len(gen1) != len(everything)
+
+    gen0 = load_episode_results(tmp_path, "heldout", generation=0)
+    assert [r.seed for r in gen0] == [2000, 2001]
+
+    # 同代跨臂也真过滤（F46 的第二层）
+    only_cand = load_episode_results(tmp_path, "heldout", generation=1, arm="cand-abc")
+    assert len(only_cand) == 3 and {r.arm for r in only_cand} == {"cand-abc"}
+
+
+def test_generation_filter_falls_back_to_filename_for_legacy_rows(tmp_path):
+    """旧工件行里没有 `generation`：退化为解析文件名 `-g{gen:03d}-`，两者都判不出才跳过。"""
+    legacy = _write_generation_row(tmp_path, 2000, "parent", 1, with_generation=False)
+    rows = json.loads(legacy.read_text(encoding="utf-8"))
+    assert "generation" not in rows
+    hit = load_episode_results(tmp_path, "heldout", generation=1)
+    assert [r.seed for r in hit] == [2000] and hit[0].generation == 1
+    assert load_episode_results(tmp_path, "heldout", generation=0) == []
+
+    # 文件名也判不出 ⇒ 必须**跳过**（不得静默混入别的代），并发可观测事件
+    stray = tmp_path / "episodes" / "heldout" / "stray.jsonl"
+    stray.write_text(json.dumps({"type": "episode_end", "seed": 2099, "arm": "parent"}) + "\n",
+                     encoding="utf-8")
+    assert load_episode_results(tmp_path, "heldout", generation=1) == \
+        [r for r in load_episode_results(tmp_path, "heldout", generation=1)]
+
+
+def test_generation_row_value_is_not_overwritten_by_the_filter(tmp_path):
+    """`EpisodeResult.generation` 取**行里的值**（修复前恒被形参覆盖）。"""
+    _write_generation_row(tmp_path, 2000, "parent", 1)
+    got = load_episode_results(tmp_path, "heldout", generation=1)[0]
+    assert got.generation == 1
+    # 行里是 1、请求 0 ⇒ 不匹配 ⇒ 空；且请求 1 时也不得把 generation 改写成别的值
+    assert load_episode_results(tmp_path, "heldout", generation=0) == []
+
+
+def test_read_episode_protocols_filters_by_generation(tmp_path):
+    """同形函数 `read_episode_protocols` 必须同口径（F46-A 的「同形函数」清单）。"""
+    from dice_ratchet.evals.harness import read_episode_protocols
+
+    _write_generation_row(tmp_path, 2000, "parent", 0)
+    _write_generation_row(tmp_path, 2001, "parent", 1)
+    assert read_episode_protocols(tmp_path, "heldout", generation=1) == {"episode-protocol-v2"}
+    legacy = _write_generation_row(tmp_path, 2002, "parent", 1, with_generation=False)
+    assert read_episode_protocols(tmp_path, "heldout", generation=0) == {"episode-protocol-v2"}
+    assert len(read_episode_protocols(tmp_path, "heldout")) == 1 # 无过滤：全部同协议
+    assert legacy.is_file()
+
+
+def test_eval_report_shows_one_arm_not_a_pool(tmp_path):
+    """F46-A 的端到端形态：单臂口径的 `n` 不得是该代所有非基线臂之和。"""
+    for seed in (2000, 2001, 2002, 2003):
+        _write_generation_row(tmp_path, seed, "parent", 1, outcome="win")
+    for seed in (2000, 2001, 2002):
+        _write_generation_row(tmp_path, seed, "cand-abc", 1, outcome="lose")
+    pool = load_episode_results(tmp_path, "heldout", generation=1)
+    parent = load_episode_results(tmp_path, "heldout", generation=1, arm="parent")
+    cand = load_episode_results(tmp_path, "heldout", generation=1, arm="cand-abc")
+    assert aggregate(pool, split="heldout", basket="H1").n == 7
+    assert aggregate(parent, split="heldout", basket="H1").n == 4
+    assert aggregate(cand, split="heldout", basket="H1").n == 3
+    assert aggregate(parent, split="heldout", basket="H1").win_rate == 1.0
+    assert aggregate(cand, split="heldout", basket="H1").win_rate == 0.0
+
+
+def test_resolve_report_arm_defaults_to_the_generations_candidate(tmp_path):
+    """缺省臂 = 该代 `report.json` 里的候选臂；候选臂局不在时回落 `parent`。"""
+    from dice_ratchet.evals import cli as cli_mod
+    from dice_ratchet.evals.harness import write_generation_report
+
+    report = {"generation": 1, "candidates": [{"candidate_id": "abc", "decision": "reject"}]}
+    write_generation_report(tmp_path, 1, report, validate=False)
+    for seed in (2000, 2001):
+        _write_generation_row(tmp_path, seed, "parent", 1)
+    for seed in (2000,):
+        _write_generation_row(tmp_path, seed, "cand-abc", 1)
+    pool = load_episode_results(tmp_path, "heldout", generation=1)
+    assert cli_mod._resolve_report_arm(tmp_path, 1, pool, requested=None) == ("cand-abc", False)
+    assert cli_mod._resolve_report_arm(tmp_path, 1, pool, requested="all") == ("all", True)
+    assert cli_mod._resolve_report_arm(tmp_path, 1, pool, requested="parent") == ("parent", False)
+
+    # 胜出臂的局不在已落盘集合里（例如只跑了 parent）⇒ 回落 parent
+    only_parent = load_episode_results(tmp_path, "heldout", generation=1, arm="parent")
+    assert cli_mod._resolve_report_arm(tmp_path, 1, only_parent, requested=None) == ("parent", False)
+
+
+def test_resolve_report_arm_prefers_accepted_candidate(tmp_path):
+    """多候选时优先取 `decision="accept"` 的那个（它是该代的胜出臂）。"""
+    from dice_ratchet.evals import cli as cli_mod
+    from dice_ratchet.evals.harness import write_generation_report
+
+    write_generation_report(tmp_path, 1, {"generation": 1, "candidates": [
+        {"candidate_id": "loser", "decision": "reject"},
+        {"candidate_id": "winner", "decision": "accept"}]}, validate=False)
+    _write_generation_row(tmp_path, 2000, "cand-winner", 1)
+    pool = load_episode_results(tmp_path, "heldout", generation=1)
+    assert cli_mod._resolve_report_arm(tmp_path, 1, pool, requested=None) == ("cand-winner", False)
+
+
+def test_resolve_report_arm_without_candidates_falls_back_to_parent(tmp_path):
+    from dice_ratchet.evals import cli as cli_mod
+    from dice_ratchet.evals.harness import write_generation_report
+
+    write_generation_report(tmp_path, 0, {"generation": 0, "candidates": []}, validate=False)
+    _write_generation_row(tmp_path, 2000, "parent", 0)
+    pool = load_episode_results(tmp_path, "heldout", generation=0)
+    assert cli_mod._resolve_report_arm(tmp_path, 0, pool, requested=None) == ("parent", False)
