@@ -383,7 +383,11 @@ gen-000 基线之前**通过 MOD-09 的工作区干净性判据；脏 → `E_IO_
 - **不放进 `LoopOrchestrator.run()` 内部**：那会让程序化嵌入、测试装配、本地未提交改动的
   诊断一律被拦；门禁属于 **CLI 边界**（也是 `init_run_dir` / `_build_orchestrator` 所在层）；
 - **非 git 路径 → 降级跳过**（返回 `False`，Spec §8.5），临时目录里的 run 照常；
-- `--resume` 与 HITL 续跑都走 `cmd_loop_run`，因此**都被覆盖**。
+- `--resume` 与 HITL 续跑都走 `cmd_loop_run`，因此**都被覆盖**；
+- **与干跑链的交互**：检查单 §11.2 的干跑链用 `--harness-dir runs/_sweep/harness`，此时仓库根是
+  `runs/_sweep`，而 `git status --porcelain` 报的是**仓库根相对**路径 ⇒ 脏工作区**同样被拦**。
+  这是有意的：门禁的语义就是「要花钱的 run 必须在干净的提交上跑」；做法是先提交，或
+  `git stash push` → 干跑 → `git stash pop`（`runs/`/`logs/`/`.archify/`/`.env` 都已 ignore，不触发）。
 
 **护栏**：`tests/unit/loop/test_loop_cli.py::test_cli_run_aborts_on_dirty_worktree_before_any_spend`
 （脏工作区 → 退出码 4、**零次推理调用**、`generations/gen-000/` 不存在 ⇒ 基线也没开跑）、
