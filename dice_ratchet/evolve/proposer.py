@@ -1242,23 +1242,38 @@ def order_candidates(candidates: Iterable[Candidate]) -> tuple[Candidate, ...]:
                         key=lambda c: (-int(c.expected_effect.priority), c.candidate_id)))
 
 
+def proposal_inputs(bundle: EvidenceBundle, cfg: Any) -> dict[str, Any]:
+    """提案的**输入指纹面**（F42-B 检查点用）。
+
+    与 ``propose`` 内部渲染调用**共用同一句**（``render_proposer_prompt`` + ``candidate_schema_dict``），
+    避免「检查点按另一份参数算指纹」这类静默漂移。返回的 ``system`` / ``user`` / ``schema``
+    就是真正送进 LLM 的三段。
+    """
+    system, user = render_proposer_prompt(bundle, cfg)
+    return {"system": system, "user": user, "schema": candidate_schema_dict()}
+
+
 def propose(bundle: EvidenceBundle, *, cfg: Any, rng_seed: int, client: Any = None,
             run_id: str = "", generation: int = 0, protocol: Any = None,
-            runs_root: Any = None, app_config: Any = None) -> ProposalResult:
+            runs_root: Any = None, app_config: Any = None,
+            inputs: Mapping[str, Any] | None = None) -> ProposalResult:
     """候选生成（FR-07-1）。
 
     失败**绝不静默退化**：返回 ``ProposalResult(candidates=[], error_code=…)``。
 
     ``cfg`` 是 **``EvolveConfig`` 段**（渲染/重试/护栏都用它）；``app_config`` 是完整
     ``AppConfig``，**只**用于回退解析 proposer 客户端（见 ``_resolve_client`` 的 F36）。
+
+    ``inputs``（F42-B）：调用方已用 ``proposal_inputs()`` 渲染过同一份三段时直接传入，
+    避免「检查点算指纹」与「真正送进 LLM」两次渲染不一致（默认内部渲染）。
     """
     gen_id = f"g{int(generation):03d}"
     try:
         assert_no_holdout_leak(bundle, cfg=cfg, protocol=protocol)
     except HoldoutLeakError:
         raise # INV-5 致命：交由上层中止本代 + audit 告警（PRD §10）
-    system, user = render_proposer_prompt(bundle, cfg)
-    schema = candidate_schema_dict()
+    rendered = dict(inputs) if inputs is not None else proposal_inputs(bundle, cfg)
+    system, user, schema = rendered["system"], rendered["user"], rendered["schema"]
     retries = max(0, int(getattr(cfg, "propose_max_retries", 2)))
     last_error = ""
 

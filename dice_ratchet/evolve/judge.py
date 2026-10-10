@@ -386,6 +386,9 @@ class CandidateEvaluator:
     runner: Any = None
     episode_config: Any = None
     harness_version_of: Callable[[Any], int] | None = None
+    #: F42-A/B：run 根目录（臂归档 / 检查点落点）。为空时由 ``evaluate_arm`` 按
+    #: ``config.infra.runs_root / run_id`` 推导。
+    run_dir: Any = None
 
     def _evaluate_arm(self, arm_dir: Any, *, split: str, basket: Any, arm: str,
                       harness_version: int) -> Any:
@@ -402,6 +405,8 @@ class CandidateEvaluator:
         eval_cfg = getattr(self.config, "evals", None)
         kwargs["n_workers"] = int(getattr(eval_cfg, "n_workers", 1) or 1)
         kwargs["n_rep"] = int(getattr(getattr(eval_cfg, "determinism", None), "n_rep", 1) or 1)
+        if self.run_dir is not None: # F42-A：臂归档落在真实 run 目录
+            kwargs["run_dir"] = self.run_dir
         return evaluate_arm(
             arm_dir, split=split, basket=basket, memory_version=int(self.memory_version),
             arm=arm, run_id=self.run_id, protocol=self.protocol, config=self.config,

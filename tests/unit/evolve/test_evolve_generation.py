@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from dice_ratchet.evolve import checkpoint as CHECKPOINT
 from dice_ratchet.evolve import generation as GEN
 from dice_ratchet.evolve.paths import GenPaths
 from dice_ratchet.evolve.schemas import Candidate
@@ -545,3 +546,127 @@ def test_f47_accept_infra_failure_is_recorded_as_error_reject(tmp_path, stub_pai
     decisions = [row for row in seen if row["event"] == "evolve.decision"]
     assert decisions and decisions[-1]["decision"] == "error_reject", \
         "事件流与报告必须同口径"
+
+
+# =====================================================================
+# F42-B：提案检查点（评估之前落盘；resume 时指纹一致则复用同一候选）
+# =====================================================================
+#
+# 现场：API 提案**不可复现**（注册表标注 `api_supports_seed=false`，实测「字节相同的请求
+# 9 次返回 9 个不同响应」）⇒ 不落检查点的话，resume 时候选 id 必然变，
+# `metrics/arms/genNNN-*-cand-<id>.json` 归档必然 miss，能省的只有 parent 侧。
+# 机制：评估**之前**把 ProposalResult 落 `generations/gen-NNN/proposals/proposal.json`，
+# 连同输入指纹（run_id / generation / propose_seed / harness_version / memory_version /
+# prompt_digest）；指纹一致 → 复用同一 candidate id 与 diff，**0 次 proposer 调用**。
+
+def test_proposal_checkpoint_is_written_before_evaluation(tmp_path, stub_pairing):
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+    _run(run_ctx, state, evaluator=ScriptedEvaluator(heldout=FakeArm(win_rate=0.40),
+                                                     paired=_paired(delta=0.10)),
+         client=_one_candidate_llm())
+    path = CHECKPOINT.proposal_checkpoint_path(run_root, 1)
+    assert path.is_file(), "提案没有在评估之前落检查点（F42-B）"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["version"] == CHECKPOINT.PROPOSAL_CHECKPOINT_VERSION
+    assert data["fingerprint"].startswith("sha256:")
+    assert len(data["proposal"]["candidates"]) == 1
+    cand = data["proposal"]["candidates"][0]
+    for key in ("candidate_id", "diff", "rationale", "expected_effect"):
+        assert key in cand, f"检查点缺 {key}"
+
+
+def test_resume_reuses_the_proposal_with_zero_proposer_calls(tmp_path, stub_pairing):
+    """跑到一半被杀 → 检查点命中：同一 candidate id、**0 次 proposer 调用**。
+
+    真实中断点：Ctrl-C（``loop`` 的 SIGINT 处理器抛 ``KeyboardInterrupt``，正是 F42 描述的
+    「一代 3.75 h 中途被打断」）。``KeyboardInterrupt`` 不是 ``Exception`` ⇒ 不会被
+    ``evaluate_candidate`` / ``_parent_arms`` 的保守化捕获吞掉，直接穿透 MOD-07，
+    ``report.json`` 不落盘 ⇒ 与现场「``loop`` 把 phase 重置为 playing 重跑整代」完全同形。
+    """
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+
+    class _Interrupted(ScriptedEvaluator):
+        """第一次进入 parent 臂时模拟 Ctrl-C（此后照常）。"""
+
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.boom = True
+
+        def parent_arms(self, parent_dir, *, parent_version):
+            if self.boom:
+                self.boom = False
+                raise KeyboardInterrupt("模拟：一代评估中途被 Ctrl-C")
+            return super().parent_arms(parent_dir, parent_version=parent_version)
+
+    first_client = _one_candidate_llm()
+    with pytest.raises(KeyboardInterrupt):
+        _run(run_ctx, state, evaluator=_Interrupted(), client=first_client)
+    assert len(first_client.calls) == 1, "第一轮应当真实调用过 proposer 并落检查点"
+    checkpoint = CHECKPOINT.proposal_checkpoint_path(run_root, 1)
+    assert checkpoint.is_file(), "提案没有在评估之前落检查点（F42-B）"
+    assert GenPaths.of(run_root, 1).report.is_file() is False, \
+        "本代不应有 report.json（被杀在中途）"
+    first_id = json.loads(checkpoint.read_text(encoding="utf-8"))[
+        "proposal"]["candidates"][0]["candidate_id"]
+
+    # resume：客户端**没有** payload 了（真被调用就会 AssertionError）
+    second_client = StubLLM([])
+    outcome = _run(run_ctx, state,
+                   evaluator=ScriptedEvaluator(heldout=FakeArm(win_rate=0.40),
+                                               paired=_paired(delta=0.10)),
+                   client=second_client)
+    assert second_client.calls == [], "提案被复用后仍然调了 proposer（每次调用都是钱）"
+    assert GenPaths.of(run_root, 1).candidate_ids() == (first_id,)
+    assert outcome.decision == "accept"
+
+
+def test_proposal_checkpoint_mismatch_falls_back_to_the_client(tmp_path, stub_pairing):
+    """指纹不一致（换了 harness/记忆/模板/seed）⇒ 不复用，照常重新提案（fail-closed）。"""
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+    _run(run_ctx, state, evaluator=ScriptedEvaluator(heldout=FakeArm(win_rate=0.40),
+                                                     paired=_paired(delta=0.10)),
+         client=_one_candidate_llm())
+    path = CHECKPOINT.proposal_checkpoint_path(run_root, 1)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["fingerprint"] = "sha256:0000"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    client = _one_candidate_llm()
+    _run(run_ctx, state, evaluator=ScriptedEvaluator(heldout=FakeArm(win_rate=0.40),
+                                                     paired=_paired(delta=0.10)),
+         client=client)
+    assert len(client.calls) == 1, "指纹不一致却复用了检查点"
+
+
+def test_corrupt_proposal_checkpoint_is_ignored(tmp_path, stub_pairing):
+    """检查点损坏 ⇒ 照常重新提案（不得抛错、不得静默放弃本代）。"""
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+    _run(run_ctx, state, evaluator=ScriptedEvaluator(heldout=FakeArm(win_rate=0.40),
+                                                     paired=_paired(delta=0.10)),
+         client=_one_candidate_llm())
+    CHECKPOINT.proposal_checkpoint_path(run_root, 1).write_text("{not json",
+                                                               encoding="utf-8")
+    client = _one_candidate_llm()
+    _run(run_ctx, state, evaluator=ScriptedEvaluator(heldout=FakeArm(win_rate=0.40),
+                                                     paired=_paired(delta=0.10)),
+         client=client)
+    assert len(client.calls) == 1
+
+
+def test_proposal_fingerprint_is_stable_and_input_sensitive():
+    """指纹：同输入恒定；``propose_seed`` / ``harness_version`` / prompt 任一变化即变。"""
+    inputs = {"system": "S", "user": "U", "schema": {"type": "object"}}
+    base = dict(run_id="r1", generation=1, propose_seed=7, harness_version=0,
+                memory_version=0, inputs=inputs)
+    one = CHECKPOINT.proposal_fingerprint(**base)
+    assert one == CHECKPOINT.proposal_fingerprint(**base)
+    assert one != CHECKPOINT.proposal_fingerprint(**{**base, "propose_seed": 8})
+    assert one != CHECKPOINT.proposal_fingerprint(**{**base, "harness_version": 1})
+    assert one != CHECKPOINT.proposal_fingerprint(**{**base, "memory_version": 1})
+    assert one != CHECKPOINT.proposal_fingerprint(
+        **{**base, "inputs": {**inputs, "user": "U2"}})
+    assert one != CHECKPOINT.proposal_fingerprint(**{**base, "run_id": "r2"})

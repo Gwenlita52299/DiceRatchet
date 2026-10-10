@@ -32,6 +32,7 @@ from dice_ratchet.infra.io import write_json_atomic
 
 from . import gate as gate_mod
 from . import judge as judge_mod
+from . import checkpoint as checkpoint_mod
 from . import proposer as proposer_mod
 from . import versioning as versioning_mod
 from .errors import (HoldoutLeakError, LoadFailedError, ScanFailedError,
@@ -274,13 +275,31 @@ def _run_generation(*, state: Any, run_ctx: Any, runner: Any, cfg: Any, app_cfg:
                               candidate_dir=str(ctx.gen(gen).candidates))
 
     # ---- 1) 证据束 + 候选生成（INV-5 硬闸在 propose 内）-----------------------------
+    # F42-B：提案在**评估之前**落检查点，resume 时指纹一致则复用同一 candidate id 与 diff。
+    # 理由：API 提案不可复现（`api_supports_seed=false`），不落检查点则候选臂归档必然 miss
+    # （归档路径含 `cand-<id>`），中断后只能省 parent 侧。
     bundle = proposer_mod.build_evidence_bundle(
         run_id=run_id, n_traj=int(getattr(cfg, "n_traj", 20)), cfg=cfg, memory=memory,
         run_dir=run_root, harness=harness, generation=gen)
     rng_seed = propose_seed(run_id, gen, seed=seed)
-    prop = proposer_mod.propose(bundle, cfg=cfg, rng_seed=rng_seed, client=client,
-                                run_id=run_id, generation=gen, protocol=protocol,
-                                runs_root=ctx.root.parent, app_config=app_cfg)
+    inputs = proposer_mod.proposal_inputs(bundle, cfg)
+    fingerprint = checkpoint_mod.proposal_fingerprint(
+        run_id=run_id, generation=gen, propose_seed=rng_seed,
+        harness_version=int(getattr(parent, "version", 0) or 0),
+        memory_version=int(memory_version or 0), inputs=inputs)
+    prop = checkpoint_mod.load_proposal_checkpoint(run_root, gen, fingerprint=fingerprint)
+    if prop is None:
+        prop = proposer_mod.propose(bundle, cfg=cfg, rng_seed=rng_seed, client=client,
+                                    run_id=run_id, generation=gen, protocol=protocol,
+                                    runs_root=ctx.root.parent, app_config=app_cfg,
+                                    inputs=inputs)
+        try: # 检查点是加速产物：落盘失败不得阻断本代
+            checkpoint_mod.save_proposal_checkpoint(run_root, generation=gen,
+                                                    fingerprint=fingerprint, proposal=prop,
+                                                    inputs=inputs)
+        except Exception as exc: # noqa: BLE001
+            events.emit("evolve.proposal_checkpoint", gen=gen, status="failed",
+                        detail=str(exc)[:200])
     if not prop.candidates:
         result.error_code = prop.error_code or str(E.E_EVOLVE_NO_CANDIDATE)
         result.reason = prop.reason or "no_candidate"
@@ -296,7 +315,7 @@ def _run_generation(*, state: Any, run_ctx: Any, runner: Any, cfg: Any, app_cfg:
     ev = _build_evaluator(cfg=cfg, app_cfg=app_cfg, evaluator=evaluator, runner=runner,
                           protocol=protocol, memory_version=memory_version,
                           run_id=run_id, gen=gen, smoke_seeds=smoke_seeds,
-                          episode_config=episode_config, seed=seed)
+                          episode_config=episode_config, seed=seed, run_dir=run_root)
     if not result.pending_human:
         parent_heldout, parent_smoke = _parent_arms(
             ev, result, parent=parent, harness=harness)
@@ -335,21 +354,29 @@ def _run_generation(*, state: Any, run_ctx: Any, runner: Any, cfg: Any, app_cfg:
 def _build_evaluator(*, cfg: Any, app_cfg: Any, evaluator: Any, runner: Any,
                      protocol: Any, memory_version: int, run_id: str, gen: int,
                      smoke_seeds: Sequence[int], episode_config: Any,
-                     seed: int | None = None) -> Any:
+                     seed: int | None = None, run_dir: Any = None) -> Any:
     if evaluator is not None:
         return evaluator
     return judge_mod.CandidateEvaluator(
         protocol=protocol, config=app_cfg, memory_version=int(memory_version),
         run_id=run_id, generation=int(gen), smoke_seeds=tuple(smoke_seeds),
-        runner=runner, episode_config=episode_config)
+        runner=runner, episode_config=episode_config, run_dir=run_dir)
 
 
 def _parent_arms(ev: Any, result: GenerationResult, *, parent: HarnessRef,
                  harness: Path) -> tuple[Any, Any]:
-    """parent 的 heldout + 冒烟；MOD-08 异常 → 保守 reject（NFR-07-7）。"""
+    """parent 的 heldout + 冒烟；MOD-08 异常 → 保守 reject（NFR-07-7）。
+
+    F42-B：``KeyboardInterrupt`` / ``SystemExit`` **必须穿透**（``except Exception`` 本来
+    就不会捕获它们，这里显式写明契约）。一代 84 局 ≈ 3.75 h，Ctrl-C 是最常见的中断；
+    把它折成「保守 reject」会写出一个 ``report.json``，让 ``loop`` 把该代记为**已完成**，
+    从而丢掉整代的已评估结果（正是 F42 要消灭的浪费）。
+    """
     parent_dir = getattr(parent, "dir", None) or harness
     try:
         return ev.parent_arms(parent_dir, parent_version=int(parent.version))
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception as exc: # noqa: BLE001 - 评审链路整体不可用 → 空报告
         events.emit("evolve.evaluate", candidate_id="parent",
                     error_code=str(getattr(exc, "code", E.E_EVOLVE_EVAL_FAILED)))

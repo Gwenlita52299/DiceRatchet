@@ -201,6 +201,13 @@ def maybe_run_generation(*, state: RunState, run_ctx: RunContext,
             state.phase = "playing"
             _save(run_ctx, state)
             return state
+        # F42-B：一代内的**已完成臂**不重跑。这里只做可观测性——真正的复用由 MOD-07
+        # 经 `metrics/arms/`（按臂检查点）与 `generations/gen-NNN/proposals/`（提案检查点）
+        # 完成；`_cycle_artifacts_exist` 继续负责「整代已裁决」这唯一终态。**不清**
+        # `metrics/arms/`：它正是这次重入能省下 3.75 h / ≈¥47 的依据。
+        events.emit("loop.resume", phase="evolving", cycle=int(cycle),
+                    completed_arms=_completed_arm_count(paths, cycle),
+                    reuse="metrics/arms+proposals")
         state.evolving_cycle = None
         state.phase = "playing"
         _save(run_ctx, state)
@@ -269,6 +276,18 @@ def _cycle_artifacts_exist(paths: RunPaths, cycle: int) -> bool:
     if not any((base / name).is_file() for name in ("report.json", "decision.json")):
         return False
     return not _hitl_gate_pending(base)
+
+
+def _completed_arm_count(paths: RunPaths, cycle: int) -> int:
+    """该 cycle 已归档的**臂**数量（``metrics/arms/gen{cycle:03d}-*.json``；F42-B）。
+
+    只用于 resume 的可观测性：resume 之所以不再白花一整代，是因为 MOD-07 会按这些归档
+    （以及 ``generations/gen-NNN/proposals/proposal.json``）复用已完成的局与提案。
+    """
+    arms = Path(paths.metrics) / "arms"
+    if not arms.is_dir():
+        return 0
+    return len(list(arms.glob(f"gen{int(cycle):03d}-*.json")))
 
 
 def _hitl_gate_pending(base: Path) -> bool:

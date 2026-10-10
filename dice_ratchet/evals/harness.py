@@ -29,7 +29,7 @@ import json
 import re
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import (Any, Callable, Final, Iterable, Literal, Mapping, Protocol, Sequence,
@@ -310,7 +310,10 @@ def run_eval(spec: EvalSpec, *, runner: EpisodeRunner, writer: TraceWriter | Non
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
     pools.append(pool)
     futures: dict[concurrent.futures.Future[EpisodeResult], int] = {}
-    queued = [int(s) for s in spec.seeds]
+    # F42-A：``resume_results`` 的契约是「已完成的局**不重跑**」。这里必须**过滤队列**，
+    # 而不是只把它们并进聚合字典：只并入的话 worker 仍会把同一个 seed 跑一遍，最后被
+    # ``_store`` 覆盖 —— 钱已经花了，而且 `n_workers>1` 时还会与已完成的局交错。
+    queued = [int(s) for s in spec.seeds if int(s) not in results]
     abandoned_workers = 0
 
     def _pump() -> None:
@@ -738,11 +741,29 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
                  generation: int = 0, harness_version: int = 0,
                  config: Any = None, model_hash: str = "",
                  n_workers: int = 1, n_rep: int = 1,
-                 episode_config: Any = None) -> ArmResult:
+                 episode_config: Any = None,
+                 resume_results: Sequence[EpisodeResult] = (),
+                 on_result: Callable[[EpisodeResult], None] | None = None,
+                 run_dir: Path | str | None = None,
+                 archive: bool = True) -> ArmResult:
     """单臂评估（Spec §4.7；FR-08-25）。
 
     ``runner`` 未注入时用 MOD-04/02 的默认执行器（MOD-06 会显式注入自己的 runner）。
+
+    F42-A/B（长跑检查点）：
+
+    - ``resume_results`` / ``on_result`` **薄转发**给 ``run_eval``（不复制任何执行逻辑）；
+    - **臂归档**：``run_id`` 在 ``runs_root``（或显式 ``run_dir``）下已存在时，每次评估落一份
+      ``metrics/arms/gen{gen:03d}-{split}-{basket}-{arm}.json``（``ArmResult.as_dict()`` +
+      provenance + 逐局明细），并**先**尝试复用：
+
+      * provenance（``ARM_PROVENANCE_KEYS``）**全等**且覆盖完整 seed 列表 → **整臂复用**
+        （一局都不跑），发 ``evals.arm_reused``；
+      * 只覆盖一部分 → 把已完成的作为 ``resume_results`` 传入，只跑缺的局；
+      * 任一 provenance 不一致 / 归档损坏 / run 目录不存在 → **不复用**，照常重算（fail-closed）。
+
     """
+
     proto = seeds_mod.validate_protocol(seeds_mod.coerce_protocol(protocol))
     seed_list = tuple(seeds_mod.resolve_basket(basket, generation=generation, protocol=proto))
     eval_cfg = getattr(config, "evals", config)
@@ -757,17 +778,166 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
         drop_rate_max=float(getattr(eval_cfg, "drop_rate_max", 0.10)),
         arm=arm, memory_version=memory_version,
         episode_config_hash=_config_digest(episode_config))
+    archive_dir = _arm_archive_dir(run_dir=run_dir, config=config, run_id=run_id) \
+        if archive else None
+    wanted = _arm_provenance_for(spec=spec, proto=proto, config=config, run_id=run_id)
+    cached = load_arm_archive(arm_archive_path(
+        archive_dir, generation=spec.generation, split=spec.split, basket=spec.basket_id,
+        arm=arm)) if archive_dir is not None else None
+    reused: list[EpisodeResult] = []
+    reusable = bool(cached) and provenance_matches(dict(cached.get("provenance") or {}), wanted)
+    if reusable and cached is not None:
+        reused, missing = reuse_from_archive(cached, seeds=spec.seeds, split=split,
+                                             generation=spec.generation,
+                                             harness_version=spec.harness_version, arm=arm)
+        if reused and not missing:
+            # 按**篮子顺序**还原（与 `run_eval` 的聚合顺序一致，保证复用不改测量结果）
+            by_seed = {int(r.seed): r for r in reused}
+            ordered = tuple(by_seed[int(s)] for s in spec.seeds if int(s) in by_seed)
+            metrics = aggregate(ordered, split=split, basket=spec.basket_id,
+                                t_max=spec.t_max, min_support=spec.min_support,
+                                drop_rate_max=spec.drop_rate_max)
+            _emit("evals.arm_reused", generation=spec.generation, split=split,
+                  basket=spec.basket_id, arm=arm, n=metrics.n,
+                  archive=str(arm_archive_path(archive_dir, generation=spec.generation,
+                                               split=split, basket=spec.basket_id, arm=arm)))
+            return ArmResult(arm=arm, split=split, basket=spec.basket_id,
+                             harness_version=int(harness_version),
+                             memory_version=int(memory_version or 0), run_id=run_id,
+                             results=ordered, metrics=metrics, model_hash=model_hash,
+                             dur_s=0.0, resumed_n=len(ordered),
+                             pending_seeds=(), archive_path=str(arm_archive_path(
+                                 archive_dir, generation=spec.generation, split=split,
+                                 basket=spec.basket_id, arm=arm)))
+    # 归档只覆盖一部分：已完成局并入 ``resume_results``（调用方显式给的也要保留），
+    # 引擎按 ``results`` **过滤队列** ⇒ 已完成的 seed 不会再跑一次。
+    already = {int(r.seed): r for r in resume_results}
+    already.update({int(r.seed): r for r in reused})
+    missing = tuple(s for s in spec.seeds if int(s) not in already)
+    # 局部完成的收益必须落到**臂归档**上：给每次新完成的局补一次归档写。
+    persist = on_result
+    if archive_dir is not None:
+        persist = _archive_on_result(on_result, run_root=archive_dir, spec=spec, proto=proto,
+                                     config=config, run_id=run_id, model_hash=model_hash,
+                                     already=already)
     executor = runner or _default_runner(harness_dir=harness_dir, arm=arm,
                                          memory_version=memory_version, config=config,
                                          model_hash=model_hash, run_id=run_id,
                                          episode_config=episode_config)
-    result = run_eval(spec, runner=executor, writer=None, protocol=proto)
-    return ArmResult(arm=arm, split=split, basket=spec.basket_id,
-                     harness_version=int(harness_version),
-                     memory_version=int(memory_version or 0), run_id=run_id,
-                     results=result.results, metrics=result.metrics,
-                     model_hash=model_hash, error_codes=result.error_codes,
-                     dur_s=result.dur_s)
+    result = run_eval(spec, runner=executor, writer=None, protocol=proto,
+                      resume_results=tuple(already.values()), on_result=persist)
+    completed = {int(r.seed) for r in result.results}
+    outcome = ArmResult(arm=arm, split=split, basket=spec.basket_id,
+                        harness_version=int(harness_version),
+                        memory_version=int(memory_version or 0), run_id=run_id,
+                        results=result.results, metrics=result.metrics,
+                        model_hash=model_hash, error_codes=result.error_codes,
+                        dur_s=result.dur_s, resumed_n=len(already),
+                        pending_seeds=tuple(s for s in spec.seeds
+                                            if int(s) not in completed))
+    if archive_dir is not None:
+        provenance = arm_provenance(
+            generation=spec.generation, split=split, basket=spec.basket_id, arm=arm,
+            harness_version=int(harness_version), memory_version=int(memory_version or 0),
+            n_seeds=len(spec.seeds), n_dropped=int(result.metrics.n_dropped),
+            config_hash=wanted.get("config_hash"), seeds_hash=_seed_hash(proto),
+            protocol_id=str(getattr(proto, "version", "") or ""),
+            episode_config_hash=spec.episode_config_hash)
+        path = write_arm_archive(archive_dir, generation=spec.generation, split=split,
+                                 basket=spec.basket_id, arm=arm, result=outcome,
+                                 provenance=provenance)
+        outcome = replace(outcome, archive_path=str(path))
+    return outcome
+
+
+def _arm_archive_dir(*, run_dir: Path | str | None, config: Any, run_id: str) -> Path | None:
+    """臂归档根目录；run 目录不存在 → ``None``（不归档，也不读归档）。
+
+    ``run_dir`` 显式给出时以它为准；否则按 ``config.infra.runs_root / run_id`` 推导。
+    生产路径下 run 目录总是存在（``init_run_dir`` 先建）；单测里的哑 ``run_id`` 因此
+    天然不产归档文件。
+    """
+    if not run_id:
+        return None
+    if run_dir is not None:
+        root = Path(run_dir)
+    else:
+        runs_root = getattr(getattr(config, "infra", None), "runs_root", None) or "runs"
+        root = Path(runs_root) / str(run_id)
+    return root if root.is_dir() else None
+
+
+def _arm_provenance_for(*, spec: EvalSpec, proto: Any, config: Any, run_id: str
+                        ) -> dict[str, Any]:
+    """本次评估的 provenance（**不含** ``created_at``，用于与归档逐字段对拍）。"""
+    from dice_ratchet.infra.config import config_hash
+
+    return {"generation": spec.generation, "split": spec.split, "basket": spec.basket_id,
+            "arm": spec.arm, "harness_version": spec.harness_version,
+            "memory_version": int(spec.memory_version or 0),
+            "config_hash": (config_hash(config) if config is not None else None),
+            "seeds_hash": str(getattr(proto, "seeds_hash", "") or ""),
+            "episode_config_hash": spec.episode_config_hash}
+
+
+def _archive_on_result(on_result: Callable[[EpisodeResult], None] | None, *,
+                       run_root: Path, spec: EvalSpec, proto: Any, config: Any,
+                       run_id: str, model_hash: str,
+                       already: Mapping[int, EpisodeResult],
+                       ) -> Callable[[EpisodeResult], None]:
+    """把「每完成一局」接到**臂归档**上（F42-A）。
+
+    局部完成时，光把 ``resume_results`` 传下去只能省当事进程的重复劳动；进程再挂一次，
+    那些已完成的局就丢了。因此每局完成时用「已完成 + 本局」重写一次归档（原子写）。
+    """
+    def _persist(result: EpisodeResult) -> None:
+        if on_result is not None:
+            on_result(result)
+        done = dict(already)
+        done[int(result.seed)] = result
+        ordered = tuple(done[s] for s in sorted(done))
+        metrics = aggregate(ordered, split=spec.split, basket=spec.basket_id,
+                            t_max=spec.t_max, min_support=spec.min_support,
+                            drop_rate_max=spec.drop_rate_max)
+        partial = ArmResult(arm=spec.arm, split=spec.split, basket=spec.basket_id,
+                            harness_version=spec.harness_version,
+                            memory_version=int(spec.memory_version or 0), run_id=run_id,
+                            results=ordered, metrics=metrics, model_hash=model_hash,
+                            resumed_n=len(already))
+        provenance = arm_provenance(
+            generation=spec.generation, split=spec.split, basket=spec.basket_id,
+            arm=spec.arm, harness_version=spec.harness_version,
+            memory_version=int(spec.memory_version or 0), n_seeds=len(spec.seeds),
+            n_dropped=int(metrics.n_dropped), config_hash=_safe_config_hash(config),
+            seeds_hash=_seed_hash(proto),
+            protocol_id=str(getattr(proto, "version", "") or ""),
+            episode_config_hash=spec.episode_config_hash)
+        write_arm_archive(run_root, generation=spec.generation, split=spec.split,
+                          basket=spec.basket_id, arm=spec.arm, result=partial,
+                          provenance=provenance)
+
+    return _persist
+
+
+def _seed_hash(proto: Any) -> str:
+    """种子协议的 ``seeds_hash``（缺失/``None`` → ``""``）。
+
+    注意 ``getattr(proto, "seeds_hash", "") or ""`` 对 ``None`` **无效**（``str(None)`` → ``"None"``），
+    这正是 F42-A 复用闸第一次写完就永远对不上的原因（归档写 ``"None"``、对拍算 ``""``）。
+    """
+    value = getattr(proto, "seeds_hash", None)
+    return "" if value is None else str(value)
+
+
+def _safe_config_hash(config: Any) -> str | None:
+    if config is None:
+        return None
+    try:
+        from dice_ratchet.infra.config import config_hash
+
+        return config_hash(config)
+    except Exception: # noqa: BLE001 - 归档是可观测性产物，不得阻塞测量
+        return None
 
 
 def _config_digest(obj: Any) -> str | None:
@@ -782,6 +952,144 @@ def _config_digest(obj: Any) -> str | None:
         payload = {"repr": repr(obj)}
     text = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+# =====================================================================
+# 臂归档与复用（F42-A/B：每代评估的检查点）
+# =====================================================================
+#
+# 现场：MOD-07 的 resume 单元只有**整代**（`loop/generation.py::_cycle_artifacts_exist` 看
+# `generations/gen-NNN/{report,decision}.json`），不在就把 phase 重置为 playing **重跑整代**。
+# 一代 84 局评估 ≈ 3.75 h / ≈¥47（实测 `m2-s32b-smoke-c1-medium6` 的 gen-1），中断即再付一次。
+# 引擎早就有长跑能力（`run_eval` 的 `resume_results` / `on_result`，F18/F19/F20），缺的是
+# 「中间那层」：`evaluate_arm` 不转发它们。本段补上「按臂落盘 + fail-closed 复用」。
+
+#: provenance 里必须**逐字段相等**才允许复用的键（fail-closed：任一不同就重算）。
+ARM_PROVENANCE_KEYS: Final[tuple[str, ...]] = (
+    "generation", "split", "basket", "arm", "harness_version", "memory_version",
+    "config_hash", "seeds_hash", "episode_config_hash",
+)
+
+#: 臂归档里逐局需要还原的字段（``win`` / ``degraded_flag`` 是 property，见 ``EpisodeResult``）。
+#: 含 ``arm``：它是逐局事实，归档必须**原样还原**（否则复用会把 ``arm`` 换成请求值，
+#: 让「复用」悄悄改变了测量结果 —— 测试替身返回的 arm 与请求值不同时就会暴露）。
+_EPISODE_FIELDS: Final[tuple[str, ...]] = (
+    "seed", "outcome", "truncation_reason", "stages_cleared", "hearts_left", "battles_won",
+    "decisions", "decisions_llm", "steps", "illegal_attempts", "fallback_decisions",
+    "kind_counts", "slot_counts", "seq_hash", "dropped", "degraded", "decision_kinds",
+    "error_code", "arm",
+)
+
+
+def arms_dir(run_root: Path | str) -> Path:
+    """``runs/<run_id>/metrics/arms/``（F42-A 的臂归档目录）。"""
+    return Path(run_root) / "metrics" / "arms"
+
+
+def arm_archive_path(run_root: Path | str, *, generation: int, split: str, basket: str,
+                     arm: str) -> Path:
+    """``metrics/arms/gen{gen:03d}-{split}-{basket}-{arm}.json``（PRD §13）。"""
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in str(arm)) or "arm"
+    return arms_dir(run_root) / f"gen{int(generation):03d}-{split}-{basket}-{safe}.json"
+
+
+def _episode_to_dict(result: EpisodeResult) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for name in _EPISODE_FIELDS:
+        value = getattr(result, name, None)
+        out[name] = list(value) if isinstance(value, tuple) else value
+    return out
+
+
+def _episode_from_dict(data: Mapping[str, Any], *, split: Split, generation: int,
+                       harness_version: int, arm: str) -> EpisodeResult:
+    return EpisodeResult(
+        split=split, generation=int(generation), harness_version=int(harness_version),
+        arm=str(data.get("arm") or arm), seed=int(data.get("seed") or 0),
+        outcome=str(data.get("outcome") or "lose"),
+        truncation_reason=(str(data["truncation_reason"])
+                           if data.get("truncation_reason") else None),
+        stages_cleared=int(data.get("stages_cleared") or 0),
+        hearts_left=int(data.get("hearts_left") or 0),
+        battles_won=int(data.get("battles_won") or 0),
+        decisions=int(data.get("decisions") or 0),
+        decisions_llm=int(data.get("decisions_llm") or 0),
+        steps=int(data.get("steps") or 0),
+        illegal_attempts=int(data.get("illegal_attempts") or 0),
+        fallback_decisions=int(data.get("fallback_decisions") or 0),
+        kind_counts=tuple(int(x) for x in (data.get("kind_counts") or ()))[:16],
+        slot_counts=dict(data.get("slot_counts") or {}),
+        seq_hash=str(data.get("seq_hash") or ""),
+        dropped=bool(data.get("dropped", False)),
+        degraded=bool(data.get("degraded", False)),
+        decision_kinds=tuple(int(x) for x in (data.get("decision_kinds") or ())),
+        error_code=(str(data["error_code"]) if data.get("error_code") else None))
+
+
+def arm_provenance(*, generation: int, split: str, basket: str, arm: str,
+                   harness_version: int, memory_version: int, n_seeds: int,
+                   n_dropped: int = 0, config_hash: str | None = None,
+                   seeds_hash: str = "", protocol_id: str = "",
+                   episode_config_hash: str | None = None) -> dict[str, Any]:
+    """臂归档的 provenance（F42-A；``evaluate_arm`` 与调用方共用同一构造）。"""
+    return {"generation": int(generation), "split": str(split), "basket": str(basket),
+            "arm": str(arm), "harness_version": int(harness_version),
+            "memory_version": int(memory_version), "n_seeds": int(n_seeds),
+            "n_dropped": int(n_dropped), "config_hash": config_hash,
+            "seeds_hash": str(seeds_hash), "protocol_id": str(protocol_id),
+            "episode_config_hash": episode_config_hash, "created_at": utc_now()}
+
+
+def provenance_matches(archived: Mapping[str, Any], wanted: Mapping[str, Any]) -> bool:
+    """provenance **逐字段**相等（``ARM_PROVENANCE_KEYS``）；任一不同即不复用（fail-closed）。"""
+    return all(archived.get(key) == wanted.get(key) for key in ARM_PROVENANCE_KEYS)
+
+
+def load_arm_archive(path: Path | str) -> dict[str, Any] | None:
+    """读回臂归档（缺失/损坏 → ``None``，按「不复用」处理）。"""
+    path = Path(path)
+    if not path.is_file():
+        return None
+    try:
+        data = read_json(path)
+    except InfraError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def write_arm_archive(run_root: Path | str, *, generation: int, split: str, basket: str,
+                      arm: str, result: ArmResult,
+                      provenance: Mapping[str, Any]) -> Path:
+    """落一份臂归档：``ArmResult.as_dict()`` + provenance + 逐局明细（F42-A）。"""
+    path = arm_archive_path(run_root, generation=generation, split=split, basket=basket,
+                            arm=arm)
+    payload = dict(result.as_dict())
+    payload["provenance"] = dict(provenance)
+    payload["episodes"] = [_episode_to_dict(r) for r in result.results]
+    write_json_atomic(path, _round_floats(payload))
+    return path
+
+
+def reuse_from_archive(archive: Mapping[str, Any], *, seeds: Sequence[int], split: Split,
+                       generation: int, harness_version: int, arm: str
+                       ) -> tuple[list[EpisodeResult], tuple[int, ...]]:
+    """从归档里挑出**仍然有效**的已完成局，返回 ``(results, missing_seeds)``。
+
+    只接受 seed 在当前篮子内的逐局记录（形状异常/重复/超范围 → 丢弃）。
+    """
+    episodes = archive.get("episodes") or []
+    wanted = {int(s) for s in seeds}
+    out: dict[int, EpisodeResult] = {}
+    for item in episodes:
+        if not isinstance(item, Mapping):
+            continue
+        seed = int(item.get("seed") or 0)
+        if seed not in wanted or seed in out:
+            continue
+        out[seed] = _episode_from_dict(item, split=split, generation=generation,
+                                       harness_version=harness_version, arm=arm)
+    missing = tuple(sorted(wanted - set(out)))
+    return [out[s] for s in sorted(out)], missing
 
 
 @dataclass(frozen=True)
