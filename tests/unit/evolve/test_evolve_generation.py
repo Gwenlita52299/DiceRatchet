@@ -448,3 +448,36 @@ def _paired(**values):
             return dict(self._v)
 
     return _P()
+
+
+# =====================================================================
+# F32：``harness=`` 缺省时不得 ``NameError``（生产装配走的就是这一支）
+# =====================================================================
+
+def test_f32_harness_default_does_not_name_error(tmp_path):
+    """F32：省略 ``harness=`` 必须解析出 ``run_ctx.harness_dir``，而不是抛 ``NameError``。
+
+    原写法 ``getattr(run_ctx, "harness_dir", default_harness_dir())`` 会**无条件**求值
+    默认参数，而 ``default_harness_dir`` 这个函数在仓库里从不存在 ⇒ 生产装配
+    （``app._evolve_fn_provider`` 的 ``run_one_generation(harness=None)``）必然崩溃。
+    本模块的单测**全部**显式传 ``harness=``，所以 1800+ 用例全绿也没拦住它——2026-10-09
+    的 §3.2 实跑因此在做完任何事之前崩掉，白烧 ¥34.62 / 92 min。
+    """
+    ctx = FakeRunContext(tmp_path, harness=tmp_path / "h")
+    assert GEN._resolve_harness_path(None, ctx) == tmp_path / "h"           # 默认取 run_ctx
+    assert GEN._resolve_harness_path(tmp_path / "x", ctx) == tmp_path / "x"  # 显式优先
+    # 鸭子类型替身（缺 ``harness_dir``）退到 infra 常量，而不是 ``NameError``
+    assert GEN._resolve_harness_path(None, object()) == Path("harness")
+
+
+def test_f32_full_generation_without_harness_kwarg(tmp_path, stub_pairing):
+    """F32 的行为面：**完全不传** ``harness=`` 时整代仍能跑完（= 生产装配口径）。"""
+    _harness, _evolve, _app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+    ev = ScriptedEvaluator(heldout=FakeArm(win_rate=0.40), paired=_paired(delta=0.10))
+    outcome = GEN.run_one_generation(
+        state=state, run_ctx=run_ctx, runner=None, config=run_ctx.app_config,
+        evaluator=ev, client=_one_candidate_llm(), run_dir=run_root, seed=7)
+
+    assert outcome is not None
+    assert _read_report(run_root, 1)["decision"] in ("accept", "reject")

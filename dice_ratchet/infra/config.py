@@ -254,7 +254,7 @@ class InferenceConfig:
     retry_backoff_ms: int = 200
     total_timeout_ms: int = 120000 # 实测回填（与 default.yaml 同值）；原 8000 < 实测 p50，会把正常决策判成 E_LLM_TIMEOUT
     generate_timeout_ms: int = 30000
-    max_tokens: int = 256
+    max_tokens: int = 256 # F37：不能全局抬高（会打断 mock/4096 与吃掉 8B/8192 余量）；提案的输出预算须按调用方单独给
     reasoning_max_tokens: int = 160
     context_overflow_policy: str = "reject" # reject | truncate
     train_temperature_min: float = 0.7

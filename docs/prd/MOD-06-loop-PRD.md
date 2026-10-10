@@ -1,6 +1,6 @@
 # MOD-06 loop 技术 PRD
 
-> 版本：v1.4（2026-10-09 新增 §9.1：评估局的环境隔离——每局一个 `SandboxEnv`，登记缺陷 F30/残留 F31，见 §17）· 状态：草案（待评审）· 所属里程碑：M2 · 上游 Spec：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突时以 Spec 为准）· 作者：MOD-06 模块作者
+> 版本：v1.5（2026-10-10 新增 §9.2：`--resume` 必须能重入未完成的周期边界（F34：空队列曾静默 `phase=done`，见 §17））· 状态：草案（待评审）· 所属里程碑：M2 · 上游 Spec：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突时以 Spec 为准）· 作者：MOD-06 模块作者
 > 代码路径：`dice_ratchet/loop/{runner.py, reflect.py, generation.py}` · 产物路径：`runs/<run_id>/`
 
 ## 1. 背景与目标
@@ -337,6 +337,27 @@ MOD-06 **不自己装配模型**：`loop run --agent llm` 的客户端由**组�
 
 **残留 F31（低危，未修）**：`loop/runner.py:446-448` 与 `:219` 在局末做 `state.counters.illegal_actions` / `llm_timeouts` / `io_retries += …`，是**跨线程读改写**，`n_workers=2` 下理论上丢更新。影响面仅限 `state.json` 的上报计数器——这三个计数器在 `dice_ratchet/` 内**零读取点**，不进门禁、不进裁决。
 
+### 9.2 `--resume` 必须能重入未完成的周期边界（v1.5 新增；F34）
+
+**约束**：队列排空 **不等于** 本轮无事可做。`--resume` 时 `run()` 会把 `pending_queue` 重算为
+「`--seeds` 里尚未完成的 seed」，因此**崩溃在周期边界内**的 run（`phase="evolving"`、
+`evolving_cycle` 悬着、`completed` 恰好是 `k` 的整数倍）会拿到**空队列**。
+
+**缺陷（F34，2026-10-09 实测）**：`_loop` 是 `while state.pending_queue:`，空队列一次都不进
+⇒ 边界永不重入 ⇒ 直接落到 `phase="done"`。零成本探针实测该 resume 返回
+``{"exit_code": 0, "phase": "done", "generation": 0}``，而 `evolving_cycle` 仍悬着 `1`
+——**对外是成功，实际一步没走**。这正是 §9.0 那类「静默」失败（与 F28 同类）。
+
+**修法**：队列排空后补一次 `maybe_run_generation(...)`。这不是新语义——该函数的 docstring
+本来就写明「进程在 `evolving` 阶段被杀 → `--resume` 检查 `generations/gen-XXX/{report,decision}.json`：
+存在则标该 cycle 完成，**否则重置 `phase="playing"` 后重新触发**」；只是原先没有任何路径在空队列下
+调用它。**只调一次**即可：`cycle_due` 的三重幂等键（`last_completed_cycle` + `evolving_cycle` +
+MOD-07 产物存在性）保证不重复触发，且空队列下 `cycle_index` 不再前进。
+
+**护栏**：`tests/unit/loop/test_loop_generation.py::test_f34_resume_reenters_boundary_when_queue_empty`
+——伪造崩溃现场后断言 `evolve_fn` 恰调 1 次、`generation` 0→1、`evolving_cycle` 清空、再次
+resume 不重复触发。修复前该用例失败。
+
 ## 10. 错误处理与降级（使用 Spec §8 的错误码前缀）
 
 | 触发条件 | 错误码 | MOD-06 行为 | 计入评估样本 |
@@ -459,3 +480,4 @@ MOD-06 **不自己装配模型**：`loop run --agent llm` 的客户端由**组�
 | v1.2 | 2026-09-30 17:49 | seed 取用规则回填为 Spec B-36；HITL 挂起语义以 Spec §4.5 B-32 为准 |
 | v1.3 | 2026-10-09 | **新增 §9.0「模型角色与实验臂」**（对齐 Spec v2.0 B-42/B-43/B-44）。① 澄清本模块**不自己装配模型**：`loop run --agent llm` 的客户端由组合根经 `RoleModelProvider` 注入，故 `experiment.arm` 对闭环生效，三角色按 Spec §4.7 的四级优先级 fail-closed 解析（装配细节归 MOD-03 §7.1）。② 登记 **M2 闭环主力臂 = `C1`**（三角色全 `deepseek-flash` + `harness: evolve`）与随之变化的成本口径：本地 8B 19.6 min/局 ⇒ `E_gen=114` ≈ 37 h/代；API 臂 2.09–2.52 min/局 ⇒ **≈4.0–4.8 h/代、≈¥84–100/代**；**局数约束（`max_episodes_per_generation=120`、`E_gen=114`）不变，但瓶颈由墙钟转为 API 花费/限流**。③ 登记 **缺陷 F28 的「静默性」**：`hard × 6` 上 C5 因 `truncation_rate=0.30 > 0.15` 全拒，而本模块按 FR-06-7 对接受与拒绝**同样** `generation += 1` 并回到 `playing`（退出码 0），不会报错 ⇒ **「跑完 N 代、退出码 0」不等于闭环有产出**；判定 M2 验收必须查 `harness/versions/` 新版本与逐代 `decision` 记录。④ 登记 **F29**：臂的 `harness: fixed/evolve` 字段本模块**不消费**（演化开关是 `--no-evolve` / 组合根注入的 `_EVOLVE_PROVIDER`）⇒ **`C0` 与 `C1` 当前行为等价**，选 `C0` 跑闭环照样演化 |
 | v1.4 | 2026-10-09 | **新增 §9.1「评估局的环境隔离」**（对齐 Spec v2.2 B-46；处置缺陷 F30，登记残留 F31）。① **约束**：本模块注入 MOD-08 的执行器**不得跨评估局共享 `SandboxEnv`**——`evaluate_arm(n_workers=cfg.evals.n_workers=2)` 驱动同一个 runner，而 `SandboxEnv` 是有状态单实例 ⇒ 两局 `reset`/`step` 交错、观测串局 ⇒ 模型按别的局的相位出动作 ⇒ 非法 ⇒ 重试耗尽 ⇒ fallback。② **实测**（§3.2 冒烟 5/40 局时发现并中止）：`illegal_rate ≈ 0.285` / `fallback_rate ≈ 0.290`，同臂同 seed 同时间窗的 `play`（`SandboxRunner` 每局新 env、`n_workers=1`）为 `0.032` / `0.000`；`heuristic` 臂复现 H1 全 40 局——共享 env 13/40 局非法、0/40 胜，每局新 env 0/40、18/40 = 45.0%（对上 `greedy_counter` hard×6 45.5%）。③ **落地**：`loop/cli.py` 改注入 `env_factory=_env_factory(cfg)`（每局 `episode_id=key`、局末 `close()`，与 MOD-08 `SandboxRunner` 同构）；构造代价 1.1 ms/局。**这与 FR-06-14「评估局并发时 MOD-04 不可共享实例」是同一条理由**，此前只落到 `policy` 上。④ **护栏**：`tests/integration/test_loop_env_isolation.py` 从组合根装配，断言 `runner.env is None` + `n_workers=1` 与 `=2` 逐字段一致；`git stash` 掉修复后 **5/5 稳定失败**。门禁 **1870 passed / 2 skipped**。⑤ 登记 **F31**（局末 `state.counters.*` 跨线程读改写，仅影响上报值、零读取点，本轮未修） |
+| v1.5 | 2026-10-10 | **新增 §9.2：`--resume` 必须能重入未完成的周期边界（F34，对齐 Spec v2.3）**。① 实测：`--resume` 一个「队列已空、周期边界崩溃」的 run 会返回 **退出码 0 / `phase=done`**，但 `generation` 不动、`evolving_cycle` 悬着 ⇒ 静默成功（零成本探针实测，见 §9.2）。② 修法：队列排空后补一次 `maybe_run_generation`（其 docstring 本就定义了该重入语义），靠 `cycle_due` 的幂等键防重复。③ 护栏：`test_f34_resume_reenters_boundary_when_queue_empty`（修复前失败）。 |

@@ -173,3 +173,38 @@ def test_t06_12_train_seeds_accepted(tmp_path, monkeypatch):
     monkeypatch.chdir(REPO_ROOT)
     args = argparse.Namespace(seeds="train:1000-1002")
     assert _resolve_seeds(args, object(), resume=False) == [1000, 1001, 1002]
+
+
+# =====================================================================
+# F33：``_hitl_gate_pending`` 的 ``read_json`` 必须可见（HITL resume 路径）
+# =====================================================================
+
+def test_f33_hitl_gate_pending_does_not_name_error(tmp_path):
+    """F33：``_hitl_gate_pending`` 原先用了没有模块级导入的 ``read_json``。
+
+    触发条件正是 **HITL 流程**：``resume`` 且该 cycle 的
+    ``report.json``/``decision.json`` 已存在 → ``_cycle_artifacts_exist`` →
+    ``_hitl_gate_pending`` → ``NameError``。模块级只导了 ``read_jsonl``，而
+    ``read_json`` 当时只在另一个函数体内局部导入（另一个作用域，帮不到这里），
+    故这里逐一钉住三种情形。
+    """
+    from dice_ratchet.loop.generation import _cycle_artifacts_exist, _hitl_gate_pending
+
+    base = tmp_path / "generations" / "gen-001"
+    base.mkdir(parents=True)
+    paths = type("_P", (), {"generations": tmp_path / "generations"})()
+
+    # 无 gate.json / 无产物
+    assert _hitl_gate_pending(base) is False
+    assert _cycle_artifacts_exist(paths, 1) is False
+
+    # report.json + gate.json(status=pending) → 人工尚未裁决
+    (base / "report.json").write_text("{}", encoding="utf-8")
+    (base / "gate.json").write_text('{"status": "pending"}', encoding="utf-8")
+    assert _hitl_gate_pending(base) is True
+    assert _cycle_artifacts_exist(paths, 1) is False, "pending 的 cycle 不算已裁决"
+
+    # 已裁决 → 不再是 pending，产物算存在
+    (base / "gate.json").write_text('{"status": "accepted"}', encoding="utf-8")
+    assert _hitl_gate_pending(base) is False
+    assert _cycle_artifacts_exist(paths, 1) is True

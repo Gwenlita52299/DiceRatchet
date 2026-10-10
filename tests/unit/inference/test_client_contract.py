@@ -113,6 +113,38 @@ def test_loose_stub_clients_still_work() -> None:
     assert stub.kwargs["mode"] == "eval"
     assert stub.kwargs["sampling"] == {"temperature": 0.0}
     assert stub.kwargs["seed"] == 5
+    # F37：提案必须按**调用方**给输出预算（全局 inference.max_tokens=256 只够决策点）
+    from dice_ratchet.evolve.proposer import _PROPOSE_MAX_TOKENS
+    assert stub.kwargs["max_tokens"] == _PROPOSE_MAX_TOKENS > 256
+
+
+def test_f37_sync_client_forwards_per_call_max_tokens() -> None:
+    """F37：按调用方给的输出预算必须**真的到达** ``guard_context``。
+
+    manager 层早就支持 per-call ``max_tokens``（``test_backends_optional.py`` 有用例），
+    但同步门面没把它暴露出来，于是 MOD-07 的提案只能吃 ``inference.max_tokens=256``——
+    实测提案需 ~500 completion token，256 时一律 ``finish_reason=length`` 截断、被报成
+    ``E_LLM_SCHEMA_INVALID`` ⇒ **proposer 永远 0 候选、闭环静默定格**。
+    """
+    from dice_ratchet.inference.backend import MockBackend
+
+    def _small_window() -> BackendManager:
+        registry = build_registry(registry_data(model_id="mock-a", context_length=1000))
+        return BackendManager(
+            registry=registry, mode="eval", config=inference_config(mode="eval", seed=1042),
+            backend_factory=lambda spec: MockBackend([GOOD], model_id=spec.model_id))
+
+    client = BackendInferenceClient(_small_window(), model_id="mock-a")
+    with pytest.raises(InferenceError) as excinfo:
+        client.generate_json(MESSAGES, SCHEMA, mode="eval",
+                             sampling={"temperature": 0.0}, seed=1042, max_tokens=2048)
+    assert excinfo.value.code == E.E_LLM_CONTEXT_OVERFLOW, (
+        "覆盖值必须参与 guard_context（est_prompt + max_tokens ≤ context_length）")
+
+    # 同一窗口、不覆盖（用配置默认 256）→ 放行：证明拦下的正是调用方给的预算
+    plain = BackendInferenceClient(_small_window(), model_id="mock-a")
+    assert plain.generate_json(MESSAGES, SCHEMA, mode="eval",
+                               sampling={"temperature": 0.0}, seed=1042).text == GOOD
 
 
 def test_coerce_client_is_role_aware_and_backward_compatible() -> None:

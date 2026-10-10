@@ -165,7 +165,7 @@ def validate_trajectory_line(line: Mapping[str, Any]) -> None: ...  # 失败抛 
              "decision_index","plan_index","attempt","source","obs_digest","action",
              "reward","cum_reward","illegal","mode","ts"],
  "properties":{
-   "episode_key":{"type":"string","pattern":"^e-[0-9]{6}-g[0-9]{3}-(train|parent|cand-[a-z0-9]+|baseline-[a-z_]+|ablation-[a-z_]+)$"},
+   "episode_key":{"type":"string","pattern":"^e-[0-9]{6}-g[0-9]{3}-(train|parent|cand-[a-z0-9]+|baseline-[a-z_]+|ablation-[a-z_]+)(-smoke)?$"},
    "generation":{"type":"integer","minimum":0},
    "harness_version":{"type":"integer","minimum":0},
    "arm":{"type":"string"},
@@ -453,3 +453,4 @@ T-09-1～T-09-16 全部落地（`bbdc02e` 起）；证据见 [M0 验收报告](.
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：`config_hash` 不再包含 harness_version，新增 `artifact_hash`（P0-7）；redaction 只作用于 prompt/memory/reflection（P0-7）；事件改为 `<module>.<event>` 注册表并统一落到 `events.jsonl`（P1-11）；轨迹 schema 对齐 §4.5 新字段与 `episode_key` 路径（P1-10）；退出码新增 5（P1-13）；CLI 对齐 §4.6，统一使用 `--run-id`（P1-14）；git tag 改为 `harness-v{N}`（P1-15）；新增 FR-09-18 schema 与原子写、FR-09-19 `runs/` 忽略检查 |
 | v0.3 | 2026-09-30 17:49 | FR-09-1 按 Spec B-26 插入 harness/config.json 层及白名单校验 |
 | v0.3.1 | 2026-10-03 | 修复 `bootstrap_process()` 早发 `infra.run_start`（缺必填 `config_hash`）：`DICERATCHET_DEV=1` 下任何命令都会以退出码 1 失败（用 `guards check` 复现）。改为进程快照由 `cli_init_run()` 的 run_start 记录，并新增 `process_snapshot()`（FR-09-17）；`audit leak` 退出码注释同步为 `0/1/2/4` |
+| v0.4 | 2026-10-10 | **轨迹 `episode_key` 的 `arm` 位允许 `-smoke` 后缀（F41，对齐 Spec v2.3 B-50）**。MOD-07 FR-07-6 的冒烟臂是 `parent-smoke` / `cand-{id}-smoke`，而登记模式不含该后缀 ⇒ 冒烟局**每一行**轨迹都失败 `E_IO_TRAJECTORY_SCHEMA` → 该局 dropped（轨迹文件 0 行）→ `n_dropped/n = 1.0 > drop_rate_max` → `low_confidence` → `error_codes` 带 `E_EVAL_INSUFFICIENT_N` → `judge.smoke_fast_reject` 返回 `smoke_error:…` ⇒ **每个候选都在冒烟关被淘汰，`harness/versions/` 永不可能有新版本**。该语法在**三处**有副本，本版三处同步：§6.2 的 schema 片段、`infra/logging.py` 的 `_EPISODE_KEY_RE`、`schemas/trajectory_line.schema.json`；前两处加了一致性用例 `test_episode_key_patterns_stay_in_sync` 防再次漂移（F41 的成因就是「写了两遍、只改一处」）。 |

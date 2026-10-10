@@ -64,7 +64,17 @@ class InferenceClient(Protocol):
     """
 
     def generate_json(self, messages: Sequence[Any], schema: Mapping[str, Any], *,
-                      mode: str, sampling: Mapping[str, Any], seed: int) -> Any: ...
+                      mode: str, sampling: Mapping[str, Any], seed: int,
+                      max_tokens: int | None = None) -> Any:
+        """``max_tokens`` 是按**调用方**给的输出预算（F37）；``None`` = 用 ``inference.max_tokens``。
+
+        不同调用方的输出体量差一个数量级：决策点是一个动作 JSON（~200 token），而 MOD-07 的
+        harness 提案是「unified diff + rationale + expected_effect」（实测 ~500，且随
+        ``max_diff_chars=4000`` 上探）。**不能**靠全局抬高 ``inference.max_tokens`` 解决——
+        ``guard_context`` 按 ``est_prompt + max_tokens ≤ context_length`` 判定，抬高会打断
+        小窗口模型（``mock`` 4096 实测 71 例 ``E_LLM_CONTEXT_OVERFLOW``）。
+        """
+        ...
 
 
 #: 持久后台事件循环（``_run_sync`` 用）。MOD-03 的 ``BackendManager`` 在内部缓存
@@ -123,9 +133,13 @@ class BackendInferenceClient:
         self.role = role
 
     def generate_json(self, messages: Sequence[Any], schema: Mapping[str, Any], *,
-                      mode: str, sampling: Mapping[str, Any], seed: int) -> Any:
+                      mode: str, sampling: Mapping[str, Any], seed: int,
+                      max_tokens: int | None = None) -> Any:
         kwargs = dict(sampling)
         kwargs["seed"] = int(seed)
+        # F37：按调用方给的输出预算原样带给 MOD-03（``None`` = 不覆盖，用 inference.max_tokens）。
+        if max_tokens is not None:
+            kwargs["max_tokens"] = int(max_tokens)
         # 把调用方声明的 train/eval 口径带进 MOD-03：B-14 的收紧只在评估口生效，
         # 训练局的探索温度（0.7–1.2）不再被门面层的默认 mode 误判为越界。
         kwargs["mode"] = str(mode)

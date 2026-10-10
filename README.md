@@ -24,7 +24,7 @@ RSI（Recursive Self-Improvement，递归自我改进）的公开讨论大多停
 | M0 环境 | MOD-09 骨架、MOD-01 Python 移植、MOD-02 沙箱 | ✅ 2026-10-03 验收通过（[报告](docs/reviews/2026-10-03-M0验收报告.md)）：5 组 golden 逐行对拍、200 局差分 0 分歧、heuristic 差 0.0pp、G1–G6 全过 |
 | M1 基线 | MOD-03 本地推理：后端契约 + 三级 JSON 修复 + 内存预算/并发限流 + 聚合指标 | ✅ 代码落地（`tests/unit/inference` / `tests/integration/test_inference_*` / `tests/golden/inference`）；真实 8B 200 条跑批待权重落盘（`inference robustness`） |
 | M1 基线 | 决策策略（MOD-04）+ 三基线 | 计划 → 2027-01-14 |
-| M2 闭环 | 反思记忆（MOD-05）+ 闭环编排（MOD-06）+ harness 自进化（MOD-07） | ✅ 代码落地：`tests/unit/{memory,loop,evolve}` + `tests/integration/{test_loop_*,evolve}`；主力臂已定（`C1` = 三角色全 `deepseek-flash`，Spec v2.2 B-43/B-45/B-46）、C5 的门已按该臂改造（`truncation` 改相对门）；**端到端跑代仍未做**（检查单 §3.2） |
+| M2 闭环 | 反思记忆（MOD-05）+ 闭环编排（MOD-06）+ harness 自进化（MOD-07） | ✅ 代码落地：`tests/unit/{memory,loop,evolve}` + `tests/integration/{test_loop_*,evolve}`；主力臂已定（`C1` = 三角色全 `deepseek-flash`，Spec v2.3 B-43/B-45/B-46/B-51）、C5 的门已按该臂改造（`truncation` 改相对门）；**端到端跑代仍未做**（检查单 §3.2） |
 | M3 测量 | held-out 裁判、消融、多样性、test 终检 | 计划 → 2027-04-22 |
 
 ## 系统结构

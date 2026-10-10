@@ -1,6 +1,6 @@
 # MOD-03 inference 技术 PRD
 
-> 版本：v1.6（2026-10-09 **三角色解耦 + DeepSeek API 后端回填**，对齐 Spec v2.0 B-42；见 §2.1/§7/§9/§17）· 状态：草案（待复核）· 所属里程碑：M1（DeepSeek 后端为 Issue #1 追加）
+> 版本：v1.7（2026-10-10 **`generate_json` 增加按调用方的 `max_tokens`**（Spec v2.3 B-47，F37：决策点 ~200 token 与 harness 提案 ~500 token 不能共用同一个全局上限）；见 §6/§17）· 状态：草案（待复核）· 所属里程碑：M1（DeepSeek 后端为 Issue #1 追加）
 > 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（**唯一事实来源**；冲突以 Spec 为准）
 > 上游计划：[../../项目计划-DiceRatchet.md](../../项目计划-DiceRatchet.md) §4 技术栈（Mac M5 24GB / MLX 或 llama.cpp / Qwen3-8B → 27B Q4）、§8 风险（LLM 输出非 JSON）
 > 作者：DiceRatchet 技术文档（MOD-03 负责模块）· 依赖：MOD-09 infra（配置、日志、run_id、CLI）
@@ -186,6 +186,27 @@ DECISION_SCHEMA: dict[str, Any] = {
 | 选型 | 阶段一默认（Apple Silicon 更快、迭代快） | 阶段二默认（30B MoE GGUF 生态成熟 + GBNF 稳定），需真并发时用 server 模式 |
 
 两者对上层完全等价：同一份 `DECISION_SCHEMA`、同一套 `GenerationResult`、同一组 `E_LLM_*`；差异只由注册表 `supports_grammar` / `max_inflight` 驱动降级路径。
+
+### 6.1 `generate_json` 的按调用方输出预算（v1.7 新增；Spec v2.3 B-47，F37）
+
+```python
+def generate_json(self, messages, schema, *, mode: str,
+                  sampling: Mapping[str, Any], seed: int,
+                  max_tokens: int | None = None) -> Any: ...
+```
+
+`max_tokens` 是**按调用方**给的输出预算：`None` ⇒ 用 `inference.max_tokens`。`BackendManager`
+把预算透传给 `guard_context`（`est_prompt + max_tokens ≤ context_length`）与实际生成。
+
+**为什么必须按调用方给**（实测，2026-10-09）：不同调用方的输出体量差一个数量级——决策点是
+一个动作 JSON（~200 token），而 MOD-07 的 harness 提案是「unified diff + rationale +
+expected_effect」（实测需 **~500** completion token，且随 `max_diff_chars=4000` 上探）。
+提案沿用 256 时响应一律 `finish_reason=length` 截断、JSON 在半个对象里断掉 → 被报成
+`E_LLM_SCHEMA_INVALID` → **proposer 永远 0 候选、闭环静默定格**。
+
+**禁止**用「全局抬高 `inference.max_tokens`」解决：2048 时 `mock`（`context_length=4096`）
+实测触发 **71 例** `E_LLM_CONTEXT_OVERFLOW`（`est_prompt 2052 + 2048 > 4096`），并吃掉
+`qwen3-8b`（8192）臂的余量。按调用方给预算既不打断小窗口模型，也不改 `config_hash`。
 
 ## 7. 数据模型与存储
 
@@ -474,3 +495,4 @@ Qwen3 思考模式烧光 token 预算、probe prompt 欠约束（详见 [M1 验�
 | v1.5 | 2026-10-06 | **对齐超时默认值的三层漂移**（复核登记 → 已修）：① `InferenceConfig.total_timeout_ms` dataclass 默认 8000 → **120000**（与 `configs/default.yaml` 一致）；② `inference/backend.py` 的同键 `getattr` 兜底 8_000 → **120_000**；③ 连带把 `app.py` / `evals/cli.py` 的 `seed_timeout_s` 兜底（300 / 1800）对齐为 **14400**（`EvalConfig` / `EvalSpec` / YAML 三方原已一致）。依据：`_default_dict()` 取自 dataclass、YAML 逐键覆盖，故改 dataclass 默认**不改变生效值**（仍 120000 / 14400），**`config_hash` 实测不变**（`b6f119ca325e282d`），存量 run 不会 `E_IO_RUN_CONFLICT`；差异只影响「不读 YAML 直接构造配置」的路径。新增守门用例 `tests/unit/infra/test_config.py`（7 条，含源码文本级兜底校验），并做变异验证 |
 | v1.4 | 2026-10-06 | **补记 2026-10-04 的真实模型实测回填**（此前只在 §16 Q-2/Q-6 与配置注释里，变更记录缺一条）：权重 `mlx-community/Qwen3-8B-4bit` 落盘（`weights_sha256=20303070…`）、`resident_gb_est` 5.6 → **4.6077**、`perf_budget` 1500/3000/25 → **5000/6000/10**（原目标实测未达成，按实测重设）、`total_timeout_ms` 8000 ms → **120000 ms**（8 s < 实测 p50，正常决策会被判 `E_LLM_TIMEOUT`）；主快照 n=200 实测 `m1_evidence=true`、首答 0.94、`schema_fail_rate` 0.005、`t_d` p50 5.687 s / p95 11.70 s；并登记只有真实权重能暴露的 **F14**（mlx-lm API 漂移：`load(tokenizer_path=)` / `stream_generate(seed=)` / `mx.metal.*` 改名）、**F15**（Qwen3 思考模式烧光 token 预算 → 显式 `enable_thinking=False`）、**F16**（probe/bench 固定 prompt 欠约束）、**F17**（权重摘要误把 HF 下载缓存算进去）。依据 [M1 验收报告 §12](../reviews/2026-10-04-M1验收报告.md) |
 | v1.6 | 2026-10-09 | **三角色解耦 + DeepSeek API 后端回填**（对齐 Spec v2.0 B-42；依据 [Issue #1 落地报告](../tasks/2026-10-08-issue-1-角色解耦落地报告.md)）。① §2.1 新增四个文件：`client.py`（三角色共用的 `InferenceClient` 同步契约）、`deepseek_backend.py`、`roles.py`（`RoleModelProvider` / `resolve_role_bindings` / `role_model_ids` / `run_provenance`）、`secrets.py`。② **新增 §7.1**：三角色（`policy`/`reflection`/`proposer`）的绑定**全部来自配置**，四级优先级 `experiment.roles.<role>` > `experiment.arms[arm].<role>` > `models.<role>` > `inference.model_id`，**fail-closed**（未知角色/未知臂/空 `model_id`/注册表缺模型/`provider=api` 缺 key 环境变量一律显式报错，绝不静默降级）；每个 run 落 `runs/<run_id>/models_provenance.json`（三角色各自的 `model_id`/`provider`/`backend`/`model_revision`/`online`/`api_key_present` + 臂 + `harness` 模式 + `config_hash`，**key 本体绝不落盘**）。③ 注册表新增 `deepseek-flash`（`provider=api`、`api_supports_seed=false`、`api_thinking=disabled`、`supports_grammar=false` 走 `json_object` + jsonschema）与 `deepseek-v4-pro`（已登记、当前无臂使用）；实测该账号**已无 `deepseek-chat`**（旧名下线）。④ §9 新增三行配置：`api_key_file`（默认 `.env`；真实环境变量优先、只读注册表声明的 `api_key_env`、key 只进内存、空串即关闭）、`models.policy/reflection/proposer`、`experiment.arm/roles/arms`（臂定义计入 `config_hash`）。⑤ **登记两条实测口径**：(a) DeepSeek **不承诺跨时间确定性**——字节相同的请求 9 次返回 9 个不同响应，故 `E_EVAL_NONDETERMINISTIC` 的判据改为按 request hash 比对 response hash；(b) `flash` 默认开思考模式会让 `content` 返空、每次白花一次调用，故结构化流水线显式 `api_thinking: disabled` |
+| v1.7 | 2026-10-10 | **`generate_json` 增加按调用方的 `max_tokens`（F37，对齐 Spec v2.3 B-47）**。① 背景：本键同时是「调用方未显式指定时的模态默认」，MOD-07 的提案也走它，而 256 只够决策点 ⇒ 提案一律被截断（`finish_reason=length`）→ 报成 `E_LLM_SCHEMA_INVALID` → 0 候选。② 修法：契约增加可选 `max_tokens`，`BackendInferenceClient` 原样带给 MOD-03（`BackendManager` 本就支持 per-call 覆盖，已有用例）。③ **明确否掉全局抬高**：2048 时 `mock`（4096）触发 71 例 `E_LLM_CONTEXT_OVERFLOW`、并吃掉 8B 余量；纯代码路线还保住了 `config_hash`（已付基线可复用）。④ 新增 §6.1 说明；护栏两条（门面转发 + proposer 传值），修复前均失败。 |

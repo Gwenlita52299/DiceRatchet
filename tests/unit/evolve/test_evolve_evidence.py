@@ -229,3 +229,77 @@ def test_harness_snapshot_excludes_versions_dir(tmp_path):
     names = [name for name, _ in snap.files]
     assert "prompts/decision.md" in names
     assert not any(name.startswith("versions/") for name in names)
+
+
+# =====================================================================
+# F35：运行期元数据不得进入 agent 可见文本（撞 heldout 数字区间）
+# =====================================================================
+
+def test_f35_reflection_metadata_not_carried_into_bundle(tmp_path):
+    """F35：带 ``entry.created_at`` 的反思记录不得把年份带进证据束。
+
+    2026-10-09 §3.2 实跑现场：``configs/seeds.yaml`` 的 ``numeric_scan: true`` 占用了
+    **2000-2099 / 9000-9099** 整个区间，而**日历年 2026 正在 H1（2000-2039）之内**；
+    旧的 ``_reflection_set`` 拷的是**整条**记录 ⇒ ISO 时间戳
+    ``"2026-10-09T16:34:13Z"`` 被判成「heldout seed 字面量」⇒ ``E_EVAL_INV5_LEAK``
+    （退出码 4）、整代中止 ⇒ **闭环在 2000-2039 年永远跑不起来**。
+    实测（真实证据束）：命中 3 处，全在 ``.reflections[i].entry.created_at``。
+
+    这里刻意**同时**塞入 ``prompt_tokens=2026`` 与 ``llm_latency_ms=2031``，证明修法
+    覆盖的不只是 ``created_at`` 一个字段。
+    """
+    run_root = tmp_path / "runs" / "run-1"
+    path = run_root / "reflections" / "e-001000-g000-train.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "episode_key": "e-001000-g000-train", "split": "train", "generation": 0,
+        "outcome": "win", "reflection_id": "refl-c5ae08ca726a",
+        "entry": {"text": "优先清护卫", "tags": ["low_virtue"], "stages_cleared": 6,
+                  "illegal_attempts": 7, "failure_cause": "virtue_management",
+                  "created_at": "2026-10-09T16:34:13Z", "run_id": "run-1",
+                  "prompt_tokens": 2026, "llm_latency_ms": 2031},
+    }, ensure_ascii=False), encoding="utf-8")
+    harness = tmp_path / "harness"
+    harness.mkdir()
+
+    bundle = P.build_evidence_bundle(run_id="run-1", n_traj=20, cfg=make_config(),
+                                     memory=None, run_dir=run_root, harness=harness,
+                                     generation=1)
+
+    assert len(bundle.reflections) == 1
+    item = dict(bundle.reflections[0])
+    entry = dict(item.get("entry") or {})
+    for dropped in ("created_at", "run_id", "reflection_id", "prompt_tokens",
+                    "llm_latency_ms"):
+        assert dropped not in item, f"反思条目仍带运行期字段 {dropped}（F35）"
+        assert dropped not in entry, f"反思 entry 仍带运行期字段 {dropped}（F35）"
+    # 策略相关字段必须保留（别把修复做成「砍掉有用信息」）
+    assert entry["text"] == "优先清护卫"
+    assert entry["tags"] == ["low_virtue"]
+    assert (entry["stages_cleared"], entry["illegal_attempts"]) == (6, 7)
+    assert item["outcome"] == "win"
+
+    # 这正是实跑里死掉的那一步：护栏必须过
+    P.assert_no_holdout_leak(bundle, cfg=make_config())
+
+
+def test_f35_memory_metadata_not_carried_into_bundle(tmp_path):
+    """F35 的同类面：记忆条目的 ``created_at`` / ``embedding`` 同样不得进证据束。"""
+    memory = _FakeMemory([{
+        "entry_id": "m-1", "lesson": "优先清护卫", "tags": ["low_virtue"],
+        "created_at": "2026-10-09T16:34:13Z", "created_tick": 2026,
+        "run_id": "run-1", "embedding": [2026.0, 2031.0],
+        "content_sha256": "x" * 16,
+    }])
+    harness = tmp_path / "harness"
+    harness.mkdir()
+    bundle = P.build_evidence_bundle(run_id="run-1", n_traj=5, cfg=make_config(),
+                                     memory=memory, run_dir=None, harness=harness,
+                                     generation=1)
+
+    item = dict(bundle.memory_items[0])
+    for dropped in ("created_at", "created_tick", "embedding", "run_id",
+                    "content_sha256"):
+        assert dropped not in item, f"记忆条目仍带运行期字段 {dropped}（F35）"
+    assert item["lesson"] == "优先清护卫"
+    P.assert_no_holdout_leak(bundle, cfg=make_config())

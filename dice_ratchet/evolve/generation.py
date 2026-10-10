@@ -36,7 +36,7 @@ from . import proposer as proposer_mod
 from . import versioning as versioning_mod
 from .errors import (HoldoutLeakError, LoadFailedError, ScanFailedError,
                      VersionConflictError)
-from .paths import EvolveContext, GenPaths
+from .paths import EvolveContext, GenPaths, harness_dir
 from .schemas import (Candidate, CandidateReport, GateState, HarnessRef, Verdict,
                       write_candidate_report)
 
@@ -187,6 +187,25 @@ class GenerationResult:
 # 主入口
 # =====================================================================
 
+def _resolve_harness_path(harness: Path | str | None, run_ctx: Any) -> Path:
+    """``harness=`` 显式优先 → ``run_ctx.harness_dir`` → ``paths.harness_dir()``。
+
+    F32（2026-10-09 实跑登记）：这里**不能**写成
+    ``getattr(run_ctx, "harness_dir", default_harness_dir())`` —— Python 会先**无条件
+    求值**默认参数，而 ``default_harness_dir`` 这个名字在本模块里从不存在（它是
+    ``proposer.py`` 顶部 ``from .paths import harness_dir as default_harness_dir`` 的
+    别名；本行显然是从那里抄过来却漏了导入）⇒ 即便 ``run_ctx`` 有 ``harness_dir``
+    也会 ``NameError``。生产装配（``app._evolve_fn_provider`` →
+    ``run_one_generation(state=…, run_ctx=…, runner=…)``，即 ``harness=None``）必然走
+    这一支，而单测都显式传 ``harness=`` ⇒ 1800+ 用例全绿掩护了一条**完全死掉的闭环
+    路径**，直到 §3.2 实跑才炸（崩在该代做任何事之前，白烧 ¥34.62 / 92 min）。
+    """
+    if harness is not None:
+        return Path(harness)
+    value = getattr(run_ctx, "harness_dir", None)
+    return Path(value) if value is not None else harness_dir()
+
+
 def run_one_generation(*, state: Any, run_ctx: Any, runner: Any = None,
                        config: Any = None, memory: Any = None,
                        evaluator: Any = None, client: Any = None,
@@ -204,8 +223,8 @@ def run_one_generation(*, state: Any, run_ctx: Any, runner: Any = None,
     run_id = str(getattr(run_ctx, "run_id", ""))
     root = (Path(run_dir) if run_dir is not None
             else Path(getattr(run_ctx, "paths").root))
-    harness_path = (Path(harness) if harness is not None
-                    else Path(getattr(run_ctx, "harness_dir", default_harness_dir())))
+    # F32：见 ``_resolve_harness_path`` 的注释——默认值必须延迟求值。
+    harness_path = _resolve_harness_path(harness, run_ctx)
     memory = memory if memory is not None else getattr(run_ctx, "memory", None)
     protocol = getattr(run_ctx, "protocol", None)
     memory_version = int(getattr(run_ctx, "memory_version", 0) or 0)
@@ -261,7 +280,7 @@ def _run_generation(*, state: Any, run_ctx: Any, runner: Any, cfg: Any, app_cfg:
     rng_seed = propose_seed(run_id, gen, seed=seed)
     prop = proposer_mod.propose(bundle, cfg=cfg, rng_seed=rng_seed, client=client,
                                 run_id=run_id, generation=gen, protocol=protocol,
-                                runs_root=ctx.root.parent)
+                                runs_root=ctx.root.parent, app_config=app_cfg)
     if not prop.candidates:
         result.error_code = prop.error_code or str(E.E_EVOLVE_NO_CANDIDATE)
         result.reason = prop.reason or "no_candidate"

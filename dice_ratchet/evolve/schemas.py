@@ -65,7 +65,7 @@ EVIDENCE_SOURCE_TAGS: Final[frozenset[str]] = frozenset({
 VALIDATION_STATUSES: Final[tuple[str, ...]] = ("pass", "fail")
 
 CANDIDATE_SCHEMA_VERSION: Final[str] = "evolve-candidate-1.0.0"
-HARNESS_SNAPSHOT_SCHEMA_VERSION: Final[str] = "evolve-harness-snapshot-1.0.0"
+HARNESS_SNAPSHOT_SCHEMA_VERSION: Final[str] = "evolve-harness-snapshot-1.1.0"
 
 _ID_ALPHABET: Final[str] = "0123456789abcdef"
 _RATIONALE_MAX: Final[int] = 300
@@ -257,22 +257,32 @@ def parse_diff_paths(diff: str) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class HarnessSnapshot:
-    """当前 harness 的只读指纹（``version`` + 各文件 sha256）。"""
+    """当前 harness 的只读指纹（``version`` + 各文件 sha256 + 可改文件正文）。
+
+    ``contents``（F38）只带**允许被候选修改**的文件正文（``prompts/*.md``、
+    ``config.json``、``tools/*.py``）。原因：候选是 unified diff，hunk 的上下文行**必须
+    与目标文件逐字符一致**，而只给 sha256 时模型看不到任何一行原文，产出的 diff 必然
+    ``E_EVOLVE_PATCH_INVALID``（实测：``hunk 上下文不匹配（decision.md 第 1 行）``）。
+    """
 
     version: int
     files: tuple[tuple[str, str], ...] = ()
     artifact_hash: str = ""
+    contents: tuple[tuple[str, str], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {"schema_version": HARNESS_SNAPSHOT_SCHEMA_VERSION,
                 "version": int(self.version), "artifact_hash": self.artifact_hash,
-                "files": [[str(p), str(h)] for p, h in self.files]}
+                "files": [[str(p), str(h)] for p, h in self.files],
+                "contents": [[str(p), str(t)] for p, t in self.contents]}
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> "HarnessSnapshot":
         return cls(version=int(raw.get("version", 0) or 0),
                    files=tuple((str(p), str(h)) for p, h in (raw.get("files") or ())),
-                   artifact_hash=str(raw.get("artifact_hash", "")))
+                   artifact_hash=str(raw.get("artifact_hash", "")),
+                   contents=tuple((str(p), str(t))
+                                  for p, t in (raw.get("contents") or ())))
 
 
 @dataclass(frozen=True)
@@ -610,6 +620,10 @@ HARNESS_SNAPSHOT_SCHEMA: Final[dict[str, Any]] = {
         "files": {"type": "array",
                   "items": {"type": "array", "minItems": 2, "maxItems": 2,
                             "items": {"type": "string"}}},
+        # F38：允许被候选修改的文件的正文（[相对路径, 文本]）。
+        "contents": {"type": "array",
+                     "items": {"type": "array", "minItems": 2, "maxItems": 2,
+                               "items": {"type": "string"}}},
     },
 }
 

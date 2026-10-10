@@ -24,7 +24,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from ..infra import events
 from ..infra.errors import E, InfraError, error_code_of
-from ..infra.io import read_jsonl
+from ..infra.io import read_json, read_jsonl
 from ..infra.run import RunPaths
 from . import reflect as reflect_mod
 from .runner import EpisodeRunner, RecordedEpisode, RunContext
@@ -272,7 +272,14 @@ def _cycle_artifacts_exist(paths: RunPaths, cycle: int) -> bool:
 
 
 def _hitl_gate_pending(base: Path) -> bool:
-    """``gate.json`` 存在且仍为 ``pending``（人工尚未裁决）。"""
+    """``gate.json`` 存在且仍为 ``pending``（人工尚未裁决）。
+
+    F33（2026-10-09 复检登记）：这里原先用的 ``read_json`` **没有**模块级导入（模块级
+    只导了 ``read_jsonl``，另一个函数在体内局部导入 ``read_json`` ——那是另一个作用域，
+    帮不到这里）。于是只要走到「resume 且该 cycle 的 ``report.json``/``decision.json``
+    已存在」，就会 ``NameError``：正是 **HITL 挂起 → ``evolve approve`` →
+    ``loop run --resume``** 这条流程。修法是把它提到模块级导入。
+    """
     gate = base / "gate.json"
     if not gate.is_file():
         return False
@@ -518,6 +525,29 @@ class LoopOrchestrator:
                                  evolve_fn=self.evolve_fn)
             if state.phase in ("hitl_wait", "failed"):
                 return                     # FR-06-11 挂起 / FR-06-13 预算闸门
+
+        # F34（2026-10-09 登记）：队列排空 ≠ 本轮无事可做。
+        #
+        # ``--resume`` 时 ``run()`` 会把 ``pending_queue`` 重算成「``--seeds`` 里尚未
+        # 完成的 seed」，因此**崩溃在周期边界内**的 run（``phase="evolving"``、
+        # ``evolving_cycle`` 挂着、``completed`` 恰好是 k 的整数倍）会拿到空队列：
+        # 上面的 ``while`` 一次都不进，边界永不重入，函数直接落到 ``phase="done"``
+        # ——对外是**退出码 0 的成功**，而 ``generation`` 一步没走、
+        # ``harness/versions/`` 一个新版本都没有。实测（零成本探针）：这样的 resume
+        # 返回 ``{"exit_code": 0, "phase": "done", "generation": 0}``，同时
+        # ``evolving_cycle`` 仍悬着 —— 正是 §3.1 要防的静默成功（同 F28 的教训）。
+        #
+        # ``maybe_run_generation`` 本就为此设计（见其 docstring：进程在 ``evolving``
+        # 阶段被杀时，「产物存在则标该 cycle 完成，否则重置 ``phase="playing"`` 后
+        # 重新触发」），只是原先没有任何路径在空队列下调用它。这里补上这一次调用。
+        #
+        # **只需调用一次**：``cycle_due`` 的双重幂等键（``last_completed_cycle`` +
+        # ``evolving_cycle`` + MOD-07 产物存在性）保证重复调用不会重复触发；而空队列
+        # 下 ``cycle_index = len(completed)//k`` 不再前进，故至多一个 cycle 可能到期。
+        maybe_run_generation(state=state, run_ctx=self.run_ctx,
+                             evolve_fn=self.evolve_fn)
+        if state.phase in ("hitl_wait", "failed"):
+            return
         state.phase = "done"
         _save(self.run_ctx, state)
 
@@ -710,7 +740,8 @@ class LoopOrchestrator:
         """
         if not bool(getattr(self.config, "retry_reflections_on_resume", False)):
             return 0
-        from ..infra.io import read_json
+        # F33：``read_json`` 已提到模块级导入（原先只有这里的局部导入，导致
+        # ``_hitl_gate_pending`` 以为它在全局作用域可见）。
 
         directory = Path(self.paths.reflections)
         if not directory.is_dir():

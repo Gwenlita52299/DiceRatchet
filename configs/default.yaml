@@ -105,6 +105,14 @@ inference:
   # 取 120 s ≈ 实测 p95 × 3 次尝试 × 3.4 倍余量（依据见 MOD-03 PRD Q-2、M1 验收报告 §12）。
   total_timeout_ms: 120000
   generate_timeout_ms: 30000
+  # 2026-10-09（F37 登记，**结论：本键不能抬**）：它同时是「调用方未显式指定时的模态
+  # 默认」，MOD-07 的**提案**（harness 补丁：diff + rationale）也走它，而 256 只够决策点
+  # （实测提案需 ~500 completion token，256 时一律 `finish_reason=length` 截断 → 被报成
+  # `E_LLM_SCHEMA_INVALID` → proposer 永远 0 候选 → 闭环静默定格）。
+  # **但全局抬高会打断小窗口模型**：`guard_context`（FR-03-10）按
+  # `est_prompt + max_tokens ≤ context_length` 判定，2048 时 `mock`（4096）实测
+  # 71 例 `E_LLM_CONTEXT_OVERFLOW`（2052+2048 > 4096），并吃掉 8B（8192）臂的余量。
+  # ⇒ F37 的正确修法是**按调用方给输出预算**（提案单独给大预算），不是改本键。
   max_tokens: 256
   reasoning_max_tokens: 160
   context_overflow_policy: reject
