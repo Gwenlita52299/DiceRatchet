@@ -27,6 +27,11 @@ models/
 # 本地生成的动画讲解 HTML（大文件，不入库）
 *-动画讲解.html
 
+# Archify 生成的架构/数据流图（自包含 HTML + 候选 JSON + 证据收据；本地产物，不入库）
+# 同 .env 的理由：infra.git_ops 把未跟踪文件也算进「worktree 不干净」，
+# 不 ignore 会让 MOD-07 在自己仓库里拒绝演化。
+.archify/
+
 # 本地 API key 文件（Issue #1：真跑 B/C 臂用；key 绝不入库、绝不进 run 工件）
 # 注意：infra.git_ops 把 `git status --porcelain` 的任何输出都算「worktree 不干净」，
 # 未跟踪文件也在内 —— 所以这条必须存在，否则 .env 会让 MOD-07 拒绝演化。
