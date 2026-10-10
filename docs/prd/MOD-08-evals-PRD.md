@@ -1,6 +1,6 @@
 # MOD-08 evals 技术 PRD
 
-> 版本：v0.7（2026-10-10 `VERDICT_DECISIONS` 纳入 `error_reject`，处置 F47-D，见 §17）· 历史版本：v0.6（2026-10-06 按 M1 验收复核更正 §15 口径引用）· 状态：待评审 · 所属里程碑：M1（基线）→ M2（执行器/指标）→ M3（完整：坍缩 + 消融 + test 终检）
+> 版本：v0.8（2026-10-11 **F46-A / F42-A+B+C / F45-2**：`generation` 真过滤 + `--arm` 臂显式化、按臂归档与 fail-closed 复用、heldout/test 换六位端口空间，见 §13/§17）· 历史版本：v0.7（2026-10-10 `VERDICT_DECISIONS` 纳入 `error_reject`，处置 F47-D，见 §17）· v0.6（2026-10-06 按 M1 验收复核更正 §15 口径引用）· 状态：待评审 · 所属里程碑：M1（基线）→ M2（执行器/指标）→ M3（完整：坍缩 + 消融 + test 终检）
 > 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（**唯一事实来源**，冲突以 Spec 为准）· 上游计划：[../../项目计划-DiceRatchet.md](../../项目计划-DiceRatchet.md)（§5 防坍缩、§6 三项验收、§8 沙箱泄漏）
 > 作者：MOD-08 owner · 落地：`dice_ratchet/evals/{harness,metrics,diversity,ablation,baselines}.py`
 
@@ -46,8 +46,8 @@ MOD-08 是 L3 测量层，**只读轨迹与报告，不参与决策**（Spec §1
 
 - **FR-08-01** 加载 `seeds.yaml` 并校验三类区间两两不相交；任一重叠抛 `E_EVAL_SEED_OVERLAP`。
 - **FR-08-02** `train`（默认 1000–1999）按 `per_generation=30` 顺序切块：第 g 代用 `1000+30(g-1) … 1029+30(g-1)`；越界抛 `E_EVAL_SEED_EXHAUSTED`。
-- **FR-08-03** `heldout`（2000–2099）切成固定篮子 `H1=2000–2039`（代际裁判）、`H2=2040–2079`（消融/终检复核）、`H3=2080–2099`（应急）；篮子成员不得重新抽样。
-- **FR-08-04** `test`（9000–9099）默认锁定；仅 `test_unlock` 解锁，每里程碑 ≤1 次，落 `test_attestation.json`；结果**不得**进入代际决策路径。test 同时跑两种局：默认局（主结论）和完整局 medium × 10 关（次级「迁移」指标，Spec §8.6，只报告不判定）。
+- **FR-08-03** `heldout`（**v0.8 / F45-2 起 731000–731099**，此前 2000–2099）切成固定篮子 `H1=731000–731039`（代际裁判）、`H2=731040–731079`（消融/终检复核）、`H3=731080–731099`（应急）；篮子成员不得重新抽样。**为什么换六位**：旧四位空间与耗时（`duration_us=2072.8`）、token 预算（`max_tokens=2048`）、ISO 年份（`2026`）撞车，迫使审计维护两张人工死名单（实测 118,646 次命中、12 个键）；六位端口空间让「数字串相等即泄漏」重新健全。**代价**：`config_hash` **不含** seeds ⇒ 必须由 `baseline_protocol()` 把 `seeds_hash` 绑进测量协议（否则新旧局会被 `--resume` 静默混算），且已归档的 v2 证据与新协议**不可比**。
+- **FR-08-04** `test`（**v0.8 / F45-2 起 947000–947099**，此前 9000–9099）默认锁定；仅 `test_unlock` 解锁，每里程碑 ≤1 次，落 `test_attestation.json`；结果**不得**进入代际决策路径。test 同时跑两种局：默认局（主结论）和完整局 medium × 10 关（次级「迁移」指标，Spec §8.6，只报告不判定）。
 - **FR-08-05 / 06** `guard_prompt_context()` 在 prompt/memory/reflection 三 destination 上断言文本不含 heldout/test seed 数值 token；`split != "train"` 的局任何 memory 写入与 reflection 落库被拦截；两者命中均抛 `E_EVAL_INV5_LEAK`。
 - **FR-08-07 / 08 / 09 / 10** `run_eval()` 支持 `n_workers≥1`，结果按 `seed` 升序归一化聚合且与串行逐字节一致；评估 `temperature=0.0`（训练沿用计划 §3 的 ≥0.7）；每 seed 默认 1 局（后端非确定时 `n_rep=3` 多数票）；超时或崩溃的局记为 `dropped`，**计入 n 并按 lose 计**（Spec v1.3 §8.5，防止幸存者偏差），另外单列 `n_dropped`；`dropped/n > 0.10` 时抛 `E_EVAL_INSUFFICIENT_N` 并标 `low_confidence=true`。`degraded` 局（模型不可用、由启发式代打）则从 n 中剔除，并单列 `degraded_n`。
   - **单局超时真的执行**（2026-10-05，M1 验收 F20）：`evals.seed_timeout_s` 经 `run_eval` 传给 `EpisodeRunner.run_episode(timeout_s=…)`，`SandboxRunner` 把它变成决策循环的 deadline（超预算 → `dropped=true` + `E_EVAL_TIMEOUT`，计 n 按 lose 计）；`run_eval` 另设 `seed_timeout_s × n_rep + 60 s` 的硬看门狗，超限即放弃该 worker、记 dropped，并**换新线程池**继续跑剩余 seed（否则 `n_workers=1` 时一个卡死的 worker 会让其余 seed 永远排不上队）。
@@ -263,15 +263,15 @@ splits:
   heldout:
     expose_to: []
     baskets:
-      H1: {start: 2000, end: 2039, role: generation_judge}
-      H2: {start: 2040, end: 2079, role: ablation_final}
-      H3: {start: 2080, end: 2099, role: reserve}
-  test:    {start: 9000, end: 9099, role: final_acceptance, locked: true, unlock_policy: single_use_per_milestone}
+      H1: {start: 731000, end: 731039, role: generation_judge}   # F45-2 起六位端口空间
+      H2: {start: 731040, end: 731079, role: ablation_final}
+      H3: {start: 731080, end: 731099, role: reserve}
+  test:    {start: 947000, end: 947099, role: final_acceptance, locked: true, unlock_policy: single_use_per_milestone}
 exposure_guard:
   destinations_forbidden: [prompt, memory, reflection]
-  numeric_scan: true            # 文本中 4 位数字 token 落 2000-2099 / 9000-9099 即告警
-  forbidden_tokens: [heldout, H1, H2, H3, "2000-2099", "9000-9099"]
-seeds_hash: "sha256:<>"         # 由 CLI 生成、CI 校验；改动必须同步更新并在 PR 说明
+  numeric_scan: true            # 文本中 3–7 位数字 token 落 731000-731099 / 947000-947099 即告警
+  forbidden_tokens: [heldout, H1, H2, H3, "731000-731099", "947000-947099"]
+seeds_hash: "sha256:686b2618330db5eb8291c1810499dc07fc47a956da5711803015bbb09ec2e904"  # F45-2 重算；由 CLI 生成、CI 校验；改动必须同步更新并在 PR 说明
 # configs/default.yaml 的 eval 段
 eval:
   n_heldout: 40; n_test: 100; n_ablation: 40        # 依次为 H1 / test_full / H2 篮子
@@ -358,6 +358,8 @@ python -m dice_ratchet eval test --run-id <run_id> --unlock-once --attestation r
   - **2026-10-06（M2 开工 D-3 裁决，Spec §8.6 / B-39）判据分工**：`win_rate` 仍是第一报告指标，但**在 H=40（H1 篮子）下只能判 ≥15pp 的净跳变**（见 §8.2 的功效换算），故 M3 的「4–5pp 量级增益」结论**由 `mean_stages_cleared` 的配对 bootstrap 承担**（Δ=0.30 关 = 6 关制的 5.0pp，n=40 下 power 0.66–0.97），`mean_battles_won` 作并列证据。**hard × 6 上 `fixed_prompt` 基线 win_rate = 0.0%（n=10），win_rate 无方差可用**，D-2 已据此把 M3 判据改为 `mean_stages_cleared`/`mean_battles_won`。报告必须同时给出两个口径的 `delta + CI + p + method`，并保留 `power_note`。
 - **次级指标与判定量**：`illegal_rate`、`entropy_mean_norm`、`entropy_slope`、`jsd_kind`、`jsd_slot`、`distinct_sequence_ratio`、`llm_latency_ms_p50/p95`、`mean_cum_reward_debug`（**仅调试，禁止进入 verdict**）；判定量为 `win_rate_gap`、`verdict`、`collapse_flag`、`attribution`。
 - **埋点事件**（统一经 MOD-09 `emit` 写入 `events.jsonl`）：`eval.start{spec}`、`eval.seed_start{seed,split,basket}`、`eval.seed_done{seed,outcome,steps,decisions,dur_s,dropped,degraded,error_code}`、`eval.report{n,n_dropped,degraded_n,dur_s,report_sha256}`、`eval.guard_violation{error_code,split,seed,destination,matched_token}`、`eval.collapse{generation,reasons}`、`eval.test_unlock{generation,attestation_path,decided_by}`。
+- **`generation` 是真过滤，臂是显式的（v0.8 / F46-A，Spec B-59）**：`load_episode_results` / `read_episode_protocols` / `evaluate_generation` 的训练窗口读取在给定 `generation` 时只保留该代的局（行里的 `generation` 优先，缺失按文件名 `-g{gen:03d}-` 解析，两者都判不出 → 跳过并发 `evals.generation_unresolved`），且**不再覆盖** `EpisodeResult.generation`。`eval report --arm`：缺省 = 该代 `report.json` 里的候选臂（优先 `decision="accept"`，无则唯一候选，再退 `parent`）；`all` = **显式申报**的混合池（ext 标 `mixed_pool=true`，禁止当默认）。实测对拍（`runs/m2-s32b-smoke-c1-medium6`）：候选臂 `n=37 / 0.6757`、parent 臂 `n=40 / 0.6250`，与 MOD-07 报告一致；修复前是混代混臂的 `n=117 / 0.6496`。
+- **臂归档与复用（v0.8 / F42-A/B，Spec B-60/B-61）**：每个臂落 `metrics/arms/gen{gen:03d}-{split}-{basket}-{arm}.json`（`ArmResult.as_dict()` + provenance + 逐局明细）。复用是 **fail-closed**：provenance 逐字段全等（`ARM_PROVENANCE_KEYS` = generation/split/basket/arm/harness_version/memory_version/config_hash/seeds_hash/episode_config_hash，不含 `created_at`）且覆盖完整 seed 列表 → **整臂复用**（0 局 + `evals.arm_reused`）；只覆盖一部分 → 只跑缺的局；任一不一致/损坏/run 目录不存在 → **不复用**。提案另有独立检查点 `generations/gen{gen:03d}/proposals/proposal.json`（指纹一致 → 同 candidate id、0 次 proposer 调用）。
 - **绘图数据（MOD-09 消费）**：`metrics/generations.csv` 列固定为 `generation,harness_version,parent_version,split,basket,n,win_rate,ci_lo,ci_hi,mean_stages_cleared,mean_hearts_left,mean_battles_won,mean_decisions,illegal_rate,fallback_rate,truncation_rate,entropy_mean_norm,entropy_slope,jsd_kind,collapse_flag,win_rate_gap,verdict,decision,bootstrap_seed,config_hash,git_commit,ts`。
 
 ## 14. 依赖与风险
@@ -417,7 +419,7 @@ n_dropped=0`、10 局 `protocol` 完全一致、`audit leak` clean / 退出码 0
 
 ## 16. 开放问题
 
-1. **test 池与冗余子集**：9000–9099（n=100）在 M3 只允许一次性使用；M4 前是否需要扩成两个不相交 test 篮子（9000–9049 / 9050–9099）以支持"跨代增益 vs 推理时增益"长期对比？另：若 train 池耗尽后循环复用同一 seed，代际 `win_rate` 比较是否仍有效（倾向：禁止复用，耗尽即停）？
+1. **test 池与冗余子集**：947000–947099（n=100，F45-2 前为 9000–9099）在 M3 只允许一次性使用；M4 前是否需要扩成两个不相交 test 篮子以支持"跨代增益 vs 推理时增益"长期对比？另：若 train 池耗尽后循环复用同一 seed，代际 `win_rate` 比较是否仍有效（倾向：禁止复用，耗尽即停）？
 2. **熵的归一化分母**：固定 `log2(6)`（可跨代比较）vs 每回合 `log2(|legal kinds|)`（更公平但不可比）——当前取前者，需用 M3 基线数据验证是否掩盖收敛；坍缩阈值 C1/C2/C4 是否应按游戏阶段分段而非全局单一阈值？
 3. **`mean_turns` 定义**：取终局 `obs.turn` 还是 `steps`？依赖 MOD-01 对 `turn` 最终语义的确认（当前取 `turn`，备选 `steps` 写入 ext）。
 4. **模型更新的可比性**：阶段一换 27B Q4 后，历史 `report.json` 是否因 `model_hash` 不同而标记不可比，并强制重跑全部基线？
@@ -435,3 +437,4 @@ n_dropped=0`、10 局 `protocol` 完全一致、`audit leak` clean / 退出码 0
 | v0.6 | 2026-10-06 | **按 M1 验收复核更正陈旧口径与示例值**（不新增功能）：① §15 那句「三条 held-out 分数已入档（`runs/m1-real-h1/baselines/`）」是 v1.5 之前的旧口径——已改为最终 run `runs/m1-real-h1n10b/`（seed 2000–2009、n=10、三基线同源），并注明旧 `runs/m1-real-h1n40/` 只有 random/heuristic 的 n=40 与中止在 18% 的 fixed_prompt；② §15 补 `format_robustness.json` 的**工件新鲜度**要求（2026-10-06 重跑覆盖：首答 0.94 → **0.995**、`schema_fail_rate` 0.005 → **0.0**）；③ **NFR-08-05** 由「单局 ≈5 min、n=40 ≈3.3 h」改为实测口径（单局模型时间 **≈19.6 min**、`D` 均值 97.1 / 中位 69 / max 245、`calls/决策点` 1.62、`t_d` p50 7.46 s → n=40 约 **13.1 h（均值）～29–34 h（上界）**），并写明 `d_wall / d_model = 1.02`（`n_workers` 不缩短总墙钟）；④ 示例配置 `seed_timeout_s` 5400 → **14400**。依据 [M1 验收复核 §M-1](../reviews/2026-10-05-M1验收复核.md) 与 [M1 验收报告 §14.18/§14.19](../reviews/2026-10-04-M1验收报告.md) |
 | v0.7 | 2026-10-10 | **`VERDICT_DECISIONS` 纳入 `error_reject`（F47-D，对齐 Spec v2.5 B-58）**。MOD-07 在 accept/rollback 抛 `InfraError`（如 `E_EVOLVE_GIT_FAILED`：脏工作区）时记 `decision="error_reject"`——它是「阈值内但落版本失败」的**唯一可见信号**，因此 `append_generations_csv` 的 upsert 必须像对待 `accept`/`reject`/`rollback` 一样**保留它**，`eval report` 对这类代也要写 sidecar：否则重算的 `pending` 会把它盖掉，§3.2 的「机制性失败为零」判据就无从查证。护栏：`tests/unit/evals/test_evals_harness.py::test_f47_error_reject_is_a_verdict_and_survives_recompute`（修复前 `"error_reject" in VERDICT_DECISIONS` 失败）。 |
 | v0.x-2026-10-10 | 2026-10-10 | **F43 与 F46（对齐 Spec v2.4 B-52/B-55）**。① **F43**：`eval report` 与 MOD-07 `_finish_report` 写**同一个** `generations/gen-NNN/report.json`，而判据②要的 `metrics/generations.csv` 只有 `eval report` 会产 ⇒ 「满足②」只能靠「抹掉①的判决」。修法：MOD-07 在代末自己追写 csv（新增 `generations_row_from_report`，列集与 `_csv_row` 共用 `GENERATIONS_COLUMNS`）；`eval report` 对**已裁决**的代改写 sidecar `report.eval.json`；`append_generations_csv` 按 `generation` **upsert**（每代恰好一行）并保留已裁决的 `decision`/`verdict`。② **F46（待裁决）**：`load_episode_results` 的 `generation` 参数**只贴标签、不筛文件** ⇒ `eval report --generation 1` 把 gen-000 基线的 `arm="parent"`（40 局）也算进 gen-1，实测 `n=117`（= g000/parent 40 + g001/parent 40 + g001/cand 37 有效）而真实只有 40+40+37。**台账每代数字因此没有物理含义**——这正是 M1 验收 F5 修过的「混**臂**聚合」的同类残留（那次修了 arm、没修 generation） |
+| v0.8 | 2026-10-11 | **F46-A / F42-A+B+C / F45-2（对齐 Spec v2.6 B-59..B-62）**。① **F46-A**：`generation` 由「只贴标签」改为**真过滤**（原先还覆盖行里的值）；`eval report --arm`（缺省=该代候选臂、`all`=显式混合池）；坍缩判定改用该代整池。实测对拍：候选臂 `n=37 / 0.6757`、parent 臂 `n=40 / 0.6250`，与 MOD-07 报告逐项一致（修复前 `n=117 / 0.6496`）；已裁决代仍只写 sidecar（F43 规则不变）。② **F42-A+B+C**：`evaluate_arm` 转发 `resume_results`/`on_result` 并落 `metrics/arms/` 臂归档（provenance + 逐局明细）+ fail-closed 复用；提案检查点（评估前落盘 + 输入指纹，resume 命中即 0 次 proposer 调用）；`n_workers`/`n_rep` 按配置转发。③ **F45-2**：heldout 731000–731099（H1/H2/H3）、test 947000–947099，`seeds_hash` 重算为 `sha256:686b2618330db5eb8291c1810499dc07fc47a956da5711803015bbb09ec2e904`；`baseline_protocol()` 与 ext provenance 绑上 seeds 协议标签（代际隔离闸）；`numeric_scan` 与 `_NUM4_RE` 由 4 位改为 3–7 位（六位 seed 原本扫不到）。④ **归档影响**：22 个含 heldout/test 局的归档 run 属 protocol v2 证据，与新协议**不可比**；不删数据、不擅自重跑。⑤ 门禁 `scripts/ci_gate.sh` 全绿（1925 passed）；本版未做付费跑批。 |

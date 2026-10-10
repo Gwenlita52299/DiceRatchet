@@ -175,7 +175,7 @@ def _play(args: argparse.Namespace) -> int:
     seeds = tuple(sorted({s for values in parsed.values() for s in values}))
     if not seeds:
         raise InfraError(E.E_IO_CONFIG_INVALID, "--seeds 未解析出任何 seed",
-                         hint="用法：--seeds train:1000-1004 / heldout:2000-2099")
+                         hint="用法：--seeds train:1000-1004 / heldout:731000-731039")
     proto = validate_protocol(coerce_protocol(None))
     declared = next((name for name, values in parsed.items()
                      if name != "default" and values), "")

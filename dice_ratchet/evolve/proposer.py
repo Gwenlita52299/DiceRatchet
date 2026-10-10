@@ -217,11 +217,13 @@ def harness_snapshot(harness: Path | str | None = None) -> HarnessSnapshot:
 #: 原先这里拷的是**整条**记录（``dict(_plain(raw))``，含 ``entry.created_at`` /
 #: ``reflection_id`` / ``run_id`` / ``prompt_tokens`` …），而 ``_render_items`` 会把整条
 #: ``json.dumps`` 进 prompt、``assert_no_holdout_leak`` 再对全部字符串做数字扫描。
-#: ``seeds.yaml`` 的 ``numeric_scan`` 占用了 2000-2099，而**日历年 2026 正在其中**：
-#: 于是一个 ISO 时间戳 ``"2026-10-09T16:34:13Z"`` 被判成 heldout seed 字面量，
-#: 整代以 ``E_EVAL_INV5_LEAK``（退出码 4）中止——**闭环在 2000-2039 年永远跑不起来**。
-#: 实测：真实证据束命中 3 处，全在 ``.reflections[i].entry.created_at``，内容字段零命中。
-#: 只保留**策略相关**字段；运行期元数据不进 agent 可见文本。
+#: 现场（F35，2026-10-09）：``numeric_scan`` 当时占用的四位区间（2000-2099）里**日历年
+#: 2026 正在其中**，于是一个 ISO 时间戳 ``"2026-10-09T16:34:13Z"`` 被判成 heldout seed
+#: 字面量，整代以 ``E_EVAL_INV5_LEAK``（退出码 4）中止——闭环跑不起来。实测命中 3 处，
+#: 全在 ``.reflections[i].entry.created_at``，内容字段零命中。
+#: **F45-2（2026-10-11）起 heldout/test 已移到六位端口空间**，「年份撞区间」这一具体成因
+#: 不再存在；但白名单仍是本模块的**契约**：它让「进入 agent 可见文本的字段集」保持**封闭**
+#: （新字段默认不进，必须显式加入），从根上避免下一次数字空间变化重演同一类误判。
 _REFLECTION_FIELDS: Final[tuple[str, ...]] = (
     "episode_key", "generation", "harness_version", "outcome", "truncation_reason",
     "status", "reason", "seed", "tick",
@@ -247,11 +249,12 @@ def _project(payload: Mapping[str, Any], fields: Sequence[str]) -> dict[str, Any
 
     为什么是白名单而不是「排除 created_at 之类的黑名单」：证据束的文本会被
     ``_render_items`` 原样 ``json.dumps`` 进 proposer 的 prompt，而
-    ``assert_no_holdout_leak`` 会对**全部**字符串做数字扫描（``seeds.yaml`` 的
-    ``numeric_scan: true`` 占用了 2000-2099 / 9000-9099 整个区间）。于是任何**新加**的
-    元数据字段都可能再次撞上 heldout 区间并把整代打死（fail-closed，退出码 4）。
-    白名单让「进入 agent 可见文本的字段集」是**封闭**的：新字段默认不进，必须显式加入。
-    姊妹函数 ``_trajectory_summaries`` 本来就是这么写的，这里把三者对齐。
+    ``assert_no_holdout_leak`` 会对**全部**字符串做数字扫描。历史上（F35 现场）
+    ``numeric_scan`` 的四位区间与日历年撞车，任何**新加**的元数据字段都可能再次撞上
+    heldout 区间并把整代打死（fail-closed，退出码 4）；F45-2 换了六位端口空间后该具体
+    成因消失，但「黑名单会漏、白名单封闭」这条工程结论不变。白名单让「进入 agent 可见
+    文本的字段集」是**封闭**的：新字段默认不进，必须显式加入。姊妹函数
+    ``_trajectory_summaries`` 本来就是这么写的，这里把三者对齐。
     """
     return {name: payload[name] for name in fields if name in payload}
 
@@ -432,7 +435,7 @@ def _heldout_seeds(cfg: Any) -> tuple[int, ...]:
 
 
 def _seeds_from_spec(spec: str) -> list[int]:
-    """解析 ``"heldout:2000-2039"`` / ``"2000-2003,2008"`` 形态的 seed 规格。"""
+    """解析 ``"heldout:731000-731039"`` / ``"731000-731003,731008"`` 形态的 seed 规格。"""
     text = str(spec).split(":", 1)[-1].strip()
     out: list[int] = []
     for chunk in text.split(","):

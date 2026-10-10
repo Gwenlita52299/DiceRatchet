@@ -73,7 +73,7 @@ agent.close()
 > `tests/unit/agent/test_policy_heuristic.py::test_heuristic_win_rate_within_3pp_of_js_reference_on_default_run`
 > 是 `@pytest.mark.slow`：按 Spec §8.6 的 n=200、seed 1–200 跑一遍默认局（约 1 分钟），
 > 断言 MOD-04 启发式与 JS 参考 45.5% 的差距 ≤ 3pp（实测 48.0%，差 2.5pp）。
-> 这批 seed 与 `baseline --basket H1`（40 局，seed 2000–2039）不是同一批，勿混用口径。
+> 这批 seed 与 `baseline --basket H1`（40 局，seed 731000–731039）不是同一批，勿混用口径。
 
 `play` 已由组合根接线（2026-10-04，M1 验收 F4）：
 

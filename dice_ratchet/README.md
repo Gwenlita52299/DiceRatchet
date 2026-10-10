@@ -19,7 +19,9 @@ BM25 检索 / 快照回滚）与 **MOD-06 loop**（闭环编排：单局时序�
 [`memory/README.md`](memory/README.md)、[`loop/README.md`](loop/README.md)、
 [`evolve/README.md`](evolve/README.md)
 **MOD-07 evolve**（harness 自进化：证据束白名单与 INV-5 硬闸 / 候选合法性校验 /
-冒烟快速淘汰与 heldout 判定表 / 不可变版本化与回滚 / HITL 门）与
+冒烟快速淘汰与 heldout 判定表 / 不可变版本化与回滚 / HITL 门 / 断点续跑：
+提案检查点 `generations/gen{gen:03d}/proposals/proposal.json`（输入指纹一致 ⇒ 复用候选、
+0 次 proposer 调用）+ 逐臂评估归档复用）与
 [`evals/README.md`](evals/README.md)）。
 九个模块**全部落地**，命令面无 `E_IO_MODULE_PENDING` 悬空项。
 
@@ -103,10 +105,14 @@ python -m dice_ratchet baseline --kind fixed_prompt --split heldout --basket H1 
     --model mock --run-id demo-fixed-mock-0001                                     # 离线冒烟：期望退出码 0
 
 # MOD-08：代际报告 / 多样性 / 消融 / test 终检（均不带覆盖，继续用族 B 的 demo-eval-0001）
+# F46-A：--generation 现在是真过滤（修复前只做标签覆盖，会把跨代/跨臂的局混成一个池）；
+#   --arm <name|all> 选臂——缺省 = 该代胜出/候选臂（无候选或候选全被拒时回落 parent），
+#   all = 显式申报的混合池（禁止当默认口径）；diversity 的 --arm 缺省 = 该代整池
 python -m dice_ratchet eval report --split heldout --baseline all --run-id demo-eval-0001            # 期望退出码 0
+python -m dice_ratchet eval report --split heldout --generation 1 --arm parent --run-id demo-eval-0001  # 只重算 parent 臂
 python -m dice_ratchet eval diversity --run-id demo-eval-0001 --generation 0                        # 期望退出码 0
 python -m dice_ratchet eval ablation --run-id demo-eval-0001 --generation 3 --arms no_reflection,no_self_edit  # 期望退出码 0
-# test 终检默认锁定，需 --unlock-once；它跑满 test 池（9000–9099，100 局）加迁移局，是本块最慢的一条
+# test 终检默认锁定，需 --unlock-once；它跑满 test 池（947000–947099，100 局）加迁移局，是本块最慢的一条
 python -m dice_ratchet eval test --run-id demo-eval-0001 --unlock-once \
     --attestation runs/demo-eval-0001/generations/gen-003/test_attestation.json    # 期望退出码 0
 
@@ -135,15 +141,15 @@ python -m dice_ratchet inference probe      --model qwen3-8b-q4 --mode eval --se
 python -m dice_ratchet inference bench      --model qwen3-8b-q4 --mode eval --seed 7 --n 30 --run-id real-0001
 python -m dice_ratchet inference robustness --model qwen3-8b-q4 --mode eval --seed 1042 --n 200 --run-id real-0002
 
-# 三基线（H1 = seed 2000–2039）
+# 三基线（H1 = seed 731000–731039；F45-2 起 heldout/test 在六位端口空间）
 # random / heuristic 不带覆盖，可共用 real-0003；fixed_prompt 带 --model，属另一族 → real-0004
 # ⚠️ n=40 的 fixed_prompt 实测需 ≈29–34 h（§14.18），M1 归档口径是前 10 个 seed（n=10，≈3.3 h）
 python -m dice_ratchet baseline --kind random       --split heldout --basket H1 --run-id real-0003
 python -m dice_ratchet baseline --kind heuristic    --split heldout --basket H1 --run-id real-0003
-python -m dice_ratchet baseline --kind fixed_prompt --split heldout --seeds heldout:2000-2009 \
+python -m dice_ratchet baseline --kind fixed_prompt --split heldout --seeds heldout:731000-731009 \
     --model qwen3-8b-q4 --run-id real-0004
 # 中断后接着跑（逐局增量落盘，跳过已完成 seed；--resume 只对已存在的 run 有效，首次跑不要加）：
-#   python -m dice_ratchet baseline --kind fixed_prompt --split heldout --seeds heldout:2000-2009 \
+#   python -m dice_ratchet baseline --kind fixed_prompt --split heldout --seeds heldout:731000-731009 \
 #       --model qwen3-8b-q4 --run-id real-0004 --resume
 ```
 
@@ -192,7 +198,11 @@ python -m dice_ratchet baseline --kind fixed_prompt --split heldout --seeds held
 - **审计**（INV-3/INV-5）：扫 `prompt`/`memory`/`log` 三个出口；canary / heldout-test seed /
   未来房间 / 商店未展示内容判 `critical`，纯字段名类判 `medium`；轨迹缺失或 JSONL 损坏
   （`E_ENV_AUDIT_IO`）同样判 `critical`（缺证据 ≠ 无泄漏）。报告权限 `0600`，`evidence`
-  只保留命中 token 前后各 12 字符。
+  只保留命中 token 前后各 12 字符。**F45-2（2026-10-11）**：seed 规则扫**整行字段**——
+  `LOG_NON_CONTENT_KEYS` / `MEMORY_NON_CONTENT_KEYS` 两张人工死名单已删除，仅豁免框架
+  自身的播种计划 `LOG_STRUCTURAL_KEYS = {seed, episode_key, spec}`（heldout/test 移到六位
+  端口空间后不再与耗时/预算/日历字面量撞车）；全量归档（1311 文件 / 188 MB）用旧区间命中
+  **799,868** 次，用新区间命中 **0** 次。
 - **`python -m dice_ratchet audit leak`** 退出码 `0/1/2/4`（两根正交轴，MOD-02 PRD §18.2）：
   `0` 无 finding / `1` 仅 medium / `2` 含 critical（泄漏结论，FR-02-19）；`4` 审计器自身
   守卫违例（`machinery_errors`，如蜜罐自测 <100% 的 `E_ENV_HONEYPOT`，与
@@ -247,14 +257,14 @@ python -m dice_ratchet baseline --kind fixed_prompt --split heldout --seeds held
 
 | 文件 | 职责 | 关键 FR |
 |---|---|---|
-| `seeds.py` | seed 唯一出口 `take()`（train 按代切块，越界 `E_EVAL_SEED_EXHAUSTED`）、`resolve_basket()`（H1/H2/H3/test_full/train_window，成员固定不重抽）、三类区间不相交（`E_EVAL_SEED_OVERLAP`）；INV-5 文本护栏 `guard_prompt_context()` 与 `guard_memory_write()`（`E_EVAL_INV5_LEAK`）；test 解锁 + `test_attestation.json`（`E_EVAL_TEST_LOCKED`） | FR-08-01…06 |
+| `seeds.py` | seed 唯一出口 `take()`（train 按代切块，越界 `E_EVAL_SEED_EXHAUSTED`）、`resolve_basket()`（H1/H2/H3/test_full/train_window，成员固定不重抽）、三类区间不相交（train 1000–1999 / heldout 731000–731099 / test 947000–947099，`E_EVAL_SEED_OVERLAP`）、协议摘要 `seeds_hash`（`sha256:686b2618…`；`config_hash` 不含 `configs/seeds.yaml`，协议串自带 `seeds-<hash12>` 隔离闸）；INV-5 文本护栏 `guard_prompt_context()` 与 `guard_memory_write()`（`E_EVAL_INV5_LEAK`）；test 解锁 + `test_attestation.json`（`E_EVAL_TEST_LOCKED`） | FR-08-01…06 |
 | `metrics.py` | INV-7 数据模型（`EpisodeResult` **无** shaped 分数字段）、`wilson_ci`、`normalized_entropy`、`action_entropy_curve`（横轴 = 决策点）、`mcnemar_exact_p`、`aggregate`（整数累加后单次相除）、§8.2 verdict、`render_report_sections` | FR-08-15…18, 23/24 |
 | `diversity.py` | `js_divergence`（手算 0.108031）、`entropy_slope`、C1–C4 坍缩判定 + 两点确认 | FR-08-19/20 |
-| `harness.py` | `EvalSpec`/`run_eval`（并行、超时、dropped 计 lose、degraded 剔除、预算）、`evaluate_arm`/`compare_paired`/`evaluate_generation`（MOD-07 唯一统计口径）、`report.json`+`report.sha256`、`generations.csv`、`plots_data/`、`SandboxRunner`（MOD-02 门面） | FR-08-07…10, 17, 22, 25 |
+| `harness.py` | `EvalSpec`/`run_eval`（并行、超时、dropped 计 lose、degraded 剔除、预算）、`evaluate_arm`/`compare_paired`/`evaluate_generation`（MOD-07 唯一统计口径）、`evaluate_arm` 逐臂归档 `metrics/arms/gen{gen:03d}-{split}-{basket}-{arm}.json`（`ArmResult.as_dict()` + provenance + 逐局明细）与 fail-closed 复用（provenance 全等且覆盖完整 seed 列表 ⇒ 整臂复用、0 局并发 `evals.arm_reused`；部分覆盖只补缺局；任一不一致即重算）、`report.json`+`report.sha256`、`generations.csv`、`plots_data/`、`SandboxRunner`（MOD-02 门面） | FR-08-07…10, 17, 22, 25 |
 | `baselines.py` | `random`（`seed ^ 0x5EED` 显式 rng）/ `heuristic`（委托 MOD-04 `heuristic_policy`，默认局参考 45.5%）/ `fixed_prompt`（harness v0 冻结）；不可覆盖归档 + `registry.csv` | FR-08-11…14 |
 | `ablation.py` | H2 三臂配对消融 + Holm–Bonferroni（两臂时首个阈值 0.025）+ `attribution ∈ {reflection, self_edit, both, none}` | FR-08-21 |
 | `reward.py` | shaped reward（**仅学习/调试**，不进判定路径；`metrics.py` 不 import 它） | Spec §3 |
-| `cli.py` | `baseline` / `eval report|diversity|ablation|test`（经 `app.py::wire()` 注册） | G6 |
+| `cli.py` | `baseline` / `eval report|diversity|ablation|test`（经 `app.py::wire()` 注册；`report`/`diversity` 支持 `--arm <name|all>`，F46-A） | G6 |
 
 细节与命令见 [`evals/README.md`](evals/README.md)。
 

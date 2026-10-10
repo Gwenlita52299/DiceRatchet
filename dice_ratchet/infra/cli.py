@@ -322,7 +322,7 @@ def _add_play(sub: Any) -> None:
     p.add_argument("--agent", choices=["llm", "heuristic", "random", "fixed_prompt"],
                    default="llm", help="Spec §4.6 命令面：llm|heuristic|random|fixed_prompt")
     p.add_argument("--seeds", default="train:1000-1004",
-                   help="seed 规格：train:1000-1004 / heldout:2000-2099 / 9000,9001 / file:seeds.txt")
+                   help="seed 规格：train:1000-1004 / heldout:731000-731039 / 947000,947001 / file:seeds.txt")
     p.add_argument("--episodes", type=int, default=1)
     p.add_argument("--mode", choices=["train", "eval"], default="train")
     p.add_argument("--model", default=None, help="MOD-03 模型 id（覆盖 inference.model_id）")
@@ -577,7 +577,7 @@ def _run_guards(args: argparse.Namespace) -> int:
 # =====================================================================
 
 def parse_seeds_spec(spec: str, *, seeds_file_dir: Path = Path(".")) -> dict[str, list[int]]:
-    """解析 ``train:1000-1004`` / ``heldout:2000-2099`` / ``9000,9001`` / ``file:seeds.txt``。
+    """解析 ``train:1000-1004`` / ``heldout:731000-731039`` / ``947000,947001`` / ``file:seeds.txt``。
 
     返回 ``{split: [seeds]}``；无 split 前缀时键为 ``"default"``。
     """

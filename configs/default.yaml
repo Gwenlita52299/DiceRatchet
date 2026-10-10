@@ -226,7 +226,7 @@ loop:
   max_episodes_per_generation: 120 # 全系统唯一成本上限（E_gen 比较）
   n_candidates: 1 # 2026-10-06 D-1：2 → 1（多候选择优的削弱由 §3.2 冒烟确认）
   smoke_n: 2 # 2026-10-06 D-1：5 → 2。**必须与 evolve.smoke_n 同步改**（config.py 不做该校验）
-  heldout_n: 40 # 2026-10-06 D-3：保持 40（H1 篮子 2000–2039；与 eval.n_heldout 必须相等）
+  heldout_n: 40 # 2026-10-06 D-3：保持 40（H1 篮子 731000–731039，F45-2 六位端口空间；与 eval.n_heldout 必须相等）
   io_retry: 3
   io_backoff_ms: 200
   llm_timeout_s: 90.0
@@ -253,7 +253,7 @@ evolve:
   gap_threshold: 0.15
   min_entropy_slope: -0.01
   # 2026-10-07（M2 开工检查单 §3.1 实测标定，裁决 A+C）：C5 三阈值 0.05/0.10/0.05 → 0.35/0.25/0.15。
-  # 依据：full PolicyAgent 在 H1 子集（seed 2000–2009，n=10，eval 模式）实测
+  # 依据：full PolicyAgent 在 H1 子集（**旧四位协议** seed 2000–2009，n=10，eval 模式）实测
   #   illegal_rate 0.3016 / fallback_rate 0.2146 / truncation_rate 0.10，
   # 与 fixed_prompt 基线（0.3021 / 0.1810 / 0.0）同量级 → 原阈值分别超限 6.0× / 2.15× / 2.0×，
   # 会使 MOD-07 的每一次演化都被 C5 reject（闭环形式上跑通、实则 0 候选留下）。
@@ -264,6 +264,8 @@ evolve:
   #   第一批 train/heldout 配对后标定。
   # 实测证据：runs/m2-s31-full-baseline/（generations.csv + gen-000/report.json），
   #   记录见 docs/reviews/2026-10-07-M2-S31-full-agent基线实测.md。
+  # 注（F45-2，2026-10-11）：H1 已移到六位端口空间（731000–731039）；上述 2000–2009 的实测
+  #   证据属**旧四位协议**，与新协议不可比（见 configs/seeds.yaml 的代价说明）。
   max_illegal_rate: 0.35
   max_fallback_rate: 0.25
   # 2026-10-09（Spec v2.0 B-44，用户裁决 ②+③）：C5 由「三项绝对门」改为
@@ -293,7 +295,9 @@ eval:
   fdr_q: 0.10
   gap_threshold: 0.15
   t_max: 120
-  n_workers: 2
+  n_workers: 2 # F42-C：MOD-06 基线路径与 MOD-07 `evolve/judge.py` 的候选臂评估**都**显式转发
+  #   本值与 `determinism.n_rep`；修复前候选臂路径没传，落到 `evaluate_arm` 的默认 n_workers=1
+  #   （一代 84 局串行）。本地臂并发提速 ≈2×；**API 臂未实测**。
   # 2026-10-04（M1 实测回填）：原 300 s 是按「t_d ≈ 3 s × 决策点 96」定的（≈288 s，本就贴边）；
   #（F20 已于 2026-10-05 修复：该预算现在真的被执行——SandboxRunner 的 deadline +
   #  run_eval 的硬看门狗，超时记 dropped + E_EVAL_TIMEOUT，计 n 按 lose 计。）

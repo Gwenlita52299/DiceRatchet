@@ -1,6 +1,7 @@
 # MOD-07 evolve 技术 PRD
 
-> **版本**：v0.7（2026-10-10 **新增 §6.6：accept/rollback 的失败自清与失败口径**——处置 F47-C2/D：失败时删掉本次新建的快照（否则顶掉版本号并留下可被 load/rollback 取用的幻影版本）、版本冲突也失败保守、基础设施失败记 `decision="error_reject"` 且 `report.json` 不得写成 `accept`；见 §17）
+> **版本**：v0.8（2026-10-11 **新增 §6.7：每代评估的检查点与复用**（臂归档 `metrics/arms/` + fail-closed 复用 + 提案检查点 + `n_workers`/`n_rep` 转发 + 中断穿透）——处置 F42-A+B+C；见 §17）
+> **历史版本**：v0.7（2026-10-10 **新增 §6.6：accept/rollback 的失败自清与失败口径**——处置 F47-C2/D：失败时删掉本次新建的快照（否则顶掉版本号并留下可被 load/rollback 取用的幻影版本）、版本冲突也失败保守、基础设施失败记 `decision="error_reject"` 且 `report.json` 不得写成 `accept`；见 §17）
 > **历史版本**：v0.6（2026-10-10 **新增 §6.5：提案输入与补丁应用的硬口径**——处置 F37（按调用方给输出预算）/F38（内联可改文件正文）/F39（容忍行偏移、不容忍 fuzz）/F40（prompt 必须列出校验器规则）/F41（冒烟臂 `-smoke` 的 `episode_key`）；见 §17）。
 > **历史版本**：v0.5（2026-10-09 **处置缺陷 F28**：C5 的 `truncation` 由绝对门 0.15 改为**相对门** `candidate ≤ parent + truncation_tol(0.05)`，`illegal`/`fallback` 保留绝对门；新增 §8.2.2、更新 §8.2/§8.2.1/§9，对齐 Spec v2.0 B-44 用户裁决 ②+③；v0.4 = 2026-10-07 按 Spec v1.8 回填 C5 实测标定与 M3 相对门设计，见 §8.2.1/§17）· **状态**：待评审 · **所属里程碑**：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）· **作者**：DiceRatchet 技术文档 · **日期**：2026-10-09
 > **上游 Spec**：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（v1.8，**唯一事实来源**；冲突以 Spec 为准）· **关联不变量**：INV-3/INV-4/INV-5/INV-7
@@ -230,6 +231,55 @@ test_accept_git_failure_leaves_no_snapshot_and_can_retry`（含「残留 → 跳
 （含 `build_decision_sections` 的 gate 分支反例自检）。修复前：前两条分别断言
 `['v0','v1'] == ['v0']`、`['v0','v1','v2'] == ['v0','v1']` 失败；第三条
 `assert 'reject' == 'error_reject'` 失败。
+
+### 6.7 每代评估的检查点与复用（v0.8 新增；F42-A+B，Spec B-60/B-61）
+
+**为什么必须做**：MOD-06 的 resume 单元原先只有**整代**（`generations/gen-NNN/{report,decision}.json`
+不在就把 phase 重置为 playing **重跑整代**），而一代 84 局评估实测 **≈3.75 h / ≈¥47**
+（`runs/m2-s32b-smoke-c1-medium6` 的 gen-1）——中断即**再付一次**。引擎早就有长跑能力
+（`run_eval` 的 `resume_results` / `on_result`，M1 验收 F18/F19/F20），缺的是「中间那层」：
+`evaluate_arm` 不转发它们（修复前签名：`TypeError: evaluate_arm() got an unexpected keyword
+argument 'resume_results'`）。
+
+**三层检查点**
+
+1. **臂归档**（`evals/harness.py::evaluate_arm`）：每个臂落
+   `metrics/arms/gen{gen:03d}-{split}-{basket}-{arm}.json` =
+   `ArmResult.as_dict()` + `provenance` + **逐局明细**。`provenance` 字段：
+   `generation / split / basket / arm / harness_version / memory_version / n_seeds /
+   n_dropped / config_hash / seeds_hash / protocol_id / episode_config_hash / created_at`。
+2. **复用规则（fail-closed）**：
+   - `provenance` 在 `ARM_PROVENANCE_KEYS` 上**逐字段全等**（**不含** `created_at`）且归档覆盖
+     完整 seed 列表 → **整臂复用**：**一局都不跑**，发 `evals.arm_reused`；
+   - 只覆盖一部分 → 已完成的局并入 `resume_results`，**只跑缺的**；每完成一局即重写归档
+     （原子写），所以再挂一次也只丢当前局；
+   - 任一字段不一致 / 归档损坏 / run 目录不存在 → **不复用**（照常重算）。改了 harness 版本、
+     记忆版本、篮子、局型（`episode_config`）或 seed 区间，都必然走到这一支。
+3. **提案检查点**（`evolve/checkpoint.py`）：**评估之前**把 `ProposalResult` 落
+   `generations/gen{gen:03d}/proposals/proposal.json`，连同**输入指纹**
+   （`run_id` / `generation` / `propose_seed` / `harness_version` / `memory_version` /
+   `prompt_digest`）。resume 时重算指纹：一致 → **复用同一 `candidate_id` 与 diff**、
+   **0 次 proposer 调用**（发 `evolve.proposal_reused`）；不一致 / 版本不符 / 损坏 → 照常重新提案。
+
+**为什么提案也要检查点**：API 提案**不可复现**（注册表标注 `api_supports_seed=false`，实测
+「字节相同的请求 9 次返回 9 个不同响应」）⇒ 不落检查点则 resume 时候选 id 必然变，而
+`metrics/arms/` 的路径含 `cand-<id>` ⇒ 候选臂归档必然 miss，能省的只有 parent 侧。
+
+**fingerprint 的诚实边界**：只覆盖**输入**，不含模型权重（proposer 客户端不向 MOD-07 暴露模型
+指纹）；`harness_snapshot` 本身是 prompt 的一部分，因此 **accept 之后**的检查点天然不再命中
+（那时 parent 已前进，重新提案才是正确行为）。指纹由 `proposer.proposal_inputs()` 与真正送进
+LLM 的渲染**共用同一句**，避免「检查点按另一份参数算指纹」的静默漂移。
+
+**`n_workers` / `n_rep` 必须按配置转发**（F42-C）：`CandidateEvaluator._evaluate_arm` 原先不传
+它们 ⇒ 落到 `evaluate_arm` 的默认 `n_workers=1`（一代 84 局**串行**），而 gen-000 基线路径传的是
+`cfg.evals.n_workers=2`。现在两条路径都按 `cfg.evals` 对齐；**不改任何配置值** ⇒ `config_hash` 不变。
+
+**中断语义**：`_parent_arms` 让 `KeyboardInterrupt` / `SystemExit` **穿透**（`except Exception`
+本就不捕获它们，这里显式写明契约）。Ctrl-C 是最常见的打断方式；把它折成「保守 reject」会写出
+`report.json`，让 MOD-06 把该代记成**已完成**，整代已评估结果白扔。
+
+**端到端验收（实测，全部本地替身、0 成本）**：一代在 parent heldout 第 1 局之后 Ctrl-C →
+resume → proposer **0 次调用**、parent heldout 已归档的局**一局都没重跑**、该代跑完。
 
 ## 7. 数据模型与存储
 
@@ -496,3 +546,4 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | v0.5 | 2026-10-09 | **新增 §8.2.2：C5 是「臂相关」的 → 登记缺陷 F28 与待裁决的处置**（对齐 Spec v2.0 B-44）。起因：C5 三阈值（§8.2.1 的①）是 2026-10-07 按**本地 8B** 标定的，而 M2 闭环主力臂已于 2026-10-09 由用户裁决为 **`C1`（三角色全 `deepseek-flash`）**（Spec B-43）。用当前臂实测值 + **真实 `judge()`** 复算：`hard × 6` 的 `truncation_rate = 0.30 > 门 0.15` ⇒ **C5 会 reject 每一个候选**（`E_EVOLVE_ILLEGAL_RATE`）；同时 illegal/fallback 反向松了约 10×。① 结论：**C5 的阈值不是被测对象的属性，而是「标定臂 × 局型」的属性**；§3.1 要防的「静默锁死闭环」风险未被消除，只是从 illegal 轴搬到 truncation 轴（`hard × 6` 上 3/10 局撞内核 `maxTurnsPerBattle=60` → `E_KERNEL_TURN_LIMIT`，且被截断的局计 lose 不算 dropped）。② 补记「闭环为什么静默」：`reject` 不是错误，MOD-06 对接受与拒绝同样 `generation += 1` 并回到 `playing`（退出码 0），MOD-07 照常写 decision 记录 ⇒ 全拒的闭环会跑完全部代数、退出码 0、日志无异常，但 `harness/versions/` 永不出现新版本。③ 列出三个处置候选（按当前臂重标 / bring-up 改用 medium×6 / **truncation 并入相对门**）并写明**裁决前不得宣称 M2 准入完成** |
 | v0.7 | 2026-10-10 | **新增 §6.6：accept/rollback 的失败自清与失败口径（F47-C2/D，对齐 Spec v2.5 B-57/B-58）**。① **失败自清**：`accept()` 在建完快照后失败（git 提交失败）时，原先只 `_restore()` 恢复工作区，`_rollback_files` 又会跳过 `versions/` ⇒ 本次新建的快照被留下；`rollback()` 同形。改为删掉**本次新建**的那一个（`_discard_new_snapshot(created_snap)`；回滚目标 `snap` 只读、绝不删）。**开发期更正**：残留的危害不是「后续 accept 抛 `VersionConflictError`」（`next_version = max(指针, 现有目录)+1` 会跳号），而是**顶掉一个版本号** + 留下**可被 `load_version`/`rollback` 取用的幻影版本**（无账本、`git_commit` 空）——两条都有反例用例。② **版本冲突也失败保守**：`except VersionConflictError` 原先直接 `raise`，而 diff 已写进生效工件 ⇒ 留下「已改内容 + 旧指针」；改为先 `_restore()`。③ **失败口径分离**：accept/rollback 抛 `InfraError` 时记 `decision="error_reject"`（加入 MOD-08 `VERDICT_DECISIONS`）。原先 `_finish_report` 写 `reject` 而 `build_decision_sections` 只看 gate（此时 `approved`）⇒ **report 写 `accept` 却没有新版本**（幻影 accept）。实测探针：`outcome.decision='reject'` / `report.decision='accept'` / `versions=['v0']`；修法是 `_build_report` 在 `error_reject` 时以 result 覆写 decision/reason。④ 明确 `commit_harness` 内部的门禁只是**兜底**（位于整代花费之后），真正的「演化前门禁」在 MOD-06 §9.3 / MOD-09 FR-09-20。 |
 | v0.6 | 2026-10-10 | **新增 §6.5：提案输入与补丁应用的硬口径（F37–F41，对齐 Spec v2.3 B-47..B-50）**。本轮是**闭环首次真正跑通提案→补丁→冒烟→裁判**，五个缺陷依次暴露（全部只在「测试不走的参数组合」里，被 1700+ 条全绿用例掩护）：① **F37** 提案沿用 `inference.max_tokens=256` ⇒ 响应一律截断 → 报成 `E_LLM_SCHEMA_INVALID` → **0 候选**；改为按调用方给预算（2048），**否掉**全局抬高路线。② **F38** prompt 只给 harness 文件的 sha256、不给正文 ⇒ 模型对没见过的文件写 diff ⇒ `E_EVOLVE_PATCH_INVALID`；改为内联可改文件正文（`HarnessSnapshot.contents`，schema 1.1.0）。③ **F39** `_apply_hunks` 只认声明行号 ⇒ 上下文逐字正确但偏 +9 的真实候选被判无效；改为 ±200 行逐字定位（容忍 offset、不做 fuzz、歧义即拒）。④ **F40** `evolvable_keys` 从未进 prompt（`config_patch` 盲猜即作废）、rationale 上限只在 schema 的 `maxLength`（API 不强制）⇒ 改为 prompt 明列 + 上限取自 schema（单一事实来源）。⑤ **F41** 冒烟臂 `parent-smoke`/`cand-{id}-smoke` 不在 `episode_key` 登记模式里 ⇒ 冒烟局 0 行轨迹 ⇒ `E_EVAL_INSUFFICIENT_N` ⇒ **每个候选在冒烟关即死**；已三处同步（MOD-09 §6.2 / `infra/logging.py` / `schemas/trajectory_line.schema.json`）。**修好后的首个真实候选**走到完整裁判链并**被合法拒绝**（`C2:no_significant_gain`、`delta=0.0,p=1.0`）⇒ 据此**改写 §3.2 验收判据**为「机制性失败为零」（Spec B-51，用户裁决）。 |
+| v0.8 | 2026-10-11 | **新增 §6.7：每代评估的检查点与复用（F42-A+B+C，对齐 Spec v2.6 B-60/B-61）**。① **现场**：MOD-06 的 resume 单元只有整代（`_cycle_artifacts_exist`），中断即重跑整代——一代 84 局实测 ≈3.75 h / ≈¥47；而引擎早有 `run_eval(resume_results/on_result)`，只是 `evaluate_arm` 不转发（修复前签名 `TypeError: evaluate_arm() got an unexpected keyword argument 'resume_results'`）。② **臂归档**：`metrics/arms/gen{gen:03d}-{split}-{basket}-{arm}.json` = `ArmResult.as_dict()` + provenance（13 字段）+ 逐局明细。③ **fail-closed 复用**：provenance 逐字段全等且覆盖完整 seed 列表 → 整臂复用（0 局 + `evals.arm_reused`）；部分覆盖 → 只跑缺的；任一不一致/损坏/无 run 目录 → 重算。④ **提案检查点**：评估前落 `generations/gen{gen:03d}/proposals/proposal.json` + 输入指纹（含 `prompt_digest`）；命中即同 candidate id、**0 次 proposer 调用**。理由：API 提案不可复现（`api_supports_seed=false`），不落检查点则 `cand-<id>` 归档必然 miss，只能省 parent 侧。⑤ **F42-C**：`CandidateEvaluator._evaluate_arm` 原先不传 `n_workers`（84 局串行，而 gen-000 基线传 2）⇒ 按 `cfg.evals` 对齐（不改配置 ⇒ `config_hash` 不变）。⑥ **中断语义**：`_parent_arms` 让 `KeyboardInterrupt`/`SystemExit` 穿透（折成保守 reject 会写出 report.json，让 loop 把该代记成已完成）。⑦ **顺带修**：`run_eval` 原先只把 `resume_results` 并进聚合字典、队列仍会重跑那些 seed；`str(None)=="None"` 让归档复用闸永远对不上。⑧ **端到端实测（0 成本替身）**：parent heldout 第 1 局后 Ctrl-C → resume → proposer 0 次调用、parent 已归档局一局未重跑、该代跑完。 |
