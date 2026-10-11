@@ -524,6 +524,24 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 
 **对齐 M2**：`python -m dice_ratchet loop run --generations 1 --k 30 --hitl` 闭环跑通 ≥1 轮演化，产出 `diff.patch` + `report.json` + `gate.json`，`evolve approve` 后 `harness/version.json.version == 1`。
 **对齐 M3**：≥3 代演化，heldout 主指标单调不降，**并且至少有 1 次 accept**（否则「每代都拒绝」也能满足单调不降，属于退化通过），报告写明接受率（计划 §6 验收 1）；至少 1 个指标相对基线可归因提升且 `ablation.no_self_edit` 差异被记录（验收 2）；`win_rate_gap < gap_threshold` 且 `collapse_flag == False`（验收 3）。
+
+> **✅ 2026-10-11（D-M3-4 裁决 A，Spec v2.10 / B-66）：M3 的 HITL 模式与「样本资格」口径已澄清。**
+> §14 风险④ 原文写「`--hitl=false` 跑批量实验（标 `decided_by="auto"`，**不计入 M3 验收样本**）」，
+> 而本节又要求「≥1 次 accept」——两条**互相矛盾**：全自动跑时 accept 出自 auto、按原文不计入样本；
+> 改用 `--hitl` 则每代有人工延迟，且 24 h 无响应会 `hitl_timeout` **保守回滚**（一代白跑 ≈4.8 h / ≈¥100）。
+> **裁决 A（记录在案）**：
+> ① **M3 实验跑 `--hitl=false` 全程自动**（`evolve.hitl=false`；可复现、无人在环干预）；
+> ② **样本资格改为**「`decided_by="auto"` **+ `condition_trace` 完整**（C0–C5 六项齐全，每项带
+>    `passed`/`value`/`threshold`）」——满足则该 auto 决策**计入** M3 验收样本；缺 `condition_trace`
+>    的 auto 决策**不计入**；
+> ③ 报告必须**显式记录「本轮无人工确认」**（不得让读者误以为有 HITL 复核）；
+> ④ §14 风险④ 的「不计入 M3 验收样本」**收窄为**只适用于「`condition_trace` 不完整的 auto 决策」，
+>    不再适用于全部 auto 决策。
+> **依据**：M2 准出 run（`runs/m2-s32b-smoke-c1-medium6`）**事实就是走 auto 路径**——归档 `report.json` 为
+> `decided_by="auto"`、`decision="reject"`、`reason="C2:no_significant_gain"`，且
+> `candidates/{id}.json.verdict.condition_trace` 完整 ⇒ 本裁决是**追认既有做法**，不是引入新风险；
+> 而选 `--hitl` 的代价不对称（一代白跑 ≈¥100 + 长跑必须守夜）。
+> **⚠️ 诚实边界**：auto accept 的说服力弱于人工确认——M3 报告**不得**把 auto 决策描述为「经人工复核」。
 **专属 DoD**：任意 reject 都有 `report.json`；任意 accept 都有 `version.json` + `diff.patch` + git commit；任意恶意候选都在静态扫描阶段被挡且 0 局 heldout 消耗。
 
 ## 13. 指标与埋点
@@ -547,7 +565,7 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | MOD-02 sandbox | `guard.gate` + `guard.load_harness_tools` | **阻塞上线**：无扫描即违反 INV-4（M0 已交付） |
 | MOD-03 inference / MOD-04 policy | `generate_json()` 结构化输出 / `harness_tool` 注册表与 prompt 渲染契约 | `propose` 不可用 → `E_EVOLVE_PROPOSE_FAILED`；新 harness 无法被加载验证 |
 
-**风险**：① 8B 牌力弱导致判定表全拒 → M2 先用宽松档（`alpha=0.10`、`win_rate_tol=0.05`；默认档已是 `win_rate_tol=0.05`，宽松档只把 `alpha` 放宽到 0.10，见 2026-10-06 D-3）跑通管线，M3 收紧到默认值并给出收紧前后对比；② heldout 预算被候选数放大 → 冒烟前置 + `cost_cap` 硬截断（2026-10-06 D-1：`C=1`、`S=2`、`H=40`、`E_gen=114 ≤ loop.max_episodes_per_generation=120`）；③ diff 质量低 → `propose_max_retries=2` + 去重，`propose` 失败率 >50% 时回看 MOD-04 prompt 契约；④ HITL 拖慢实验节奏 → `--hitl=false` 跑批量实验（标 `decided_by="auto"`，不计入 M3 验收样本）；⑤ git 分支污染主仓 → 只经 MOD-09 `git_ops`，禁裸 `subprocess`，`E_EVOLVE_GIT_FAILED` 时不动 `version.json`；⑥ **（2026-10-06 D-2/D-3）`C=1` 削弱"多候选择优"信号、且 `win_rate` 在 H=40 上只能判 ≥15pp** → 必须在 M2 §3.2 冒烟里确认 C=1 仍能产出 ≥1 轮可判定的演化（判据落在 `mean_stages_cleared` 的配对显著性上，而非 win_rate 点估计），否则回头调 D-1。
+**风险**：① 8B 牌力弱导致判定表全拒 → M2 先用宽松档（`alpha=0.10`、`win_rate_tol=0.05`；默认档已是 `win_rate_tol=0.05`，宽松档只把 `alpha` 放宽到 0.10，见 2026-10-06 D-3）跑通管线，M3 收紧到默认值并给出收紧前后对比；② heldout 预算被候选数放大 → 冒烟前置 + `cost_cap` 硬截断（2026-10-06 D-1：`C=1`、`S=2`、`H=40`、`E_gen=114 ≤ loop.max_episodes_per_generation=120`）；③ diff 质量低 → `propose_max_retries=2` + 去重，`propose` 失败率 >50% 时回看 MOD-04 prompt 契约；④ HITL 拖慢实验节奏 → `--hitl=false` 跑批量实验（标 `decided_by="auto"`，不计入 M3 验收样本——**2026-10-11 D-M3-4 裁决 A 修订**：此限定**收窄为**只适用于「`condition_trace` 不完整的 auto 决策」；完整的 auto 决策（C0–C5 六项齐全，每项带 `passed`/`value`/`threshold`）**计入** M3 验收样本，M3 实验跑 `--hitl=false` 全程自动并在报告显式记录「本轮无人工确认」（理由与依据见 §12 的裁决块））；⑤ git 分支污染主仓 → 只经 MOD-09 `git_ops`，禁裸 `subprocess`，`E_EVOLVE_GIT_FAILED` 时不动 `version.json`；⑥ **（2026-10-06 D-2/D-3）`C=1` 削弱"多候选择优"信号、且 `win_rate` 在 H=40 上只能判 ≥15pp** → 必须在 M2 §3.2 冒烟里确认 C=1 仍能产出 ≥1 轮可判定的演化（判据落在 `mean_stages_cleared` 的配对显著性上，而非 win_rate 点估计），否则回头调 D-1。
 
 ## 15. 里程碑与工作量估算（人日）
 
