@@ -166,11 +166,17 @@ def _require_points(name: str, xs: Sequence[Any], ys: Sequence[Any],
              "（绘图列清单必须从 MOD-08 派生，不得另写一份）")
 
 
-def plot_generations(csv_path: Path, out_dir: Path) -> list[Path]:
+def plot_generations(csv_path: Path, out_dir: Path, *, figures: list[Any] | None = None
+                     ) -> list[Path]:
     """绘图；返回生成的 png 列表。
 
     - matplotlib 不可用 → ``E_IO_PLOT_UNAVAILABLE``（降级，返回 ``[]``，不失败）；
     - 输入存在但**某张图没有数据点** → ``E_IO_PLOT_NO_DATA``（**失败**，不产出空白图）。
+
+    ``figures``（可选）：传入一个 list 时，把每张图的 ``(名字, figure)`` 追加进去，
+    供调用方**检查真实画出来的对象**。M3 彩排的「5 张 PNG 有数据点」判据走这条路——
+    只查「文件存在」或「文件大小」会被空白图通过（F48 的教训：空白图 20–27 KB，
+    非白像素比例 3.43% vs 有数据图 3.60%，两者分不开）。
     """
     try:
         plt = _import_matplotlib()
@@ -193,7 +199,10 @@ def plot_generations(csv_path: Path, out_dir: Path) -> list[Path]:
     def _save(fig: Any, name: str) -> None:
         fig.tight_layout()
         fig.savefig(out_dir / name, dpi=120)
-        plt.close(fig)
+        if figures is not None:
+            figures.append((name, fig))
+        else:
+            plt.close(fig)
         written.append(out_dir / name)
 
     # ---- win_rate.png -------------------------------------------------------------
@@ -268,4 +277,6 @@ def plot_generations(csv_path: Path, out_dir: Path) -> list[Path]:
         # gap 图有值但**没有 train 行**：win_rate_gap 是 heldout 行上的一个数（图仍可画），
         # 但 train 对照曲线会缺席——必须可观测，不能让「5 张图都在」掩盖这个缺口。
         events.emit("infra.plot_missing_split", split="train", path=str(csv_path))
+    # 注意：`figures is not None` 时**不**在此关闭 figure —— 调用方（M3 彩排）要读
+    # `Line2D.get_xydata()` 来判「真的有数据点」，关了就读不到了。调用方负责关。
     return written

@@ -21,7 +21,8 @@ from typing import Any, Callable, Final, Mapping, Sequence
 from dice_ratchet.infra import cli as infra_cli
 from dice_ratchet.infra import events
 from dice_ratchet.infra.config import load_config
-from dice_ratchet.infra.errors import E, InfraError, error_code_of
+from dice_ratchet.infra.errors import (EXIT_DOMAIN, E, InfraError,
+                                      error_code_of)
 from dice_ratchet.infra.io import read_json, write_json_atomic
 
 from . import seeds as seeds_mod
@@ -38,6 +39,7 @@ from .metrics import (aggregate, bootstrap_seed, judge_gain, mcnemar_exact_p, po
 
 __all__ = ["HANDLERS", "cmd_baseline", "cmd_eval_report", "cmd_eval_diversity",
            "cmd_eval_ablation", "cmd_eval_acceptance", "cmd_eval_test",
+           "cmd_rehearsal_check",
            "set_inference_client_provider"]
 
 
@@ -661,10 +663,24 @@ def cmd_eval_ablation(args: argparse.Namespace) -> int:
 # =====================================================================
 
 def cmd_eval_test(args: argparse.Namespace) -> int:
-    """test 终检（FR-08-04；默认锁定，``--unlock-once`` 解锁并存证）。"""
+    """test 终检（FR-08-04；默认锁定，``--unlock-once`` 解锁并存证）。
+
+    ``--check``：**只读预检**（D-M3-5 裁决 A）。它回答「真跑之前，存证这一步会不会失败」，
+    不调用 ``evaluate_arm``、不写存证、**不消耗解锁**。
+
+    **为什么必须有它（实测的顺序问题）**：``cmd_eval_test`` 先跑 100 局 test（≈4.2 h /
+    ≈¥88）（指标要先算出来才能写进取证），**之后**才调 ``test_unlock``；而
+    ``test_unlock`` 的唯一「单次」判据是 **attestation 文件是否已存在**。因此
+    「attestation 路径不可写 / 父目录不存在 / 该代已解锁过」这几种失败一旦发生，
+    **那 100 局已经花掉、却拿不到有效存证** —— 这是 test 池上唯一真正不可逆的失败模式，
+    而它可以零成本提前查出来。
+    """
     paths, cfg, run_id = _paths(args)
     generation = _generation_of(args, paths.root)
     proto = _protocol(cfg, args.config_dir)
+    if bool(getattr(args, "check", False)):
+        return _preflight_test(args, paths=paths, proto=proto, generation=generation,
+                               run_id=run_id)
     if not bool(getattr(args, "unlock_once", False)):
         raise InfraError(E.E_EVAL_TEST_LOCKED,
                          "test 池默认锁定：需显式 --unlock-once（每里程碑 ≤1 次）",
@@ -714,6 +730,107 @@ def cmd_eval_test(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_rehearsal_check(args: argparse.Namespace) -> int:
+    """``rehearsal check``：M3 彩排的机器可读合格判据（D-M3-5 裁决 A）。
+
+    **只读、不付费**：全部判据都作用于已落盘的产物（`generations/*/report.json`、
+    `metrics/generations.csv`、`plots/*.png`、`episodes/heldout/*.jsonl`）。
+    唯一会「重算」的是把台账重渲染一遍好数数据点——画到临时目录，不覆盖交付物。
+
+    **返回非 0 表示彩排不合格**（这是**守卫**语义：不合格就不该起跑正式实验）。
+    """
+    from .rehearsal import run_rehearsal_checks
+
+    paths, _cfg, run_id = _paths(args)
+    report = run_rehearsal_checks(paths.root, run_id=run_id,
+                                  min_comparable=int(getattr(args, "min_comparable", 1)))
+    payload = report.as_dict()
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    if not report.ok:
+        failed = "; ".join(f"{c.name}: {c.detail}" for c in report.failed)
+        print(f"彩排**不合格**（{len(report.failed)} 项）：{failed}", file=sys.stderr)
+        return EXIT_DOMAIN
+    return 0
+
+def _preflight_test(args: argparse.Namespace, *, paths: Any, proto: Any,
+                    generation: int, run_id: str) -> int:
+    """``eval test --check``：test 终检的只读预检（D-M3-5）。
+
+    **不消耗解锁**：本函数不调 ``evaluate_arm``、不调 ``test_unlock``、不写任何文件
+    （只做一次**可写性探测**：在目标目录建一个临时文件再删掉）。
+    退出码与守卫同口径：预检不通过 ⇒ 非 0（这是**守卫**，不是判定器）。
+    """
+    import tempfile
+
+    checks: list[dict[str, Any]] = []
+    seed_count = 0
+
+    def _add(name: str, ok: bool, detail: str) -> bool:
+        checks.append({"check": name, "ok": bool(ok), "detail": str(detail)})
+        return bool(ok)
+
+    all_ok = True
+
+    # ① test 池锁定状态：应为**锁定**（未解锁）。已解锁 ⇒ 本里程碑已用过（再跑会被
+    #    `test_unlock` 拒），且更重要的：不该再有第二次。
+    unlocked = seeds_mod.is_test_unlocked(proto)
+    all_ok &= _add("test_pool_locked", not unlocked,
+                   "已解锁（本里程碑已用过 test 池）" if unlocked else "锁定（符合预期）")
+
+    # ② 篮子规模：test_full 的 seed 数必须 > 0（真跑要 100 局，但契约只保证非空；
+    #    实际条数写进 detail 供人核对）。
+    try:
+        seeds_list = list(seeds_mod.basket_seeds("test_full", protocol=proto))
+        seed_count = len(seeds_list)
+        all_ok &= _add("test_basket_seeds", seed_count > 0,
+                       f"test_full 共 {seed_count} 个 seed")
+    except InfraError as exc:
+        all_ok &= _add("test_basket_seeds", False, f"{exc.code}: {exc.message}")
+
+    # ③ 解锁后的协议必须能通过校验（真跑时构造的就是它）
+    try:
+        unlocked_proto = seeds_mod.SeedProtocol(
+            version=proto.version, hash_algo=proto.hash_algo, splits=proto.splits,
+            exposure_guard=proto.exposure_guard, seeds_hash=proto.seeds_hash, unlocked=True)
+        seeds_mod.validate_protocol(unlocked_proto)
+        all_ok &= _add("unlocked_protocol_valid", True, "validate_protocol 通过")
+    except InfraError as exc:
+        all_ok &= _add("unlocked_protocol_valid", False, f"{exc.code}: {exc.message}")
+
+    # ④ seeds_hash 可算（存证里要写 `protocol_hash`）
+    try:
+        digest = seeds_mod.protocol_hash(proto)
+        all_ok &= _add("protocol_hash", bool(digest), str(digest))
+    except InfraError as exc:
+        all_ok &= _add("protocol_hash", False, f"{exc.code}: {exc.message}")
+
+    # ⑤ 存证路径：**本预检的核心**——它必须「尚不存在」且「父目录可写」。
+    requested = getattr(args, "attestation", None)
+    att_path = (Path(requested) if requested
+                else seeds_mod.test_attestation_path(paths.root, generation))
+    all_ok &= _add("attestation_not_exists", not att_path.exists(),
+                   f"{att_path}" + ("（已存在 ⇒ 该代已解锁）" if att_path.exists() else ""))
+    parent = att_path.parent
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+        probe = Path(tempfile.mkstemp(dir=str(parent), prefix=".preflight-")[1])
+        probe.unlink()
+        all_ok &= _add("attestation_dir_writable", True, str(parent))
+    except OSError as exc:
+        all_ok &= _add("attestation_dir_writable", False, f"{parent}: {exc}")
+
+    payload = {"run_id": run_id, "generation": int(generation),
+               "attestation_path": str(att_path), "test_seeds": seed_count,
+               "ok": bool(all_ok), "checks": checks}
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    if not all_ok:
+        failed = ", ".join(c["check"] for c in checks if not c["ok"])
+        print(f"[{E.E_IO_CONFIG_INVALID}] eval test 预检不通过：{failed}"
+              "（**未消耗解锁**；修好再真跑）", file=sys.stderr)
+        return EXIT_DOMAIN
+    print("预检通过：test 终检可以安全起跑（解锁尚未消耗）", file=sys.stderr)
+    return 0
+
 def _empty_diversity() -> Any:
     from .metrics import CollapseVerdict
 
@@ -728,5 +845,6 @@ HANDLERS = {
     ("eval", "diversity"): cmd_eval_diversity,
     ("eval", "ablation"): cmd_eval_ablation,
     ("eval", "acceptance"): cmd_eval_acceptance,
+    ("rehearsal", "check"): cmd_rehearsal_check,
     ("eval", "test"): cmd_eval_test,
 }

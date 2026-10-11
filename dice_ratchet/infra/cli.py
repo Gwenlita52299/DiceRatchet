@@ -244,6 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_loop(sub)
     _add_evolve(sub)
     _add_eval(sub)
+    _add_rehearsal(sub)
     _add_audit(sub)
     _add_inference(sub)
     _add_memory(sub)
@@ -420,6 +421,18 @@ def _add_evolve(sub: Any) -> None:
     p.set_defaults(func=None)
 
 
+def _add_rehearsal(sub: Any) -> None:
+    """M3 彩排判据（D-M3-5 裁决 A；Spec v2.14 / B-70）。"""
+    p = _sp(sub, "rehearsal", help="M3 彩排（D-M3-5）")
+    sp = p.add_subparsers(dest="subcommand", metavar="<subcommand>")
+    chk = _sp(sp, "check", help="彩排合格判据（只读，不付费）")
+    _common_run_id(chk)
+    chk.add_argument("--min-comparable", dest="min_comparable", type=int, default=1,
+                     help="判据 1 判定器至少需要几对可比较的代（默认 1）")
+    _set_func(chk, _deferred(["rehearsal", "check"], "evals"),
+              ["rehearsal", "check"])
+
+
 def _add_eval(sub: Any) -> None:
     p = _sp(sub, "eval", help="测量（MOD-08）")
     sp = p.add_subparsers(dest="subcommand", metavar="<subcommand>")
@@ -452,6 +465,9 @@ def _add_eval(sub: Any) -> None:
     tst.add_argument("--no-transfer", dest="transfer", action="store_false", default=True,
                      help="跳过完整局（medium×10 关）的次级「迁移」指标（Spec §8.6）")
     tst.add_argument("--attestation", default=None, help="存证落盘路径")
+    tst.add_argument("--check", dest="check", action="store_true", default=False,
+                     help="**只读预检**（D-M3-5）：校验存证路径/篮子/协议，"
+                          "不跑 100 局、不写存证、**不消耗解锁**；不通过则非 0 退出")
     _set_func(tst, _deferred(["eval", "test"], "eval"), ["eval", "test"])
 
     acc = _sp(sp, "acceptance", help="判据 1 判定器（held-out 单调不降 + ≥1 次 accept）")

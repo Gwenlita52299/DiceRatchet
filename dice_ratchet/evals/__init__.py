@@ -39,6 +39,8 @@ from .metrics import (EpisodeResult, GainVerdict, CollapseVerdict, PairedTest, S
                       render_report_sections, wilson_ci)
 from .acceptance import (AcceptanceReport, GenerationAcceptance,
                         evaluate_acceptance, write_acceptance)
+from .rehearsal import (CheckResult, RehearsalReport,
+                       run_rehearsal_checks)
 from .ablation import ARM_MECHANISM
 from . import seeds
 from .seeds import (SeedProtocol, assert_split_isolation, default_protocol,
@@ -71,6 +73,8 @@ __all__ = [
     # 判据 1 判定器（F-M3-9）
     "AcceptanceReport", "GenerationAcceptance", "evaluate_acceptance",
     "write_acceptance",
+    # M3 彩排判据（D-M3-5）
+    "CheckResult", "RehearsalReport", "run_rehearsal_checks",
     "write_ext_metrics", "write_plots_data", "generation_report_path", "report_sha_path",
     # baselines
     "BASELINE_KINDS", "BaselineAgent", "RandomAgent", "HeuristicAgent", "baseline_arm",
