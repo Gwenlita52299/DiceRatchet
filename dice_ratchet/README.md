@@ -32,7 +32,12 @@ MOD-03 按 Spec v1.4 B-31 交付 `MLXBackend` + `MockBackend`：`Backend` 契约
 
 - Python ≥ 3.11（用到了 `StrEnum`）；依赖 `pyyaml` + `jsonschema`（draft 2020-12）。
 - 绘图为可选依赖：缺 `matplotlib` 时 `plot_generations()` 降级为 `E_IO_PLOT_UNAVAILABLE`
-  警告并返回 `[]`（FR-09-13）。
+  警告并返回 `[]`（FR-09-13）。**2026-10-11（F48）两条额外口径**：① 绘图有**生产调用点**了
+  ——`eval report` 末尾会画 `runs/<run_id>/plots/` 的 5 张 PNG（失败不阻断报告/台账落盘，
+  但发 `infra.plot_done`/`infra.plot_skipped` 事件 + stderr，不静默）；② 输入存在但
+  **某张图没有数据点**时抛 `E_IO_PLOT_NO_DATA`（**不产出空白图**——「文件存在」不等于「有图」）。
+  台账列清单的唯一副本在 `infra/plotting.py::GENERATIONS_CSV_COLUMNS`（`infra → evals` 被
+  分层门禁禁止，故字面副本落 IO 层），`evals.harness.GENERATIONS_COLUMNS` 直接引用它。
 
 ```bash
 uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python pyyaml jsonschema pytest matplotlib
