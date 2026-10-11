@@ -32,6 +32,10 @@ models/
 # 不 ignore 会让 MOD-07 在自己仓库里拒绝演化。
 .archify/
 
+# answer-me-with-html 生成的讲解页（单文件 HTML + 草稿；本地产物，不入库）
+# 同 .env / .archify 的理由：含 runs/ 路径与内部判定细节，且未跟踪会让 MOD-07 拒绝演化。
+.answer-me-with-html/
+
 # 本地 API key 文件（Issue #1：真跑 B/C 臂用；key 绝不入库、绝不进 run 工件）
 # 注意：infra.git_ops 把 `git status --porcelain` 的任何输出都算「worktree 不干净」，
 # 未跟踪文件也在内 —— 所以这条必须存在，否则 .env 会让 MOD-07 拒绝演化。
