@@ -454,6 +454,12 @@ def _add_eval(sub: Any) -> None:
     tst.add_argument("--attestation", default=None, help="存证落盘路径")
     _set_func(tst, _deferred(["eval", "test"], "eval"), ["eval", "test"])
 
+    acc = _sp(sp, "acceptance", help="判据 1 判定器（held-out 单调不降 + ≥1 次 accept）")
+    _common_run_id(acc)
+    acc.add_argument("--bootstrap-B", dest="bootstrap_B", type=int, default=None,
+                     help="P(gap>0) 的配对 bootstrap 次数（默认取 eval.bootstrap_B）")
+    _set_func(acc, _deferred(["eval", "acceptance"], "eval"), ["eval", "acceptance"])
+
     div = _sp(sp, "diversity", help="动作熵 / 坍缩监控")
     _common_run_id(div)
     div.add_argument("--generation", type=int, default=None)

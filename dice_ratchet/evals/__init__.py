@@ -37,6 +37,8 @@ from .metrics import (EpisodeResult, GainVerdict, CollapseVerdict, PairedTest, S
                       illegal_rate, judge_gain, mcnemar_exact_p, metric_value,
                       normalized_entropy, paired_bootstrap_gap, power_note,
                       render_report_sections, wilson_ci)
+from .acceptance import (AcceptanceReport, GenerationAcceptance,
+                        evaluate_acceptance, write_acceptance)
 from .ablation import ARM_MECHANISM
 from . import seeds
 from .seeds import (SeedProtocol, assert_split_isolation, default_protocol,
@@ -66,6 +68,9 @@ __all__ = [
     "write_generation_report", "check_report_determinism",
     "enforce_report_determinism", "reproducibility_of", "append_generations_csv",
     "generations_rows_from_report", "generations_row_from_report",
+    # 判据 1 判定器（F-M3-9）
+    "AcceptanceReport", "GenerationAcceptance", "evaluate_acceptance",
+    "write_acceptance",
     "write_ext_metrics", "write_plots_data", "generation_report_path", "report_sha_path",
     # baselines
     "BASELINE_KINDS", "BaselineAgent", "RandomAgent", "HeuristicAgent", "baseline_arm",

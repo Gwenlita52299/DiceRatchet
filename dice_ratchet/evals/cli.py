@@ -37,7 +37,8 @@ from .metrics import (aggregate, bootstrap_seed, judge_gain, mcnemar_exact_p, po
                       render_report_sections)
 
 __all__ = ["HANDLERS", "cmd_baseline", "cmd_eval_report", "cmd_eval_diversity",
-           "cmd_eval_ablation", "cmd_eval_test", "set_inference_client_provider"]
+           "cmd_eval_ablation", "cmd_eval_acceptance", "cmd_eval_test",
+           "set_inference_client_provider"]
 
 
 #: MOD-03 推理客户端提供者（组合根 ``dice_ratchet/app.py::wire()`` 注入）。
@@ -281,6 +282,10 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
     ext.update({"recomputed_arm": arm, "mixed_pool": bool(mixed),
                 "pool_n": pool_metrics.n, "arms_present": _arms_of(pool_results),
                 "requested_arm": (str(requested_arm) if requested_arm else None)})
+    # F-M3-9：判据 1 的结论随报告一起可读。**只在台账里有两代可比时才算**——
+    # 每代都算会退化；且单代 run（如 gen-000 基线）本来就没有「单调性」可言。
+    # 配对 bootstrap 的开销按「可比较的代数」增长，不随本命令重复调用而放大。
+    _augment_ext_with_acceptance(ext, paths.root, run_id, cfg)
     write_ext_metrics(paths.root, generation, ext)
     # F-M3-3（2026-10-11）：台账写**全部** split 行（heldout + train），且**用与 MOD-07 同一个
     # 构造器**（`generations_rows_from_report`）——原先这里用本地 `_csv_row` 只写 heldout 行，
@@ -488,6 +493,29 @@ def _write_report_preserving_verdict(run_root: Path | str, generation: int,
     return write_generation_report(run_root, generation, report)
 
 
+def _augment_ext_with_acceptance(ext: dict[str, Any], run_root: Path, run_id: str,
+                                 cfg: Any) -> None:
+    """把判据 1 的结论放进 ext（F-M3-9）。**失败不阻断报告**，但发事件。"""
+    from .acceptance import evaluate_acceptance
+
+    try:
+        report = evaluate_acceptance(
+            run_root, run_id=run_id,
+            min_heldout_n=int(getattr(cfg.evolve, "min_heldout_n", 20)),
+            bootstrap_B=int(getattr(cfg.evals, "bootstrap_B", 10000)))
+    except InfraError as exc:
+        events.emit("eval.acceptance_skipped", code=str(exc.code),
+                    detail=str(exc)[:200])
+        return
+    if len(report.comparable) < 1:
+        # 只有一代（或一代可比都没有）：判据 1 无从判定，记下原因而不是塞一个假的 ok。
+        ext["acceptance"] = {"ok": None, "monotonic_ok": None,
+                             "reason": "可比较的代不足（至少需要两代 heldout）",
+                             "accepts": report.accepts}
+        return
+    ext["acceptance"] = report.as_dict()
+
+
 def _plot_or_warn(run_root: Path, generation: int) -> list[Path]:
     """F-M3-3 的绘图生产调用点：画 ``runs/<run_id>/plots/`` 下的 5 张 PNG。
 
@@ -581,6 +609,34 @@ def _null_gain() -> Any:
 # eval ablation
 # =====================================================================
 
+def cmd_eval_acceptance(args: argparse.Namespace) -> int:
+    """``eval acceptance``：算 M3 判据 1（held-out 单调不降 + ≥1 次 accept）。
+
+    **总是返回 0**：它是**判定器**不是守卫。把「验收不合格」编码成进程退出码，会让
+    「命令失败」与「实验结论是否定」混淆——F47-D 刚把这两件事分开
+    （`decision="error_reject"` vs `"reject"`）。结论写在 stdout 与
+    `metrics/acceptance.json` 的 `ok` 上；需要 CI 门禁时由调用方读 `ok`。
+
+    归属：F-M3-9（Spec v2.13 / B-69）。修复前 `monotonic_ok` 在代码里 **0 命中**
+    （只在文档里出现 3 次）⇒ 判据 1 无法由代码产出结论。
+    """
+    from .acceptance import evaluate_acceptance, write_acceptance
+
+    paths, cfg, run_id = _paths(args)
+    B = getattr(args, "bootstrap_B", None) or int(getattr(cfg.evals, "bootstrap_B", 10000))
+    report = evaluate_acceptance(
+        paths.root, run_id=run_id,
+        min_heldout_n=int(getattr(cfg.evolve, "min_heldout_n", 20)),
+        bootstrap_B=int(B))
+    path = write_acceptance(paths.root, report)
+    payload = report.as_dict()
+    payload["acceptance_path"] = str(path)
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    if not report.ok:
+        print(f"判据 1 **不通过**：{'; '.join(report.reasons)}", file=sys.stderr)
+    return 0
+
+
 def cmd_eval_ablation(args: argparse.Namespace) -> int:
     """H2 上跑 3 臂消融并做配对检验（FR-08-21；G6）。"""
     paths, cfg, run_id = _paths(args)
@@ -671,5 +727,6 @@ HANDLERS = {
     ("eval", "report"): cmd_eval_report,
     ("eval", "diversity"): cmd_eval_diversity,
     ("eval", "ablation"): cmd_eval_ablation,
+    ("eval", "acceptance"): cmd_eval_acceptance,
     ("eval", "test"): cmd_eval_test,
 }

@@ -24,7 +24,7 @@ def _ns(**kw) -> argparse.Namespace:
             "split": "heldout", "basket": "H1", "baseline": "none", "generation": 0,
             "kind": "random", "arms": "no_reflection,no_self_edit",
             "unlock_once": True, "attestation": None, "dry_run": False,
-            "transfer": False}
+            "transfer": False, "bootstrap_B": None}
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -266,3 +266,62 @@ def test_fm33_eval_report_writes_all_splits_and_plots(wired, capsys):
     assert sorted(p.name for p in plots.glob("*.png")) == sorted(PLOT_FILES)
     for name in PLOT_FILES:
         assert (plots / name).stat().st_size > 0
+
+
+def test_fm39_acceptance_handler_writes_json_and_returns_zero(wired, capsys):
+    """`eval acceptance`（F-M3-9）：落 `metrics/acceptance.json`，**总是返回 0**。
+
+    返回 0 是刻意的：它是**判定器**不是守卫。把「验收不合格」编码成进程退出码会让
+    「命令失败」与「实验结论是否定」混淆（F47-D 刚把这两件事分开）。
+    """
+    import csv
+
+    tmp_path, _cfg = wired
+    (tmp_path / "metrics").mkdir(parents=True, exist_ok=True)
+    from dice_ratchet.infra.plotting import GENERATIONS_CSV_COLUMNS
+
+    with (tmp_path / "metrics" / "generations.csv").open("w", encoding="utf-8",
+                                                        newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(GENERATIONS_CSV_COLUMNS))
+        w.writeheader()
+        for gen, win, lo in ((0, 0.50, 0.40), (1, 0.55, 0.53)):
+            w.writerow({"generation": gen, "split": "heldout", "n": 40,
+                        "win_rate": win, "ci_lo": lo, "decision": "accept"})
+            # F48 之后台账含 train 行：判定器必须忽略它
+            w.writerow({"generation": gen, "split": "train", "n": 30,
+                        "win_rate": 0.99, "ci_lo": 0.9})
+    for gen, dec in ((0, "baseline"), (1, "accept")):
+        d = tmp_path / "generations" / f"gen-{gen:03d}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "report.json").write_text(json.dumps({"generation": gen, "decision": dec}),
+                                       encoding="utf-8")
+
+    rc = cli_mod.cmd_eval_acceptance(_ns(bootstrap_B=200))
+    out = capsys.readouterr().out
+    assert rc == 0, "判定器总是返回 0"
+    payload = json.loads(out)
+    assert payload["accepts"] == 1
+    assert payload["monotonic_ok"] is True
+    assert payload["ok"] is True
+    assert (tmp_path / "metrics" / "acceptance.json").is_file()
+
+
+def test_fm39_acceptance_handler_reports_failure_on_stderr(wired, capsys):
+    """不通过时把原因写 stderr（**必须非静默**），但退出码仍为 0。"""
+    import csv
+
+    tmp_path, _cfg = wired
+    (tmp_path / "metrics").mkdir(parents=True, exist_ok=True)
+    from dice_ratchet.infra.plotting import GENERATIONS_CSV_COLUMNS
+
+    with (tmp_path / "metrics" / "generations.csv").open("w", encoding="utf-8",
+                                                        newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(GENERATIONS_CSV_COLUMNS))
+        w.writeheader()
+        for gen, win, lo in ((0, 0.80, 0.70), (1, 0.40, 0.30)):
+            w.writerow({"generation": gen, "split": "heldout", "n": 40,
+                        "win_rate": win, "ci_lo": lo, "decision": "reject"})
+    rc = cli_mod.cmd_eval_acceptance(_ns(bootstrap_B=200))
+    err = capsys.readouterr().err
+    assert rc == 0
+    assert "不通过" in err
