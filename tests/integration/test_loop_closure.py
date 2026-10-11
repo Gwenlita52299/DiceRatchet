@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -29,6 +30,10 @@ _ENV = {
     "DICERATCHET_ENV__EPISODE__STAGE_COUNT": "3",
 }
 
+from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol
+_H1_START = validate_protocol(coerce_protocol(None)).splits["heldout"].baskets["H1"].start
+_H1_SEEDS = (_H1_START, _H1_START + 1, _H1_START + 2)
+
 
 def _run_cli(tmp_path: Path, argv: list[str], *, timeout: float = 300.0
              ) -> tuple[int, str, str]:
@@ -41,6 +46,22 @@ def _run_cli(tmp_path: Path, argv: list[str], *, timeout: float = 300.0
 
 def _run_dir(tmp_path: Path, run_id: str) -> Path:
     return tmp_path / "runs" / run_id
+
+
+def _isolated_harness(tmp_path: Path) -> Path:
+    """把仓库 ``harness/`` 拷到 ``tmp_path``（**git worktree 之外**）并返回路径。
+
+    F47-A 之后，会演化的 ``loop run`` 在起跑前要求 git 工作区干净；而本文件的用例
+    跑真实子进程、注册真实 MOD-07 provider，若沿用仓库内的 ``harness/``，就会让
+    「宿主工作区是否干净」决定用例成败（本地带未提交改动即失败）。指向仓库外的拷贝后，
+    起跑前门禁按 Spec §8.5「非 git 路径 → 降级跳过」处理，用例回到只验编排契约。
+    门禁本身由 ``tests/unit/loop/test_loop_cli.py`` 与
+    ``tests/unit/infra/test_git_ops.py`` 直接覆盖。
+    """
+    dst = tmp_path / "harness"
+    if not dst.is_dir():
+        shutil.copytree(_REPO / "harness", dst)
+    return dst
 
 
 def _state(tmp_path: Path, run_id: str) -> dict:
@@ -238,7 +259,8 @@ set_evolve_provider(provider)
 """
     proc = _run_with_hook(tmp_path, stub, "t16", [
         "loop", "run", "--agent", "heuristic", "--seeds", "train:1000-1002",
-        "--k", "3", "--generations", "1", "--no-reflect", "--no-baseline"])
+        "--k", "3", "--generations", "1", "--no-reflect", "--no-baseline",
+        "--harness-dir", str(_isolated_harness(tmp_path))])
     assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
 
     state = _state(tmp_path, "t16")
@@ -271,7 +293,8 @@ set_evolve_provider(provider)
 """
     proc = _run_with_hook(tmp_path, stub, "t16b", [
         "loop", "run", "--agent", "heuristic", "--seeds", "train:1000-1002",
-        "--k", "3", "--generations", "1", "--no-reflect", "--no-baseline"])
+        "--k", "3", "--generations", "1", "--no-reflect", "--no-baseline",
+        "--harness-dir", str(_isolated_harness(tmp_path))])
     assert proc.returncode == 0, proc.stderr
     state = _state(tmp_path, "t16b")
     assert state["generation"] == 1
@@ -347,6 +370,8 @@ def test_nfr06_3_orchestration_overhead_per_step(tmp_path):
     """假依赖下编排层的单步开销（落盘 + 记账）应远低于 5 ms（NFR-06-3）。"""
     from fakes import FakeEnv, FakePolicy                     # noqa: PLC0415
     from loop_support import build_runner                     # noqa: PLC0415
+
+
     from dice_ratchet.loop.state import init_state               # noqa: PLC0415
 
     env = FakeEnv(steps_to_terminate=200)
@@ -376,6 +401,16 @@ def test_gen000_baseline_report_is_written(tmp_path, monkeypatch):
 
     则 ``generations/gen-000/report.json`` 存在、``decision=="baseline"``、
     评估局轨迹落在 ``episodes/heldout/``（经 MOD-06 的 ``EvalRunnerAdapter``）。
+
+    **本用例曾因一个真实缺陷而失败（2026-10-11 修）**：`write_gen000_baseline`
+    调 `evaluate_generation` 时**没传 `run_dir`**，而 MOD-08 从 F48/F49 起会在该路径上
+    落**按代**产物（`metrics/kind_distribution/gen-XXX.json`）⇒ `run_dir=None` 回落到
+    **硬编码的 ``Path("runs")``**，于是真实 `runs/r-loop-test/` 被建出来。
+    后果不止「位置错」：该目录一旦存在，F42-A 的**臂归档**
+    （`_arm_archive_dir` 按 `runs_root/run_id` 推导且要求目录已存在）就生效
+    ⇒ 第二次评估**复用归档、不再执行任何局**（`heldout.n=3` 仍成立，因为结果来自归档），
+    而 `episodes/heldout/` 为空 ⇒ 本断言失败。**这不是 flaky**，是共享可写状态的确定性后果；
+    修法是让生产代码传 `run_dir`，并**在此断言 `runs/` 未被污染**。
     """
     monkeypatch.chdir(_REPO)
     from fakes import FakeEnv, FakePolicy
@@ -393,7 +428,7 @@ def test_gen000_baseline_report_is_written(tmp_path, monkeypatch):
     ctx.memory_version = 0
 
     report_path = write_gen000_baseline(ctx, harness_version=0,
-                                        basket=(2000, 2001, 2002), runner=runner)
+                                        basket=_H1_SEEDS, runner=runner)
     assert report_path is not None and report_path.is_file()
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["decision"] == "baseline"
@@ -402,7 +437,12 @@ def test_gen000_baseline_report_is_written(tmp_path, monkeypatch):
     assert (tmp_path / "r-loop-test" / "episodes" / "heldout").glob("*.jsonl")
     heldout = sorted(p.name for p in
                      (tmp_path / "r-loop-test" / "episodes" / "heldout").glob("*.jsonl"))
-    assert heldout == [f"e-{s:06d}-g000-parent.jsonl" for s in (2000, 2001, 2002)]
+    assert heldout == [f"e-{s:06d}-g000-parent.jsonl" for s in _H1_SEEDS]
+    # **反向护栏**：本次调用不得在真实 runs/ 下留下任何按代产物
+    # （`run_dir` 漏传时 `kind_distribution/gen-000.json` 会落到那里）
+    assert not (_REPO / "runs" / "r-loop-test" / "metrics" / "kind_distribution").exists(), (
+        "write_gen000_baseline 必须把按代产物写进 run_ctx.paths.root，"
+        "不得回落到硬编码的 Path('runs')")
 
 
 def test_gen000_baseline_is_idempotent(tmp_path, monkeypatch):
@@ -420,7 +460,7 @@ def test_gen000_baseline_is_idempotent(tmp_path, monkeypatch):
     target = tmp_path / "r-loop-test" / "generations" / "gen-000"
     target.mkdir(parents=True, exist_ok=True)
     (target / "report.json").write_text('{"decision": "baseline"}', encoding="utf-8")
-    assert write_gen000_baseline(ctx, basket=(2000,), runner=runner) == target / "report.json"
+    assert write_gen000_baseline(ctx, basket=(_H1_START,), runner=runner) == target / "report.json"
     # 没有触发任何评估局（篮子被忽略、文件未重写）
     assert json.loads((target / "report.json").read_text(encoding="utf-8")) == {
         "decision": "baseline"}
@@ -458,7 +498,8 @@ def provider(cfg, runner, run_ctx):
 set_evolve_provider(provider)
 """
     base = ["loop", "run", "--agent", "heuristic", "--seeds", "train:1000-1002",
-            "--k", "3", "--generations", "1", "--no-reflect", "--no-baseline", "--hitl"]
+            "--k", "3", "--generations", "1", "--no-reflect", "--no-baseline", "--hitl",
+            "--harness-dir", str(_isolated_harness(tmp_path))]
     proc = _run_with_hook(tmp_path, stub, "t9", base)
     assert proc.returncode == 0, f"stdout={proc.stdout}\nstderr={proc.stderr}"
     state = _state(tmp_path, "t9")

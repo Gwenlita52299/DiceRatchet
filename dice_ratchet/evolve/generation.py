@@ -32,11 +32,12 @@ from dice_ratchet.infra.io import write_json_atomic
 
 from . import gate as gate_mod
 from . import judge as judge_mod
+from . import checkpoint as checkpoint_mod
 from . import proposer as proposer_mod
 from . import versioning as versioning_mod
 from .errors import (HoldoutLeakError, LoadFailedError, ScanFailedError,
                      VersionConflictError)
-from .paths import EvolveContext, GenPaths
+from .paths import EvolveContext, GenPaths, harness_dir
 from .schemas import (Candidate, CandidateReport, GateState, HarnessRef, Verdict,
                       write_candidate_report)
 
@@ -187,6 +188,25 @@ class GenerationResult:
 # 主入口
 # =====================================================================
 
+def _resolve_harness_path(harness: Path | str | None, run_ctx: Any) -> Path:
+    """``harness=`` 显式优先 → ``run_ctx.harness_dir`` → ``paths.harness_dir()``。
+
+    F32（2026-10-09 实跑登记）：这里**不能**写成
+    ``getattr(run_ctx, "harness_dir", default_harness_dir())`` —— Python 会先**无条件
+    求值**默认参数，而 ``default_harness_dir`` 这个名字在本模块里从不存在（它是
+    ``proposer.py`` 顶部 ``from .paths import harness_dir as default_harness_dir`` 的
+    别名；本行显然是从那里抄过来却漏了导入）⇒ 即便 ``run_ctx`` 有 ``harness_dir``
+    也会 ``NameError``。生产装配（``app._evolve_fn_provider`` →
+    ``run_one_generation(state=…, run_ctx=…, runner=…)``，即 ``harness=None``）必然走
+    这一支，而单测都显式传 ``harness=`` ⇒ 1800+ 用例全绿掩护了一条**完全死掉的闭环
+    路径**，直到 §3.2 实跑才炸（崩在该代做任何事之前，白烧 ¥34.62 / 92 min）。
+    """
+    if harness is not None:
+        return Path(harness)
+    value = getattr(run_ctx, "harness_dir", None)
+    return Path(value) if value is not None else harness_dir()
+
+
 def run_one_generation(*, state: Any, run_ctx: Any, runner: Any = None,
                        config: Any = None, memory: Any = None,
                        evaluator: Any = None, client: Any = None,
@@ -204,8 +224,8 @@ def run_one_generation(*, state: Any, run_ctx: Any, runner: Any = None,
     run_id = str(getattr(run_ctx, "run_id", ""))
     root = (Path(run_dir) if run_dir is not None
             else Path(getattr(run_ctx, "paths").root))
-    harness_path = (Path(harness) if harness is not None
-                    else Path(getattr(run_ctx, "harness_dir", default_harness_dir())))
+    # F32：见 ``_resolve_harness_path`` 的注释——默认值必须延迟求值。
+    harness_path = _resolve_harness_path(harness, run_ctx)
     memory = memory if memory is not None else getattr(run_ctx, "memory", None)
     protocol = getattr(run_ctx, "protocol", None)
     memory_version = int(getattr(run_ctx, "memory_version", 0) or 0)
@@ -255,13 +275,31 @@ def _run_generation(*, state: Any, run_ctx: Any, runner: Any, cfg: Any, app_cfg:
                               candidate_dir=str(ctx.gen(gen).candidates))
 
     # ---- 1) 证据束 + 候选生成（INV-5 硬闸在 propose 内）-----------------------------
+    # F42-B：提案在**评估之前**落检查点，resume 时指纹一致则复用同一 candidate id 与 diff。
+    # 理由：API 提案不可复现（`api_supports_seed=false`），不落检查点则候选臂归档必然 miss
+    # （归档路径含 `cand-<id>`），中断后只能省 parent 侧。
     bundle = proposer_mod.build_evidence_bundle(
         run_id=run_id, n_traj=int(getattr(cfg, "n_traj", 20)), cfg=cfg, memory=memory,
         run_dir=run_root, harness=harness, generation=gen)
     rng_seed = propose_seed(run_id, gen, seed=seed)
-    prop = proposer_mod.propose(bundle, cfg=cfg, rng_seed=rng_seed, client=client,
-                                run_id=run_id, generation=gen, protocol=protocol,
-                                runs_root=ctx.root.parent)
+    inputs = proposer_mod.proposal_inputs(bundle, cfg)
+    fingerprint = checkpoint_mod.proposal_fingerprint(
+        run_id=run_id, generation=gen, propose_seed=rng_seed,
+        harness_version=int(getattr(parent, "version", 0) or 0),
+        memory_version=int(memory_version or 0), inputs=inputs)
+    prop = checkpoint_mod.load_proposal_checkpoint(run_root, gen, fingerprint=fingerprint)
+    if prop is None:
+        prop = proposer_mod.propose(bundle, cfg=cfg, rng_seed=rng_seed, client=client,
+                                    run_id=run_id, generation=gen, protocol=protocol,
+                                    runs_root=ctx.root.parent, app_config=app_cfg,
+                                    inputs=inputs)
+        try: # 检查点是加速产物：落盘失败不得阻断本代
+            checkpoint_mod.save_proposal_checkpoint(run_root, generation=gen,
+                                                    fingerprint=fingerprint, proposal=prop,
+                                                    inputs=inputs)
+        except Exception as exc: # noqa: BLE001
+            events.emit("evolve.proposal_checkpoint", gen=gen, status="failed",
+                        detail=str(exc)[:200])
     if not prop.candidates:
         result.error_code = prop.error_code or str(E.E_EVOLVE_NO_CANDIDATE)
         result.reason = prop.reason or "no_candidate"
@@ -277,7 +315,7 @@ def _run_generation(*, state: Any, run_ctx: Any, runner: Any, cfg: Any, app_cfg:
     ev = _build_evaluator(cfg=cfg, app_cfg=app_cfg, evaluator=evaluator, runner=runner,
                           protocol=protocol, memory_version=memory_version,
                           run_id=run_id, gen=gen, smoke_seeds=smoke_seeds,
-                          episode_config=episode_config, seed=seed)
+                          episode_config=episode_config, seed=seed, run_dir=run_root)
     if not result.pending_human:
         parent_heldout, parent_smoke = _parent_arms(
             ev, result, parent=parent, harness=harness)
@@ -316,21 +354,29 @@ def _run_generation(*, state: Any, run_ctx: Any, runner: Any, cfg: Any, app_cfg:
 def _build_evaluator(*, cfg: Any, app_cfg: Any, evaluator: Any, runner: Any,
                      protocol: Any, memory_version: int, run_id: str, gen: int,
                      smoke_seeds: Sequence[int], episode_config: Any,
-                     seed: int | None = None) -> Any:
+                     seed: int | None = None, run_dir: Any = None) -> Any:
     if evaluator is not None:
         return evaluator
     return judge_mod.CandidateEvaluator(
         protocol=protocol, config=app_cfg, memory_version=int(memory_version),
         run_id=run_id, generation=int(gen), smoke_seeds=tuple(smoke_seeds),
-        runner=runner, episode_config=episode_config)
+        runner=runner, episode_config=episode_config, run_dir=run_dir)
 
 
 def _parent_arms(ev: Any, result: GenerationResult, *, parent: HarnessRef,
                  harness: Path) -> tuple[Any, Any]:
-    """parent 的 heldout + 冒烟；MOD-08 异常 → 保守 reject（NFR-07-7）。"""
+    """parent 的 heldout + 冒烟；MOD-08 异常 → 保守 reject（NFR-07-7）。
+
+    F42-B：``KeyboardInterrupt`` / ``SystemExit`` **必须穿透**（``except Exception`` 本来
+    就不会捕获它们，这里显式写明契约）。一代 84 局 ≈ 3.75 h，Ctrl-C 是最常见的中断；
+    把它折成「保守 reject」会写出一个 ``report.json``，让 ``loop`` 把该代记为**已完成**，
+    从而丢掉整代的已评估结果（正是 F42 要消灭的浪费）。
+    """
     parent_dir = getattr(parent, "dir", None) or harness
     try:
         return ev.parent_arms(parent_dir, parent_version=int(parent.version))
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception as exc: # noqa: BLE001 - 评审链路整体不可用 → 空报告
         events.emit("evolve.evaluate", candidate_id="parent",
                     error_code=str(getattr(exc, "code", E.E_EVOLVE_EVAL_FAILED)))
@@ -459,9 +505,13 @@ def _finish_report(*, result: GenerationResult, run_ctx: Any, cfg: Any,
                 result.accepted = accepted
                 result.decision = "accept"
             except InfraError as exc:
+                # F47-D：**基础设施失败 ≠ 裁判拒绝**。原先这里写 `decision="reject"`，
+                # 于是一次 `E_EVOLVE_GIT_FAILED`（如脏工作区）在报告与台账里长得跟
+                # 「候选不显著、合法拒绝」一模一样，且退出码仍为 0 ⇒ 按 §3.2 判据算合格。
+                # 沿用 ``loop._call_evolve`` 已确立的词汇：保守拒绝、不更新 harness。
                 result.error_code = str(exc.code)
                 result.reason = str(exc)
-                result.decision = "reject"
+                result.decision = "error_reject"
         elif gate_state.status in ("rejected", "timeout"):
             reason = gate_state.reason or ("hitl_timeout" if gate_state.status == "timeout"
                                            else "human_rollback")
@@ -470,10 +520,11 @@ def _finish_report(*, result: GenerationResult, run_ctx: Any, cfg: Any,
                                         decided_by=gate_state.resolved_by or "human",
                                         cfg=ctx, harness=harness, generation=gen,
                                         now=now)
-            except InfraError as exc: # pragma: no cover - 回滚失败：保守记 reject
+                result.decision = "rollback"
+            except InfraError as exc: # pragma: no cover - 回滚失败：保守记 error_reject
                 result.error_code = str(exc.code)
                 result.reason = str(exc)
-            result.decision = "rollback"
+                result.decision = "error_reject" # 回滚没做成：不得记成 "rollback"
         else:
             result.decision = "pending"
 
@@ -482,10 +533,38 @@ def _finish_report(*, result: GenerationResult, run_ctx: Any, cfg: Any,
                            cfg=cfg, run_id=run_id, run_root=run_root,
                            protocol=protocol, gen=gen, parent_version=parent_version)
     try:
-        from dice_ratchet.evals import write_generation_report
+        from dice_ratchet.evals import (append_generations_csv, enforce_report_determinism,
+                                        write_generation_report)
+        from dice_ratchet.evals.harness import generations_rows_from_report
 
+        app_cfg = ctx_app_config(run_ctx, cfg)
+        # G3 的**生产执行点**（2026-10-11 D-M3-3 裁决 A，Spec v2.9 / B-65）。
+        # 现场：`check_report_determinism` 从 M1 起没有任何生产调用点 ⇒「同参数重跑 sha256
+        # 必须一致」这条承诺在真实 run 里从未被执行过。这里把它接上，但**按臂分口径**：
+        # 臂内含 `provider=api` 的角色（当前主力臂 `C1`）时，端到端逐字节可复现在物理上
+        # 不成立（`api_supports_seed=false`）⇒ 记 `api_nondeterministic` + 发
+        # `eval.nondeterministic`，不抛 `E_EVAL_NONDETERMINISTIC`；本地臂仍硬执行。
+        enforce_report_determinism(run_root, gen, report, app_cfg=app_cfg)
         path, _sha = write_generation_report(run_root, gen, report)
         result.report_path = str(path)
+        # F43：本代行由**写报告的一方**追写 `metrics/generations.csv`（B-06 固定列）。
+        # 原先只有 `eval report` 会写它，而那条路径会把重算结果写进**同一个**
+        # `generations/gen-NNN/report.json`（decision 变 "pending"）⇒ 判据②（csv 可复算）
+        # 只能靠破坏判据①（本模块刚写下的决策记录）来满足。
+        # 台账是附属产物：失败**不阻塞**裁决落盘，但必须可观测（`evolve.ledger`）。
+        # F-M3-3（2026-10-11）：改为写**全部** split 行（heldout + train）。原先只写 heldout
+        # ⇒ `generations.csv` 里 train 一侧永远缺席（实测 8 个归档 run 的 train 行数全为 0），
+        # 而 `train_heldout_gap.png` 与 `win_rate.png` 的 train 对照曲线都要它。
+        try:
+            rows = generations_rows_from_report(report, cfg=app_cfg)
+            for row in rows:
+                append_generations_csv(run_root, row)
+            events.emit("evolve.ledger", generation=int(gen), status="ok",
+                        rows=len(rows), splits=[str(r.get("split")) for r in rows])
+        except Exception as exc: # noqa: BLE001 - 附属台账失败不阻塞裁决
+            events.emit("evolve.ledger", generation=int(gen), status="failed",
+                        error_code=str(getattr(exc, "code", E.E_IO_WRITE)),
+                        detail=str(exc)[:200])
     except InfraError as exc:
         # MOD-08 报告段不可用：降级为 MOD-07 自产的最小合法报告（不静默丢弃）
         events.emit("evolve.decision", gen=gen, candidate_id="", decision="reject",
@@ -529,6 +608,13 @@ def _build_report(*, result: GenerationResult, app_cfg: Any, cfg: Any, run_id: s
             metrics = {}
     sections = versioning_mod.build_decision_sections(gen, result.reports, result.winner,
                                                       result.gate_state)
+    # F47-D：``build_decision_sections`` 只看 gate 状态，而 accept/rollback **失败**时
+    # gate 仍是 "approved"/"rejected" ⇒ 它会写出 ``decision="accept"`` 而磁盘上
+    # ``harness/versions/`` 里没有新版本（**幻影 accept**），与 ``result.decision``
+    # （``error_reject``）以及 ``evolve.decision`` 事件自相矛盾。以 result 为准。
+    if str(result.decision) == "error_reject":
+        sections["decision"] = "error_reject"
+        sections["reason"] = str(result.reason or result.error_code or "")
     if metrics:
         report = {**metrics, **sections}
     else:

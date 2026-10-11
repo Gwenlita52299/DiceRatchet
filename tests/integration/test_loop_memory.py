@@ -16,6 +16,11 @@ from pathlib import Path
 import pytest
 
 from fakes import FakeEnv, FakePolicy, ScriptedClient
+from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol
+
+_PROTO = validate_protocol(coerce_protocol(None))
+_HELDOUT_SEED = _PROTO.splits["heldout"].baskets["H1"].start + 1
+
 from dice_ratchet.infra.config import MemoryConfig
 from dice_ratchet.loop.generation import LoopOrchestrator
 from dice_ratchet.loop.state import Scoreboard, scoreboard_path
@@ -102,12 +107,14 @@ def test_eval_episode_uses_frozen_view_and_cannot_write(tmp_path, memory_store):
     runner, run_ctx = _wire(paths, tmp_path, cfg, store, client=_reflection_llm(),
                             memory_version=1)
 
-    rec = runner.run_episode(2000, split="heldout", arm="parent", harness_version=0)
+    rec = runner.run_episode(_HELDOUT_SEED, split="heldout", arm="parent",
+                             harness_version=0)
 
-    assert rec.episode_key == "e-002000-g000-parent"
+    assert rec.episode_key == f"e-{_HELDOUT_SEED:06d}-g000-parent"
     assert store.entries() == (), "评估局不得写记忆库（frozen 只读视图）"
     # 轨迹写到 heldout/，主台账（训练计分）保持空
-    assert (Path(paths.episodes) / "heldout" / "e-002000-g000-parent.jsonl").is_file()
+    assert (Path(paths.episodes) / "heldout"
+            / f"e-{_HELDOUT_SEED:06d}-g000-parent.jsonl").is_file()
     assert not scoreboard_path(paths).is_file()
 
 
@@ -115,7 +122,7 @@ def test_reflection_scan_blocks_heldout_seed_text(tmp_path, memory_store):
     """反思文本里带 held-out seed 字面量 → MOD-05 隔离拦截，绝不入 prompt/memory（INV-5）。"""
     store, paths = memory_store
     cfg = _loop_cfg(reflect=True)
-    leaky = ScriptedClient([{"text": f"下次别再用 seed 2001 的打法。",
+    leaky = ScriptedClient([{"text": f"下次别再用 seed {_HELDOUT_SEED} 的打法。",
                              "failure_cause": "unknown", "tags": ["combat"]}])
     runner, run_ctx = _wire(paths, tmp_path, cfg, store, client=leaky)
     orch = LoopOrchestrator(run_ctx=run_ctx, config=cfg, runner=runner,
@@ -124,7 +131,7 @@ def test_reflection_scan_blocks_heldout_seed_text(tmp_path, memory_store):
     summary = orch.run(seeds=[_TRAIN_SEED])
     assert summary.exit_code == 0, "泄漏被拦截是降级，不是 run 失败"
     for entry in store.entries():
-        assert "2001" not in entry.lesson
+        assert str(_HELDOUT_SEED) not in entry.lesson
 
 
 # =====================================================================

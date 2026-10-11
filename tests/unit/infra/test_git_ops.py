@@ -9,8 +9,9 @@ from pathlib import Path
 import pytest
 
 from dice_ratchet.infra.errors import E, InfraError
-from dice_ratchet.infra.git_ops import (commit_harness, git_available, rollback_to,
-                                     tag_version, worktree_clean_check)
+from dice_ratchet.infra.git_ops import (commit_harness, git_available,
+                                     preflight_worktree_clean, rollback_to, tag_version,
+                                     worktree_clean_check)
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -134,6 +135,66 @@ def test_commit_harness_requires_dir(tmp_path: Path):
     with pytest.raises(InfraError) as exc:
         commit_harness(tmp_path, 1, "x")
     assert exc.value.code == E.E_IO_CONFIG_INVALID
+
+
+# =====================================================================
+# F47-A：起跑前门禁 / F47-C1：失败不留索引残留
+# =====================================================================
+
+@pytest.mark.skipif(not git_available(), reason="git 不可用")
+def test_preflight_rejects_dirty_and_passes_clean(repo: Path):
+    """F47-A：``preflight_worktree_clean`` 干净放行、脏则 ``E_IO_GIT_DIRTY``（退出码 4）。"""
+    assert preflight_worktree_clean(repo) is True
+    (repo / "src.py").write_text("uncommitted\n", encoding="utf-8") # 未跟踪工具产物
+    with pytest.raises(InfraError) as exc:
+        preflight_worktree_clean(repo)
+    assert exc.value.code == E.E_IO_GIT_DIRTY
+    assert exc.value.exit_code == 4
+    assert "src.py" not in exc.value.message, "（仅记事）当前报错只给条数、不给路径"
+
+
+@pytest.mark.skipif(not git_available(), reason="git 不可用")
+def test_preflight_degrades_outside_git(tmp_path: Path):
+    """非 git 目录 → 返回 ``False``（降级跳过，Spec §8.5），**不抛**。"""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert preflight_worktree_clean(plain) is False
+
+
+@pytest.mark.skipif(not git_available(), reason="git 不可用")
+def test_dirty_repo_blocks_commit_without_staged_residue(repo: Path, harness: Path):
+    """F47-C1：门禁失败**不得**留下 staged 残留（修法：先检查后 ``git add``）。
+
+    反例自检：旧顺序（先 ``git add`` 后检查）确实会留下 ``MM``/``A`` 残留 ——
+    证明下面那条「索引为空」的断言不是空转。
+    """
+    commit_harness(repo, 1, "v1")
+    (harness / "prompts" / "decision.md").write_text("changed\n", encoding="utf-8")
+    (repo / "README.md").write_text("uncommitted\n", encoding="utf-8")
+
+    # 反例：复刻旧顺序 → 索引里留下 harness/ 的 staged 条目
+    _git(repo, "add", "harness")
+    with pytest.raises(InfraError):
+        worktree_clean_check(repo, allow=("harness",))
+    assert _git(repo, "diff", "--cached", "--name-only") != "", "反例：旧顺序应留下残留"
+    _git(repo, "reset", "--quiet", "--", "harness")
+
+    # 正例：真实实现 → 门禁拒绝且索引干净
+    with pytest.raises(InfraError) as exc:
+        commit_harness(repo, 2, "v2")
+    assert exc.value.code == E.E_IO_GIT_DIRTY
+    assert _git(repo, "diff", "--cached", "--name-only") == "", "失败后索引必须为空"
+    # 工作区内容不受影响（本函数只动索引，恢复工作区是 accept 的职责）
+    assert (harness / "prompts" / "decision.md").read_text(encoding="utf-8") == "changed\n"
+
+
+@pytest.mark.skipif(not git_available(), reason="git 不可用")
+def test_commit_harness_still_stages_on_success(repo: Path, harness: Path):
+    """正例对照：失败自清不能把成功路径的暂存也清掉。"""
+    (harness / "prompts" / "decision.md").write_text("v1\n", encoding="utf-8")
+    sha = commit_harness(repo, 1, "v1")
+    assert len(sha) == 40
+    assert _git(repo, "show", "--stat", "--oneline", "-1").count("decision.md") == 1
 
 
 # ---- 回归（2026-10-03 审计 P1-5/P1-11）--------------------------------------------------

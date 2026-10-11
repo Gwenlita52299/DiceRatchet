@@ -244,6 +244,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_loop(sub)
     _add_evolve(sub)
     _add_eval(sub)
+    _add_rehearsal(sub)
     _add_audit(sub)
     _add_inference(sub)
     _add_memory(sub)
@@ -322,7 +323,7 @@ def _add_play(sub: Any) -> None:
     p.add_argument("--agent", choices=["llm", "heuristic", "random", "fixed_prompt"],
                    default="llm", help="Spec §4.6 命令面：llm|heuristic|random|fixed_prompt")
     p.add_argument("--seeds", default="train:1000-1004",
-                   help="seed 规格：train:1000-1004 / heldout:2000-2099 / 9000,9001 / file:seeds.txt")
+                   help="seed 规格：train:1000-1004 / heldout:731000-731039 / 947000,947001 / file:seeds.txt")
     p.add_argument("--episodes", type=int, default=1)
     p.add_argument("--mode", choices=["train", "eval"], default="train")
     p.add_argument("--model", default=None, help="MOD-03 模型 id（覆盖 inference.model_id）")
@@ -420,6 +421,18 @@ def _add_evolve(sub: Any) -> None:
     p.set_defaults(func=None)
 
 
+def _add_rehearsal(sub: Any) -> None:
+    """M3 彩排判据（D-M3-5 裁决 A；Spec v2.14 / B-70）。"""
+    p = _sp(sub, "rehearsal", help="M3 彩排（D-M3-5）")
+    sp = p.add_subparsers(dest="subcommand", metavar="<subcommand>")
+    chk = _sp(sp, "check", help="彩排合格判据（只读，不付费）")
+    _common_run_id(chk)
+    chk.add_argument("--min-comparable", dest="min_comparable", type=int, default=1,
+                     help="判据 1 判定器至少需要几对可比较的代（默认 1）")
+    _set_func(chk, _deferred(["rehearsal", "check"], "evals"),
+              ["rehearsal", "check"])
+
+
 def _add_eval(sub: Any) -> None:
     p = _sp(sub, "eval", help="测量（MOD-08）")
     sp = p.add_subparsers(dest="subcommand", metavar="<subcommand>")
@@ -430,6 +443,9 @@ def _add_eval(sub: Any) -> None:
     rep.add_argument("--baseline", default="none", help="none|all|<kind>")
     rep.add_argument("--basket", default="H1", help="seed 篮子（heldout）")
     rep.add_argument("--generation", type=int, default=None, help="代数（默认取最大已存在代）")
+    rep.add_argument("--arm", default=None,
+                     help="臂（默认 = 该代胜出/候选臂；all = 申报的混合池；"
+                          "也可显式给 parent / cand-<id> 等，F46-A）")
     _set_func(rep, _deferred(["eval", "report"], "eval"), ["eval", "report"])
 
     abl = _sp(sp, "ablation", help="消融三臂（FR-08-21）")
@@ -449,11 +465,25 @@ def _add_eval(sub: Any) -> None:
     tst.add_argument("--no-transfer", dest="transfer", action="store_false", default=True,
                      help="跳过完整局（medium×10 关）的次级「迁移」指标（Spec §8.6）")
     tst.add_argument("--attestation", default=None, help="存证落盘路径")
+    tst.add_argument("--check", dest="check", action="store_true", default=False,
+                     help="**只读预检**（D-M3-5）：校验存证路径/篮子/协议，"
+                          "不跑 100 局、不写存证、**不消耗解锁**；不通过则非 0 退出")
     _set_func(tst, _deferred(["eval", "test"], "eval"), ["eval", "test"])
+
+    acc = _sp(sp, "acceptance", help="判据 1 判定器（held-out 单调不降 + ≥1 次 accept）")
+    _common_run_id(acc)
+    acc.add_argument("--bootstrap-B", dest="bootstrap_B", type=int, default=None,
+                     help="P(gap>0) 的配对 bootstrap 次数（默认取 eval.bootstrap_B）")
+    acc.add_argument("--sensitivity", action="store_true", default=False,
+                     help="顺带打印 C5 三个 tol 的**最小可判效应（MDE）**换算"
+                          "（零成本：只用分母与粒度，不做任何跑批；§3.3）")
+    _set_func(acc, _deferred(["eval", "acceptance"], "eval"), ["eval", "acceptance"])
 
     div = _sp(sp, "diversity", help="动作熵 / 坍缩监控")
     _common_run_id(div)
     div.add_argument("--generation", type=int, default=None)
+    div.add_argument("--arm", default=None,
+                     help="臂（缺省/ all = 该代整池；也可显式给 parent / cand-<id> 等，F46-A）")
     _set_func(div, _deferred(["eval", "diversity"], "eval"), ["eval", "diversity"])
     p.set_defaults(func=None)
 
@@ -572,7 +602,7 @@ def _run_guards(args: argparse.Namespace) -> int:
 # =====================================================================
 
 def parse_seeds_spec(spec: str, *, seeds_file_dir: Path = Path(".")) -> dict[str, list[int]]:
-    """解析 ``train:1000-1004`` / ``heldout:2000-2099`` / ``9000,9001`` / ``file:seeds.txt``。
+    """解析 ``train:1000-1004`` / ``heldout:731000-731039`` / ``947000,947001`` / ``file:seeds.txt``。
 
     返回 ``{split: [seeds]}``；无 split 前缀时键为 ``"default"``。
     """

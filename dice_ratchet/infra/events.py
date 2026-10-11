@@ -59,6 +59,9 @@ def _build_registry() -> dict[str, EventSpec]:
         ("config_unknown_key", frozenset({"keys"})),
         ("trailing_truncated", frozenset({"path"})),
         ("plot_unavailable", frozenset()),
+        ("plot_skipped", frozenset({"generation"})),
+        ("plot_done", frozenset({"generation", "files"})),
+        ("plot_missing_split", frozenset({"split"})),
     ]:
         entries.append(_spec("infra", ev, "MOD-09 工程横切事件", req))
     # ---- env（MOD-01/02 转发内核事件）----------------------------------------------
@@ -136,6 +139,7 @@ def _build_registry() -> dict[str, EventSpec]:
         ("hitl_pending", frozenset({"generation"})),
         ("rollback", frozenset({"to_version"})),
         ("cost", frozenset({"episodes_spent", "episodes_cap"})),
+        ("ledger", frozenset({"generation", "status"})),
     ]:
         entries.append(_spec("evolve", ev, "MOD-07 harness 自进化事件", req))
     # ---- eval（MOD-08 PRD §13：eval.start/seed_start/seed_done/report/guard_violation/
@@ -145,6 +149,7 @@ def _build_registry() -> dict[str, EventSpec]:
         ("seed_start", frozenset({"seed", "split", "basket"})),
         ("seed_done", frozenset({"seed", "outcome"})),
         ("report", frozenset({"generation"})),
+        ("nondeterministic", frozenset({"generation", "determinism"})),
         ("guard_violation", frozenset({"error_code", "split", "destination"})),
         ("collapse", frozenset({"generation", "flag"})),
         ("test_unlock", frozenset({"generation", "attestation_path"})),

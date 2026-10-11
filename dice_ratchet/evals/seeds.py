@@ -7,15 +7,22 @@
 三类 seed 的默认区间（Spec B-07，``configs/seeds.yaml`` 为准）::
 
     train    1000–1999，per_generation=30：第 g 代 = 1000+30(g-1) … 1029+30(g-1)
-    heldout  2000–2099：H1=2000–2039（代际裁判）/ H2=2040–2079（消融终检）/ H3=2080–2099（应急）
-    test     9000–9099：默认锁定，仅 ``test_unlock`` 解锁（每里程碑 ≤1 次）
+    heldout  731000–731099：H1=731000–731039（代际裁判）/ H2=731040–731079（消融终检）
+             / H3=731080–731099（应急）
+    test     947000–947099：默认锁定，仅 ``test_unlock`` 解锁（每里程碑 ≤1 次）
+
+F45-2（2026-10-11）：heldout/test 从**四位**（2000–2099 / 9000–9099）移到**六位**端口空间。
+原先它们与耗时（``duration_us=2072.8``）、token 预算（``max_tokens=2048``）、ISO 年份
+（``2026``）、秒级浮点（``dur_s=3.9022``）共用一个数字空间 ⇒「数字串相等即泄漏」不健全，
+只能靠两张人工死名单豁免（实测 12 个键撞上、118,646 次命中）。六位区间避开这些字面量，
+正则 ``[0-9]{3,6}`` 无需放宽。**代价**：已归档的旧区间证据与新协议不可比（MOD-08 PRD §4/§9）。
 
 INV-5 的四道代码级护栏（FR-08-01…06）：
 
 1. ``validate_protocol()``：三类区间两两不相交，否则 ``E_EVAL_SEED_OVERLAP``；
 2. ``assert_split_isolation()``：某个 seed 跑在错误 split 上 → 同上；
 3. ``guard_prompt_context()``：prompt/memory/reflection 三个出口的**文本**不得含
-   heldout/test 的 4 位 seed token（含 ``heldout`` / ``H1`` 等禁用词）→ ``E_EVAL_INV5_LEAK``；
+   heldout/test 的 seed token（含 ``heldout`` / ``H1`` 等禁用词）→ ``E_EVAL_INV5_LEAK``；
 4. ``guard_memory_write()``：``split != "train"`` 的局任何记忆写入与反思落库被拦截。
 """
 
@@ -49,8 +56,12 @@ DESTINATIONS_FORBIDDEN: Final[tuple[Destination, ...]] = ("prompt", "memory", "r
 #: train 滚动窗口默认局数（PRD §8.1）
 DEFAULT_TRAIN_WINDOW: Final[int] = 60
 
-#: 文本中 4 位数字 token 的扫描（PRD §9 numeric_scan）
-_NUM4_RE: Final[re.Pattern[str]] = re.compile(r"(?<![0-9A-Za-z])(\d{4})(?![0-9A-Za-z])")
+#: 文本中**数字串** token 的扫描（PRD §9 numeric_scan）。
+#: F45-2（2026-10-11）：原先是固定的 4 位（``\d{4}``），因为旧 heldout/test 就是四位
+#: （2000-2099 / 9000-9099）。heldout/test 移到六位端口空间后，四位正则**根本扫不到**
+#: 新 seed（``731000`` 是 6 位）⇒ 这条护栏会静默失效。改成 3–7 位，与 MOD-02 审计侧的
+#: ``(?<![0-9A-Za-z_])[0-9]{3,6}(?![0-9A-Za-z_])`` 同口径（两端不允许字母数字/下划线）。
+_NUM4_RE: Final[re.Pattern[str]] = re.compile(r"(?<![0-9A-Za-z_])(\d{3,7})(?![0-9A-Za-z_])")
 
 
 # =====================================================================
@@ -96,7 +107,7 @@ class ExposureGuard:
     destinations_forbidden: tuple[str, ...] = DESTINATIONS_FORBIDDEN
     numeric_scan: bool = True
     forbidden_tokens: tuple[str, ...] = ("heldout", "H1", "H2", "H3",
-                                         "2000-2099", "9000-9099")
+                                         "731000-731099", "947000-947099")
 
 
 @dataclass(frozen=True)
@@ -126,12 +137,12 @@ def default_protocol() -> SeedProtocol:
             "train": SplitRange("train", 1000, 1999, per_generation=30,
                                 consume="in_order",
                                 expose_to=("prompt", "memory", "reflection")),
-            "heldout": SplitRange("heldout", 2000, 2099, expose_to=(), baskets={
-                "H1": Basket("H1", 2000, 2039, "generation_judge"),
-                "H2": Basket("H2", 2040, 2079, "ablation_final"),
-                "H3": Basket("H3", 2080, 2099, "reserve"),
+            "heldout": SplitRange("heldout", 731000, 731099, expose_to=(), baskets={
+                "H1": Basket("H1", 731000, 731039, "generation_judge"),
+                "H2": Basket("H2", 731040, 731079, "ablation_final"),
+                "H3": Basket("H3", 731080, 731099, "reserve"),
             }),
-            "test": SplitRange("test", 9000, 9099, role="final_acceptance",
+            "test": SplitRange("test", 947000, 947099, role="final_acceptance",
                                locked=True, unlock_policy="single_use_per_milestone"),
         },
         exposure_guard=ExposureGuard(),
@@ -443,7 +454,7 @@ def _forbidden_seed_ranges(proto: SeedProtocol) -> list[tuple[str, int, int]]:
 
 
 def scan_forbidden_tokens(text: str, *, protocol: SeedProtocol | Any = None) -> list[str]:
-    """扫描文本命中：heldout/test 的 4 位 seed token 或禁用词（返回命中的 token 列表）。"""
+    """扫描文本命中：heldout/test 的 seed token 或禁用词（返回命中的 token 列表）。"""
     proto = coerce_protocol(protocol)
     guard = proto.exposure_guard
     hits: list[str] = []

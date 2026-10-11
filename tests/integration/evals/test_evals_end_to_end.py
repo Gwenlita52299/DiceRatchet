@@ -11,6 +11,9 @@ from uuid import uuid4
 
 import pytest
 
+from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol
+_H1_SEED = (validate_protocol(coerce_protocol(None)).splits["heldout"].baskets["H1"].start + 43)
+
 from dice_ratchet.infra import events
 from dice_ratchet.infra.errors import E, InfraError
 from dice_ratchet.evals import seeds as S
@@ -42,8 +45,8 @@ def test_guard_violation_is_recorded_as_event(tmp_path):
     events.bind(sink_path, "r-leak")
     try:
         with pytest.raises(InfraError) as exc:
-            S.guard_prompt_context(split="heldout", seed=2043,
-                                   text="honeypot: seed 2043 leaked",
+            S.guard_prompt_context(split="heldout", seed=_H1_SEED,
+                                   text=f"honeypot: seed {_H1_SEED} leaked",
                                    destination="prompt")
         assert exc.value.code == E.E_EVAL_INV5_LEAK
     finally:
@@ -53,7 +56,7 @@ def test_guard_violation_is_recorded_as_event(tmp_path):
     hits = [r for r in rows if r.get("event") == "eval.guard_violation"]
     assert len(hits) == 1
     assert hits[0]["error_code"] == "E_EVAL_INV5_LEAK"
-    assert hits[0]["matched_token"] == "2043"
+    assert hits[0]["matched_token"] == str(_H1_SEED)
 
 
 def _result(seed: int, outcome: str, *, harness_version: int = 3) -> EpisodeResult:

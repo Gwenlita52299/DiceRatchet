@@ -267,3 +267,52 @@ def test_t06_11_eval_concurrency_allowed():
     """``eval_concurrency`` 是局级并发（FR-06-14），1..8 合法。"""
     LoopConfig(eval_concurrency=2).validate()
     LoopConfig(eval_concurrency=8).validate()
+
+
+# =====================================================================
+# F34：``--resume`` 落在「队列已空、周期边界未完成」时必须重入边界
+# =====================================================================
+
+def _crash_at_boundary(ctx) -> None:
+    """伪造 2026-10-09 实跑崩溃后的现场（状态取自 ``runs/m2-s32b-smoke-c1-medium6``）。
+
+    ``completed`` 恰好是 k 的整数倍、``pending_queue`` 空、``phase="evolving"``、
+    ``evolving_cycle`` 悬着、``generation`` 未推进 —— ``last_completed_cycle`` 尚未写，
+    因为 ``maybe_run_generation`` 是在 ``_call_evolve`` **返回之后**才写它（崩溃在之前）。
+    """
+    state = ctx.state
+    state.completed_train_seeds = [1000, 1001, 1002]
+    state.pending_queue = []
+    state.phase = "evolving"
+    state.evolving_cycle = 1
+    state.last_completed_cycle = None
+    state.generation = 0
+
+
+def test_f34_resume_reenters_boundary_when_queue_empty(tmp_path, mk_orchestrator,
+                                                       mk_memory):
+    """F34：空队列下的 ``resume`` 必须重入周期边界，而不是静默 ``phase="done"``。
+
+    修复前 ``_loop`` 是 ``while state.pending_queue:``，空队列一次都不进 ⇒ 直接落到
+    ``phase="done"``、**退出码 0**，而 ``evolve_fn`` 一次都没被调用 ⇒ 对外是「成功」，
+    实际 ``generation`` 一步没走、``harness/versions/`` 一个新版本都没有。这正是 §3.1
+    要防的静默成功（与 F28 同类）。
+    """
+    evolve = RecordingEvolve()
+    orch, ctx = mk_orchestrator(tmp_path, policy=FakePolicy(),
+                                env=FakeEnv(steps_to_terminate=2), memory=mk_memory(),
+                                evolve_fn=evolve, seeds=(1000, 1001, 1002))
+    reconfigure(orch, ctx, k=3, reflect_enabled=False, max_generations=1)
+    _crash_at_boundary(ctx)
+
+    summary = orch.run(resume=True)
+
+    assert len(evolve.calls) == 1, f"空队列下必须重入边界恰好一次，实际 {evolve.calls}"
+    assert ctx.state.generation == 1, "generation 必须推进（修复前恒为 0）"
+    assert ctx.state.last_completed_cycle == 1
+    assert ctx.state.evolving_cycle is None, "崩溃遗留的 evolving_cycle 必须清掉"
+    assert summary.phase == "done"
+
+    # 幂等：再 resume 一次不得重复触发（FR-06-6 的 last_completed_cycle / generation 闸）
+    orch.run(resume=True)
+    assert len(evolve.calls) == 1, "同一 cycle 至多触发一次"

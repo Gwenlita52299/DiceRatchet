@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from dice_ratchet.evolve import checkpoint as CHECKPOINT
 from dice_ratchet.evolve import generation as GEN
 from dice_ratchet.evolve.paths import GenPaths
 from dice_ratchet.evolve.schemas import Candidate
@@ -448,3 +449,224 @@ def _paired(**values):
             return dict(self._v)
 
     return _P()
+
+
+# =====================================================================
+# F32：``harness=`` 缺省时不得 ``NameError``（生产装配走的就是这一支）
+# =====================================================================
+
+def test_f32_harness_default_does_not_name_error(tmp_path):
+    """F32：省略 ``harness=`` 必须解析出 ``run_ctx.harness_dir``，而不是抛 ``NameError``。
+
+    原写法 ``getattr(run_ctx, "harness_dir", default_harness_dir())`` 会**无条件**求值
+    默认参数，而 ``default_harness_dir`` 这个函数在仓库里从不存在 ⇒ 生产装配
+    （``app._evolve_fn_provider`` 的 ``run_one_generation(harness=None)``）必然崩溃。
+    本模块的单测**全部**显式传 ``harness=``，所以 1800+ 用例全绿也没拦住它——2026-10-09
+    的 §3.2 实跑因此在做完任何事之前崩掉，白烧 ¥34.62 / 92 min。
+    """
+    ctx = FakeRunContext(tmp_path, harness=tmp_path / "h")
+    assert GEN._resolve_harness_path(None, ctx) == tmp_path / "h"           # 默认取 run_ctx
+    assert GEN._resolve_harness_path(tmp_path / "x", ctx) == tmp_path / "x"  # 显式优先
+    # 鸭子类型替身（缺 ``harness_dir``）退到 infra 常量，而不是 ``NameError``
+    assert GEN._resolve_harness_path(None, object()) == Path("harness")
+
+
+def test_f32_full_generation_without_harness_kwarg(tmp_path, stub_pairing):
+    """F32 的行为面：**完全不传** ``harness=`` 时整代仍能跑完（= 生产装配口径）。"""
+    _harness, _evolve, _app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+    ev = ScriptedEvaluator(heldout=FakeArm(win_rate=0.40), paired=_paired(delta=0.10))
+    outcome = GEN.run_one_generation(
+        state=state, run_ctx=run_ctx, runner=None, config=run_ctx.app_config,
+        evaluator=ev, client=_one_candidate_llm(), run_dir=run_root, seed=7)
+
+    assert outcome is not None
+    assert _read_report(run_root, 1)["decision"] in ("accept", "reject")
+
+
+# =====================================================================
+# F47-D：基础设施失败 ≠ 裁判拒绝
+# =====================================================================
+
+def test_f47_accept_infra_failure_is_recorded_as_error_reject(tmp_path, stub_pairing,
+                                                              monkeypatch):
+    """accept 抛 ``InfraError``（如 ``E_EVOLVE_GIT_FAILED``：脏工作区）时必须记为
+    ``decision="error_reject"``，不得写成 ``"reject"``，更不得写成 ``"accept"``。
+
+    原先有两个自相矛盾的口径：
+    - ``_finish_report`` 写 ``decision="reject"``（长得跟「候选不显著」一模一样）；
+    - ``build_decision_sections`` 只看 gate 状态，而此时 gate 是 ``approved``
+      ⇒ **report.json 写 ``decision="accept"``**，而磁盘上 ``harness/versions/``
+      里根本没有新版本（幻影 accept）。事件流与报告因此互相打脸。
+
+    本用例同时钉住两点：报告口径 = ``error_reject``；``evolve.decision`` 事件一致。
+    """
+    from dice_ratchet.infra import events
+    from dice_ratchet.infra.errors import InfraError
+
+    harness, _evolve, _app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+    ev = ScriptedEvaluator(heldout=FakeArm(win_rate=0.40), paired=_paired(delta=0.10))
+    versions_before = sorted(p.name for p in (harness / "versions").iterdir())
+    calls: list[int] = []
+
+    def _boom(*args, **kwargs):
+        calls.append(1)
+        raise InfraError(E.E_EVOLVE_GIT_FAILED, "脏工作区：拒绝提交 harness")
+
+    monkeypatch.setattr(GEN.versioning_mod, "accept", _boom)
+
+    seen_events = tmp_path / "events.jsonl"
+    events.bind(seen_events, str(run_ctx.run_id))
+    try:
+        outcome = _run(run_ctx, state, evaluator=ev, client=_one_candidate_llm())
+    finally:
+        events.unbind()
+    seen = [json.loads(line) for line in seen_events.read_text(encoding="utf-8").splitlines()
+            if line.strip()]
+
+    # 前置：候选真的过了六道门 —— ``accept`` 只在 ``gate.status == "approved"`` 时被调用
+    assert calls, "accept 必须被调用过（否则本用例考的不是这条路径）"
+
+    # 反例自检：只看 gate 状态（= 修复前的口径）确实会推出 "accept"（幻影 accept 的来源）
+    phantom = GEN.versioning_mod.build_decision_sections(
+        1, [], None,
+        GEN.versioning_mod.gate_state_for(generation=1, status="approved",
+                                          harness_version=0, parent_version=0))
+    assert phantom["decision"] == "accept", "反例：gate=approved 会被推成 accept"
+
+    assert outcome.decision == "error_reject"
+    assert str(outcome.error_code) == str(E.E_EVOLVE_GIT_FAILED)
+
+    report = _read_report(run_root, 1)
+    assert report["decision"] == "error_reject", "基础设施失败不得写成 accept/reject"
+    assert sorted(p.name for p in (harness / "versions").iterdir()) == versions_before, \
+        "失败时不得留下版本目录"
+
+    decisions = [row for row in seen if row["event"] == "evolve.decision"]
+    assert decisions and decisions[-1]["decision"] == "error_reject", \
+        "事件流与报告必须同口径"
+
+
+# =====================================================================
+# F42-B：提案检查点（评估之前落盘；resume 时指纹一致则复用同一候选）
+# =====================================================================
+#
+# 现场：API 提案**不可复现**（注册表标注 `api_supports_seed=false`，实测「字节相同的请求
+# 9 次返回 9 个不同响应」）⇒ 不落检查点的话，resume 时候选 id 必然变，
+# `metrics/arms/genNNN-*-cand-<id>.json` 归档必然 miss，能省的只有 parent 侧。
+# 机制：评估**之前**把 ProposalResult 落 `generations/gen-NNN/proposals/proposal.json`，
+# 连同输入指纹（run_id / generation / propose_seed / harness_version / memory_version /
+# prompt_digest）；指纹一致 → 复用同一 candidate id 与 diff，**0 次 proposer 调用**。
+
+def test_proposal_checkpoint_is_written_before_evaluation(tmp_path, stub_pairing):
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+    _run(run_ctx, state, evaluator=ScriptedEvaluator(heldout=FakeArm(win_rate=0.40),
+                                                     paired=_paired(delta=0.10)),
+         client=_one_candidate_llm())
+    path = CHECKPOINT.proposal_checkpoint_path(run_root, 1)
+    assert path.is_file(), "提案没有在评估之前落检查点（F42-B）"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["version"] == CHECKPOINT.PROPOSAL_CHECKPOINT_VERSION
+    assert data["fingerprint"].startswith("sha256:")
+    assert len(data["proposal"]["candidates"]) == 1
+    cand = data["proposal"]["candidates"][0]
+    for key in ("candidate_id", "diff", "rationale", "expected_effect"):
+        assert key in cand, f"检查点缺 {key}"
+
+
+def test_resume_reuses_the_proposal_with_zero_proposer_calls(tmp_path, stub_pairing):
+    """跑到一半被杀 → 检查点命中：同一 candidate id、**0 次 proposer 调用**。
+
+    真实中断点：Ctrl-C（``loop`` 的 SIGINT 处理器抛 ``KeyboardInterrupt``，正是 F42 描述的
+    「一代 3.75 h 中途被打断」）。``KeyboardInterrupt`` 不是 ``Exception`` ⇒ 不会被
+    ``evaluate_candidate`` / ``_parent_arms`` 的保守化捕获吞掉，直接穿透 MOD-07，
+    ``report.json`` 不落盘 ⇒ 与现场「``loop`` 把 phase 重置为 playing 重跑整代」完全同形。
+    """
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+
+    class _Interrupted(ScriptedEvaluator):
+        """第一次进入 parent 臂时模拟 Ctrl-C（此后照常）。"""
+
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.boom = True
+
+        def parent_arms(self, parent_dir, *, parent_version):
+            if self.boom:
+                self.boom = False
+                raise KeyboardInterrupt("模拟：一代评估中途被 Ctrl-C")
+            return super().parent_arms(parent_dir, parent_version=parent_version)
+
+    first_client = _one_candidate_llm()
+    with pytest.raises(KeyboardInterrupt):
+        _run(run_ctx, state, evaluator=_Interrupted(), client=first_client)
+    assert len(first_client.calls) == 1, "第一轮应当真实调用过 proposer 并落检查点"
+    checkpoint = CHECKPOINT.proposal_checkpoint_path(run_root, 1)
+    assert checkpoint.is_file(), "提案没有在评估之前落检查点（F42-B）"
+    assert GenPaths.of(run_root, 1).report.is_file() is False, \
+        "本代不应有 report.json（被杀在中途）"
+    first_id = json.loads(checkpoint.read_text(encoding="utf-8"))[
+        "proposal"]["candidates"][0]["candidate_id"]
+
+    # resume：客户端**没有** payload 了（真被调用就会 AssertionError）
+    second_client = StubLLM([])
+    outcome = _run(run_ctx, state,
+                   evaluator=ScriptedEvaluator(heldout=FakeArm(win_rate=0.40),
+                                               paired=_paired(delta=0.10)),
+                   client=second_client)
+    assert second_client.calls == [], "提案被复用后仍然调了 proposer（每次调用都是钱）"
+    assert GenPaths.of(run_root, 1).candidate_ids() == (first_id,)
+    assert outcome.decision == "accept"
+
+
+def test_proposal_checkpoint_mismatch_falls_back_to_the_client(tmp_path, stub_pairing):
+    """指纹不一致（换了 harness/记忆/模板/seed）⇒ 不复用，照常重新提案（fail-closed）。"""
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+    _run(run_ctx, state, evaluator=ScriptedEvaluator(heldout=FakeArm(win_rate=0.40),
+                                                     paired=_paired(delta=0.10)),
+         client=_one_candidate_llm())
+    path = CHECKPOINT.proposal_checkpoint_path(run_root, 1)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["fingerprint"] = "sha256:0000"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    client = _one_candidate_llm()
+    _run(run_ctx, state, evaluator=ScriptedEvaluator(heldout=FakeArm(win_rate=0.40),
+                                                     paired=_paired(delta=0.10)),
+         client=client)
+    assert len(client.calls) == 1, "指纹不一致却复用了检查点"
+
+
+def test_corrupt_proposal_checkpoint_is_ignored(tmp_path, stub_pairing):
+    """检查点损坏 ⇒ 照常重新提案（不得抛错、不得静默放弃本代）。"""
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+    _run(run_ctx, state, evaluator=ScriptedEvaluator(heldout=FakeArm(win_rate=0.40),
+                                                     paired=_paired(delta=0.10)),
+         client=_one_candidate_llm())
+    CHECKPOINT.proposal_checkpoint_path(run_root, 1).write_text("{not json",
+                                                               encoding="utf-8")
+    client = _one_candidate_llm()
+    _run(run_ctx, state, evaluator=ScriptedEvaluator(heldout=FakeArm(win_rate=0.40),
+                                                     paired=_paired(delta=0.10)),
+         client=client)
+    assert len(client.calls) == 1
+
+
+def test_proposal_fingerprint_is_stable_and_input_sensitive():
+    """指纹：同输入恒定；``propose_seed`` / ``harness_version`` / prompt 任一变化即变。"""
+    inputs = {"system": "S", "user": "U", "schema": {"type": "object"}}
+    base = dict(run_id="r1", generation=1, propose_seed=7, harness_version=0,
+                memory_version=0, inputs=inputs)
+    one = CHECKPOINT.proposal_fingerprint(**base)
+    assert one == CHECKPOINT.proposal_fingerprint(**base)
+    assert one != CHECKPOINT.proposal_fingerprint(**{**base, "propose_seed": 8})
+    assert one != CHECKPOINT.proposal_fingerprint(**{**base, "harness_version": 1})
+    assert one != CHECKPOINT.proposal_fingerprint(**{**base, "memory_version": 1})
+    assert one != CHECKPOINT.proposal_fingerprint(
+        **{**base, "inputs": {**inputs, "user": "U2"}})
+    assert one != CHECKPOINT.proposal_fingerprint(**{**base, "run_id": "r2"})

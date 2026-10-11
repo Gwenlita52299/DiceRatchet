@@ -21,6 +21,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol
+
+_PROTO = validate_protocol(coerce_protocol(None))
+_H1 = _PROTO.splits["heldout"].baskets["H1"]
+_SEEDS_SPEC = f"heldout:{_H1.start}-{_H1.start + 2}"
+_SEEDS_SPEC_2 = f"heldout:{_H1.start}-{_H1.start + 1}"
+_HELDOUT_LEAK_SEED = _H1.start + 2
+
 from dice_ratchet.evals.baselines import run_baseline
 from dice_ratchet.evals.harness import SandboxRunner
 from dice_ratchet.evals.metrics import aggregate
@@ -97,7 +105,7 @@ def test_eval_run_has_zero_leak_findings(run_id):
     seed 列表 120 条 + ``duration_us``/``dur_s`` 假阳性 16 条）。
     """
     proc = _run_cli("baseline", "--kind", "heuristic", "--split", "heldout",
-                    "--seeds", "2000,2001,2002", "--run-id", run_id)
+                    "--seeds", _SEEDS_SPEC, "--run-id", run_id)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     report = _run_cli("eval", "report", "--split", "heldout", "--baseline", "all",
                       "--run-id", run_id)
@@ -112,11 +120,11 @@ def test_eval_run_has_zero_leak_findings(run_id):
 def test_content_leak_in_the_log_surface_is_still_caught(run_id):
     """反例：把 held-out seed 塞进**内容**字段，扫描必须照旧抓到（修复不能变成盲区）。"""
     proc = _run_cli("baseline", "--kind", "random", "--split", "heldout",
-                    "--seeds", "2000,2001", "--run-id", run_id)
+                    "--seeds", _SEEDS_SPEC_2, "--run-id", run_id)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     events = _REPO / "runs" / run_id / "events.jsonl"
     row = json.loads(events.read_text(encoding="utf-8").splitlines()[-1])
-    row["reason"] = "泄漏面：heldout seed 2037 出现在内容字段"
+    row["reason"] = f"泄漏面：heldout seed {_HELDOUT_LEAK_SEED} 出现在内容字段"
     with events.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, ensure_ascii=False) + "\n")
     audit = _run_cli("audit", "leak", "--run-id", run_id)
@@ -137,7 +145,7 @@ def test_fixed_prompt_baseline_actually_calls_the_backend(run_id):
     修复前无任何路径能注入客户端，该命令只能静默产出 heuristic 的副本。
     """
     proc = _run_cli("baseline", "--kind", "fixed_prompt", "--split", "heldout",
-                    "--seeds", "2000,2001,2002", "--model", "mock", "--run-id", run_id)
+                    "--seeds", _SEEDS_SPEC, "--model", "mock", "--run-id", run_id)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     payload = json.loads(proc.stdout)
     assert payload["inference_client"] is True and payload["model_id"] == "mock"

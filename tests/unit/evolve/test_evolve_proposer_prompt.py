@@ -10,15 +10,20 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
+
+from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol
+_HELDOUT_SEED = validate_protocol(coerce_protocol(None)).splits["heldout"].baskets["H1"].start + 13
 
 from dice_ratchet.evolve import proposer as P
 from dice_ratchet.evolve.errors import HoldoutLeakError, ProposeFailedError
 from dice_ratchet.evolve.schemas import EvidenceBundle, HarnessSnapshot
 from dice_ratchet.infra.errors import E
 
-from evolve_support import (StubLLM, make_candidate, make_config, prompt_diff,
-                            proposal_payload, tool_diff)
+from evolve_support import (StubLLM, make_app_config, make_candidate, make_config,
+                            prompt_diff, proposal_payload, tool_diff)
 
 
 def _bundle(*, traj=(), memory=(), reflect=()) -> EvidenceBundle:
@@ -33,7 +38,11 @@ def _bundle(*, traj=(), memory=(), reflect=()) -> EvidenceBundle:
 # =====================================================================
 
 def test_prompt_slots_are_whitelisted():
-    """模板产出的槽位 ⊆ ``PROMPT_PLACEHOLDERS``，且不留未替换的 ``{{...}}``。"""
+    """模板产出的槽位 ⊆ ``PROMPT_PLACEHOLDERS``，且不留未替换的 ``{{...}}``。
+
+    注：本 fixture 的 ``HarnessSnapshot`` 无 ``contents``；带正文时正文块内的 ``{{...}}``
+    是**目标文件自己的**模板，属 F38 的例外（见下一条用例）。
+    """
     system, user = P.render_proposer_prompt(_bundle(), make_config())
     text = system + "\n" + user
     assert "{{" not in text and "}}" not in text
@@ -43,6 +52,57 @@ def test_prompt_slots_are_whitelisted():
     assert "## harness" in user
     assert "## 任务" in user
     assert set(P.PROMPT_PLACEHOLDERS) == {"observation", "memory", "harness", "task"}
+
+
+def test_f38_harness_body_is_inlined_and_scopes_placeholder_rule(tmp_path):
+    """F38：可改文件的**正文**必须逐字符进 prompt（否则 diff 的 hunk 无法对齐）。
+
+    实测现场：只给 sha256 时模型产出的 diff 被打回
+    ``E_EVOLVE_PATCH_INVALID: hunk 上下文不匹配（decision.md 第 1 行）``。
+    同时界定范围：``decision.md`` 自己是**给 agent 的模板**（含 ``{{observation}}`` 等），
+    正文块内的占位符**不**算 proposer 模板的未替换槽位。
+    """
+    from dice_ratchet.evolve.schemas import EvidenceBundle
+
+    harness = tmp_path / "harness"
+    (harness / "prompts").mkdir(parents=True)
+    body = "# 决策模板\n\n## 当前观测\n{{observation}}\n"
+    (harness / "prompts" / "decision.md").write_text(body, encoding="utf-8")
+
+    snap = P.harness_snapshot(harness)
+    assert ("prompts/decision.md", body) in snap.contents, "可改文件的正文必须进快照"
+    assert "version.json" not in [name for name, _ in snap.contents]
+
+    bundle = EvidenceBundle(bundle_id="ev-f38", memory_items=(),
+                            trajectory_summaries=(), reflections=(),
+                            harness_snapshot=snap, source_tags=("harness:current",))
+    _system, user = P.render_proposer_prompt(bundle, make_config())
+
+    assert body.rstrip("\n") in user, "F38：正文必须逐字符可见，模型才能写出对齐的 hunk"
+    # 正文块之外的区域仍不得残留未替换槽位
+    head = user.split("### 可修改文件的当前正文")[0]
+    assert "{{" not in head and "}}" not in head
+
+
+def test_f40_prompt_states_the_rules_the_validator_enforces():
+    """F40：prompt 必须给出**校验器实际强制**的规则，否则候选只能盲猜。
+
+    实测（2026-10-09 干跑）：`config_patch` 因
+    ``config_key_not_evolvable:['enabled','min_decisions','reflection']`` 作废——
+    `evolvable_keys` 从未出现在 prompt 里；另一候选因 rationale 322 字符越过 300 硬上限作废。
+    """
+    from dice_ratchet.evolve.schemas import CANDIDATE_SCHEMA
+
+    cfg = make_config(evolvable_keys=("retrieval.top_k", "sampling.temperature"))
+    system, _user = P.render_proposer_prompt(_bundle(), cfg)
+
+    for key in ("retrieval.top_k", "sampling.temperature"):
+        assert key in system, f"prompt 必须列出可改的 config 键：{key}"
+    assert str(P._RATIONALE_MAX_CHARS) in system, "prompt 必须给出 rationale 硬上限"
+    assert str(P._RATIONALE_GUIDE_CHARS) in system, "prompt 必须给出留余量的建议值"
+    # 同一上限只许有一个事实来源：校验器直接取候选 JSON Schema 的 maxLength
+    assert P._RATIONALE_MAX_CHARS == CANDIDATE_SCHEMA["properties"]["rationale"]["maxLength"]
+
 
 
 def test_prompt_has_no_forbidden_substrings():
@@ -145,6 +205,48 @@ def test_propose_without_client_returns_explicit_error(monkeypatch):
     assert result.reason == "no_client"
 
 
+# =====================================================================
+# F36：回退解析客户端时，provider 收到的是 AppConfig 而不是 EvolveConfig 段
+# =====================================================================
+
+class _RoleProviderStub:
+    """``app._role_provider`` 的最小替身：**必须**读完整 ``AppConfig`` 的 ``inference``。"""
+
+    def __init__(self) -> None:
+        self.seen: list[Any] = []
+
+    def __call__(self, cfg, **kwargs):
+        self.seen.append(cfg)
+        if not hasattr(cfg, "inference"): # 真实 provider 在这里 `cfg.inference` → AttributeError
+            raise AttributeError("'EvolveConfig' object has no attribute 'inference'")
+        return StubLLM([{"candidates": [proposal_payload()]}])
+
+    def client_for(self, role): # RoleModelProvider 的形状
+        return self
+
+
+def test_f36_fallback_provider_receives_app_config(monkeypatch):
+    """F36：``client=None`` 的回退路径上，provider 必须拿到完整 ``AppConfig``。
+
+    实测现场（2026-10-09）：``loop run --agent heuristic`` + 已注册 provider →
+    ``AttributeError: 'EvolveConfig' object has no attribute 'inference'``。原因是
+    ``propose(cfg=…)`` 的 ``cfg`` 是 **``EvolveConfig`` 段**（渲染/重试/护栏都要用它），
+    早先被直接传给了需要完整 ``AppConfig`` 的 provider。真实 LLM 臂因 ``client`` 非空
+    而短路，所以这个缺陷一直藏着。
+    """
+    provider = _RoleProviderStub()
+    monkeypatch.setattr(P, "_CLIENT_PROVIDER", provider)
+    app_cfg = make_app_config()
+    evolve_cfg = make_config(n_candidates=1)
+
+    result = P.propose(_bundle(), cfg=evolve_cfg, rng_seed=7, client=None,
+                       run_id="r-1", generation=1, app_config=app_cfg)
+
+    assert provider.seen and provider.seen[0] is app_cfg, \
+        "provider 必须收到 AppConfig（F36：传 EvolveConfig 段会 AttributeError）"
+    assert result.ok, f"回退路径应当能产出候选：{result.error_code} / {result.reason}"
+
+
 def test_propose_empty_candidates_returns_no_candidate_code():
     result = P.propose(_bundle(), cfg=make_config(), rng_seed=7,
                        client=StubLLM([{"candidates": []}]))
@@ -202,7 +304,7 @@ def test_parse_proposal_payload_rejects_bad_shapes(payload):
 
 def test_propose_propagates_holdout_leak():
     """INV-5 是致命错误：``propose`` 不吞它，交由上层中止本代（PRD §10）。"""
-    bundle = _bundle(reflect=[{"split": "train", "lesson": "2013 最好"}])
+    bundle = _bundle(reflect=[{"split": "train", "lesson": f"{_HELDOUT_SEED} 最好"}])
     with pytest.raises(HoldoutLeakError):
         P.propose(bundle, cfg=make_config(), rng_seed=7, client=_two_candidate_llm())
 

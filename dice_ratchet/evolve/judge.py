@@ -66,6 +66,16 @@ _C5_FALLBACK: float = 0.10
 #: ``truncation`` 相对门容差：``candidate ≤ parent + tol``。
 #: 0.05 = n=40 下的 2 局（粒度 1/40 = 0.025），与 ``evolve.win_rate_tol`` 同依据（D-3）。
 _C5_TRUNCATION_TOL: float = 0.05
+#: **2026-10-11（D-M3-2，用户裁决 E）**：三轴统一为「相对门 + 绝对 backstop」。
+#: 现场：``illegal``/``fallback`` 的绝对门（0.35 / 0.25）对 ``C1`` 实测（0.0318 / 0.0017）
+#: 松 11× / 147× ⇒ 实际非约束门 ⇒「候选把非法率推高」的退化候选被放行、
+#: **判据 2 的归因结论不成立**。改为与 truncation 同构后才有诊断力。
+#: ``backstop`` 只用于堵相对门的已知放宽（parent 已很烂 ⇒ 跟着烂），不替代相对门。
+_C5_ILLEGAL_TOL: float = 0.05
+_C5_FALLBACK_TOL: float = 0.05
+_C5_TRUNCATION_BACKSTOP: float = 0.60
+#: 相对门的通用兜底（`max_illegal_rate` / `max_fallback_rate` 缺省时的 backstop）。
+_C5_BACKSTOP: float = 0.35
 
 
 # =====================================================================
@@ -236,6 +246,21 @@ def judge(cand_report: CandidateReport, parent_report: Any, *, cfg: Any,
         return _fail("C0", "incomplete_report", code=str(E.E_EVOLVE_JUDGE_FAILED),
                      cand=cand_report, generation=generation, trace=trace)
 
+    # C5 自 2026-10-11（D-M3-2 裁决 E）起**三轴全为相对门**，因此 parent 的 illegal/fallback
+    # 与 truncation 一样是**前置完备性**的一部分：缺任一项就无法求值 → fail-closed 记 C0。
+    # 不得静默跳过该轴（跳过 = C5 对那一轴失去诊断力，正是本次要修的病）。
+    parent_illegal = metric_of(parent_report, "illegal_rate", None)
+    if parent_illegal is None:
+        trace[-1] = condition_trace_entry("C0", False, "parent heldout 缺 illegal_rate")
+        return _fail("C0", "incomplete_report", code=str(E.E_EVOLVE_JUDGE_FAILED),
+                     cand=cand_report, generation=generation, trace=trace)
+
+    parent_fallback = metric_of(parent_report, "fallback_rate", None)
+    if parent_fallback is None:
+        trace[-1] = condition_trace_entry("C0", False, "parent heldout 缺 fallback_rate")
+        return _fail("C0", "incomplete_report", code=str(E.E_EVOLVE_JUDGE_FAILED),
+                     cand=cand_report, generation=generation, trace=trace)
+
     # ---- C1 主指标不降（tol=0.05，D-3）---------------------------------------------
     win = float(heldout.get("win_rate") or 0.0)
     tol = float(getattr(cfg, "win_rate_tol", 0.05))
@@ -290,28 +315,56 @@ def judge(cand_report: CandidateReport, parent_report: Any, *, cfg: Any,
                      generation=generation, trace=trace)
 
     # ---- C5 合法性与健壮性 ----------------------------------------------------------
-    # 2026-10-09（B-44，用户裁决 ②+③）：illegal / fallback 保留**绝对门**（能力/遵从属性，
-    # 有跨臂的绝对意义）；truncation 改**相对门** `candidate ≤ parent + tol`（局型 × 策略
-    # 强度的合成属性，绝对门会随臂错位 —— 缺陷 F28）。parent 的 truncation_rate 已在 C0
-    # 处校验非 None。
+    # 2026-10-11（D-M3-2 裁决 E，用户）：三轴统一为 **相对门 + 绝对 backstop**，判定式
+    #   `candidate ≤ min(parent + tol, backstop)`。
+    # 为什么要改：M2 出于「先松开」把这它留成绝对门（0.35 / 0.25），而 `C1` 实测
+    #   illegal 0.0318 / fallback 0.0017 ⇒ 松 11× / 147×，**等于非约束门**。后果不是
+    #   「少抓一个坏候选」，而是**判据 2 的归因结论不成立**（候选完全可以靠推高非法率
+    #   换 win_rate 而照样过闸）。truncation 早在 2026-10-09（B-44/F28）就是相对门了。
+    # 为什么保留 backstop：相对门单独用时有个已知放宽——parent 自身 0.90 时，候选 0.60
+    #   也能过（§8.2.2）。backstop 只用于堵这个洞，不替代相对门。
+    # tol 语义按轴分列：illegal/fallback 是**步级**（分母 ≈12k / ≈3.7k），
+    #   truncation 是**局级**（粒度 1/40 = 0.025）。见 `infra/config.py` 的字段注释。
     illegal = float(heldout.get("illegal_rate") or 0.0)
     fallback = float(heldout.get("fallback_rate") or 0.0)
     truncation = float(heldout.get("truncation_rate") or 0.0)
-    max_illegal = float(getattr(cfg, "max_illegal_rate", _C5_ILLEGAL))
-    max_fallback = float(getattr(cfg, "max_fallback_rate", _C5_FALLBACK))
+    # 兜底值沿用 M2 标定的绝对门（`max_illegal_rate`/`max_fallback_rate`）——它们**仍在
+    # config 里**，但语义从「主门」降为「backstop」，因此 `hasattr` 检查保持不变。
+    illegal_backstop = float(getattr(cfg, "max_illegal_rate", _C5_BACKSTOP))
+    fallback_backstop = float(getattr(cfg, "max_fallback_rate", _C5_BACKSTOP))
+    illegal_tol = float(getattr(cfg, "illegal_tol", _C5_ILLEGAL_TOL))
+    fallback_tol = float(getattr(cfg, "fallback_tol", _C5_FALLBACK_TOL))
     truncation_tol = float(getattr(cfg, "truncation_tol", _C5_TRUNCATION_TOL))
-    truncation_ok = truncation <= parent_truncation + truncation_tol
-    c5_ok = (illegal <= max_illegal and fallback <= max_fallback and truncation_ok)
+    truncation_backstop = float(
+        getattr(cfg, "truncation_backstop", _C5_TRUNCATION_BACKSTOP))
+    illegal_max = min(float(parent_illegal) + illegal_tol, illegal_backstop)
+    fallback_max = min(float(parent_fallback) + fallback_tol, fallback_backstop)
+    truncation_max = min(float(parent_truncation) + truncation_tol, truncation_backstop)
+    illegal_ok = illegal <= illegal_max
+    fallback_ok = fallback <= fallback_max
+    truncation_ok = truncation <= truncation_max
+    c5_ok = illegal_ok and fallback_ok and truncation_ok
     trace.append(condition_trace_entry(
         "C5", c5_ok,
-        f"illegal={illegal:.4f}≤{max_illegal} fallback={fallback:.4f}≤{max_fallback} "
-        f"truncation={truncation:.4f}≤parent {parent_truncation:.4f}+tol {truncation_tol}",
+        f"illegal={illegal:.4f}≤min(parent {float(parent_illegal):.4f}+tol {illegal_tol}, "
+        f"backstop {illegal_backstop}) "
+        f"fallback={fallback:.4f}≤min(parent {float(parent_fallback):.4f}+tol "
+        f"{fallback_tol}, backstop {fallback_backstop}) "
+        f"truncation={truncation:.4f}≤min(parent {float(parent_truncation):.4f}+tol "
+        f"{truncation_tol}, backstop {truncation_backstop})",
         value={"illegal_rate": illegal, "fallback_rate": fallback,
                "truncation_rate": truncation,
-               "parent_truncation_rate": parent_truncation},
-        threshold={"max_illegal_rate": max_illegal,
-                   "max_fallback_rate": max_fallback,
-                   "truncation_tol": truncation_tol}))
+               "parent_illegal_rate": float(parent_illegal),
+               "parent_fallback_rate": float(parent_fallback),
+               "parent_truncation_rate": float(parent_truncation)},
+        threshold={"max_illegal_rate": illegal_max,
+                   "max_fallback_rate": fallback_max,
+                   "max_truncation_rate": truncation_max,
+                   "illegal_tol": illegal_tol, "fallback_tol": fallback_tol,
+                   "truncation_tol": truncation_tol,
+                   "illegal_backstop": illegal_backstop,
+                   "fallback_backstop": fallback_backstop,
+                   "truncation_backstop": truncation_backstop}))
     if not c5_ok:
         return _fail("C5", "illegal/fallback/truncation",
                      code=str(E.E_EVOLVE_ILLEGAL_RATE), cand=cand_report,
@@ -386,6 +439,9 @@ class CandidateEvaluator:
     runner: Any = None
     episode_config: Any = None
     harness_version_of: Callable[[Any], int] | None = None
+    #: F42-A/B：run 根目录（臂归档 / 检查点落点）。为空时由 ``evaluate_arm`` 按
+    #: ``config.infra.runs_root / run_id`` 推导。
+    run_dir: Any = None
 
     def _evaluate_arm(self, arm_dir: Any, *, split: str, basket: Any, arm: str,
                       harness_version: int) -> Any:
@@ -394,6 +450,16 @@ class CandidateEvaluator:
         kwargs: dict[str, Any] = {}
         if self.runner is not None:
             kwargs["runner"] = _wrap_runner(self.runner)
+        # F42-C：原先**没传** ``n_workers``/``n_rep`` ⇒ 落到 ``evaluate_arm`` 的默认
+        # ``n_workers=1``，即一代 84 局**串行**跑；而 gen-000 基线路径传的是
+        # ``cfg.evals.n_workers=2``（``loop/generation.py``）⇒ 同一份配置下两条路径的
+        # 并发度不同，候选/parent 臂的墙钟与 gen-000 不可比。这里按配置对齐；
+        # **不改任何配置值**，所以 ``config_hash`` 不变。
+        eval_cfg = getattr(self.config, "evals", None)
+        kwargs["n_workers"] = int(getattr(eval_cfg, "n_workers", 1) or 1)
+        kwargs["n_rep"] = int(getattr(getattr(eval_cfg, "determinism", None), "n_rep", 1) or 1)
+        if self.run_dir is not None: # F42-A：臂归档落在真实 run 目录
+            kwargs["run_dir"] = self.run_dir
         return evaluate_arm(
             arm_dir, split=split, basket=basket, memory_version=int(self.memory_version),
             arm=arm, run_id=self.run_id, protocol=self.protocol, config=self.config,

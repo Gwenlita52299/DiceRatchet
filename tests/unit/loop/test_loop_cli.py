@@ -11,6 +11,8 @@ import contextlib
 import io
 import json
 from pathlib import Path
+import shutil
+import subprocess
 
 import pytest
 
@@ -160,8 +162,11 @@ def test_cli_smoke_resume_is_noop(tmp_path, monkeypatch):
 # =====================================================================
 
 def test_cli_rejects_heldout_seeds(tmp_path, monkeypatch):
+    # ``--harness-dir`` 指向仓库外的拷贝：F47-A 的起跑前门禁在非 git 路径下降级跳过，
+    # 使用例只验「种子分片校验」，不依赖宿主工作区是否干净（门禁另有用例直接覆盖）。
     code, _out, err = _run(tmp_path, monkeypatch,
                            ["loop", "run", "--agent", "heuristic",
+                            "--harness-dir", _tmp_harness_copy(tmp_path),
                             "--seeds", "heldout:2000-2001", "--k", "3"])
     assert code == 4, err
     assert str(E.E_EVAL_SPLIT_VIOLATION) in err
@@ -213,6 +218,127 @@ def test_cli_resume_k_mismatch(tmp_path, monkeypatch):
     # ``--k`` 变化会让周期幂等键漂移 → 拒绝（Spec F10 + 本模块的额外一致性校验）
     assert code == 2, err
     assert str(E.E_IO_RUN_CONFLICT) in err or str(E.E_IO_CONFIG_INVALID) in err
+
+
+# =====================================================================
+# F47-A：演化起跑前的 git 门禁（CLI 边界）
+# =====================================================================
+
+def _tmp_harness_copy(tmp_path: Path) -> str:
+    """把仓库 ``harness/`` 拷到 ``tmp_path``（git worktree 之外）并返回路径字符串。
+
+    与 ``tests/integration/test_loop_closure.py::_isolated_harness`` 同一套绝缘理由：
+    F47-A 之后，会演化的 ``loop run`` 起跑前要求工作区干净；指向仓库外的拷贝可让
+    「种子分片」「错误码」等**与被测行为无关**的用例不依赖宿主工作区状态。
+    """
+    dst = tmp_path / "harness"
+    if not dst.is_dir():
+        shutil.copytree(REPO_ROOT / "harness", dst)
+    return str(dst)
+
+
+def _init_git_repo(path: Path) -> Path:
+    """建一个干净的 git 仓库（只有一个初始提交）。"""
+    path.mkdir(parents=True, exist_ok=True)
+    for cmd in (["init", "-q"], ["config", "user.email", "t@example.com"],
+                ["config", "user.name", "Tester"],
+                ["config", "commit.gpgsign", "false"]):
+        subprocess.run(["git", "-C", str(path), *cmd], check=True, capture_output=True)
+    (path / "README.md").write_text("init\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(path), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(path), "commit", "-q", "-m", "init"],
+                   check=True, capture_output=True)
+    return path
+
+
+def _harness_in(repo: Path) -> Path:
+    harness = repo / "harness"
+    (harness / "prompts").mkdir(parents=True, exist_ok=True)
+    (harness / "prompts" / "decision.md").write_text("v0\n", encoding="utf-8")
+    (harness / "version.json").write_text(json.dumps(
+        {"version": 0, "parent": None, "git_commit": "", "artifact_hash": "",
+         "created_at": "2026-10-06T00:00:00Z", "reason": "t", "accepted_by": "human",
+         "base_model": None}), encoding="utf-8")
+    # 提交 harness/：否则它自己是 `??`，会让「干净」用例先天为脏
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "harness"],
+                   check=True, capture_output=True)
+    return harness
+
+
+def test_cli_run_aborts_on_dirty_worktree_before_any_spend(tmp_path, monkeypatch):
+    """F47-A：脏工作区必须在**任何推理调用与 gen-000 基线之前**被拒（退出码 4）。
+
+    原先同一判据只长在 MOD-07 ``commit_harness`` 内部，即整代跑完、即将落版本时——
+    实测代价 3.75 h / ≈¥47，且被记成 ``decision="reject"``（看起来像合法拒绝）。
+    """
+    repo = _init_git_repo(tmp_path / "outer")
+    harness = _harness_in(repo)
+    (repo / "工具产物.txt").write_text("x\n", encoding="utf-8") # 未跟踪 → 脏
+
+    calls: list[tuple] = []
+
+    class _CountingClient:
+        def generate_json(self, *args, **kwargs):
+            calls.append((args, kwargs))
+            raise AssertionError("门禁未生效：发生了推理调用")
+
+    loop_cli.set_inference_client_provider(
+        lambda cfg, *, run_id, runs_root: _CountingClient())
+    loop_cli.set_evolve_provider(lambda cfg, runner, run_ctx: (lambda state, ctx: {}))
+    try:
+        code, _out, err = _run(tmp_path, monkeypatch,
+                               ["loop", "run", "--agent", "llm", "--model", "mock",
+                                "--no-reflect", "--harness-dir", str(harness),
+                                "--seeds", "train:1000-1002", "--k", "3",
+                                "--run-id", "u-dirty"])
+    finally:
+        loop_cli.set_inference_client_provider(_real_client_provider())
+        loop_cli.set_evolve_provider(None)
+
+    assert code == 4, err
+    assert str(E.E_IO_GIT_DIRTY) in err
+    assert calls == [], "门禁必须先于任何推理调用"
+    assert not (tmp_path / "runs" / "u-dirty" / "generations" / "gen-000").exists(), \
+        "被拒的 run 不得先付 gen-000 基线"
+
+
+def test_cli_smoke_is_not_gated_by_worktree(tmp_path, monkeypatch):
+    """范围界定：门禁只保护「会落版本」的 run ⇒ ``loop smoke``（--no-evolve）不拦。
+
+    否则本地带未提交改动时连零成本诊断都做不了。语义已写进 MOD-06 PRD。
+    """
+    repo = _init_git_repo(tmp_path / "outer2")
+    harness = _harness_in(repo)
+    (repo / "工具产物.txt").write_text("x\n", encoding="utf-8") # 同样脏
+
+    code, out, err = _run(tmp_path, monkeypatch,
+                          ["loop", "smoke", "--no-reflect", "--harness-dir", str(harness),
+                           "--seeds", "train:1000-1002", "--k", "3", "--run-id", "u-dirty-smoke"])
+    assert code == 0, err
+    assert json.loads(out)["completed"] == 3
+
+
+def test_ensure_evolution_worktree_clean_helper(tmp_path):
+    """F47-A 助手：干净 → True；脏 → 抛；非 git → False（降级不阻断）。"""
+    import types
+
+    from dice_ratchet.loop.generation import ensure_evolution_worktree_clean
+
+    repo = _init_git_repo(tmp_path / "repo3")
+    harness = _harness_in(repo)
+    repo_ctx = types.SimpleNamespace(harness_dir=str(harness))
+    assert ensure_evolution_worktree_clean(repo_ctx) is True
+
+    (repo / "dirty.txt").write_text("x\n", encoding="utf-8")
+    with pytest.raises(InfraError) as exc:
+        ensure_evolution_worktree_clean(repo_ctx)
+    assert exc.value.code == E.E_IO_GIT_DIRTY
+
+    plain = tmp_path / "plain"
+    (plain / "harness").mkdir(parents=True)
+    assert ensure_evolution_worktree_clean(
+        types.SimpleNamespace(harness_dir=str(plain / "harness"))) is False
 
 
 # =====================================================================

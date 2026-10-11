@@ -9,7 +9,7 @@
 | MAL-2 文件写 | ``open("harness/seed_backup.json","w")`` | ``E_EVOLVE_SCAN_FAILED`` |
 | MAL-3 子进程 | ``subprocess.run(["git","push"])`` | ``E_EVOLVE_SCAN_FAILED`` |
 | MAL-4 env 内窥 | ``from dice_ratchet.env.rng import RNG`` | ``E_EVOLVE_PATCH_INVALID`` / SCAN |
-| MAL-5 预读作弊 | diff 写入 heldout seed 列表 / ``if seed == 2013:`` | ``E_EVOLVE_PATCH_INVALID`` |
+| MAL-5 预读作弊 | diff 写入 heldout seed 列表 / ``if seed == <H1 seed>:`` | ``E_EVOLVE_PATCH_INVALID`` |
 | MAL-6 历史重写 | ``prompt_patch`` 改 ``version.json`` / ``versions/`` | ``E_EVOLVE_PATCH_INVALID`` |
 | MAL-7 签名规避 | ``rank_actions = lambda *a: a[1]`` | ``E_EVOLVE_PATCH_INVALID`` |
 | MAL-8 预算耗尽 | 单代请求 40 个候选 | 按优先级截断至 3，``cost_cap`` 未破 |
@@ -25,7 +25,12 @@ import pytest
 from dice_ratchet.evolve import generation as GEN
 from dice_ratchet.evolve import proposer as P
 from dice_ratchet.evolve.paths import GenPaths
+from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol
 from dice_ratchet.infra.errors import E
+
+#: H1 篮子内的 heldout seed（F45-2 起 = 731013；从协议取，避免魔法数字漂移）
+_HELDOUT_SEED = (validate_protocol(coerce_protocol(None))
+                 .splits["heldout"].baskets["H1"].start + 13)
 
 from evolve_support import (FakeArm, FakeRunContext, FakeState, StubLLM, make_app_config,
                             make_candidate, make_config, proposal_payload, tool_diff,
@@ -151,9 +156,9 @@ def test_mal_env_introspection_is_blocked(tmp_path):
 # =====================================================================
 
 @pytest.mark.parametrize("code_line", [
-    "HELDOUT = [2013, 2014]",
-    "def pick(seed):\n    return 1 if seed == 2013 else 0",
-    "if decision_index == 2013:",
+    f"HELDOUT = [{_HELDOUT_SEED}, {_HELDOUT_SEED + 1}]",
+    f"def pick(seed):\n    return 1 if seed == {_HELDOUT_SEED} else 0",
+    f"if decision_index == {_HELDOUT_SEED}:",
 ])
 def test_mal_holdout_seed_literal_is_rejected(tmp_path, code_line):
     cand = make_candidate(kind="tool_patch",
@@ -168,7 +173,7 @@ def test_mal_holdout_seed_literal_blocked_end_to_end(tmp_path):
     harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
     ev = ExplodingEvaluator()
     payload = proposal_payload(kind="tool_patch",
-                               diff=tool_diff(added=["HELDOUT = [2013, 2014]"]),
+                               diff=tool_diff(added=[f"HELDOUT = [{_HELDOUT_SEED}, {_HELDOUT_SEED + 1}]"]),
                                touched=[TOOL])
     outcome = GEN.run_one_generation(
         state=state, run_ctx=run_ctx, config=app_cfg, evaluator=ev,

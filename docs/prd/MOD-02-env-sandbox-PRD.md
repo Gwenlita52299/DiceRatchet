@@ -1,6 +1,6 @@
 # MOD-02 env-sandbox 技术 PRD
 
-> 版本：v1.2.1（2026-10-03 追加 §18 实现落地记录）· 状态：草案（待复核）· 所属里程碑：M0（`SandboxEnv` + 投影 + 审计器 + 蜜罐自测全部交付）
+> 版本：v1.2.2（2026-10-11 **F45-2：删两张人工死名单、改成全字段扫描**；seed 端口空间换六位，见 §17 与 §18.1 item 7）· 历史版本：v1.2.1（2026-10-03 追加 §18 实现落地记录）· 状态：草案（待复核）· 所属里程碑：M0（`SandboxEnv` + 投影 + 审计器 + 蜜罐自测全部交付）
 > 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突以 Spec 为准）· 上游计划：[../../项目计划-DiceRatchet.md](../../项目计划-DiceRatchet.md) §3/§8
 > 作者：DiceRatchet 技术文档（MOD-02 负责模块）
 
@@ -401,10 +401,19 @@ G2 golden：`tests/golden/sandbox/{g5_obs_agent.txt,g5_render.txt,leak-report-cl
    `sandbox/audit.py` 已是模块，同名包目录会与模块解析冲突；`schemas/` 是 MOD-09
    登记的跨模块 schema 根（`infra.io.validate` 默认搜索路径）。
 7. **seed 规则集默认只扫 heldout/test**：依 `configs/seeds.yaml::exposure_guard.numeric_scan`
-   （「4 位数字落 2000-2099 / 9000-9099 即告警」）与 INV-5 的 `expose_to`；需要更严时
-   `run_audit(seed_splits=("train","heldout","test"))`。数值 token 要求两侧非字母数字，
-   且轨迹扫描跳过 `obs_digest/prompt_hash/ts/seed/token 计数` 等机器元数据——否则
-   sha256 片段、年份、token 数会刷出假阳性（假阳性同样是 P0 失效）。
+   （**F45-2 起**：「3–6 位数字落 **731000-731099 / 947000-947099** 即告警」；此前是
+   「4 位落 2000-2099 / 9000-9099」）与 INV-5 的 `expose_to`；需要更严时
+   `run_audit(seed_splits=("train","heldout","test"))`。数值 token 要求两侧非字母数字。
+   **扫描面（F45-2）**：原先有两张人工死名单（`LOG_NON_CONTENT_KEYS` /
+   `MEMORY_NON_CONTENT_KEYS`，扩过四次，用来跳过 `obs_digest`/`ts`/耗时/token 计数/哈希…），
+   现已**整删**：六位端口空间不再与耗时（`duration_us=2072.8`）、token 预算
+   （`max_tokens: 2048`）、ISO 年份（`2026`）、秒级浮点（`dur_s=3.9022`）撞车，
+   「数字串相等即泄漏」重新健全，于是**全字段**都在扫描面内、代码更简单。
+   唯一保留的豁免是 `LOG_STRUCTURAL_KEYS = {seed, episode_key, spec}`——框架自己的**播种计划**
+   （每条 `episode_end` 行都带本局 seed、`eval.start` 带 `spec.seeds`）：它们是 run 的测量
+   元数据而不是模型可见内容，不豁免则每个 run 都会因记录了自己的 seed 被判 critical。
+   豁免**只按这三个键**、不做通配；同一 seed 出现在任何其它字段仍会被抓
+   （`sandbox` 单测里有正反两例）。
 8. **import hook 双层**：`MetaPathFinder`（加载期，§4.10 的字面要求）+ `builtins.__import__`
    包装（缓存命中期）。因为 `SandboxEnv` 按 FR-02-10 预先 import 了环境层，agent 侧
    `import dice_ratchet.env.rng` 会命中 `sys.modules`、绕过 finder；只装 finder 会让
@@ -443,3 +452,5 @@ G2 golden：`tests/golden/sandbox/{g5_obs_agent.txt,g5_render.txt,leak-report-cl
 
 `run_audit`/`write_report` 不抛异常表达上面任何一条（只读文件、结论入报告）；`AuditResult.exit_code`
 与 `AuditResult.exit_reason` 是 CLI 的唯一出口。
+| v?-2026-10-10 | 2026-10-10 | **`audit leak` 按文件形状解析 + 遥测键豁免（F44/F45，对齐 Spec v2.4 B-53/B-54）**。① **F44**：`reflections/<episode_key>.json` 是 MOD-06 写的**多行 pretty JSON**（实测 51 行），而审计对 `*.jsonl` 与 `*.json` 都走 `_read_jsonl` ⇒ 第 2 行起 `Extra data` ⇒ `E_ENV_AUDIT_IO` ⇒ **退出码 2** ⇒ 任何含反思的 `loop run` 都无法让 `audit leak` clean。改为 `.jsonl` 逐行、`.json` 整文档（并下探 `entry` 取正文——反思正文才是泄漏面）。② **F45a**：同一形状问题在**扫描循环**里还有第二处：逐行 `json.loads` 必失败 ⇒ `row=None` ⇒ 既有的 `MEMORY_NON_CONTENT_KEYS` 豁免被**绕过** ⇒ `created_at` 的年份 `2026` 撞 heldout 区间刷 3 条 critical 假阳性；改为文档整份投影后只扫内容字段。③ **F45b**：`LOG_NON_CONTENT_KEYS` 补入 `llm.*` 纯遥测键（`max_tokens`/`temperature`/`top_p`/`cost_estimate`/`request_hash`/`response_hash`/`prompt_digest`）——触发点正是 Spec B-47 刚加的按调用方输出预算 `max_tokens: 2048`（合法配置值落进 2000–2099 即被判成 seed 泄漏）。该死名单此前已被扩过三次 |
+| v1.2.2 | 2026-10-11 | **F45-2：删两张人工死名单、改成全字段扫描（对齐 Spec v2.6 B-62）**。① **为什么现在能删**：两张名单（`LOG_NON_CONTENT_KEYS` / `MEMORY_NON_CONTENT_KEYS`）四次扩容（M1 F3 的 136 条、`episode_s`/`cpu_s`/`elapsed_s`、F35 的年份 `2026`、F45b 的 `max_tokens: 2048`）本质上都在绕同一件事：旧 heldout/test 的四位区间（2000–2099 / 9000–9099）与耗时、token 预算、ISO 年份共用一个数字空间。F45-2 把 heldout/test 移到六位端口（731000–731099 / 947000–947099）后，这些字面量**不再可能与 seed 相等**，名单因此变成纯粹的盲区。② **实测（删除的依据）**：去掉全部豁免重扫 → 旧区间在 1311 个归档工件 / 188.0 MB 上命中 **799,868** 次（`ts` 699,305 占 87%、`seed` 44,173、`prompt_tokens` 28…），新区间 **0** 命中。③ **保留的唯一豁免**：`LOG_STRUCTURAL_KEYS = {seed, episode_key, spec}`（框架播种计划）。④ **顺带更正错误论据**：名单注释里「64 位 hex 约 3.7% 概率撞 20XX」**实测为假**（20000 个随机 sha256 命中 0/20000；真实 run 的 `request_hash`/`response_hash`/`prompt_digest` 各 9200 样本命中 0，正则的前后环视已把 hex 内部数字段排除）——这三键正是按该错误论据进名单的。⑤ **副产品**：`evals/seeds.py::_NUM4_RE` 写死 4 位（`\d{4}`）⇒ 六位 seed 根本扫不到，`guard_prompt_context`/`scan_forbidden_tokens` 会静默失效；改为 3–7 位（同 SPEC B-62）。⑥ 门禁：`scripts/ci_gate.sh` 全绿（1925 passed）。 |

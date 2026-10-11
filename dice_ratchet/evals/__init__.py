@@ -27,14 +27,23 @@ from .harness import (ArmResult, EpisodeRunner, EvalResult, EvalSpec, SandboxRun
                       TraceWriter, append_generations_csv, check_report_determinism,
                       compare_all_metrics, compare_paired, episode_result_from_rows,
                       evaluate_arm, evaluate_generation, generation_report_path,
-                      kind_index, load_episode_results, read_episode_protocols,
-                      report_sha_path, run_eval, slot_key, utc_now,
+                      enforce_report_determinism, generations_row_from_report,
+                      generations_rows_from_report, kind_index, load_episode_results,
+                      read_episode_protocols, report_sha_path, reproducibility_of,
+                      run_eval, slot_key, utc_now,
                       write_ext_metrics, write_generation_report, write_plots_data)
 from .metrics import (EpisodeResult, GainVerdict, CollapseVerdict, PairedTest, SplitMetrics,
                       aggregate, action_entropy_curve, bootstrap_mean_ci, bootstrap_seed,
                       illegal_rate, judge_gain, mcnemar_exact_p, metric_value,
                       normalized_entropy, paired_bootstrap_gap, power_note,
                       render_report_sections, wilson_ci)
+from .acceptance import (AcceptanceReport, GenerationAcceptance,
+                        evaluate_acceptance, write_acceptance)
+from .rehearsal import (CheckResult, RehearsalReport,
+                       run_rehearsal_checks)
+from .tol_sensitivity import (AxisSensitivity, TolSensitivity,
+                             axis_sensitivity, denominators_from_run,
+                             tolerance_sensitivity)
 from .ablation import ARM_MECHANISM
 from . import seeds
 from .seeds import (SeedProtocol, assert_split_isolation, default_protocol,
@@ -61,7 +70,17 @@ __all__ = [
     "run_eval", "evaluate_arm", "compare_paired", "compare_all_metrics",
     "evaluate_generation", "load_episode_results", "read_episode_protocols",
     "episode_result_from_rows", "EPISODE_PROTOCOL", "kind_index", "slot_key",
-    "write_generation_report", "check_report_determinism", "append_generations_csv",
+    "write_generation_report", "check_report_determinism",
+    "enforce_report_determinism", "reproducibility_of", "append_generations_csv",
+    "generations_rows_from_report", "generations_row_from_report",
+    # 判据 1 判定器（F-M3-9）
+    "AcceptanceReport", "GenerationAcceptance", "evaluate_acceptance",
+    "write_acceptance",
+    # M3 彩排判据（D-M3-5）
+    "CheckResult", "RehearsalReport", "run_rehearsal_checks",
+    # C5 tol 的 MDE 换算（§3.3）
+    "AxisSensitivity", "TolSensitivity", "axis_sensitivity",
+    "denominators_from_run", "tolerance_sensitivity",
     "write_ext_metrics", "write_plots_data", "generation_report_path", "report_sha_path",
     # baselines
     "BASELINE_KINDS", "BaselineAgent", "RandomAgent", "HeuristicAgent", "baseline_arm",

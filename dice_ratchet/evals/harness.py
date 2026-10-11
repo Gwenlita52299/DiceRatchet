@@ -16,7 +16,12 @@
 - **逐局增量落盘**（F18）：``on_result`` 钩子让调用方每局落一次 ``episodes/<split>/``，
   长跑崩溃只丢当前局；
 - 结果**按 seed 升序**归一化聚合，``n_workers=1`` 与 ``n>1`` 必须逐字节一致（G3/T-15）；
-- 报告落盘 ``report.json`` + ``report.sha256``；同参数重跑 sha 不一致 → ``E_EVAL_NONDETERMINISTIC``。
+- 报告落盘 ``report.json`` + ``report.sha256``；**G3 按臂分层执行**（2026-10-11 D-M3-3 裁决 A）：
+  **本地臂**同参数重跑 sha 不一致 → ``E_EVAL_NONDETERMINISTIC``；**API 臂**（``api_supports_seed=false``，
+  实测字节相同的请求 9 次返回 9 个不同响应）端到端逐字节可复现**物理上不成立** → 跳过硬门并发
+  ``eval.nondeterministic``，不抛异常。生产执行点是 ``enforce_report_determinism``——调用方若不显式
+  调用它，G3 就只是一句文档（这正是 2026-10-11 之前的状态：``check_report_determinism``
+  从 M1 起没有任何生产调用点）。
 """
 
 from __future__ import annotations
@@ -24,15 +29,18 @@ from __future__ import annotations
 import concurrent.futures
 import csv
 import hashlib
+import io
 import json
+import re
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import (Any, Callable, Final, Iterable, Literal, Mapping, Protocol, Sequence,
                     runtime_checkable)
 
+from dice_ratchet.infra import plotting as plotting_mod
 from dice_ratchet.infra.errors import E, InfraError
 from dice_ratchet.infra.io import read_json, read_jsonl, sha256_file, write_json_atomic
 
@@ -51,19 +59,30 @@ __all__ = [
     "load_episode_results", "gather_results", "read_episode_protocols",
     "generation_report_path",
     "report_sha_path", "write_generation_report", "check_report_determinism",
-    "append_generations_csv", "write_ext_metrics", "write_plots_data",
+    "enforce_report_determinism", "reproducibility_of",
+    "append_generations_csv", "generations_rows_from_report",
+    "generations_row_from_report", "write_ext_metrics", "write_plots_data",
     "write_episode_summaries",
     "GENERATIONS_COLUMNS", "rng_for", "GainVerdictDiversity",
 ]
 
-#: ``metrics/generations.csv`` 的固定列（PRD §13；列定义归 MOD-08，B-06）
-GENERATIONS_COLUMNS: tuple[str, ...] = (
-    "generation", "harness_version", "parent_version", "split", "basket", "n", "win_rate",
-    "ci_lo", "ci_hi", "mean_stages_cleared", "mean_hearts_left", "mean_battles_won",
-    "mean_decisions", "illegal_rate", "fallback_rate", "truncation_rate",
-    "entropy_mean_norm", "entropy_slope", "jsd_kind", "collapse_flag", "win_rate_gap",
-    "verdict", "decision", "bootstrap_seed", "config_hash", "git_commit", "ts",
-)
+#: MOD-07 写进 ``generations/gen-NNN/report.json`` 的**真实判决**（§6.3 决策段）。
+#: 用于「重算报告 / 台账不得覆盖已裁决的代」（F43）：``eval report`` 重算出的
+#: ``decision`` 恒为 ``baseline``/``pending``，不能盖掉这几个。
+#: ``error_reject`` 是 F47-D 新增的**基础设施失败**判决（accept/rollback 抛
+#: ``InfraError``：git 提交失败、版本号冲突…）：它与「候选不达标」必须区分开，
+#: 否则一次脏工作区在报告里长得像一次合法拒绝。
+VERDICT_DECISIONS: Final[tuple[str, ...]] = ("accept", "reject", "rollback", "error_reject")
+
+#: ``metrics/generations.csv`` 的固定列（PRD §13；**口径**归 MOD-08，B-06）。
+#:
+#: **2026-10-11（F-M3-3 裁决 A）**：这份清单**不再是独立定义**，而是**直接取**
+#: ``infra.plotting.GENERATIONS_CSV_COLUMNS``——修复前两处各写一份，分叉出 4 个列名
+#: （``heldout_win_rate`` 等），而绘图侧 ``_g()`` 缺列时静默返回空 ⇒ **5 张空白 PNG**
+#: 被「文件存在」的判据当成 M3 交付物。权威定义落在 ``infra``（IO 层）是因为分层门禁
+#: 禁止 ``infra → evals``（NFR-09-5），而 ``evals → infra`` 合法。**口径仍归 MOD-08**：
+#: 改列要同时改这里的语义说明与 MOD-08 §13 / MOD-09 FR-09-13。
+GENERATIONS_COLUMNS: tuple[str, ...] = tuple(plotting_mod.GENERATIONS_CSV_COLUMNS)
 
 #: 单局硬看门狗的宽限（秒）。协同预算（``SandboxRunner`` 里的 deadline）已是第一道闸；
 #: 这里只兜住「worker 完全不消费 ``timeout_s``」的极端情形，宽限留给已进入的单次
@@ -300,7 +319,10 @@ def run_eval(spec: EvalSpec, *, runner: EpisodeRunner, writer: TraceWriter | Non
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
     pools.append(pool)
     futures: dict[concurrent.futures.Future[EpisodeResult], int] = {}
-    queued = [int(s) for s in spec.seeds]
+    # F42-A：``resume_results`` 的契约是「已完成的局**不重跑**」。这里必须**过滤队列**，
+    # 而不是只把它们并进聚合字典：只并入的话 worker 仍会把同一个 seed 跑一遍，最后被
+    # ``_store`` 覆盖 —— 钱已经花了，而且 `n_workers>1` 时还会与已完成的局交错。
+    queued = [int(s) for s in spec.seeds if int(s) not in results]
     abandoned_workers = 0
 
     def _pump() -> None:
@@ -383,7 +405,8 @@ def _error_code_of(exc: BaseException) -> str:
 # =====================================================================
 
 def episode_result_from_rows(rows: Sequence[Mapping[str, Any]], *, seed: int, split: Split,
-                             generation: int, harness_version: int,
+                             generation: int | None = None,
+                             harness_version: int = 0,
                              arm: str = "") -> EpisodeResult | None:
     """从 ``episodes/<split>/*.jsonl`` 的 ``episode_end`` 行还原一局（无则 ``None``）。
 
@@ -392,6 +415,11 @@ def episode_result_from_rows(rows: Sequence[Mapping[str, Any]], *, seed: int, sp
     ``EpisodeEnd`` 分支落盘（``additionalProperties:false``），只能把 MOD-08 复算多样性
     所需的 ``kind_counts/decision_kinds/slot_counts/seq_hash`` 放在 schema 预留的
     ``^x_`` 扩展位里。两条来源因此产出同一份 ``EpisodeResult``。
+
+    ``generation``（F46-A）：**行里的** ``generation`` 是权威值；``generation`` 形参只在
+    行里缺该字段时兜底（旧工件的调用方通常已从文件名解析出真值）。修复前这里恒用形参，
+    于是 ``eval report --generation 1`` 会把 g000 的局贴上 ``generation=1`` 的标签 ——
+    「跨代混算」正是靠这个覆盖行为逃过所有过滤的。
     """
     end: Mapping[str, Any] | None = None
     for row in rows:
@@ -405,11 +433,15 @@ def episode_result_from_rows(rows: Sequence[Mapping[str, Any]], *, seed: int, sp
             return end[name]
         return end.get(f"x_{name}", default)
 
+    resolved_generation = end.get("generation")
+    if resolved_generation is None:
+        resolved_generation = generation
     outcome = "win" if str(end.get("outcome")) == "win" else "lose"
     truncation = end.get("truncation_reason")
     kind_raw = list(_pick("kind_counts") or [])
     return EpisodeResult(
-        seed=int(end.get("seed", seed)), split=split, generation=int(generation),
+        seed=int(end.get("seed", seed)), split=split,
+        generation=int(resolved_generation or 0),
         harness_version=int(harness_version), outcome=outcome,
         truncation_reason=(str(truncation) if truncation else None),
         stages_cleared=int(end.get("stages_cleared") or 0),
@@ -427,6 +459,34 @@ def episode_result_from_rows(rows: Sequence[Mapping[str, Any]], *, seed: int, sp
         arm=arm, decisions_llm=int(_pick("decisions_llm") or 0))
 
 
+#: ``episodes/<split>/e-{seed:06d}-g{gen:03d}-{arm}.jsonl`` 的文件名（Spec §4.5 B-16）。
+#: F46-A：行里缺 ``generation`` 的旧工件退化为按文件名解析。
+_EPISODE_FILE_RE: Final[re.Pattern[str]] = re.compile(r"-g(\d{3,})-")
+
+
+def _generation_from_name(path: Path) -> int | None:
+    """从 ``e-002000-g001-parent.jsonl`` 解析 ``generation``（判不出 → ``None``）。"""
+    match = _EPISODE_FILE_RE.search(path.stem)
+    return int(match.group(1)) if match else None
+
+
+def _resolve_generation(rows: Sequence[Mapping[str, Any]], path: Path) -> int | None:
+    """一局文件所属的代数：**行里的 ``generation`` 优先**，缺失时解析文件名（F46-A）。
+
+    两者都判不出 → ``None``：调用方必须**跳过**（不得静默混入别的代）。
+    """
+    for row in rows:
+        if row.get("type") == "episode_end":
+            value = row.get("generation")
+            if value is not None:
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    break
+            break
+    return _generation_from_name(path)
+
+
 def load_episode_results(run_dir: Path | str, split: Split, *,
                          generation: int | None = None,
                          harness_version: int = 0,
@@ -439,6 +499,13 @@ def load_episode_results(run_dir: Path | str, split: Split, *,
     住着 ``parent`` / ``candidates`` / ``smoke`` / ``baseline-*`` 四类局，混臂聚合会得出
     一个没有任何物理含义的数字（M1 验收 F5：实测 ``heldout.n=120``、``win_rate=0.30``）。
     返回的 ``EpisodeResult.arm`` 取**行里的** ``arm`` 字段（缺省时回落到请求值）。
+
+    ``generation``（F46-A）同样是**真过滤**：给定 N 时只保留第 N 代的局（行里的
+    ``generation`` 优先，缺失时按文件名 ``-g{gen:03d}-`` 解析；两者都判不出 → 跳过并
+    发 ``evals.generation_unresolved`` 可观测事件）。**不再覆盖**
+    ``EpisodeResult.generation``——修复前 ``eval report --generation 1`` 会把
+    g000-parent(40) + g001-parent(40) + g001-cand(37) 聚成一个 ``n=117``
+    （``win_rate=0.6496``），而真实分布是 parent 40 + 候选 37 两套口径。
     """
     root = Path(run_dir) / "episodes" / split
     if not root.is_dir():
@@ -452,9 +519,15 @@ def load_episode_results(run_dir: Path | str, split: Split, *,
         label = ""
     excluded = {str(a) for a in exclude_arms}
     out: list[EpisodeResult] = []
+    unresolved: list[str] = []
     for path in sorted(root.glob("*.jsonl")):
         rows, _truncated = read_jsonl(path)
         if not rows:
+            continue
+        file_generation = _resolve_generation(rows, path)
+        if generation is not None and file_generation != int(generation):
+            if file_generation is None:
+                unresolved.append(path.name)
             continue
         row_arm = str(rows[0].get("arm") or "")
         if want_arms is not None and row_arm not in want_arms:
@@ -465,12 +538,13 @@ def load_episode_results(run_dir: Path | str, split: Split, *,
         if wanted is not None and seed not in wanted:
             continue
         result = episode_result_from_rows(
-            rows, seed=seed, split=split,
-            generation=int(generation if generation is not None
-                           else rows[0].get("generation") or 0),
+            rows, seed=seed, split=split, generation=file_generation,
             harness_version=int(harness_version), arm=row_arm or label)
         if result is not None:
             out.append(result)
+    if unresolved: # 不静默：判不出代数的旧工件被跳过（F46-A）
+        _emit("evals.generation_unresolved", split=split, generation=int(generation or 0),
+              n=len(unresolved), files=sorted(unresolved)[:10])
     return sorted(out, key=lambda r: r.seed)
 
 
@@ -486,6 +560,9 @@ def read_episode_protocols(run_dir: Path | str, split: Split, *,
     """已落盘各局的「测量协议」标识集合（``baseline --resume`` 的一致性检查用）。
 
     旧版（F22 修复前）的局没有 ``protocol`` 字段，会以 ``""`` 出现——正是要靠它拦住的混算。
+
+    ``generation`` 是**真过滤**（F46-A），口径与 ``load_episode_results`` 一致：行里的
+    ``generation`` 优先，缺失时解析文件名；判不出代数的文件在给定 ``generation`` 时被跳过。
     """
     root = Path(run_dir) / "episodes" / split
     if not root.is_dir():
@@ -497,7 +574,7 @@ def read_episode_protocols(run_dir: Path | str, split: Split, *,
             continue
         if arm and str(rows[0].get("arm") or "") != arm:
             continue
-        if generation is not None and int(rows[0].get("generation") or 0) != int(generation):
+        if generation is not None and _resolve_generation(rows, path) != int(generation):
             continue
         found.add(str(rows[0].get("protocol") or ""))
     return found
@@ -673,11 +750,29 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
                  generation: int = 0, harness_version: int = 0,
                  config: Any = None, model_hash: str = "",
                  n_workers: int = 1, n_rep: int = 1,
-                 episode_config: Any = None) -> ArmResult:
+                 episode_config: Any = None,
+                 resume_results: Sequence[EpisodeResult] = (),
+                 on_result: Callable[[EpisodeResult], None] | None = None,
+                 run_dir: Path | str | None = None,
+                 archive: bool = True) -> ArmResult:
     """单臂评估（Spec §4.7；FR-08-25）。
 
     ``runner`` 未注入时用 MOD-04/02 的默认执行器（MOD-06 会显式注入自己的 runner）。
+
+    F42-A/B（长跑检查点）：
+
+    - ``resume_results`` / ``on_result`` **薄转发**给 ``run_eval``（不复制任何执行逻辑）；
+    - **臂归档**：``run_id`` 在 ``runs_root``（或显式 ``run_dir``）下已存在时，每次评估落一份
+      ``metrics/arms/gen{gen:03d}-{split}-{basket}-{arm}.json``（``ArmResult.as_dict()`` +
+      provenance + 逐局明细），并**先**尝试复用：
+
+      * provenance（``ARM_PROVENANCE_KEYS``）**全等**且覆盖完整 seed 列表 → **整臂复用**
+        （一局都不跑），发 ``evals.arm_reused``；
+      * 只覆盖一部分 → 把已完成的作为 ``resume_results`` 传入，只跑缺的局；
+      * 任一 provenance 不一致 / 归档损坏 / run 目录不存在 → **不复用**，照常重算（fail-closed）。
+
     """
+
     proto = seeds_mod.validate_protocol(seeds_mod.coerce_protocol(protocol))
     seed_list = tuple(seeds_mod.resolve_basket(basket, generation=generation, protocol=proto))
     eval_cfg = getattr(config, "evals", config)
@@ -692,17 +787,166 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
         drop_rate_max=float(getattr(eval_cfg, "drop_rate_max", 0.10)),
         arm=arm, memory_version=memory_version,
         episode_config_hash=_config_digest(episode_config))
+    archive_dir = _arm_archive_dir(run_dir=run_dir, config=config, run_id=run_id) \
+        if archive else None
+    wanted = _arm_provenance_for(spec=spec, proto=proto, config=config, run_id=run_id)
+    cached = load_arm_archive(arm_archive_path(
+        archive_dir, generation=spec.generation, split=spec.split, basket=spec.basket_id,
+        arm=arm)) if archive_dir is not None else None
+    reused: list[EpisodeResult] = []
+    reusable = bool(cached) and provenance_matches(dict(cached.get("provenance") or {}), wanted)
+    if reusable and cached is not None:
+        reused, missing = reuse_from_archive(cached, seeds=spec.seeds, split=split,
+                                             generation=spec.generation,
+                                             harness_version=spec.harness_version, arm=arm)
+        if reused and not missing:
+            # 按**篮子顺序**还原（与 `run_eval` 的聚合顺序一致，保证复用不改测量结果）
+            by_seed = {int(r.seed): r for r in reused}
+            ordered = tuple(by_seed[int(s)] for s in spec.seeds if int(s) in by_seed)
+            metrics = aggregate(ordered, split=split, basket=spec.basket_id,
+                                t_max=spec.t_max, min_support=spec.min_support,
+                                drop_rate_max=spec.drop_rate_max)
+            _emit("evals.arm_reused", generation=spec.generation, split=split,
+                  basket=spec.basket_id, arm=arm, n=metrics.n,
+                  archive=str(arm_archive_path(archive_dir, generation=spec.generation,
+                                               split=split, basket=spec.basket_id, arm=arm)))
+            return ArmResult(arm=arm, split=split, basket=spec.basket_id,
+                             harness_version=int(harness_version),
+                             memory_version=int(memory_version or 0), run_id=run_id,
+                             results=ordered, metrics=metrics, model_hash=model_hash,
+                             dur_s=0.0, resumed_n=len(ordered),
+                             pending_seeds=(), archive_path=str(arm_archive_path(
+                                 archive_dir, generation=spec.generation, split=split,
+                                 basket=spec.basket_id, arm=arm)))
+    # 归档只覆盖一部分：已完成局并入 ``resume_results``（调用方显式给的也要保留），
+    # 引擎按 ``results`` **过滤队列** ⇒ 已完成的 seed 不会再跑一次。
+    already = {int(r.seed): r for r in resume_results}
+    already.update({int(r.seed): r for r in reused})
+    missing = tuple(s for s in spec.seeds if int(s) not in already)
+    # 局部完成的收益必须落到**臂归档**上：给每次新完成的局补一次归档写。
+    persist = on_result
+    if archive_dir is not None:
+        persist = _archive_on_result(on_result, run_root=archive_dir, spec=spec, proto=proto,
+                                     config=config, run_id=run_id, model_hash=model_hash,
+                                     already=already)
     executor = runner or _default_runner(harness_dir=harness_dir, arm=arm,
                                          memory_version=memory_version, config=config,
                                          model_hash=model_hash, run_id=run_id,
                                          episode_config=episode_config)
-    result = run_eval(spec, runner=executor, writer=None, protocol=proto)
-    return ArmResult(arm=arm, split=split, basket=spec.basket_id,
-                     harness_version=int(harness_version),
-                     memory_version=int(memory_version or 0), run_id=run_id,
-                     results=result.results, metrics=result.metrics,
-                     model_hash=model_hash, error_codes=result.error_codes,
-                     dur_s=result.dur_s)
+    result = run_eval(spec, runner=executor, writer=None, protocol=proto,
+                      resume_results=tuple(already.values()), on_result=persist)
+    completed = {int(r.seed) for r in result.results}
+    outcome = ArmResult(arm=arm, split=split, basket=spec.basket_id,
+                        harness_version=int(harness_version),
+                        memory_version=int(memory_version or 0), run_id=run_id,
+                        results=result.results, metrics=result.metrics,
+                        model_hash=model_hash, error_codes=result.error_codes,
+                        dur_s=result.dur_s, resumed_n=len(already),
+                        pending_seeds=tuple(s for s in spec.seeds
+                                            if int(s) not in completed))
+    if archive_dir is not None:
+        provenance = arm_provenance(
+            generation=spec.generation, split=split, basket=spec.basket_id, arm=arm,
+            harness_version=int(harness_version), memory_version=int(memory_version or 0),
+            n_seeds=len(spec.seeds), n_dropped=int(result.metrics.n_dropped),
+            config_hash=wanted.get("config_hash"), seeds_hash=_seed_hash(proto),
+            protocol_id=str(getattr(proto, "version", "") or ""),
+            episode_config_hash=spec.episode_config_hash)
+        path = write_arm_archive(archive_dir, generation=spec.generation, split=split,
+                                 basket=spec.basket_id, arm=arm, result=outcome,
+                                 provenance=provenance)
+        outcome = replace(outcome, archive_path=str(path))
+    return outcome
+
+
+def _arm_archive_dir(*, run_dir: Path | str | None, config: Any, run_id: str) -> Path | None:
+    """臂归档根目录；run 目录不存在 → ``None``（不归档，也不读归档）。
+
+    ``run_dir`` 显式给出时以它为准；否则按 ``config.infra.runs_root / run_id`` 推导。
+    生产路径下 run 目录总是存在（``init_run_dir`` 先建）；单测里的哑 ``run_id`` 因此
+    天然不产归档文件。
+    """
+    if not run_id:
+        return None
+    if run_dir is not None:
+        root = Path(run_dir)
+    else:
+        runs_root = getattr(getattr(config, "infra", None), "runs_root", None) or "runs"
+        root = Path(runs_root) / str(run_id)
+    return root if root.is_dir() else None
+
+
+def _arm_provenance_for(*, spec: EvalSpec, proto: Any, config: Any, run_id: str
+                        ) -> dict[str, Any]:
+    """本次评估的 provenance（**不含** ``created_at``，用于与归档逐字段对拍）。"""
+    from dice_ratchet.infra.config import config_hash
+
+    return {"generation": spec.generation, "split": spec.split, "basket": spec.basket_id,
+            "arm": spec.arm, "harness_version": spec.harness_version,
+            "memory_version": int(spec.memory_version or 0),
+            "config_hash": (config_hash(config) if config is not None else None),
+            "seeds_hash": str(getattr(proto, "seeds_hash", "") or ""),
+            "episode_config_hash": spec.episode_config_hash}
+
+
+def _archive_on_result(on_result: Callable[[EpisodeResult], None] | None, *,
+                       run_root: Path, spec: EvalSpec, proto: Any, config: Any,
+                       run_id: str, model_hash: str,
+                       already: Mapping[int, EpisodeResult],
+                       ) -> Callable[[EpisodeResult], None]:
+    """把「每完成一局」接到**臂归档**上（F42-A）。
+
+    局部完成时，光把 ``resume_results`` 传下去只能省当事进程的重复劳动；进程再挂一次，
+    那些已完成的局就丢了。因此每局完成时用「已完成 + 本局」重写一次归档（原子写）。
+    """
+    def _persist(result: EpisodeResult) -> None:
+        if on_result is not None:
+            on_result(result)
+        done = dict(already)
+        done[int(result.seed)] = result
+        ordered = tuple(done[s] for s in sorted(done))
+        metrics = aggregate(ordered, split=spec.split, basket=spec.basket_id,
+                            t_max=spec.t_max, min_support=spec.min_support,
+                            drop_rate_max=spec.drop_rate_max)
+        partial = ArmResult(arm=spec.arm, split=spec.split, basket=spec.basket_id,
+                            harness_version=spec.harness_version,
+                            memory_version=int(spec.memory_version or 0), run_id=run_id,
+                            results=ordered, metrics=metrics, model_hash=model_hash,
+                            resumed_n=len(already))
+        provenance = arm_provenance(
+            generation=spec.generation, split=spec.split, basket=spec.basket_id,
+            arm=spec.arm, harness_version=spec.harness_version,
+            memory_version=int(spec.memory_version or 0), n_seeds=len(spec.seeds),
+            n_dropped=int(metrics.n_dropped), config_hash=_safe_config_hash(config),
+            seeds_hash=_seed_hash(proto),
+            protocol_id=str(getattr(proto, "version", "") or ""),
+            episode_config_hash=spec.episode_config_hash)
+        write_arm_archive(run_root, generation=spec.generation, split=spec.split,
+                          basket=spec.basket_id, arm=spec.arm, result=partial,
+                          provenance=provenance)
+
+    return _persist
+
+
+def _seed_hash(proto: Any) -> str:
+    """种子协议的 ``seeds_hash``（缺失/``None`` → ``""``）。
+
+    注意 ``getattr(proto, "seeds_hash", "") or ""`` 对 ``None`` **无效**（``str(None)`` → ``"None"``），
+    这正是 F42-A 复用闸第一次写完就永远对不上的原因（归档写 ``"None"``、对拍算 ``""``）。
+    """
+    value = getattr(proto, "seeds_hash", None)
+    return "" if value is None else str(value)
+
+
+def _safe_config_hash(config: Any) -> str | None:
+    if config is None:
+        return None
+    try:
+        from dice_ratchet.infra.config import config_hash
+
+        return config_hash(config)
+    except Exception: # noqa: BLE001 - 归档是可观测性产物，不得阻塞测量
+        return None
 
 
 def _config_digest(obj: Any) -> str | None:
@@ -717,6 +961,144 @@ def _config_digest(obj: Any) -> str | None:
         payload = {"repr": repr(obj)}
     text = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+# =====================================================================
+# 臂归档与复用（F42-A/B：每代评估的检查点）
+# =====================================================================
+#
+# 现场：MOD-07 的 resume 单元只有**整代**（`loop/generation.py::_cycle_artifacts_exist` 看
+# `generations/gen-NNN/{report,decision}.json`），不在就把 phase 重置为 playing **重跑整代**。
+# 一代 84 局评估 ≈ 3.75 h / ≈¥47（实测 `m2-s32b-smoke-c1-medium6` 的 gen-1），中断即再付一次。
+# 引擎早就有长跑能力（`run_eval` 的 `resume_results` / `on_result`，F18/F19/F20），缺的是
+# 「中间那层」：`evaluate_arm` 不转发它们。本段补上「按臂落盘 + fail-closed 复用」。
+
+#: provenance 里必须**逐字段相等**才允许复用的键（fail-closed：任一不同就重算）。
+ARM_PROVENANCE_KEYS: Final[tuple[str, ...]] = (
+    "generation", "split", "basket", "arm", "harness_version", "memory_version",
+    "config_hash", "seeds_hash", "episode_config_hash",
+)
+
+#: 臂归档里逐局需要还原的字段（``win`` / ``degraded_flag`` 是 property，见 ``EpisodeResult``）。
+#: 含 ``arm``：它是逐局事实，归档必须**原样还原**（否则复用会把 ``arm`` 换成请求值，
+#: 让「复用」悄悄改变了测量结果 —— 测试替身返回的 arm 与请求值不同时就会暴露）。
+_EPISODE_FIELDS: Final[tuple[str, ...]] = (
+    "seed", "outcome", "truncation_reason", "stages_cleared", "hearts_left", "battles_won",
+    "decisions", "decisions_llm", "steps", "illegal_attempts", "fallback_decisions",
+    "kind_counts", "slot_counts", "seq_hash", "dropped", "degraded", "decision_kinds",
+    "error_code", "arm",
+)
+
+
+def arms_dir(run_root: Path | str) -> Path:
+    """``runs/<run_id>/metrics/arms/``（F42-A 的臂归档目录）。"""
+    return Path(run_root) / "metrics" / "arms"
+
+
+def arm_archive_path(run_root: Path | str, *, generation: int, split: str, basket: str,
+                     arm: str) -> Path:
+    """``metrics/arms/gen{gen:03d}-{split}-{basket}-{arm}.json``（PRD §13）。"""
+    safe = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in str(arm)) or "arm"
+    return arms_dir(run_root) / f"gen{int(generation):03d}-{split}-{basket}-{safe}.json"
+
+
+def _episode_to_dict(result: EpisodeResult) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for name in _EPISODE_FIELDS:
+        value = getattr(result, name, None)
+        out[name] = list(value) if isinstance(value, tuple) else value
+    return out
+
+
+def _episode_from_dict(data: Mapping[str, Any], *, split: Split, generation: int,
+                       harness_version: int, arm: str) -> EpisodeResult:
+    return EpisodeResult(
+        split=split, generation=int(generation), harness_version=int(harness_version),
+        arm=str(data.get("arm") or arm), seed=int(data.get("seed") or 0),
+        outcome=str(data.get("outcome") or "lose"),
+        truncation_reason=(str(data["truncation_reason"])
+                           if data.get("truncation_reason") else None),
+        stages_cleared=int(data.get("stages_cleared") or 0),
+        hearts_left=int(data.get("hearts_left") or 0),
+        battles_won=int(data.get("battles_won") or 0),
+        decisions=int(data.get("decisions") or 0),
+        decisions_llm=int(data.get("decisions_llm") or 0),
+        steps=int(data.get("steps") or 0),
+        illegal_attempts=int(data.get("illegal_attempts") or 0),
+        fallback_decisions=int(data.get("fallback_decisions") or 0),
+        kind_counts=tuple(int(x) for x in (data.get("kind_counts") or ()))[:16],
+        slot_counts=dict(data.get("slot_counts") or {}),
+        seq_hash=str(data.get("seq_hash") or ""),
+        dropped=bool(data.get("dropped", False)),
+        degraded=bool(data.get("degraded", False)),
+        decision_kinds=tuple(int(x) for x in (data.get("decision_kinds") or ())),
+        error_code=(str(data["error_code"]) if data.get("error_code") else None))
+
+
+def arm_provenance(*, generation: int, split: str, basket: str, arm: str,
+                   harness_version: int, memory_version: int, n_seeds: int,
+                   n_dropped: int = 0, config_hash: str | None = None,
+                   seeds_hash: str = "", protocol_id: str = "",
+                   episode_config_hash: str | None = None) -> dict[str, Any]:
+    """臂归档的 provenance（F42-A；``evaluate_arm`` 与调用方共用同一构造）。"""
+    return {"generation": int(generation), "split": str(split), "basket": str(basket),
+            "arm": str(arm), "harness_version": int(harness_version),
+            "memory_version": int(memory_version), "n_seeds": int(n_seeds),
+            "n_dropped": int(n_dropped), "config_hash": config_hash,
+            "seeds_hash": str(seeds_hash), "protocol_id": str(protocol_id),
+            "episode_config_hash": episode_config_hash, "created_at": utc_now()}
+
+
+def provenance_matches(archived: Mapping[str, Any], wanted: Mapping[str, Any]) -> bool:
+    """provenance **逐字段**相等（``ARM_PROVENANCE_KEYS``）；任一不同即不复用（fail-closed）。"""
+    return all(archived.get(key) == wanted.get(key) for key in ARM_PROVENANCE_KEYS)
+
+
+def load_arm_archive(path: Path | str) -> dict[str, Any] | None:
+    """读回臂归档（缺失/损坏 → ``None``，按「不复用」处理）。"""
+    path = Path(path)
+    if not path.is_file():
+        return None
+    try:
+        data = read_json(path)
+    except InfraError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def write_arm_archive(run_root: Path | str, *, generation: int, split: str, basket: str,
+                      arm: str, result: ArmResult,
+                      provenance: Mapping[str, Any]) -> Path:
+    """落一份臂归档：``ArmResult.as_dict()`` + provenance + 逐局明细（F42-A）。"""
+    path = arm_archive_path(run_root, generation=generation, split=split, basket=basket,
+                            arm=arm)
+    payload = dict(result.as_dict())
+    payload["provenance"] = dict(provenance)
+    payload["episodes"] = [_episode_to_dict(r) for r in result.results]
+    write_json_atomic(path, _round_floats(payload))
+    return path
+
+
+def reuse_from_archive(archive: Mapping[str, Any], *, seeds: Sequence[int], split: Split,
+                       generation: int, harness_version: int, arm: str
+                       ) -> tuple[list[EpisodeResult], tuple[int, ...]]:
+    """从归档里挑出**仍然有效**的已完成局，返回 ``(results, missing_seeds)``。
+
+    只接受 seed 在当前篮子内的逐局记录（形状异常/重复/超范围 → 丢弃）。
+    """
+    episodes = archive.get("episodes") or []
+    wanted = {int(s) for s in seeds}
+    out: dict[int, EpisodeResult] = {}
+    for item in episodes:
+        if not isinstance(item, Mapping):
+            continue
+        seed = int(item.get("seed") or 0)
+        if seed not in wanted or seed in out:
+            continue
+        out[seed] = _episode_from_dict(item, split=split, generation=generation,
+                                       harness_version=harness_version, arm=arm)
+    missing = tuple(sorted(wanted - set(out)))
+    return [out[s] for s in sorted(out)], missing
 
 
 @dataclass(frozen=True)
@@ -764,18 +1146,46 @@ def _diversity_for_generation(run_id: str, generation: int, *, parent: ArmResult
         win_rates.append(parent.metrics.win_rate)
     base = getattr(getattr(config, "evals", config), "entropy", None)
     base_value = float(getattr(base, "base", 2.0) or 2.0)
-    distributions: list[Mapping[str, float]] = []
-    if parent is not None:
-        distributions.append(kind_distribution(parent.results))
+    # 落盘的 kind 分布（供下一代算 `jsd_kind`，也供 `eval report` 的重算路径读回）
+    current_dist: dict[str, float] = {}
     if winner is not None:
-        distributions.append(kind_distribution(winner.results))
-    if len(distributions) >= 2:
-        jsds = [None] + [js_divergence(distributions[0], distributions[1], base=base_value)]
+        current_dist = kind_distribution(winner.results)
+    elif parent is not None:
+        current_dist = kind_distribution(parent.results)
+    if current_dist:
+        write_kind_distribution(root, int(generation), current_dist)
+
+    # **`jsd_kind` 与 `win_rates` 必须对齐到同一个 pair**（2026-10-11 修 pair 错位）。
+    # 修复前是 `jsds = [None] + [jsd(parent, winner)]` 配
+    # `win_rates = [..., parent.win_rate, winner.win_rate]` ⇒ `c3` 在 `i=1` 上拿
+    # 「父→子的分布漂移」配「子相对父的胜率变化」，**不是同一对**。
+    # 现在两条路径都用 `aligned_jsd_kinds`：`jsds[i]` 恒为 `jsd(g_{i-1}, g_i)`，
+    # 且 `win_rates[i]` 恒为第 i 代的胜率。
+    gens = _generations_of_curves(root, curves)
+    jsds = aligned_jsd_kinds(root, gens, base=base_value) if gens else [None] * len(curves)
+    if len(jsds) != len(curves):   # 兜底：曲线来源与分布来源不一致时不要错位
+        jsds = [None] * len(curves)
     seq_ratios: list[float] = []
     if winner is not None:
         seq_ratios.append(distinct_sequence_ratio(winner.results))
     return collapse_check(curves=curves, jsd_kind=jsds, win_rates=win_rates, cfg=cfg,
                           seq_ratios=seq_ratios or None, generation=generation)
+
+
+def _generations_of_curves(root: Path, curves: Sequence[Sequence[Any]]) -> list[int]:
+    """``curves`` 是按代升序的熵曲线；这里回推对应的代数。
+
+    来源按优先级：`metrics/kind_distribution/` 里已落盘的代号（权威、单调），
+    兜底为「从 0 开始的连续代」（`_diversity_for_generation` 在缺 plots_data 时正是
+    这样补齐的）。**长度必须与 `curves` 一致**——不一致时调用方会把 `jsd_kind`
+    整体置 `None`（宁可不算，也不要错位）。
+    """
+    recorded = sorted(int(p.stem.split("-")[-1])
+                      for p in (Path(root) / "metrics" / "kind_distribution").glob("gen-*.json")
+                      if p.stem.split("-")[-1].isdigit())
+    if len(recorded) == len(curves):
+        return recorded
+    return list(range(len(curves)))
 
 
 def evaluate_generation(generation: int, parent: ArmResult, winner: ArmResult | None, *,
@@ -832,6 +1242,99 @@ def heldout_harness_version(parent: ArmResult, winner: ArmResult | None) -> int:
 # 报告落盘（FR-08-17 / FR-08-22 / FR-08-23/24）
 # =====================================================================
 
+def _generations_row(*, generation: int, harness_version: Any, parent_version: Any,
+                     split: str, metrics: Mapping[str, Any], diversity: Mapping[str, Any],
+                     gain: Mapping[str, Any], decision: Any, config_hash_value: Any,
+                     git_commit: Any, ts: str) -> dict[str, Any]:
+    """一行台账（``split`` 维度在**调用方**决定，本函数只做字段映射）。"""
+    ci = list(metrics.get("win_rate_ci95") or (0.0, 0.0))
+    return {
+        "generation": int(generation or 0),
+        "harness_version": harness_version,
+        "parent_version": parent_version,
+        "split": str(split),
+        "basket": metrics.get("basket"),
+        "n": metrics.get("n"),
+        "win_rate": metrics.get("win_rate"),
+        "ci_lo": ci[0],
+        "ci_hi": ci[1],
+        "mean_stages_cleared": metrics.get("mean_stages_cleared"),
+        "mean_hearts_left": metrics.get("mean_hearts_left"),
+        "mean_battles_won": metrics.get("mean_battles_won"),
+        "mean_decisions": metrics.get("mean_decisions"),
+        "illegal_rate": metrics.get("illegal_rate"),
+        "fallback_rate": metrics.get("fallback_rate"),
+        "truncation_rate": metrics.get("truncation_rate"),
+        "entropy_mean_norm": metrics.get("entropy_mean_norm"),
+        # entropy_slope / collapse_flag 是**代级**属性，只挂 heldout 行（避免 train 行与
+        # heldout 行给出两个互相矛盾的坍缩判定）。
+        "entropy_slope": diversity.get("entropy_slope") if split == "heldout" else None,
+        "jsd_kind": diversity.get("jsd_kind") if split == "heldout" else None,
+        "collapse_flag": diversity.get("collapse_flag") if split == "heldout" else None,
+        # win_rate_gap 是 heldout−train 的**一个**数，只挂 heldout 行。
+        "win_rate_gap": gain.get("win_rate_gap") if split == "heldout" else None,
+        "verdict": gain.get("verdict") if split == "heldout" else None,
+        "decision": decision if split == "heldout" else None,
+        "bootstrap_seed": None,
+        "config_hash": config_hash_value,
+        "git_commit": git_commit,
+        "ts": ts,
+    }
+
+
+def generations_rows_from_report(report: Mapping[str, Any], *, cfg: Any = None,
+                                 now: Any = None) -> list[dict[str, Any]]:
+    """从**报告字典**构造台账行：``heldout`` 一行 + ``train`` 一行（F-M3-3，2026-10-11）。
+
+    返回**列表**（按 ``heldout`` → ``train`` 排序）。**为什么必须有两行**：
+    ``train_heldout_gap.png`` 与 ``win_rate.png`` 的 train 对照曲线都要 train 一侧的数，
+    而 ``generations.csv`` 原先**只有 heldout 行**（实测 8 个归档 run 的 train 行数全为 0）
+    ⇒ `gain_realism.win_rate_gap`（M3 判据 3 的量）在台账里**没有可核验的来源**，
+    绘图只能画出空白。
+
+    F43 的语义不变：本函数由**写报告的一方**（MOD-07 ``_finish_report``）调用，
+    列集与 ``evals/cli.py`` 共用 ``GENERATIONS_COLUMNS``。
+    """
+    from datetime import datetime, timezone
+
+    from dice_ratchet.infra.config import config_hash
+    from dice_ratchet.infra.run import git_short_sha
+
+    heldout = dict(report.get("heldout") or {})
+    train = dict(report.get("train") or {})
+    diversity = dict(report.get("diversity") or {})
+    gain = dict(report.get("gain_realism") or {})
+    moment = now or datetime.now(tz=timezone.utc)
+    ts = moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    common = {
+        "generation": int(report.get("generation") or 0),
+        "harness_version": report.get("harness_version"),
+        "parent_version": report.get("parent_version"),
+        "diversity": diversity, "gain": gain,
+        "decision": report.get("decision"),
+        "config_hash_value": config_hash(cfg) if cfg is not None else None,
+        "git_commit": git_short_sha(), "ts": ts,
+    }
+    rows = [_generations_row(split="heldout", metrics=heldout, **common)]
+    # 只在**真的有训练局**时写 train 行。判据是 ``n > 0`` 而**不是**「train 段非空」：
+    # 引擎在无训练局时写的是 ``{"n": 0, "win_rate": 0.0, "low_confidence": true}``
+    # ——非空 dict（实测 gen-000 基线：``train.n == 0``），写成行会被绘图与统计
+    # 当成一个真实的「win_rate=0」数据点，在图上是**零点的假信号**。
+    if int(train.get("n") or 0) > 0:
+        rows.append(_generations_row(split="train", metrics=train, **common))
+    return rows
+
+
+def generations_row_from_report(report: Mapping[str, Any], *, cfg: Any = None,
+                                now: Any = None) -> dict[str, Any]:
+    """**heldout** 那一行（旧签名，保留给单测/调用方逐个字段核对的场景）。
+
+    新代码请用 ``generations_rows_from_report``：台账现在按 ``(generation, split)`` 双键
+    upsert，只写 heldout 行会让 train 一侧永远缺席（F-M3-3）。
+    """
+    return generations_rows_from_report(report, cfg=cfg, now=now)[0]
+
+
 def generation_report_path(run_dir: Path | str, generation: int) -> Path:
     return Path(run_dir) / "generations" / f"gen-{int(generation):03d}" / "report.json"
 
@@ -883,6 +1386,90 @@ def check_report_determinism(run_dir: Path | str, generation: int,
     return digest
 
 
+#: G3 的执行口径（2026-10-11 D-M3-3 裁决 A，Spec v2.9 / B-65）。
+#:
+#: 现场：``check_report_determinism`` 从 M1 起就**没有任何生产调用点**（只有单测调用），
+#:   所以「同参数重跑 `report.sha256` 必须一致，否则抛 `E_EVAL_NONDETERMINISTIC`」
+#:   这条承诺**在真实 run 里从未被执行过**——它只是一句文档。
+#:
+#: 更关键的是：对 **API 臂**（当前主力臂 `C1` = `deepseek-flash`，注册表标注
+#:   ``api_supports_seed=false``，实测「字节相同的请求 9 次返回 9 个不同响应」）
+#:   *端到端*逐字节可复现**在物理上不成立**。若把它当硬门接进生产，第一个 API run 就会
+#:   假报 `E_EVAL_NONDETERMINISTIC`。
+#:
+#: 裁决 A：把可复现性承诺**精确化到能兑现的层级**——
+#:   · **可复现层**（代码 / 配置 / seed / 聚合口径 / 并发归一化）⇒ **仍然硬执行**；
+#:   · **LLM 层** ⇒ 不承诺逐字节；采样照记、响应按 request hash 归档、变化即标
+#:     `llm.nondeterministic`（MOD-03 既有口径）；
+#:   · 臂内含任何 ``provider=api`` 的角色 ⇒ G3 记 ``api_nondeterministic`` 并发
+#:     ``eval.nondeterministic`` 事件，**不抛异常**。
+#:
+#: 诚实边界：这**降低了「可复现」的强度**，必须在报告里显式声明；不得据此宣称
+#:   「API 臂的 M3 结果可逐字节复现」。
+_DETERMINISM_ENFORCED: Final[str] = "enforced"
+_DETERMINISM_API_NONDETERMINISTIC: Final[str] = "api_nondeterministic"
+
+
+def reproducibility_of(app_cfg: Any, *,
+                       bindings: Mapping[str, Any] | None = None) -> tuple[bool, str]:
+    """该配置的评估结果能否承诺**端到端逐字节可复现**。
+
+    返回 ``(reproducible, reason)``。``reason`` 是给审计看的短标签
+    （``no_api_roles`` / ``api_role:<role>=<model_id>`` / ``registry_unavailable``）。
+
+    **fail-closed 方向**：配置不可解析时判 ``False``（不承诺可复现）——因为「误判为可复现」
+    会让 API run 假报 `E_EVAL_NONDETERMINISTIC`，而「误判为不可复现」只是少执行一次检查。
+    """
+    if bindings is None:
+        try:
+            from dice_ratchet.inference.roles import resolve_role_bindings
+
+            bindings = resolve_role_bindings(app_cfg)
+        except Exception as exc:  # noqa: BLE001 - 任何解析失败都不得让报告落盘失败
+            return False, f"registry_unavailable:{type(exc).__name__}"
+    for role in sorted(bindings):
+        spec = bindings[role]
+        provider = getattr(spec, "provider", None)
+        if provider is None and isinstance(spec, Mapping):  # pragma: no cover - 兼容映射形态
+            provider = spec.get("provider")
+        if str(provider) == "api":
+            model_id = getattr(spec, "model_id", None)
+            if model_id is None and isinstance(spec, Mapping):  # pragma: no cover
+                model_id = spec.get("model_id")
+            return False, f"api_role:{role}={model_id}"
+    return True, "no_api_roles"
+
+
+def enforce_report_determinism(run_dir: Path | str, generation: int,
+                               report: Mapping[str, Any], *, app_cfg: Any,
+                               bindings: Mapping[str, Any] | None = None) -> str:
+    """**生产路径**的 G3 执行（D-M3-3 裁决 A）。
+
+    与 ``check_report_determinism`` 的区别只有一条：先问「这一跑的臂能不能承诺端到端
+    逐字节可复现」。能 ⇒ 硬执行（行为与旧函数完全一致，含抛 ``E_EVAL_NONDETERMINISTIC``）；
+    不能 ⇒ 跳过硬门、发 ``eval.nondeterministic`` 事件，并把口径写回 ``report.sha256``
+    旁边（调用方负责把 ``determinism`` 记进 ext / 事件）。
+
+    返回 sha256（与 ``write_generation_report`` 的返回值同形，便于串联）。
+    """
+    reproducible, reason = reproducibility_of(app_cfg, bindings=bindings)
+    if reproducible:
+        return check_report_determinism(run_dir, generation, report)
+    try:  # 事件失败绝不阻断报告落盘（与 `_emit` 的既有纪律一致）
+        from dice_ratchet.infra.events import emit
+
+        emit("eval.nondeterministic", generation=int(generation),
+             determinism=_DETERMINISM_API_NONDETERMINISTIC, reason=str(reason),
+             repro_scope="code/config/seed only (LLM layer archived by request hash)")
+    except Exception:  # noqa: BLE001 - pragma: no cover
+        pass
+    # 返回**本次**报告的 sha（不比对既有值：API 臂上比对必然不等，
+    # 而「不等」在这里是**预期行为**，不是缺陷）。
+    payload = json.dumps(_round_floats(dict(report)), ensure_ascii=False, indent=2,
+                         sort_keys=True, default=str)
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _round_floats(obj: Any) -> Any:
     if isinstance(obj, float):
         return round(obj, 4)
@@ -893,17 +1480,80 @@ def _round_floats(obj: Any) -> Any:
     return obj
 
 
+def _csv_split_key(row: Mapping[str, Any]) -> str:
+    """台账行的 split 键；**空值一律归一为 ``heldout``**。
+
+    历史台账（F-M3-3 之前）没有 ``train`` 行，且早期归档里有 ``split`` 列缺失/为空的行
+    （实测 `runs/g6-eval-smoke` 同代同值 5 行 = 单键 upsert 在空 split 上反复追加）。
+    归一化后这些旧行会被**正确替换**，而不是继续堆积。
+    """
+    return str(row.get("split") or "").strip() or "heldout"
+
+
 def append_generations_csv(run_dir: Path | str, row: Mapping[str, Any]) -> Path:
-    """每代追加一行 ``metrics/generations.csv``（FR-08-22；列固定见 §13）。"""
+    """写一行台账到 ``metrics/generations.csv``（FR-08-22；列固定见 §13）。
+
+    **按 ``(generation, split)`` 双键 upsert**（F-M3-3，2026-10-11）。修复前是
+    ``generation`` **单键**——那时台账只有 heldout 行，单键恰好够用；一旦按 F-M3-3 补上
+    ``train`` 行，同一代的 train/heldout 会**互相覆盖**，台账里永远只剩最后写的那一个
+    split（实测：单键实现下先写 heldout 再写 train，heldout 行被吃掉）。
+    无脑追加同样不行：有**两个**写入方（MOD-07 ``_finish_report`` 代末写、``eval report``
+    也写），会给同一代留下两行互相矛盾的数字（F43 已处置）。
+
+    **已裁决的 ``decision``/``verdict`` 不被覆盖**：MOD-07 写下的判决是判据①的唯一记录，
+    而 ``eval report`` 的重算报告 ``decision`` 恒为 ``baseline``/``pending``。若重算在后，
+    只更新指标列、保留判决列（与 ``evals/cli.py::_write_report_preserving_verdict`` 同口径）。
+    该保留只作用于 heldout 行——train 行的 ``decision``/``verdict`` 本就是空。
+    """
     path = Path(run_dir) / "metrics" / "generations.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
-    new = not path.is_file()
-    with path.open("a", encoding="utf-8", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(GENERATIONS_COLUMNS),
-                                extrasaction="ignore")
-        if new:
-            writer.writeheader()
-        writer.writerow({k: _round_floats(row.get(k)) for k in GENERATIONS_COLUMNS})
+    incoming = {k: _round_floats(row.get(k)) for k in GENERATIONS_COLUMNS}
+    key = (str(incoming.get("generation")), _csv_split_key(incoming))
+
+    existing: list[dict[str, Any]] = []
+    if path.is_file():
+        try:
+            with path.open(encoding="utf-8", newline="") as handle:
+                existing = [dict(r) for r in csv.DictReader(handle)]
+        except (OSError, csv.Error): # pragma: no cover - 坏账本按空重建
+            existing = []
+
+    # **读入时按 (generation, split) 折叠历史重复行**（F-M3-3 的第二处缺陷）。
+    # 实测：`runs/g6-eval-smoke/metrics/generations.csv` 同一代同值有 **5 行**——
+    # 产生原因是 F45-2 之前的行**没有 `split` 列**，而当时的 upsert 比较 `prev.get("split")`
+    # 得到的 `None` 与任何值都不等 ⇒ 每次都走 `existing.append`。后果不只是文件脏：
+    # 任何按行读取的下游（绘图、汇总、判据判定）都会把同一代数 5 遍。
+    # 这里**顺手修好**：后写覆盖先写（保留末条），即「重复的最后一次写入」才代表真实值。
+    collapsed: dict[tuple[str, str], dict[str, Any]] = {}
+    for prev in existing:
+        collapsed[(str(prev.get("generation")), _csv_split_key(prev))] = prev
+    existing = list(collapsed.values())
+
+    replaced = False
+    for index, prev in enumerate(existing):
+        if (str(prev.get("generation")), _csv_split_key(prev)) != key:
+            continue
+        if _csv_split_key(incoming) == "heldout" and \
+                str(prev.get("decision") or "") in VERDICT_DECISIONS:
+            incoming["decision"] = prev.get("decision")
+            if prev.get("verdict") not in (None, ""):
+                incoming["verdict"] = prev.get("verdict")
+        existing[index] = incoming
+        replaced = True
+        break
+    if not replaced:
+        existing.append(incoming)
+    existing.sort(key=lambda r: (int(r.get("generation") or 0), _csv_split_key(r) != "heldout"))
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(GENERATIONS_COLUMNS), extrasaction="ignore")
+    writer.writeheader()
+    for r in existing:
+        writer.writerow({k: r.get(k) for k in GENERATIONS_COLUMNS})
+
+    from dice_ratchet.infra.io import write_bytes_atomic
+
+    write_bytes_atomic(path, buf.getvalue().encode("utf-8"))
     return path
 
 
@@ -930,6 +1580,76 @@ def write_plots_data(run_dir: Path | str, generation: int, curve: Sequence[float
                              "win_rate": round(float(win_rate), 4), "n": int(n),
                              "buckets": buckets, "jitter": None})
     return path
+
+
+def kind_distribution_path(run_dir: Path | str, generation: int) -> Path:
+    """``metrics/kind_distribution/gen-XXX.json`` —— 该代的 ``action.kind`` 分布。
+
+    **为什么必须落盘**（2026-10-11，D-M3-5/§3.4 的 `c3` 修复）：`c3` 的判据是
+    ``jsd_kind(g, g-1) < freeze`` 且 ``win_rate`` 跳变 ≥0.05，而
+    ``eval report`` 是**从轨迹重算**的路径——它手上只有当前代的结果，
+    **没有 g−1 的 kind 分布** ⇒ 原实现只能写 ``jsds = [None] * (n_gen - 1)``
+    （硬编码 null）⇒ **`c3` 在 `eval report` 路径上永不触发**（实测归档里 17 个代的
+    `jsd_kind` 全是空）。落盘之后，重算路径可以读回 g−1 的分布算出真值。
+    """
+    return Path(run_dir) / "metrics" / "kind_distribution" / f"gen-{int(generation):03d}.json"
+
+
+def write_kind_distribution(run_dir: Path | str, generation: int,
+                            distribution: Mapping[str, float]) -> Path:
+    """落该代的 kind 分布（供 g+1 算 ``jsd_kind``）。"""
+    path = kind_distribution_path(run_dir, generation)
+    write_json_atomic(path, {"generation": int(generation),
+                             "distribution": dict(distribution),
+                             "total": round(sum(float(v) for v in distribution.values()), 6)})
+    return path
+
+
+def read_kind_distribution(run_dir: Path | str, generation: int) -> dict[str, float] | None:
+    """读某代的 kind 分布；缺失/损坏 → ``None``（调用方据此把 jsd 记 ``None``，
+    **不是** 0.0——0.0 会被读成「分布完全没变」，从而**误报冻结**）。"""
+    path = kind_distribution_path(run_dir, generation)
+    if not path.is_file():
+        return None
+    try:
+        raw = read_json(path)
+    except InfraError: # pragma: no cover - 损坏文件按缺失处理
+        return None
+    dist = raw.get("distribution")
+    if not isinstance(dist, Mapping) or not dist:
+        return None
+    return {str(k): float(v) for k, v in dist.items()}
+
+
+def adjacent_jsd_kind(run_dir: Path | str, generation: int, *,
+                      base: float = 2.0) -> float | None:
+    """``jsd_kind(g−1, g)``；任一代的 kind 分布缺失 → ``None``。
+
+    **``None`` 不是 0.0**：0.0 会被 `c3` 读成「分布完全没变」⇒ **误报冻结**。
+    """
+    dist = read_kind_distribution(run_dir, generation)
+    prev = read_kind_distribution(run_dir, generation - 1)
+    if dist is None or prev is None:
+        return None
+    from .diversity import js_divergence
+
+    return float(js_divergence(prev, dist, base=base))
+
+
+def aligned_jsd_kinds(run_dir: Path | str, generations: Sequence[int], *,
+                      base: float = 2.0) -> list[float | None]:
+    """构造与 ``generations`` **等长**的 ``jsd_kind`` 序列（最后一个元素是相邻两代的真值）。
+
+    `collapse_check` 的 ``jsd_kind`` 必须与 ``curves`` 等长（它按代索引取 ``jsds[i]``）。
+    首位没有前驱 ⇒ ``None``；其余按 ``jsd(g-1, g)`` 逐个算（缺分布即 ``None``）。
+    """
+    gens = [int(g) for g in generations]
+    if not gens:
+        return []
+    out: list[float | None] = [None]
+    for gen in gens[1:]:
+        out.append(adjacent_jsd_kind(run_dir, gen, base=base))
+    return out[: len(gens)]
 
 
 def utc_now() -> str:

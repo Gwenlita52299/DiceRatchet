@@ -71,7 +71,7 @@ def test_cli_audit_leak_canary_run_exits_2(cli_workspace):
 
 def test_cli_audit_leak_seed_leak_exits_2(cli_workspace):
     workspace, make = cli_workspace
-    make(run_id="it-seed", prompt_text="heldout seed=2013 的经验\n")
+    make(run_id="it-seed", prompt_text="heldout seed=731013 的经验\n")
     proc = _run_cli(workspace, "audit", "leak", "--run-id", "it-seed")
     assert proc.returncode == 2
     assert "seed_leak=1" in proc.stdout

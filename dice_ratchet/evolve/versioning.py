@@ -443,6 +443,7 @@ def accept(cand: Candidate, verdict: Verdict, *, run_id: str, cfg: Any,
     copy_harness_tree(root, backup)
     previous_version_file = _read_version_file(root / VERSION_FILE)
     sha = ""
+    created_snap: Path | None = None #: 只有本函数真的新建了快照才记录（F47-C2）
     try:
         apply_unified_diff(root, cand.diff, paths=cand.touched_files or ())
         # ---- 2) 写不可变快照（全量拷贝 + version.json + diff.patch）-----------------
@@ -451,6 +452,7 @@ def accept(cand: Candidate, verdict: Verdict, *, run_id: str, cfg: Any,
             raise VersionConflictError(f"版本目录已存在：{snap}",
                                        hint="版本号不可复用（FR-07-9）")
         copy_harness_tree(root, snap)
+        created_snap = snap
         artifact = artifact_hash_of(root)
         payload = _version_payload(
             version=new_version, parent=parent,
@@ -469,17 +471,24 @@ def accept(cand: Candidate, verdict: Verdict, *, run_id: str, cfg: Any,
         write_version_pointer(root, payload)
         write_json_atomic(snap / VERSION_FILE, dict(payload))
     except VersionConflictError:
+        # 版本号冲突：候选 diff 已经写进生效工件，必须回到调用前（PRD §10 失败保守）。
+        # 冲突的那个目录**不是本次建的**，绝不删除（`_discard_new_snapshot` 只收
+        # ``created_snap``），它需要人工清理——这正是 F47-C2 要根除的状态。
+        _restore(root, backup, previous_version_file)
         raise
     except GitFailedError:
         _restore(root, backup, previous_version_file)
+        _discard_new_snapshot(created_snap)
         events.emit("evolve.version", from_version=parent, to_version=new_version,
                     git_commit="", action="failed")
         raise
     except (PatchInvalidError, InfraError):
         _restore(root, backup, previous_version_file)
+        _discard_new_snapshot(created_snap)
         raise
     except Exception:
         _restore(root, backup, previous_version_file)
+        _discard_new_snapshot(created_snap)
         raise
     finally:
         shutil.rmtree(backup, ignore_errors=True)
@@ -524,6 +533,26 @@ def _rollback_files(root: Path, backup: Path) -> None:
         else:
             path.unlink(missing_ok=True)
     copy_harness_tree(backup, root)
+
+
+def _discard_new_snapshot(snap: Path | None) -> None:
+    """删除**本次失败调用刚刚创建**的版本快照目录（F47-C2）。
+
+    ``_rollback_files`` 有意跳过 ``versions/``——不可变快照绝不能被失败路径误删。代价是
+    它同样留下了「本次刚建、随后失败」的那一个，而 ``accept()``/``rollback()`` 的新版本号
+    由 ``next_version()`` 推出、失败后指针已回滚 ⇒ 下次仍是同一个号 ⇒ 在
+    ``snap.exists()`` 处抛 ``VersionConflictError`` ⇒ **该 run 的 accept 通道永久关闭**
+    （实测残留物：``harness/versions/v2/``）。
+
+    只删调用方明确传入的路径：调用方**仅在本函数真的新建了目录之后**才记录它，
+    历史快照与回滚目标的快照永不经过本函数。
+    """
+    if snap is None:
+        return
+    try:
+        shutil.rmtree(snap, ignore_errors=True)
+    except OSError: # pragma: no cover - 清理失败不得覆盖原始异常
+        pass
 
 
 def _restore(root: Path, backup: Path, previous_version_file: Mapping[str, Any] | None
@@ -583,6 +612,7 @@ def rollback(to_version: int, *, run_id: str, reason: str, decided_by: str,
         shutil.rmtree(backup, ignore_errors=True)
     copy_harness_tree(root, backup)
     previous_version_file = _read_version_file(root / VERSION_FILE)
+    created_snap: Path | None = None #: 本次新建的快照（**不是** `snap`：那是回滚目标，只读）
     try:
         revert_patch = diff_trees(root, snap)
         # 先算出新指针内容，再替换工件（revert.patch 基于 current → target）
@@ -599,6 +629,7 @@ def rollback(to_version: int, *, run_id: str, reason: str, decided_by: str,
 
         new_snap = harness_version_dir(new_version, harness=root)
         copy_harness_tree(root, new_snap)
+        created_snap = new_snap
         (new_snap / "revert.patch").write_text(_ensure_newline(revert_patch),
                                                encoding="utf-8")
         write_json_atomic(new_snap / VERSION_FILE, dict(payload))
@@ -608,11 +639,13 @@ def rollback(to_version: int, *, run_id: str, reason: str, decided_by: str,
             sha = commit_harness_version(root, version=new_version, message=message)
         except GitFailedError:
             _restore(root, backup, previous_version_file)
+            _discard_new_snapshot(created_snap)
             events.emit("evolve.rollback", to_version=target, git_commit="",
                         action="failed")
             raise
         except Exception:
             _restore(root, backup, previous_version_file)
+            _discard_new_snapshot(created_snap)
             raise
         payload["git_commit"] = sha
         write_version_pointer(root, payload)

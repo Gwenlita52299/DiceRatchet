@@ -24,7 +24,7 @@ def _ns(**kw) -> argparse.Namespace:
             "split": "heldout", "basket": "H1", "baseline": "none", "generation": 0,
             "kind": "random", "arms": "no_reflection,no_self_edit",
             "unlock_once": True, "attestation": None, "dry_run": False,
-            "transfer": False}
+            "transfer": False, "bootstrap_B": None, "check": False}
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -224,3 +224,171 @@ def test_generation_of_and_basket_of():
     assert cli_mod._basket_of(_ns(split="test")) == "test_full"
     assert cli_mod._basket_of(_ns(split="train")) == "train_window"
     assert cli_mod._basket_of(_ns(split="heldout", basket="H2")) == "H2"
+
+
+def test_fm33_eval_report_writes_all_splits_and_plots(wired, capsys):
+    """**F-M3-3 的端到端护栏**：`eval report` 必须 (a) 台账写全 split、(b) 真的产出 PNG。
+
+    修复前两处都坏：
+      · 台账只写 heldout 行（`_csv_row`）⇒ train 一侧永远缺席，train 对照曲线与 gap 图无源；
+      · `plot_generations` **没有生产调用点** ⇒ `runs/*/plots/` 全空。
+    且绘图侧的四列名在真实台账里不存在 ⇒ 即便接上了线，产出的也是**空白图**。
+    """
+    pytest.importorskip("matplotlib")
+    import csv
+
+    tmp_path, _cfg = wired
+    src = _FIXTURES / "episodes" / "heldout"
+    dst = tmp_path / "episodes" / "heldout"
+    dst.mkdir(parents=True)
+    for path in src.glob("*.jsonl"):
+        (dst / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    assert cli_mod.cmd_eval_report(_ns()) == 0
+    capsys.readouterr()
+
+    # (a) 台账：至少一行 heldout，且列名与权威清单一致
+    from dice_ratchet.infra.plotting import GENERATIONS_CSV_COLUMNS
+
+    csv_path = tmp_path / "metrics" / "generations.csv"
+    assert csv_path.is_file()
+    with csv_path.open(encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        assert tuple(reader.fieldnames or ()) == tuple(GENERATIONS_CSV_COLUMNS)
+        rows = list(reader)
+    assert [r["split"] for r in rows] == ["heldout"], "夹具没有 train 局 ⇒ 只有 heldout 行"
+    assert float(rows[0]["win_rate"] or 0) > 0, "win_rate 必须真的写进去了"
+
+    # (b) 绘图：5 张 PNG 真的落盘（不是空白——空白会被 E_IO_PLOT_NO_DATA 拦成异常）
+    from dice_ratchet.infra.plotting import PLOT_FILES
+
+    plots = tmp_path / "plots"
+    assert sorted(p.name for p in plots.glob("*.png")) == sorted(PLOT_FILES)
+    for name in PLOT_FILES:
+        assert (plots / name).stat().st_size > 0
+
+
+def test_fm39_acceptance_handler_writes_json_and_returns_zero(wired, capsys):
+    """`eval acceptance`（F-M3-9）：落 `metrics/acceptance.json`，**总是返回 0**。
+
+    返回 0 是刻意的：它是**判定器**不是守卫。把「验收不合格」编码成进程退出码会让
+    「命令失败」与「实验结论是否定」混淆（F47-D 刚把这两件事分开）。
+    """
+    import csv
+
+    tmp_path, _cfg = wired
+    (tmp_path / "metrics").mkdir(parents=True, exist_ok=True)
+    from dice_ratchet.infra.plotting import GENERATIONS_CSV_COLUMNS
+
+    with (tmp_path / "metrics" / "generations.csv").open("w", encoding="utf-8",
+                                                        newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(GENERATIONS_CSV_COLUMNS))
+        w.writeheader()
+        for gen, win, lo in ((0, 0.50, 0.40), (1, 0.55, 0.53)):
+            w.writerow({"generation": gen, "split": "heldout", "n": 40,
+                        "win_rate": win, "ci_lo": lo, "decision": "accept"})
+            # F48 之后台账含 train 行：判定器必须忽略它
+            w.writerow({"generation": gen, "split": "train", "n": 30,
+                        "win_rate": 0.99, "ci_lo": 0.9})
+    for gen, dec in ((0, "baseline"), (1, "accept")):
+        d = tmp_path / "generations" / f"gen-{gen:03d}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "report.json").write_text(json.dumps({"generation": gen, "decision": dec}),
+                                       encoding="utf-8")
+
+    rc = cli_mod.cmd_eval_acceptance(_ns(bootstrap_B=200))
+    out = capsys.readouterr().out
+    assert rc == 0, "判定器总是返回 0"
+    payload = json.loads(out)
+    assert payload["accepts"] == 1
+    assert payload["monotonic_ok"] is True
+    assert payload["ok"] is True
+    assert (tmp_path / "metrics" / "acceptance.json").is_file()
+
+
+def test_fm39_acceptance_handler_reports_failure_on_stderr(wired, capsys):
+    """不通过时把原因写 stderr（**必须非静默**），但退出码仍为 0。"""
+    import csv
+
+    tmp_path, _cfg = wired
+    (tmp_path / "metrics").mkdir(parents=True, exist_ok=True)
+    from dice_ratchet.infra.plotting import GENERATIONS_CSV_COLUMNS
+
+    with (tmp_path / "metrics" / "generations.csv").open("w", encoding="utf-8",
+                                                        newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(GENERATIONS_CSV_COLUMNS))
+        w.writeheader()
+        for gen, win, lo in ((0, 0.80, 0.70), (1, 0.40, 0.30)):
+            w.writerow({"generation": gen, "split": "heldout", "n": 40,
+                        "win_rate": win, "ci_lo": lo, "decision": "reject"})
+    rc = cli_mod.cmd_eval_acceptance(_ns(bootstrap_B=200))
+    err = capsys.readouterr().err
+    assert rc == 0
+    assert "不通过" in err
+
+
+# =====================================================================
+# D-M3-5：`eval test --check` 只读预检（一次性资源的不可逆风险）
+# =====================================================================
+
+def test_dm35_test_check_never_evaluates_or_consumes(wired, monkeypatch, capsys):
+    """**核心护栏**：预检不得调用 `evaluate_arm`，也不得创建存证。
+
+    现场（实测的顺序问题）：`cmd_eval_test` 先跑 100 局 test（≈4.2 h / ≈¥88）
+    —— 指标要先算出来才能写进取证 —— **之后**才调 `test_unlock`；而 `test_unlock`
+    的「单次」判据是 **attestation 文件是否已存在**。所以「路径不可写」这类失败一旦发生，
+    那 100 局已经花掉、却拿不到有效存证：这是 test 池上唯一真正不可逆的失败模式。
+    """
+    tmp_path, _cfg = wired
+
+    def _boom(*a, **kw):   # pragma: no cover - 被调用即失败
+        raise AssertionError("--check 不得调用 evaluate_arm（那会真的跑 100 局）")
+
+    monkeypatch.setattr(cli_mod, "evaluate_arm", _boom)
+    monkeypatch.setattr(cli_mod.seeds_mod, "test_unlock", _boom)
+    rc = cli_mod.cmd_eval_test(_ns(check=True, unlock_once=True, transfer=False))
+    out = capsys.readouterr().out
+    payload = json.loads(out)
+    assert rc == 0
+    assert payload["ok"] is True
+    assert payload["test_seeds"] == 100, "test_full 应是 100 局"
+    assert {c["check"] for c in payload["checks"]} >= {
+        "test_pool_locked", "test_basket_seeds", "unlocked_protocol_valid",
+        "protocol_hash", "attestation_not_exists", "attestation_dir_writable"}
+    att = tmp_path / "generations" / "gen-000" / "test_attestation.json"
+    assert not att.exists(), "预检**不得**创建存证（那会消耗一次性解锁）"
+
+
+def test_dm35_test_check_fails_when_generation_already_unlocked(wired, capsys):
+    """该代已有存证 ⇒ 预检必须**非 0 退出**并在 stderr 说清「未消耗解锁」。
+
+    真跑到这一步才发现，代价是那 100 局。
+    """
+    tmp_path, _cfg = wired
+    att = tmp_path / "generations" / "gen-000" / "test_attestation.json"
+    att.parent.mkdir(parents=True, exist_ok=True)
+    att.write_text("{}", encoding="utf-8")
+    rc = cli_mod.cmd_eval_test(_ns(check=True, unlock_once=True, transfer=False))
+    err = capsys.readouterr().err
+    assert rc != 0, "预检不通过必须是守卫语义（非 0）"
+    assert "attestation_not_exists" in err
+    assert "未消耗解锁" in err
+
+
+def test_dm35_test_check_fails_when_attestation_dir_unwritable(wired, capsys):
+    """存证路径不可写 ⇒ 预检必须拦下（这正是「跑完 100 局才发现」的那个洞）。"""
+    tmp_path, _cfg = wired
+    rc = cli_mod.cmd_eval_test(_ns(check=True, unlock_once=True, transfer=False,
+                                   attestation="/proc/definitely/not/writable/att.json"))
+    err = capsys.readouterr().err
+    assert rc != 0
+    assert "attestation_dir_writable" in err
+
+
+def test_dm35_test_check_does_not_require_unlock_once(wired, capsys):
+    """`--check` 不该要求 `--unlock-once`：预检查的是「真跑时会不会失败」，
+    而不是「有没有给解锁开关」。锁着也能预检，才不会诱导人先加上开关再试。"""
+    tmp_path, _cfg = wired
+    rc = cli_mod.cmd_eval_test(_ns(check=True, unlock_once=False, transfer=False))
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["ok"] is True

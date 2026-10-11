@@ -153,6 +153,48 @@ def test_missing_required_field():
     assert "obs_digest" in str(exc.value)
 
 
+# =====================================================================
+# F41：冒烟臂的 episode_key（``-smoke`` 后缀）必须合法
+# =====================================================================
+
+def test_f41_smoke_arm_episode_keys_are_valid():
+    """F41：MOD-07 FR-07-6 的冒烟臂标签必须能通过轨迹行校验。
+
+    实测现场（2026-10-09 干跑）：``parent-smoke`` / ``cand-<id>-smoke`` 不在登记模式的臂位
+    里 ⇒ 冒烟局每行都失败 ⇒ 该局 dropped（轨迹文件 0 行）⇒ ``n_dropped/n = 1.0`` ⇒
+    ``low_confidence`` ⇒ ``E_EVAL_INSUFFICIENT_N`` ⇒ ``smoke_fast_reject`` 返回
+    ``smoke_error:…`` ⇒ **每个候选都在冒烟关被淘汰**，闭环零产出。
+    """
+    for key in ("e-001028-g001-parent-smoke",
+                "e-001028-g001-cand-d41a2b7197d0-smoke",
+                "e-001028-g001-train-smoke"):
+        validate_trajectory_line(good_line(episode_key=key))
+        validate_trajectory_line(end_line(episode_key=key))
+
+    # 仍然拒绝真正非法的键（放宽不能变成不设防）
+    for bad in ("bad-key", "e-001028-g001-nosucharm", "e-001028-g001-parent-smoke-x",
+                "e-001028-g1-parent"):
+        with pytest.raises(InfraError) as exc:
+            validate_trajectory_line(good_line(episode_key=bad))
+        assert exc.value.code is E.E_IO_TRAJECTORY_SCHEMA
+
+
+def test_episode_key_patterns_stay_in_sync():
+    """同一 ``episode_key`` 语法有**两份副本**（Python 正则 + JSON schema），必须逐字一致。
+
+    这正是 F41 的成因：模式写了两遍、只改了其中一处就会静默失效（而校验是「两层都要过」）。
+    """
+    import json
+
+    from dice_ratchet.infra.logging import EPISODE_KEY_PATTERN
+
+    raw = json.loads((REPO / "schemas" / "trajectory_line.schema.json")
+                     .read_text(encoding="utf-8"))
+    assert raw["properties"]["episode_key"]["pattern"] == EPISODE_KEY_PATTERN, (
+        "infra/logging.py 的 _EPISODE_KEY_RE 与 schemas/trajectory_line.schema.json 的 "
+        "episode_key.pattern 已漂移；两层必须逐字相同")
+
+
 def test_bad_episode_key():
     with pytest.raises(InfraError):
         validate_trajectory_line(good_line(episode_key="bad-key"))

@@ -17,7 +17,9 @@ _REPO = Path(__file__).resolve().parents[3]
 def test_default_protocol_validates():
     proto = S.validate_protocol(S.default_protocol())
     assert proto.split("train").start == 1000
-    assert S.resolve_basket("H1", protocol=proto)[0] == 2000
+    from dice_ratchet.evals.seeds import default_protocol
+    assert (S.resolve_basket("H1", protocol=proto)[0]
+            == default_protocol().splits["heldout"].baskets["H1"].start)
     assert len(S.resolve_basket("H1", protocol=proto)) == 40
 
 
@@ -25,8 +27,8 @@ def test_overlapping_ranges_raise():
     bad = S.SeedProtocol(splits={
         "train": S.SplitRange("train", 1000, 1999, per_generation=30),
         "heldout": S.SplitRange("heldout", 1500, 2099, baskets={
-            "H1": S.Basket("H1", 2000, 2039, "generation_judge")}),
-        "test": S.SplitRange("test", 9000, 9099, locked=True),
+            "H1": S.Basket("H1", 731000, 731039, "generation_judge")}),
+        "test": S.SplitRange("test", 947000, 947099, locked=True),
     })
     with pytest.raises(InfraError) as exc:
         S.validate_protocol(bad)
@@ -35,8 +37,8 @@ def test_overlapping_ranges_raise():
 
 def test_seed_basket_membership_is_fixed():
     proto = S.default_protocol()
-    assert S.resolve_basket("H2", protocol=proto)[0] == 2040
-    assert S.resolve_basket("H3", protocol=proto)[0] == 2080
+    assert S.resolve_basket("H2", protocol=proto)[0] == 731040
+    assert S.resolve_basket("H3", protocol=proto)[0] == 731080
     assert len(S.resolve_basket("test_full", protocol=proto)) == 100
 
 
@@ -93,13 +95,13 @@ def test_test_unlock_writes_attestation_and_is_single_use(tmp_path):
 
 def test_guard_prompt_context_catches_heldout_token():
     with pytest.raises(InfraError) as exc:
-        S.guard_prompt_context(split="heldout", seed=2043, text="seed 2043 是正确答案",
+        S.guard_prompt_context(split="heldout", seed=731003, text="seed 731003 是正确答案",
                                destination="prompt")
     assert exc.value.code == E.E_EVAL_INV5_LEAK
 
 
 def test_guard_prompt_context_allows_plain_numbers():
-    # 无误报：23 / 4 不是 4 位 heldout/test token
+    # 无误报：23 / 4 不是 heldout/test token（F45-2 的正则要求 3–7 位数字串）
     S.guard_prompt_context(split="train", seed=1000, text="hp 23, dice 4",
                            destination="prompt")
 
@@ -113,7 +115,7 @@ def test_guard_prompt_context_catches_forbidden_words():
 
 def test_guard_prompt_context_catches_test_token():
     with pytest.raises(InfraError) as exc:
-        S.guard_prompt_context(split="test", seed=9001, text="run 9001",
+        S.guard_prompt_context(split="test", seed=947001, text="run 947001",
                                destination="reflection")
     assert exc.value.code == E.E_EVAL_INV5_LEAK
 
@@ -122,10 +124,10 @@ def test_guard_prompt_context_catches_test_token():
 
 def test_guard_memory_write_blocks_non_train():
     with pytest.raises(InfraError) as exc:
-        S.guard_memory_write("heldout", seed=2001, destination="memory")
+        S.guard_memory_write("heldout", seed=731001, destination="memory")
     assert exc.value.code == E.E_EVAL_INV5_LEAK
     with pytest.raises(InfraError) as exc2:
-        S.guard_memory_write("test", seed=9001, destination="reflection")
+        S.guard_memory_write("test", seed=947001, destination="reflection")
     assert exc2.value.code == E.E_EVAL_INV5_LEAK
 
 
@@ -137,9 +139,9 @@ def test_guard_memory_write_allows_train():
 
 def test_assert_split_isolation_rejects_cross_split_seed():
     with pytest.raises(InfraError) as exc:
-        S.assert_split_isolation("heldout", [1000, 2000])
+        S.assert_split_isolation("heldout", [1000, 731000])
     assert exc.value.code == E.E_EVAL_SEED_OVERLAP
-    S.assert_split_isolation("heldout", [2000, 2039])
+    S.assert_split_isolation("heldout", [731000, 731039])
 
 
 # ---- seeds_hash 与 configs/seeds.yaml 一致（CI 校验）--------------------------------

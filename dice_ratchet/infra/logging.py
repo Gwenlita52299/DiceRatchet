@@ -160,9 +160,24 @@ def read_trajectory(path: Path) -> tuple[list[dict[str, Any]], int]:
 # 轨迹行校验（FR-09-8）
 # =====================================================================
 
+#: ``episode_key = e-{seed:06d}-g{gen:03d}-{arm}``（Spec §4.5 B-16）。
+#:
+#: **F41（2026-10-09 实跑登记）**：臂位原先只有
+#: ``train|parent|cand-<id>|baseline-*|ablation-*``，漏了 MOD-07 FR-07-6 的**冒烟臂**标签
+#: （``parent-smoke`` / ``cand-<id>-smoke``）。于是冒烟局每一行轨迹都校验失败 → 该局
+#: dropped（轨迹文件 0 行）→ ``n_dropped/n = 1.0 > drop_rate_max`` → ``low_confidence``
+#: → ``error_codes`` 带 ``E_EVAL_INSUFFICIENT_N`` → ``judge.smoke_fast_reject`` 返回
+#: ``smoke_error:…`` ⇒ **每个候选都在冒烟关被淘汰**，``harness/versions/`` 永远不可能有
+#: 新版本（闭环形式上「跑通」、实则零产出）。现允许任意臂位带 ``-smoke`` 后缀。
+#:
+#: ⚠️ 同一模式在 ``schemas/trajectory_line.schema.json`` 里有一份**副本**（两层都要过）；
+#: ``tests/unit/infra/test_logging.py`` 的用例钉住二者逐字一致，防再次漂移。
 _EPISODE_KEY_RE: Final[re.Pattern[str]] = re.compile(
-    r"^e-[0-9]{6}-g[0-9]{3}-(train|parent|cand-[a-z0-9]+|baseline-[a-z_]+|ablation-[a-z_]+)$"
+    r"^e-[0-9]{6}-g[0-9]{3}-(train|parent|cand-[a-z0-9]+|baseline-[a-z_]+|ablation-[a-z_]+)"
+    r"(-smoke)?$"
 )
+#: 与 ``schemas/trajectory_line.schema.json`` 的 ``episode_key.pattern`` 必须逐字相同。
+EPISODE_KEY_PATTERN: Final[str] = _EPISODE_KEY_RE.pattern
 _OBS_DIGEST_RE: Final[re.Pattern[str]] = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REQUIRED_LINE_KEYS: Final[frozenset[str]] = frozenset({
     "episode_key", "generation", "harness_version", "arm", "seed", "split", "step",

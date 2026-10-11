@@ -29,7 +29,8 @@ from typing import Any, Callable
 from ..infra import cli as infra_cli
 from ..infra.errors import E, InfraError
 from ..infra.run import RunPaths, read_state
-from .generation import LoopOrchestrator, write_gen000_baseline
+from .generation import (LoopOrchestrator, ensure_evolution_worktree_clean,
+                         write_gen000_baseline)
 from .runner import EpisodeRunner, RunContext, read_harness_version
 from .state import init_state, load_state
 
@@ -72,6 +73,10 @@ def cmd_loop_run(args: argparse.Namespace) -> int:
     _guard_concurrency(cfg)
     resume = bool(getattr(args, "resume", False))
     orch, run_ctx = _build_orchestrator(paths, cfg, run_id, args)
+    # F47-A：演化起跑前的 git 门禁——必须早于 gen-000 基线（那份也要花钱），
+    # 否则「脏工作区」要等整代跑完、MOD-07 提交前才被拒（实测白花 3.75 h / ≈¥47）。
+    if orch.evolve_fn is not None:
+        ensure_evolution_worktree_clean(run_ctx)
     seeds = _resolve_seeds(args, orch.config, resume=resume)
     run_baseline = getattr(args, "baseline", None)
     if run_baseline is None:

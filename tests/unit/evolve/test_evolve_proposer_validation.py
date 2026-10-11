@@ -296,3 +296,68 @@ def test_count_diff_lines_excludes_file_headers():
             "+++ b/harness/prompts/decision.md\n"
             "@@ -1 +1,2 @@\n-a\n+b\n+c\n")
     assert P.count_diff_lines(diff) == 3
+
+
+# =====================================================================
+# F39：hunk 定位容忍 offset（标准 ``patch`` 语义），但**不做 fuzz**
+# =====================================================================
+
+_BASE_12 = "\n".join(f"line-{i}" for i in range(1, 13)) + "\n"
+
+
+def _write_prompt(tmp_path, text: str = _BASE_12):
+    (tmp_path / "prompts").mkdir(parents=True, exist_ok=True)
+    path = tmp_path / "prompts" / "decision.md"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_f39_hunk_offset_is_tolerated(tmp_path):
+    """F39：声明行号偏了、但上下文**逐字**命中时必须能应用。
+
+    实测现场：``deepseek-flash`` 产出 ``@@ -44,6 +44,10 @@``，其 4 行上下文全部逐字
+    存在于第 53–56 行（偏移 +9）——模型抄对了原文，只是不会数行号。原实现只认声明行号，
+    把**每一个**真实候选都判成 ``E_EVOLVE_PATCH_INVALID``，harness 永远无法演化。
+    """
+    path = _write_prompt(tmp_path)
+    # 正文在第 5–6 行，但 hunk 声明从第 9 行开始（偏移 -4）
+    diff = ("--- a/harness/prompts/decision.md\n"
+            "+++ b/harness/prompts/decision.md\n"
+            "@@ -9,2 +9,3 @@\n"
+            " line-5\n"
+            " line-6\n"
+            "+inserted\n")
+    touched = P.apply_unified_diff(tmp_path, diff)
+
+    assert touched == ("prompts/decision.md",)
+    out = path.read_text(encoding="utf-8").split("\n")
+    # ``+`` 行落在其**前导上下文行之后**（unified diff 的语义）：line-5/line-6 之后插入。
+    assert out[:7] == ["line-1", "line-2", "line-3", "line-4", "line-5", "line-6",
+                       "inserted"], "补丁必须落在**上下文命中**处，而不是声明行号处"
+
+
+def test_f39_fuzz_is_not_allowed(tmp_path):
+    """容忍 offset **不等于**容忍 fuzz：上下文差一个字符就必须拒绝。"""
+    _write_prompt(tmp_path)
+    diff = ("--- a/harness/prompts/decision.md\n"
+            "+++ b/harness/prompts/decision.md\n"
+            "@@ -5,2 +5,3 @@\n"
+            " line-5-CHANGED\n"
+            " line-6\n"
+            "+inserted\n")
+    with pytest.raises(PatchInvalidError) as excinfo:
+        P.apply_unified_diff(tmp_path, diff)
+    assert "hunk 上下文不匹配" in str(excinfo.value)
+
+
+def test_f39_ambiguous_offset_is_rejected(tmp_path):
+    """同一距离上两侧都逐字命中 → 歧义 → 拒绝（宁可判无效，也不赌落点）。"""
+    _write_prompt(tmp_path, "same\nfiller\nsame\nfiller\n")
+    diff = ("--- a/harness/prompts/decision.md\n"
+            "+++ b/harness/prompts/decision.md\n"
+            "@@ -2,1 +2,2 @@\n"
+            " same\n"
+            "+inserted\n")
+    with pytest.raises(PatchInvalidError) as excinfo:
+        P.apply_unified_diff(tmp_path, diff)
+    assert "歧义" in str(excinfo.value)

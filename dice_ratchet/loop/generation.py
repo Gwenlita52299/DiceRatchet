@@ -24,7 +24,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from ..infra import events
 from ..infra.errors import E, InfraError, error_code_of
-from ..infra.io import read_jsonl
+from ..infra.io import read_json, read_jsonl
 from ..infra.run import RunPaths
 from . import reflect as reflect_mod
 from .runner import EpisodeRunner, RecordedEpisode, RunContext
@@ -32,8 +32,8 @@ from .state import (QueueLog, RunState, Scoreboard, init_state, load_state, lock
                     save_state, scoreboard_path, queue_path, utc_now)
 
 __all__ = ["EvolveOutcome", "LoopOrchestrator", "RunSummary", "SignalGuard",
-           "episodes_per_generation", "load_or_init_state", "maybe_run_generation",
-           "write_gen000_baseline"]
+           "ensure_evolution_worktree_clean", "episodes_per_generation",
+           "load_or_init_state", "maybe_run_generation", "write_gen000_baseline"]
 
 #: MOD-03 实测 ``t_d`` p50（Spec §8.6 n=10 实测：7.46 s；p95 10.13 s）。
 _TD_P50_S: float = 7.46
@@ -201,6 +201,13 @@ def maybe_run_generation(*, state: RunState, run_ctx: RunContext,
             state.phase = "playing"
             _save(run_ctx, state)
             return state
+        # F42-B：一代内的**已完成臂**不重跑。这里只做可观测性——真正的复用由 MOD-07
+        # 经 `metrics/arms/`（按臂检查点）与 `generations/gen-NNN/proposals/`（提案检查点）
+        # 完成；`_cycle_artifacts_exist` 继续负责「整代已裁决」这唯一终态。**不清**
+        # `metrics/arms/`：它正是这次重入能省下 3.75 h / ≈¥47 的依据。
+        events.emit("loop.resume", phase="evolving", cycle=int(cycle),
+                    completed_arms=_completed_arm_count(paths, cycle),
+                    reuse="metrics/arms+proposals")
         state.evolving_cycle = None
         state.phase = "playing"
         _save(run_ctx, state)
@@ -271,8 +278,27 @@ def _cycle_artifacts_exist(paths: RunPaths, cycle: int) -> bool:
     return not _hitl_gate_pending(base)
 
 
+def _completed_arm_count(paths: RunPaths, cycle: int) -> int:
+    """该 cycle 已归档的**臂**数量（``metrics/arms/gen{cycle:03d}-*.json``；F42-B）。
+
+    只用于 resume 的可观测性：resume 之所以不再白花一整代，是因为 MOD-07 会按这些归档
+    （以及 ``generations/gen-NNN/proposals/proposal.json``）复用已完成的局与提案。
+    """
+    arms = Path(paths.metrics) / "arms"
+    if not arms.is_dir():
+        return 0
+    return len(list(arms.glob(f"gen{int(cycle):03d}-*.json")))
+
+
 def _hitl_gate_pending(base: Path) -> bool:
-    """``gate.json`` 存在且仍为 ``pending``（人工尚未裁决）。"""
+    """``gate.json`` 存在且仍为 ``pending``（人工尚未裁决）。
+
+    F33（2026-10-09 复检登记）：这里原先用的 ``read_json`` **没有**模块级导入（模块级
+    只导了 ``read_jsonl``，另一个函数在体内局部导入 ``read_json`` ——那是另一个作用域，
+    帮不到这里）。于是只要走到「resume 且该 cycle 的 ``report.json``/``decision.json``
+    已存在」，就会 ``NameError``：正是 **HITL 挂起 → ``evolve approve`` →
+    ``loop run --resume``** 这条流程。修法是把它提到模块级导入。
+    """
     gate = base / "gate.json"
     if not gate.is_file():
         return False
@@ -384,7 +410,16 @@ def write_gen000_baseline(run_ctx: RunContext, *, harness_version: int = 0,
             n_workers=int(getattr(cfg.evals, "n_workers", 1)),
             n_rep=int(getattr(cfg.evals.determinism, "n_rep", 1)),
             episode_config=run_ctx.episode_config)
-        report = dict(evaluate_generation(0, parent, None, run_id=run_ctx.run_id))
+        # **必须传 run_dir**（2026-10-11 修）：MOD-08 从 F48/F49 起会在评估/报告路径上
+        # 落**按代**的产物（`metrics/kind_distribution/gen-XXX.json`，`c3` 判据要读它），
+        # 而 `evaluate_generation` 的 `run_dir=None` 会回落到**硬编码的 `Path("runs")`**
+        # ⇒ 那些文件落到真实 `runs/<run_id>/` 而不是 `run_ctx.paths.root`。
+        # 后果不止「位置错」：真实 `runs/<run_id>/` 一旦被建出来，F42-A 的**臂归档**
+        # （`_arm_archive_dir` 按 `runs_root/run_id` 推导，且要求目录已存在）就会开始
+        # 生效 ⇒ 第二次评估**复用归档、不再执行任何局**。MOD-07 的两处调用点都已传
+        # `run_dir`，这里原先漏了。
+        report = dict(evaluate_generation(0, parent, None, run_id=run_ctx.run_id,
+                                          run_dir=paths.root))
     except InfraError as exc:
         # 基线拿不到（模型/权重缺失）→ 降级，不阻塞 run
         events.emit("loop.resume", phase=str(run_ctx.state.phase), baseline="missing",
@@ -396,6 +431,34 @@ def write_gen000_baseline(run_ctx: RunContext, *, harness_version: int = 0,
     report["reason"] = "harness v0 基线（gen-000，FR-06-13a）"
     write_generation_report(paths.root, 0, report)
     return report_path
+
+
+# =====================================================================
+# 演化起跑前的 git 门禁（F47-A）
+# =====================================================================
+
+def ensure_evolution_worktree_clean(run_ctx: Any) -> bool:
+    """演化**起跑前**拒绝脏工作区（FR-09-14「演化前门禁」的真正落点，F47-A）。
+
+    为什么必须在这里：MOD-07 的同一判据原先只长在 ``commit_harness`` 内部，即
+    **整代跑完、即将落版本时**——脏工作区会白花一整代（实测 3.75 h / ≈¥47），
+    失败还被 ``_finish_report`` 记成 ``decision="reject"``，看起来像「候选不达标」。
+    本函数把它前移到**任何推理调用之前**，之后由 MOD-07 的提交前检查兜底。
+
+    **只由 CLI 边界调用**（``cmd_loop_run``，含 ``--resume``）且仅在 ``evolve_fn`` 非空
+    时——保护的是「版本落盘」这件事。不放进 ``LoopOrchestrator.run()`` 的内部：那会让
+    程序化嵌入（含测试与本地带未提交改动的诊断）一律被拦；``--no-evolve``/``loop
+    smoke`` 不产版本，也不拦。
+
+    仓库根取 ``harness_dir`` 的父目录（与 MOD-07 ``_repo_root`` 同规则；``git status
+    --porcelain`` 的路径是仓库根相对的，故子目录调用结果一致）。
+    返回是否真的检查过：``False`` = 不在 git worktree 内 → 降级跳过（Spec §8.5），
+    否则脏工作区抛 ``E_IO_GIT_DIRTY``（退出码 5）。
+    """
+    from ..infra import git_ops
+
+    harness = Path(getattr(run_ctx, "harness_dir", "harness"))
+    return bool(git_ops.preflight_worktree_clean(harness.resolve().parent))
 
 
 # =====================================================================
@@ -518,6 +581,29 @@ class LoopOrchestrator:
                                  evolve_fn=self.evolve_fn)
             if state.phase in ("hitl_wait", "failed"):
                 return                     # FR-06-11 挂起 / FR-06-13 预算闸门
+
+        # F34（2026-10-09 登记）：队列排空 ≠ 本轮无事可做。
+        #
+        # ``--resume`` 时 ``run()`` 会把 ``pending_queue`` 重算成「``--seeds`` 里尚未
+        # 完成的 seed」，因此**崩溃在周期边界内**的 run（``phase="evolving"``、
+        # ``evolving_cycle`` 挂着、``completed`` 恰好是 k 的整数倍）会拿到空队列：
+        # 上面的 ``while`` 一次都不进，边界永不重入，函数直接落到 ``phase="done"``
+        # ——对外是**退出码 0 的成功**，而 ``generation`` 一步没走、
+        # ``harness/versions/`` 一个新版本都没有。实测（零成本探针）：这样的 resume
+        # 返回 ``{"exit_code": 0, "phase": "done", "generation": 0}``，同时
+        # ``evolving_cycle`` 仍悬着 —— 正是 §3.1 要防的静默成功（同 F28 的教训）。
+        #
+        # ``maybe_run_generation`` 本就为此设计（见其 docstring：进程在 ``evolving``
+        # 阶段被杀时，「产物存在则标该 cycle 完成，否则重置 ``phase="playing"`` 后
+        # 重新触发」），只是原先没有任何路径在空队列下调用它。这里补上这一次调用。
+        #
+        # **只需调用一次**：``cycle_due`` 的双重幂等键（``last_completed_cycle`` +
+        # ``evolving_cycle`` + MOD-07 产物存在性）保证重复调用不会重复触发；而空队列
+        # 下 ``cycle_index = len(completed)//k`` 不再前进，故至多一个 cycle 可能到期。
+        maybe_run_generation(state=state, run_ctx=self.run_ctx,
+                             evolve_fn=self.evolve_fn)
+        if state.phase in ("hitl_wait", "failed"):
+            return
         state.phase = "done"
         _save(self.run_ctx, state)
 
@@ -710,7 +796,8 @@ class LoopOrchestrator:
         """
         if not bool(getattr(self.config, "retry_reflections_on_resume", False)):
             return 0
-        from ..infra.io import read_json
+        # F33：``read_json`` 已提到模块级导入（原先只有这里的局部导入，导致
+        # ``_hitl_gate_pending`` 以为它在全局作用域可见）。
 
         directory = Path(self.paths.reflections)
         if not directory.is_dir():

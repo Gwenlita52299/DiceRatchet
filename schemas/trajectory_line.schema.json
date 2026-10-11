@@ -18,7 +18,7 @@
     },
     "episode_key": {
       "type": "string",
-      "pattern": "^e-[0-9]{6}-g[0-9]{3}-(train|parent|cand-[a-z0-9]+|baseline-[a-z_]+|ablation-[a-z_]+)$"
+      "pattern": "^e-[0-9]{6}-g[0-9]{3}-(train|parent|cand-[a-z0-9]+|baseline-[a-z_]+|ablation-[a-z_]+)(-smoke)?$"
     },
     "generation": { "type": "integer", "minimum": 0 },
     "harness_version": { "type": "integer", "minimum": 0 },

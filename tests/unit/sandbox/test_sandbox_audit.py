@@ -104,8 +104,72 @@ def test_build_forbidden_excludes_train_seeds_seen():
 
 def test_load_forbidden_seeds_from_configs(repo_root):
     seeds = A.load_forbidden_seeds(repo_root / "configs")
-    assert "2000" in seeds and "9099" in seeds and "1000" not in seeds
+    # F45-2：heldout/test 已移到六位端口空间（731xxx / 947xxx）
+    assert "731000" in seeds and "947099" in seeds and "1000" not in seeds
     assert all(v == "seed" for v in seeds.values())
+
+
+# ---- F44/F45：反思是多行 JSON 文档，且机器元数据不得刷假阳性 -----------------------
+
+def _write_reflection(root: Path, body: dict) -> None:
+    refdir = Path(root) / "reflections"
+    refdir.mkdir(parents=True, exist_ok=True)
+    (refdir / "e-001000-g000-train.json").write_text(
+        json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def test_f44_multiline_reflection_json_is_not_read_as_jsonl(build_run, tmp_path):
+    """F44：``reflections/<key>.json`` 是多行 pretty JSON，不得按 JSONL 逐行解析。
+
+    实测（2026-10-10 实跑）：51 行的反思文件让审计第 2 行起报 ``Extra data`` ⇒
+    ``E_ENV_AUDIT_IO`` ⇒ ``audit leak`` 退出码 2 ⇒ **任何含反思的 `loop run` 都无法
+    让判据③（`audit leak` clean）成立**。
+    """
+    built = build_run(tmp_path, run_id="r-f44")
+    _write_reflection(built.root, {"entry": {"text": "优先处理护卫",
+                                             "created_at": "2026-10-09T16:34:13Z"},
+                                   "episode_key": "e-001000-g000-train"})
+
+    result = A.run_audit(built.root, generated_at=FIXED)
+
+    assert result.io_errors == (), f"多行 JSON 不得被当 JSONL：{result.io_errors}"
+    # F45-2：`created_at` 的年份 2026 与 heldout 的六位区间（731xxx）**不在同一数字空间**，
+    # 因此无论名单在不在，它都不再可能是 seed 泄漏（这也是删掉两张死名单的前提）。
+    assert result.leak_counts.get("seed_leak") is None, result.findings
+    assert result.verdict == A.VERDICT_CLEAN
+
+
+def test_f45_real_leak_in_reflection_body_is_still_caught(build_run, tmp_path):
+    """F45a 的反面：正文里的 heldout seed 字面量**仍必须**被抓（修复不得把审计变瞎）。"""
+    built = build_run(tmp_path, run_id="r-f45")
+    _write_reflection(built.root, {"entry": {"text": "历史最优 seed=731013 的策略",
+                                             "created_at": "2026-10-09T16:34:13Z"}})
+
+    result = A.run_audit(built.root, generated_at=FIXED)
+
+    assert result.io_errors == ()
+    assert result.leak_counts.get("seed_leak") == 1, result.findings
+    assert result.verdict == A.VERDICT_CRITICAL
+
+
+def test_f45b_token_budget_in_events_is_not_a_seed_leak(build_run, tmp_path):
+    """F45b/F45-2：事件里的**按调用方输出预算**（B-47 的 ``max_tokens: 2048``）不是泄漏面。
+
+    原先这是 F37 的修复**引入**的假阳性：一个完全合法的配置值落进 heldout 的 2000–2099
+    区间，于是审计刷 ``seed_leak/critical``，靠 ``max_tokens`` 进死名单才压住。
+    F45-2 之后 heldout 是六位（731xxx），它与 ``max_tokens``/采样浮点/哈希片段
+    **不再共享数字空间**——所以这条用例现在验证的是「删掉名单后仍然干净」。
+    """
+    built = build_run(tmp_path, run_id="r-f45b")
+    (built.root / "events.jsonl").write_text(json.dumps({
+        "event": "llm.api.call", "model_id": "deepseek-flash", "max_tokens": 2048,
+        "temperature": 0.2072, "request_hash": "sha256:" + "a" * 32 + "2026" + "b" * 28,
+        "ts": "2026-10-10T00:00:00Z", "run_id": built.root.name,
+    }, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    result = A.run_audit(built.root, generated_at=FIXED)
+
+    assert result.leak_counts.get("seed_leak") is None, result.findings
 
 
 # ---- FR-02-19 run_audit：verdict / 退出码 / 报告 -----------------------------------
@@ -122,17 +186,17 @@ def test_clean_run_audit_is_clean(build_run, tmp_path):
 
 
 def test_seed_leak_in_prompt_is_critical(build_run, tmp_path):
-    built = build_run(tmp_path, run_id="r-seed", prompt_text="历史最优 seed=2013 的策略\n")
+    built = build_run(tmp_path, run_id="r-seed", prompt_text="历史最优 seed=731013 的策略\n")
     result = A.run_audit(built.root, generated_at=FIXED)
     assert result.verdict == A.VERDICT_CRITICAL and result.exit_code == 2
     assert result.leak_counts.get("seed_leak") == 1
     finding = result.findings[0]
     assert finding.surface == "prompt" and finding.leak_class == A.LeakClass.SEED_LEAK
-    assert "2013" in finding.evidence
+    assert "731013" in finding.evidence
 
 
 def test_heldout_seed_in_memory_is_critical(build_run, tmp_path):
-    built = build_run(tmp_path, run_id="r-mem", memory_text="heldout 策略 2000 有效\n")
+    built = build_run(tmp_path, run_id="r-mem", memory_text="heldout 策略 731000 有效\n")
     result = A.run_audit(built.root, generated_at=FIXED)
     assert result.verdict == A.VERDICT_CRITICAL
     assert result.leak_counts.get("seed_leak") == 1
@@ -150,9 +214,10 @@ def test_timing_fields_in_events_are_not_seed_leaks(build_run, tmp_path):
     """机器耗时字段不作 seed 扫描（2026-10-08 CI parity 随机失败的回归）。
 
     ``eval.seed_done`` 会带 ``dur_s``/``episode_s``/``cpu_s``，MOD-06/07 另发
-    ``wall_ms``/``elapsed_s``/``elapsed_ms``。耗时的小数部分落在 heldout 区间
+    ``wall_ms``/``elapsed_s``/``elapsed_ms``。耗时的小数部分落在**旧** heldout 区间
     （``episode_s=2.2083`` → 2083）时曾被判 critical：**同一提交本地通过、CI 失败**，
-    因为整件事取决于墙钟数值。
+    因为整件事取决于墙钟数值。F45-2 把 heldout 移到六位（731xxx）后，耗时与 seed
+    **彻底不在同一数字空间**；这条用例因此改为验证「不再有任何字段需要豁免」。
     """
     built = build_run(tmp_path, run_id="r-timing")
     rows = [
@@ -167,7 +232,7 @@ def test_timing_fields_in_events_are_not_seed_leaks(build_run, tmp_path):
     assert result.leak_counts.get("seed_leak", 0) == 0
     assert result.verdict == A.VERDICT_CLEAN
     # 反例：同一批事件里，内容字段带 heldout seed 仍必须抓到（白名单不能变成盲区）
-    rows[0]["reason"] = "泄漏面：heldout seed 2083"
+    rows[0]["reason"] = "泄漏面：heldout seed 731083"
     (built.root / "events.jsonl").write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
     dirty = A.run_audit(built.root, generated_at=FIXED)
@@ -356,7 +421,7 @@ def test_report_schema_rejects_extra_field(build_run, tmp_path):
 
 
 def test_audit_to_console_reports_and_returns_exit_code(build_run, tmp_path, capsys):
-    built = build_run(tmp_path, run_id="r-console", prompt_text="seed=2013\n")
+    built = build_run(tmp_path, run_id="r-console", prompt_text="seed=731013\n")
     result = A.run_audit(built.root, generated_at=FIXED)
     code = A.audit_to_console(result)
     out = capsys.readouterr().out
@@ -374,7 +439,7 @@ def test_register_sensitive_feeds_redactor(build_run, tmp_path):
     count = A.register_sensitive(redactor, run_dir=built.root)
     assert count > 0
     registered = redactor.registered
-    assert "2000" in registered and "drawPile" in registered
+    assert "731000" in registered and "drawPile" in registered
     assert "1000" not in registered # 本 run 的 train seed 不注册
-    redacted, hits = redactor.redact({"text": "seed 2000 与 drawPile"})
-    assert hits >= 1 and "2000" not in redacted["text"]
+    redacted, hits = redactor.redact({"text": "seed 731000 与 drawPile"})
+    assert hits >= 1 and "731000" not in redacted["text"]

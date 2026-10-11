@@ -95,80 +95,35 @@ _NUM_RUN_RE: Final[re.Pattern[str]] = re.compile(r"(?<![0-9A-Za-z_])[0-9]{3,6}(?
 _SEED_RANGE_LIMIT: Final[int] = 20000
 
 #: seed 扫描默认覆盖的 split。依据 ``configs/seeds.yaml::exposure_guard.numeric_scan``：
-#: 「4 位数字落 2000-2099 / 9000-9099 即告警」——train seed 属允许可见（INV-5 的
-#: ``expose_to: [prompt, memory, reflection]``），因此默认只扫 heldout/test；
-#: 需要更严时可传 ``seed_splits=("train","heldout","test")``。
+#: 「3–6 位数字落 731000-731099 / 947000-947099 即告警」（F45-2 起的六位端口空间）——
+#: train seed 属允许可见（INV-5 的 ``expose_to: [prompt, memory, reflection]``），
+#: 因此默认只扫 heldout/test；需要更严时可传 ``seed_splits=("train","heldout","test")``。
 DEFAULT_SEED_SPLITS: Final[tuple[str, ...]] = ("heldout", "test")
 
-#: 轨迹行里**非内容**字段：它们是审计侧的机器元数据（摘要/计数/时间戳/本局 seed），
-#: 不参与 seed 扫描——否则 sha256 片段、prompt_tokens、年份 2026 会刷出假阳性。
-#: 注意不含 ``llm_raw``/``action``/``illegal_reason`` 等模型产出内容（那才是泄漏面）。
+#: F45-2（2026-10-11）：原先这里有两张**人工死名单**
+#: （``LOG_NON_CONTENT_KEYS`` / ``MEMORY_NON_CONTENT_KEYS``，扩过四次：M1 F3 的 136 条、
+#: ``episode_s``/``cpu_s``/``elapsed_s``、F35 的年份 ``2026``、F45b 的 ``max_tokens: 2048``），
+#: 用来把「机器元数据」从 seed 扫描里豁免掉。**已删除**，因为 heldout/test 已移到六位端口空间
+#: （``configs/seeds.yaml``：731000-731099 / 947000-947099），不再与耗时/预算/日历字面量撞车，
+#: 「数字串相等即泄漏」这条规则重新变得**健全** ⇒ 扫描面比带名单时**更严**（不再有字段被跳过）
+#: 且代码更简单。实测量化（删除前）：去掉全部豁免重扫 19 个工件 → 12 个键撞上、总命中
+#: **118,646** 次，其中 ``ts``（ISO 年份 2026）占 **112,101** 次（94%）；全量归档 1311 个工件
+#: （188 MB）用**旧**区间命中 **799,868** 次，用**新**区间命中 **0** 次。
 #:
-#: 2026-10-04（M1 验收 F3）：``events.jsonl`` 走同一条扫描路径，因此这里还必须收下
-#: 事件里真实出现的机器元数据键，否则「4 位数字落 2000–2099/9000–9099 即告警」会把
-#: 微秒耗时（``duration_us: 2072.8`` → ``2072``）和秒级耗时（``dur_s: 3.9022`` →
-#: ``9022``）当成 held-out/test seed，把 ``audit leak`` 在**任何**评估 run 上都刷成
-#: ``critical``（实测 136 条假阳性），G4 质量门随之失效。
-LOG_NON_CONTENT_KEYS: Final[frozenset[str]] = frozenset({
-    "obs_digest", "prompt_hash", "tool_hash", "state_hash", "ts", "seed",
-    "episode_key", "generation", "harness_version", "step", "decision_index",
-    "plan_index", "attempt", "reward", "cum_reward", "arm", "split", "mode",
-    "source", "type", "x_obs_keys", "llm_latency_ms", "prompt_tokens",
-    "completion_tokens", "memory_ids",
-    # 计时：微秒/毫秒值极易落进 2000–2099 或 9000–9099（``duration_us=2072.8``、
-    # ``dur_s=3.9022`` 都被当成 held-out seed；M1 验收 F3 实测 16 条）。纯计时字段，
-    # 不承载文本。
-    "duration_us", "duration_ms", "duration_s", "dur_s", "dur_ms",
-    "latency_ms", "latency_us",
-    # 2026-10-08（CI 深门实测）：``eval.seed_done`` 还带 ``episode_s``/``cpu_s``，
-    # MOD-06/07/05 另发 ``wall_ms``/``elapsed_s``/``elapsed_ms``。**任何以秒/毫秒为单位的
-    # 浮点耗时，小数部分都有约 2% 的概率落进 2000–2099/9000–9099**
-    # （``episode_s=2.2083`` → 2083 命中 heldout）⇒ 审计按耗时碰运气刷 critical 假阳性，
-    # 本次就是它让 CI parity 作业随机失败（同一提交本地复跑通过）。
-    # 白名单只按「代码里真实 emit 的键」逐个登记，**不做后缀通配**：通配会顺带放过
-    # ``*_s`` 结尾的内容字段，那是真泄漏面。
-    "episode_s", "cpu_s", "elapsed_s", "elapsed_ms", "wall_ms", "total_timeout_ms",
-    # 枚举口径（2026-10-08）：把 `runs/*/events.jsonl` 与 `runs/*/episodes/**/*.jsonl`
-    # 里**真实出现过**的「`_s`/`_ms`/`_us`/`_ns` 结尾 + 数值」字段全量扫了一遍，
-    # 上面这批覆盖了全部；`seed_timeout_s` 是唯一的纯预算字段（当前值 900 不触发，
-    # 但换成 2072 这类 4 位数就会）——一并登记，避免下次又靠运气。
-    "seed_timeout_s",
-    # 计数与规模：机器累加器
-    "n", "n_workers", "n_dropped", "degraded_n", "steps", "decisions",
-    "fields", "dropped_hidden", "missing_optional",
-    # 评估身份与判定（MOD-08 ``EvalSpec`` / 报告骨架）。``spec`` 是本次评估的描述符
-    # （run_id/generation/split/basket/**seeds**/并发/预算），MOD-06 ``--resume`` 与审计
-    # 复算都依赖它；``spec.seeds`` 也正因此被 M1 验收 F3 误判了 120 条。
-    "spec", "basket", "outcome", "dropped", "degraded", "error_code", "error_codes",
-    "report_sha256", "low_confidence", "config_hash", "exit_code",
-})
-
-#: 记忆/反思文件里**非内容**字段（2026-10-06，MOD-05 落地时新增）。
+#: 顺带更正一条**错误论据**：名单注释里曾写「64 位 hex 约 3.7% 概率撞 20XX」——实测
+#: 20000 个随机 sha256 命中 **0/20000**，真实 run 里 ``request_hash``/``response_hash``/
+#: ``prompt_digest`` 各 9200 样本命中 **0**（正则的前后环视把 hex 内部的数字段全排除了）。
+#: ``request_hash``/``response_hash``/``prompt_digest`` 三个键正是**按这条错误论据**加进名单的。
 #:
-#: 与 ``LOG_NON_CONTENT_KEYS`` 同理：``memory`` 面此前按**原始行**扫 seed，于是
-#: ``created_at: "2026-10-02T09:14:11Z"`` 的年份 ``2026`` 落在 heldout H1 的
-#: 2000–2039 区间，被当成 seed 泄漏——实测在**任何**有记忆库的 run 上刷出 7 条
-#: critical 假阳性，G4「自测 run 0 告警」直接失效。这里按「内容 / 机器元数据」
-#: 分流：seed 规则只扫内容字段，其余规则（field/canary）仍扫原始行。
-#: **不含** ``lesson`` / ``text`` / ``tags`` / ``action_hint`` / ``situation`` /
-#: ``hits`` / ``reflection`` / ``scan``——那才是真正的泄漏面。
-MEMORY_NON_CONTENT_KEYS: Final[frozenset[str]] = frozenset({
-    # 时间与版本（ISO 年份会撞 heldout 区间；逻辑时钟可以长到 4 位）
-    "created_at", "ts", "generated_at", "tick", "created_tick", "expires_tick",
-    "last_ref_tick", "ttl_ticks", "run_id", "episode_id", "source_episode_id",
-    "reflection_id", "source_reflection_id", "entry_id", "situation_key",
-    "memory_version", "parent_memory_version", "store_schema_version",
-    "harness_version", "generation",
-    # 摘要与哈希（十六进制片段必须整段带字母，但显式排除更稳）
-    "content_sha256", "text_hash", "config_hash",
-    # 计数/效用/向量：机器累加器与浮点数组（``0.2072`` 也会被当成 seed）
-    "n_ref", "n_adopted", "n_win_adopted", "n_not_adopted", "n_win_not_adopted",
-    "utility", "embedding", "confidence",
-    "decisions", "illegal_attempts", "fallback_decisions", "battles_won",
-    "stages_cleared", "hearts_left", "llm_latency_ms", "prompt_tokens",
-    "completion_tokens",
-})
-
+#: **仍然保留的豁免只有一条，理由与「数字空间撞车」无关**：框架自己的**播种计划**。
+#: 每条 ``episode_end`` 行都带本局的 ``seed`` / ``episode_key``，``eval.start`` 事件带
+#: ``spec.seeds``（本次评估的 held-out 篮子）。它们是 run 的**测量元数据**，不是模型可见
+#: 内容：``audit leak`` 要抓的是「held-out seed 出现在 agent 可见出口」，而不是「run 记录了
+#: 自己用了哪些 seed」。若不豁免，**每个**基线/评估 run 都会因自己的 seed 被判 critical
+#: （实测 clean-run 用例直接变 2 条 finding）——那是把审计变成噪声。
+#: 豁免**只按这三个键**（不做前后缀通配），并把这三个键的**值里**出现的任何其它 seed
+#: 仍然留在扫描面内（例如 ``spec.seeds`` 之外的 ``reason`` 字段写 seed 一定会被抓）。
+LOG_STRUCTURAL_KEYS: Final[frozenset[str]] = frozenset({"seed", "episode_key", "spec"})
 
 # ----------------------------------------------------------------------
 # 数据结构（PRD §6）
@@ -314,6 +269,41 @@ def _read_jsonl(path: Path, io_errors: list[str]) -> list[dict[str, Any]]:
     return rows
 
 
+def _read_json_document(path: Path, io_errors: list[str]) -> Any:
+    """整文件读一个 JSON **文档**（F44：与 JSONL 区分开）。
+
+    MOD-06 的 ``reflections/<episode_key>.json`` 是多行 pretty JSON，按 JSONL 逐行解析会
+    在第 2 行起报 ``Extra data`` ⇒ ``E_ENV_AUDIT_IO`` ⇒ ``audit leak`` 退出码 2。
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        io_errors.append(f"读不到 JSON {path}：{exc}")
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        io_errors.append(f"JSON 损坏 {path}：{exc.msg}")
+        return None
+
+
+def _content_values(node: Any) -> list[str]:
+    """取出一个条目里**会被泄漏的正文**（顶层与一层 ``entry`` 子对象都要看）。
+
+    键集沿用原实现（``text``/``content``/``reflection``/``summary``）；反思记录的正文在
+    ``entry.text``，故必须下探一层——否则 F44 修好 IO 后会「解析成功但什么都没扫到」。
+    """
+    out: list[str] = []
+    for target in (node, node.get("entry") if isinstance(node, dict) else None):
+        if not isinstance(target, dict):
+            continue
+        for key in ("text", "content", "reflection", "summary"):
+            value = target.get(key)
+            if isinstance(value, str) and value:
+                out.append(value)
+    return out
+
+
 def _read_text(path: Path, io_errors: list[str]) -> str:
     try:
         return path.read_text(encoding="utf-8")
@@ -387,12 +377,17 @@ def rebuild_visible_set(run_dir: Path, *, split: str = "train",
     memory_texts: list[str] = []
     for root in (run_dir / "memory", run_dir / "reflections"):
         for path in _iter_text_files(root, ("*.jsonl", "*.json", "*.txt", "*.md")):
-            if path.suffix == ".jsonl" or path.suffix == ".json":
+            # F44（2026-10-10 实跑登记）：**按文件形状分别解析**。原先 `.jsonl` 与 `.json`
+            # 都走 `_read_jsonl`，而 MOD-06 的 `reflections/<episode_key>.json` 是**多行
+            # pretty JSON**（实测 51 行）⇒ 第 2 行起 `Extra data` ⇒ `E_ENV_AUDIT_IO` ⇒
+            # `audit leak` 退出码 2。即**任何含反思的 `loop run` 都无法让审计 clean**，
+            # 而「`audit leak` clean」正是 §3.2 的判据③。
+            if path.suffix == ".jsonl":
                 for row in _read_jsonl(path, errors):
-                    for key in ("text", "content", "reflection", "summary"):
-                        value = row.get(key)
-                        if isinstance(value, str) and value:
-                            memory_texts.append(value)
+                    memory_texts.extend(_content_values(row))
+            elif path.suffix == ".json":
+                # 单文档 JSON 整文件解析；反思正文嵌在 `entry.text`，故取值要下探一层。
+                memory_texts.extend(_content_values(_read_json_document(path, errors)))
             else:
                 memory_texts.append(_read_text(path, errors))
 
@@ -787,24 +782,27 @@ def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "tr
             for path in _iter_text_files(root, ("*.jsonl", "*.json", "*.txt", "*.md")):
                 rel = _rel(path, run_dir)
                 text = _read_text(path, io_errors)
+                # F45a（2026-10-10 实跑登记）：`.json` 在这里是**多行 JSON 文档**
+                # （MOD-06 的 `reflections/<episode_key>.json` 实测 51 行），逐行
+                # `json.loads` 必失败 ⇒ `row=None`。原先靠「投影掉机器元数据键」补救；
+                # F45-2 删掉名单后**整份文档**都进扫描面：文档类仍整份解析一次（保证
+                # 不因逐行解析失败而漏扫），但**不再丢任何字段**。
+                is_document = path.suffix == ".json"
+                seed_scanned_doc = False
                 for line_no, line in enumerate(text.splitlines(), start=1):
                     step = max(0, line_no - 1)
-                    # seed 规则只扫内容字段（见 MEMORY_NON_CONTENT_KEYS：ISO 年份 2026
-                    # 撞 heldout 区间）；其余规则仍扫原始行。
-                    seed_text = line
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError:
-                        row = None
-                    if isinstance(row, dict):
-                        seed_text = json.dumps(
-                            {k: v for k, v in row.items()
-                             if k not in MEMORY_NON_CONTENT_KEYS},
-                            ensure_ascii=False, sort_keys=True)
-                    record(scan_text(seed_text, forbidden=seed_tokens, surface="memory",
-                                     episode_id=path.stem, step=step,
-                                     evidence_chars=evidence_chars,
-                                     line_ref=f"{rel}:{line_no}"))
+                    # F45-2：seed 规则扫**原始行/原始文档**（不再有字段豁免）。
+                    if is_document:
+                        if not seed_scanned_doc:
+                            record(scan_text(text, forbidden=seed_tokens, surface="memory",
+                                             episode_id=path.stem, step=0,
+                                             evidence_chars=evidence_chars, line_ref=rel))
+                            seed_scanned_doc = True
+                    else:
+                        record(scan_text(line, forbidden=seed_tokens, surface="memory",
+                                         episode_id=path.stem, step=step,
+                                         evidence_chars=evidence_chars,
+                                         line_ref=f"{rel}:{line_no}"))
                     record(scan_text(line, forbidden=other_tokens, surface="memory",
                                      episode_id=path.stem, step=step,
                                      evidence_chars=evidence_chars,
@@ -836,14 +834,17 @@ def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "tr
                         step = int(row["step"])
                     if row.get("type") != "episode_end":
                         stats["steps"] += 1
-                    # seed 只扫「内容」字段（模型产出/动作/原因）：机器元数据里的
-                    # 本局 seed、摘要、token 计数不是泄漏面（见 LOG_NON_CONTENT_KEYS）
-                    content = json.dumps({k: v for k, v in row.items()
-                                          if k not in LOG_NON_CONTENT_KEYS},
-                                         ensure_ascii=False, sort_keys=True)
+                # F45-2：seed 规则扫**整行**——只去掉框架自己的**播种计划**三键
+                # （``LOG_STRUCTURAL_KEYS``：本局 ``seed`` / ``episode_key`` / ``spec.seeds``），
+                # 其余字段（含摘要、token 计数、耗时、采样浮点、模型产出）全部在扫描面内。
+                # 修复前这里有 136+ 条人工死名单；六位端口空间把它们全部变成不必要。
+                if isinstance(row, dict):
+                    seed_line = json.dumps(
+                        {k: v for k, v in row.items() if k not in LOG_STRUCTURAL_KEYS},
+                        ensure_ascii=False, sort_keys=True)
                 else:
-                    content = line
-                record(scan_text(content, forbidden=seed_tokens, surface="log",
+                    seed_line = line
+                record(scan_text(seed_line, forbidden=seed_tokens, surface="log",
                                  episode_id=episode_id, step=step,
                                  evidence_chars=evidence_chars,
                                  line_ref=f"{rel}:{line_no}"))

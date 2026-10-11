@@ -27,8 +27,11 @@ from dice_ratchet.loop import cli as loop_cli
 from dice_ratchet.loop.runner import EvalRunnerAdapter
 from loop_support import REPO_ROOT
 
+from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol
+_H1_START = validate_protocol(coerce_protocol(None)).splits["heldout"].baskets["H1"].start
+
 #: 6 局 = 3 轮「2 个 worker 同时在飞」，足以暴露交错（现场 40 局里 13 局被污染）。
-SEEDS = (2000, 2001, 2002, 2003, 2004, 2005)
+SEEDS = tuple(range(_H1_START, _H1_START + 6))
 
 #: 逐局一致性要比对的字段。刻意不只看胜负：6 局尺度上，污染常常只表现为
 #: 非法动作／步数塌缩／``decisionIndex`` 取自另一个环境状态，胜负反而可能不变。
@@ -101,3 +104,37 @@ def test_concurrency_does_not_change_per_episode_results(tmp_path, monkeypatch):
     dirty = {seed: r.illegal_attempts for seed, r in concurrent.items()
              if r.illegal_attempts}
     assert not dirty, f"并发评估出现非法动作（读到别的局的观测，F30）：{dirty}"
+
+
+#: 3 局 = 1 轮「2 个 worker 同时在飞」+ 1 局收尾：足以暴露「并发改变聚合」。
+_EQUIV_SEEDS = tuple(range(_H1_START, _H1_START + 3))
+
+
+def test_n_workers_equivalence_of_evaluate_arm_on_the_production_path(tmp_path, monkeypatch):
+    """F42-C 的等价性：``evaluate_arm(n_workers=2)`` 与 ``=1`` 的 ``ArmResult`` 逐字段一致。
+
+    为什么单列这条：F42-C 把 ``CandidateEvaluator._evaluate_arm`` 的 ``n_workers``
+    从「默认 1」改成「按配置（默认 2）」——**并发度变了**，因此必须证明它不改变测量
+    结果（否则整个 M3 的 3 代数字与 M2 的串行基线不可比）。这里走与
+    ``loop run --agent heuristic`` **同一条装配路径**（``_build_orchestrator``），
+    即 F30 现场的那条路径，而不是造一个局部的 ``SandboxRunner``。
+    """
+    orch, run_ctx = _build(tmp_path, monkeypatch)
+    serial = _evaluate(run_ctx, orch, n_workers=1)
+    concurrent = _evaluate(run_ctx, orch, n_workers=2)
+
+    assert serial.metrics.as_dict() == concurrent.metrics.as_dict(), (
+        "并发改变了聚合指标：F42-C 的 n_workers 转发会让 M3 数字与串行基线不可比")
+    assert [r.as_dict() for r in serial.results] == [r.as_dict() for r in concurrent.results]
+    assert [r.seed for r in serial.results] == list(_EQUIV_SEEDS)
+
+
+def _evaluate(run_ctx: Any, orch: Any, *, n_workers: int) -> Any:
+    """在固定 seed 子集上跑一次 ``evaluate_arm``（与 ``_eval`` 同源，但返回整臂）。"""
+    proto = validate_protocol(coerce_protocol(None))
+    return evaluate_arm(
+        run_ctx.harness_dir, split="heldout", basket=_EQUIV_SEEDS, memory_version=0,
+        arm="parent", run_id=run_ctx.run_id, protocol=proto,
+        config=run_ctx.app_config, generation=0, harness_version=0,
+        runner=EvalRunnerAdapter(orch.runner), n_workers=n_workers,
+        episode_config=run_ctx.episode_config)
