@@ -375,13 +375,20 @@ def _snapshot_memory(run_ctx: RunContext, state: RunState) -> int | None:
 # =====================================================================
 
 def write_gen000_baseline(run_ctx: RunContext, *, harness_version: int = 0,
-                          basket: Any = "H1", runner: Any = None) -> Path | None:
-    """对 harness v0 在 ``basket``（默认 H1）上跑 MOD-08 ``evaluate_arm`` + ``evaluate_generation``。
+                          basket: Any = None, runner: Any = None) -> Path | None:
+    """对 harness v0 在 ``basket``（缺省取 ``evolve.heldout_basket``，默认 H1）上跑
+    MOD-08 ``evaluate_arm`` + ``evaluate_generation``。
 
     产出 ``generations/gen-000/report.json``（``decision="baseline"``），后续各代与它对比。
     ``runner`` 非空时用 MOD-06 的 ``EpisodeRunner``（经 ``EvalRunnerAdapter``）执行评估局，
     轨迹落到 ``episodes/heldout/``；为空时退回 MOD-08 的默认执行器。
     MOD-08 / 模型不可用时返回 ``None`` 并降级——基线缺失不阻塞主循环。
+
+    **F54（2026-10-11）**：`basket` 原先的默认值是**写死的字符串 `"H1"`**，且生产调用方
+    从不传它 ⇒ 「彩排只用 H3」在代码层不可达：`scripts/run_m3_rehearsal.sh` 实测跑在 H1 上
+    （一次性资源被消耗）。现在缺省从 ``evolve.heldout_basket`` 取，**默认值仍是 H1**，
+    于是「基线篮子」与「候选评估篮子」（`evolve.judge.CandidateEvaluator`）由**同一个键**
+    决定，不可能再分叉。
     """
     paths = run_ctx.paths
     report_path = Path(paths.generations) / "gen-000" / "report.json"
@@ -390,6 +397,9 @@ def write_gen000_baseline(run_ctx: RunContext, *, harness_version: int = 0,
     cfg = run_ctx.app_config
     if cfg is None:
         return None
+    if basket is None:
+        basket = str(getattr(getattr(cfg, "evolve", None), "heldout_basket", None)
+                     or "H1")
     try:
         from ..evals import evaluate_arm, evaluate_generation, write_generation_report
         from ..evals.seeds import coerce_protocol, validate_protocol

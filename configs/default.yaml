@@ -295,6 +295,17 @@ evolve:
   fallback_tol: 0.05
   # truncation 的绝对 backstop（只堵相对门的已知放宽，不替代相对门）。
   truncation_backstop: 0.60
+  # 2026-10-11（F54，彩排事故的处置）：**held-out 篮子可配置**，默认仍是 H1。
+  # 现场：`evolve/judge.py` 的 `HOLDOUT_BASKET = "H1"` 与 `loop/generation.py`
+  #   `write_gen000_baseline(basket="H1")` 是**两处写死的默认值**，且没有任何配置项可改
+  #   ⇒ `scripts/run_m3_rehearsal.sh`（声明只用 H3 731080–731099）实测**跑在 H1 上**
+  #   （已落盘 `e-731000…731004-g000-parent.jsonl`，≈¥5.1 API + 5 个一次性 seed）。
+  # 口径：本键同时决定 **gen-000 基线**与**候选 arm 的 held-out 评估**用哪个篮子
+  #   ——两者必须同源，否则 `parent` 与 `candidate` 的对比跨越两套 seed（C0 的
+  #   「同预算」前提直接失效）。默认 `H1`（`generation_judge`）**不变**；只有
+  #   「不参与 M3 判据」的彩排/干跑才该改成 `H3`（`reserve`，可重复用，见 D-M3-5）。
+  # ⚠️ 属于 `config_hash` 的一部分：改成 H3 即换 run-id 族，**不得**在正式实验 run 上改。
+  heldout_basket: H1
   hitl: true
   gate_timeout_hours: 24
   propose_max_retries: 2

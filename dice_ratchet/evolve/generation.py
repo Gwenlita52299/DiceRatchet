@@ -357,10 +357,15 @@ def _build_evaluator(*, cfg: Any, app_cfg: Any, evaluator: Any, runner: Any,
                      seed: int | None = None, run_dir: Any = None) -> Any:
     if evaluator is not None:
         return evaluator
+    # F54：held-out 篮子**必须**与 gen-000 基线同源（`evolve.heldout_basket`），否则
+    # parent 与 candidate 的对比会跨越两套 seed（C0 的「同预算」前提直接失效）。缺配置时
+    # 不传该字段，回落到 `CandidateEvaluator` 的默认（H1）——不静默换成别的篮子。
+    heldout_basket = getattr(getattr(app_cfg, "evolve", None), "heldout_basket", None)
+    extra = {} if heldout_basket is None else {"heldout_basket": str(heldout_basket)}
     return judge_mod.CandidateEvaluator(
         protocol=protocol, config=app_cfg, memory_version=int(memory_version),
         run_id=run_id, generation=int(gen), smoke_seeds=tuple(smoke_seeds),
-        runner=runner, episode_config=episode_config, run_dir=run_dir)
+        runner=runner, episode_config=episode_config, run_dir=run_dir, **extra)
 
 
 def _parent_arms(ev: Any, result: GenerationResult, *, parent: HarnessRef,

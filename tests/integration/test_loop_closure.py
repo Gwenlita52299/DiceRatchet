@@ -445,6 +445,50 @@ def test_gen000_baseline_report_is_written(tmp_path, monkeypatch):
         "不得回落到硬编码的 Path('runs')")
 
 
+def test_f54_gen000_baseline_uses_configured_basket(tmp_path, monkeypatch):
+    """给定 ``evolve.heldout_basket="H3"``；当 ``write_gen000_baseline`` **不传 basket**；
+
+    则评估局的文件名落在 **H3**（731080–731099）上，而不是写死的 H1。
+
+    **本用例对应 2026-10-11 的彩排事故（F54）**：``write_gen000_baseline`` 的 ``basket``
+    默认值是字面量 ``"H1"``，且生产调用方从不传它 ⇒ ``scripts/run_m3_rehearsal.sh``
+    （声明只用 H3、且 D-M3-5 明令 H1/H2/test 一律不出现）实测**跑在 H1 上**：
+    已落盘 ``e-731000…731004-g000-parent.jsonl``，代价 ≈¥5.1 API + 5 个**一次性** seed。
+    这不是「文档没写清」，是「代码里没有那条路」——所以护栏必须落在**真实产物**上：
+    断言的判据是**落盘文件名里的 seed**，不是「某个函数参数等于什么」。
+    """
+    monkeypatch.chdir(_REPO)
+    from dataclasses import replace
+
+    from fakes import FakeEnv, FakePolicy
+    from dice_ratchet.infra.config import load_config
+    from dice_ratchet.loop.generation import write_gen000_baseline
+    from loop_support import build_runner
+
+    h3 = validate_protocol(coerce_protocol(None)).splits["heldout"].baskets["H3"]
+    h3_seeds = (h3.start, h3.start + 1, h3.start + 2)
+    cfg = load_config()
+    cfg = replace(cfg, evolve=replace(cfg.evolve, heldout_basket="H3"))
+    runner, ctx = build_runner(tmp_path, policy=FakePolicy(),
+                               env=FakeEnv(steps_to_terminate=3, outcome="win"),
+                               loop_cfg=cfg.loop, seeds=())
+    ctx.app_config = cfg
+    ctx.config = cfg.loop
+    runner.config = cfg.loop
+
+    # **不传 basket**：走配置键（这正是修复前后的行为分叉点）
+    report_path = write_gen000_baseline(ctx, harness_version=0, runner=runner)
+    assert report_path is not None and report_path.is_file()
+    heldout = sorted(p.name for p in
+                     (tmp_path / "r-loop-test" / "episodes" / "heldout").glob("*.jsonl"))
+    # H3 的前 3 个 seed —— 完整 20 局是配置给的，这里只证「篮子来自配置」
+    assert h3_seeds[0] in [int(n.split("-")[1]) for n in heldout if n.startswith("e-")]
+    assert not any(n.startswith("e-73100") for n in heldout), (
+        f"H1（一次性资源）不得出现在彩排路径上；实际落盘 {heldout}")
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["heldout"].get("basket") == "H3", report["heldout"].get("basket")
+
+
 def test_gen000_baseline_is_idempotent(tmp_path, monkeypatch):
     """已存在的 gen-000 report 不再重算（FR-06-13a 的幂等）。"""
     monkeypatch.chdir(_REPO)

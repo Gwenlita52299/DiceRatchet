@@ -48,6 +48,13 @@ export DICERATCHET_EVAL__N_HELDOUT=20
 # 在装配配置时就抛 `[E_IO_CONFIG_INVALID] loop.heldout_n=40 必须等于 eval.n_heldout=20`
 # （退出码 2）——实测确认（2026-10-11，修复前）。**彩排没跑过，所以这个死锁此前没暴露。**
 export DICERATCHET_LOOP__HELDOUT_N=20
+# ⚠️ **held-out 篮子**（F54，2026-10-11 彩排事故的处置）：gen-000 基线与候选评估的篮子
+# 原先**两处写死 H1**（`evolve.judge.HOLDOUT_BASKET`、`write_gen000_baseline(basket="H1")`）
+# 且没有配置项 ⇒ 本脚本声明「只用 H3」但实测跑在 **H1**（一次性资源）上：已落盘
+# `e-731000…731004-g000-parent.jsonl`（≈¥5.1 API + 5 个一次性 seed）。现在该键存在，
+# 这里显式指到 **H3 731080–731099（role: reserve，可重复用）**。
+# **正式实验不要设这个变量**（默认 H1 = generation_judge，M3 判据 1 的裁判篮子）。
+export DICERATCHET_EVOLVE__HELDOUT_BASKET=H3
 
 GENERATIONS=2
 K=30
@@ -59,7 +66,7 @@ echo "runs root     : $DICERATCHET_INFRA__RUNS_ROOT"
 echo "harness 副本  : $HARNESS_DIR"
 echo "代数 / K      : $GENERATIONS / $K"
 echo "train seeds   : $TRAIN_SEEDS"
-echo "heldout       : H3 731080–731099（20 局）——**不用 H1/H2**"
+echo "heldout       : ${DICERATCHET_EVOLVE__HELDOUT_BASKET} 731080–731099（20 局）——**不用 H1/H2**（F54：篮子由 evolve.heldout_basket 决定，本脚本显式指 H3）"
 echo "difficulty    : ${DICERATCHET_ENV__EPISODE__DIFFICULTY}（D-M3-1 裁决：hard×6）"
 echo "估算          : ≈2 h / ≈¥40（付费需用户点头）"
 echo
@@ -84,6 +91,14 @@ if [[ "$PLAN_ONLY" == "1" ]]; then
 fi
 
 # 起跑前：工作区必须干净（F47-A 的起跑门禁也会拦，这里提前给可读的提示）
+# F54 起跑断言：篮子必须是 H3。写死 H1 的那段时间里，脚本声明与实际行为不一致
+# 且**没有**任何检查能发现——代价是一次性 seed 被消耗（2026-10-11 实测）。
+if [[ "${DICERATCHET_EVOLVE__HELDOUT_BASKET:-}" != "H3" ]]; then
+  echo "彩排必须用 H3（reserve）作为 held-out 篮子；当前 "
+  echo "DICERATCHET_EVOLVE__HELDOUT_BASKET=${DICERATCHET_EVOLVE__HELDOUT_BASKET:-<未设>}" >&2
+  exit 4
+fi
+
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "工作区不干净（F47-A 会在起跑处 E_IO_GIT_DIRTY 拦下）。先 commit 或 stash。" >&2
   git status --short >&2
