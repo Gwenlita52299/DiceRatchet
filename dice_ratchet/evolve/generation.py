@@ -533,10 +533,18 @@ def _finish_report(*, result: GenerationResult, run_ctx: Any, cfg: Any,
                            cfg=cfg, run_id=run_id, run_root=run_root,
                            protocol=protocol, gen=gen, parent_version=parent_version)
     try:
-        from dice_ratchet.evals import append_generations_csv, write_generation_report
+        from dice_ratchet.evals import (append_generations_csv, enforce_report_determinism,
+                                        write_generation_report)
         from dice_ratchet.evals.harness import generations_row_from_report
 
         app_cfg = ctx_app_config(run_ctx, cfg)
+        # G3 的**生产执行点**（2026-10-11 D-M3-3 裁决 A，Spec v2.9 / B-65）。
+        # 现场：`check_report_determinism` 从 M1 起没有任何生产调用点 ⇒「同参数重跑 sha256
+        # 必须一致」这条承诺在真实 run 里从未被执行过。这里把它接上，但**按臂分口径**：
+        # 臂内含 `provider=api` 的角色（当前主力臂 `C1`）时，端到端逐字节可复现在物理上
+        # 不成立（`api_supports_seed=false`）⇒ 记 `api_nondeterministic` + 发
+        # `eval.nondeterministic`，不抛 `E_EVAL_NONDETERMINISTIC`；本地臂仍硬执行。
+        enforce_report_determinism(run_root, gen, report, app_cfg=app_cfg)
         path, _sha = write_generation_report(run_root, gen, report)
         result.report_path = str(path)
         # F43：本代行由**写报告的一方**追写 `metrics/generations.csv`（B-06 固定列）。

@@ -16,7 +16,12 @@
 - **逐局增量落盘**（F18）：``on_result`` 钩子让调用方每局落一次 ``episodes/<split>/``，
   长跑崩溃只丢当前局；
 - 结果**按 seed 升序**归一化聚合，``n_workers=1`` 与 ``n>1`` 必须逐字节一致（G3/T-15）；
-- 报告落盘 ``report.json`` + ``report.sha256``；同参数重跑 sha 不一致 → ``E_EVAL_NONDETERMINISTIC``。
+- 报告落盘 ``report.json`` + ``report.sha256``；**G3 按臂分层执行**（2026-10-11 D-M3-3 裁决 A）：
+  **本地臂**同参数重跑 sha 不一致 → ``E_EVAL_NONDETERMINISTIC``；**API 臂**（``api_supports_seed=false``，
+  实测字节相同的请求 9 次返回 9 个不同响应）端到端逐字节可复现**物理上不成立** → 跳过硬门并发
+  ``eval.nondeterministic``，不抛异常。生产执行点是 ``enforce_report_determinism``——调用方若不显式
+  调用它，G3 就只是一句文档（这正是 2026-10-11 之前的状态：``check_report_determinism``
+  从 M1 起没有任何生产调用点）。
 """
 
 from __future__ import annotations
@@ -53,6 +58,7 @@ __all__ = [
     "load_episode_results", "gather_results", "read_episode_protocols",
     "generation_report_path",
     "report_sha_path", "write_generation_report", "check_report_determinism",
+    "enforce_report_determinism", "reproducibility_of",
     "append_generations_csv", "write_ext_metrics", "write_plots_data",
     "write_episode_summaries",
     "GENERATIONS_COLUMNS", "rng_for", "GainVerdictDiversity",
@@ -1304,6 +1310,90 @@ def check_report_determinism(run_dir: Path | str, generation: int,
             hint="同 (run_id, generation, split, seeds) 必须逐字节一致（G3）；"
                  "检查是否引入了未显式 seed 的随机源（INV-6）")
     return digest
+
+
+#: G3 的执行口径（2026-10-11 D-M3-3 裁决 A，Spec v2.9 / B-65）。
+#:
+#: 现场：``check_report_determinism`` 从 M1 起就**没有任何生产调用点**（只有单测调用），
+#:   所以「同参数重跑 `report.sha256` 必须一致，否则抛 `E_EVAL_NONDETERMINISTIC`」
+#:   这条承诺**在真实 run 里从未被执行过**——它只是一句文档。
+#:
+#: 更关键的是：对 **API 臂**（当前主力臂 `C1` = `deepseek-flash`，注册表标注
+#:   ``api_supports_seed=false``，实测「字节相同的请求 9 次返回 9 个不同响应」）
+#:   *端到端*逐字节可复现**在物理上不成立**。若把它当硬门接进生产，第一个 API run 就会
+#:   假报 `E_EVAL_NONDETERMINISTIC`。
+#:
+#: 裁决 A：把可复现性承诺**精确化到能兑现的层级**——
+#:   · **可复现层**（代码 / 配置 / seed / 聚合口径 / 并发归一化）⇒ **仍然硬执行**；
+#:   · **LLM 层** ⇒ 不承诺逐字节；采样照记、响应按 request hash 归档、变化即标
+#:     `llm.nondeterministic`（MOD-03 既有口径）；
+#:   · 臂内含任何 ``provider=api`` 的角色 ⇒ G3 记 ``api_nondeterministic`` 并发
+#:     ``eval.nondeterministic`` 事件，**不抛异常**。
+#:
+#: 诚实边界：这**降低了「可复现」的强度**，必须在报告里显式声明；不得据此宣称
+#:   「API 臂的 M3 结果可逐字节复现」。
+_DETERMINISM_ENFORCED: Final[str] = "enforced"
+_DETERMINISM_API_NONDETERMINISTIC: Final[str] = "api_nondeterministic"
+
+
+def reproducibility_of(app_cfg: Any, *,
+                       bindings: Mapping[str, Any] | None = None) -> tuple[bool, str]:
+    """该配置的评估结果能否承诺**端到端逐字节可复现**。
+
+    返回 ``(reproducible, reason)``。``reason`` 是给审计看的短标签
+    （``no_api_roles`` / ``api_role:<role>=<model_id>`` / ``registry_unavailable``）。
+
+    **fail-closed 方向**：配置不可解析时判 ``False``（不承诺可复现）——因为「误判为可复现」
+    会让 API run 假报 `E_EVAL_NONDETERMINISTIC`，而「误判为不可复现」只是少执行一次检查。
+    """
+    if bindings is None:
+        try:
+            from dice_ratchet.inference.roles import resolve_role_bindings
+
+            bindings = resolve_role_bindings(app_cfg)
+        except Exception as exc:  # noqa: BLE001 - 任何解析失败都不得让报告落盘失败
+            return False, f"registry_unavailable:{type(exc).__name__}"
+    for role in sorted(bindings):
+        spec = bindings[role]
+        provider = getattr(spec, "provider", None)
+        if provider is None and isinstance(spec, Mapping):  # pragma: no cover - 兼容映射形态
+            provider = spec.get("provider")
+        if str(provider) == "api":
+            model_id = getattr(spec, "model_id", None)
+            if model_id is None and isinstance(spec, Mapping):  # pragma: no cover
+                model_id = spec.get("model_id")
+            return False, f"api_role:{role}={model_id}"
+    return True, "no_api_roles"
+
+
+def enforce_report_determinism(run_dir: Path | str, generation: int,
+                               report: Mapping[str, Any], *, app_cfg: Any,
+                               bindings: Mapping[str, Any] | None = None) -> str:
+    """**生产路径**的 G3 执行（D-M3-3 裁决 A）。
+
+    与 ``check_report_determinism`` 的区别只有一条：先问「这一跑的臂能不能承诺端到端
+    逐字节可复现」。能 ⇒ 硬执行（行为与旧函数完全一致，含抛 ``E_EVAL_NONDETERMINISTIC``）；
+    不能 ⇒ 跳过硬门、发 ``eval.nondeterministic`` 事件，并把口径写回 ``report.sha256``
+    旁边（调用方负责把 ``determinism`` 记进 ext / 事件）。
+
+    返回 sha256（与 ``write_generation_report`` 的返回值同形，便于串联）。
+    """
+    reproducible, reason = reproducibility_of(app_cfg, bindings=bindings)
+    if reproducible:
+        return check_report_determinism(run_dir, generation, report)
+    try:  # 事件失败绝不阻断报告落盘（与 `_emit` 的既有纪律一致）
+        from dice_ratchet.infra.events import emit
+
+        emit("eval.nondeterministic", generation=int(generation),
+             determinism=_DETERMINISM_API_NONDETERMINISTIC, reason=str(reason),
+             repro_scope="code/config/seed only (LLM layer archived by request hash)")
+    except Exception:  # noqa: BLE001 - pragma: no cover
+        pass
+    # 返回**本次**报告的 sha（不比对既有值：API 臂上比对必然不等，
+    # 而「不等」在这里是**预期行为**，不是缺陷）。
+    payload = json.dumps(_round_floats(dict(report)), ensure_ascii=False, indent=2,
+                         sort_keys=True, default=str)
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _round_floats(obj: Any) -> Any:

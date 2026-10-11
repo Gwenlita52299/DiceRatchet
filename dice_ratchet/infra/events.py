@@ -146,6 +146,7 @@ def _build_registry() -> dict[str, EventSpec]:
         ("seed_start", frozenset({"seed", "split", "basket"})),
         ("seed_done", frozenset({"seed", "outcome"})),
         ("report", frozenset({"generation"})),
+        ("nondeterministic", frozenset({"generation", "determinism"})),
         ("guard_violation", frozenset({"error_code", "split", "destination"})),
         ("collapse", frozenset({"generation", "flag"})),
         ("test_unlock", frozenset({"generation", "attestation_path"})),

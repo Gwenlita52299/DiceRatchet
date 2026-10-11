@@ -74,6 +74,16 @@ python tests/golden/evals/regen_metrics_golden.py                     # G2：指
   Holm–Bonferroni（消融，两臂时首个阈值 0.025）、BH-FDR q=0.10（次级指标）。
 - **复现**：同 `(run_id, generation, split, seeds)` 重跑得到逐字节相同的
   `report.json`（`report.sha256` 比对），否则 `E_EVAL_NONDETERMINISTIC`。
+  **2026-10-11（D-M3-3 裁决 A，Spec v2.9 / B-65）按臂分层**：这条硬门只对**本地臂**成立；
+  臂内含任何 `provider=api` 的角色（如主力臂 `C1` 的 `deepseek-flash`，
+  `api_supports_seed=false`，实测字节相同的请求 9 次返回 9 个不同响应）时，端到端逐字节
+  可复现物理上不成立 ⇒ 该臂上跳过 sha256 硬门、发
+  `eval.nondeterministic{determinism=api_nondeterministic, reason, repro_scope}` 事件，
+  **不抛异常**。生产执行点是 `harness.enforce_report_determinism(root, gen, report,
+  app_cfg=...)`，调用点在 `evolve/generation.py` 的**写报告之前**——不显式调用它，
+  这条承诺就只是一句文档（2026-10-11 之前的实际状态：`check_report_determinism`
+  存在、被导出、有单测，却**没有任何生产调用点**）。可复现层（代码/配置/seed/聚合口径/
+  并发归一化）的承诺不变。
 - **seed 协议**（F45-2）：train 保持 `1000–1999`；heldout H1 `731000–731039`、
   H2 `731040–731079`、H3 `731080–731099`；test `947000–947099`（六位端口空间，
   避开耗时/预算/日历字面量）。`seeds_hash =
