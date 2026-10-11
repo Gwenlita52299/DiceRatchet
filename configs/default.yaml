@@ -279,6 +279,22 @@ evolve:
   # tol = 0.05 的 n=40 口径：heldout 粒度 1/40 = 0.025，0.05 = 容忍 2 局的噪声，
   #   与 evolve.win_rate_tol 同一依据（D-3）。
   truncation_tol: 0.05
+  # 2026-10-11（D-M3-2 裁决 E，用户）：C5 三轴统一为「相对门 + 绝对 backstop」。
+  # 现场：`max_illegal_rate` / `max_fallback_rate` 的绝对门（0.35 / 0.25）对 `C1` 实测值
+  #   （0.0318 / 0.0017）松 **11× / 147×** ⇒ 实际非约束（与上方「先松开」同一状态）。
+  #   后果：「候选把非法率推高」的退化候选被放行，**判据 2 的归因结论不成立**。
+  # 判定式：`candidate ≤ min(parent + <axis>_tol, <axis>_backstop)`（truncation 同构）。
+  #   rel 抓「相对退化」；backstop 抓「parent 本身已经很烂时跟着烂」（§8.2.2 的已知放宽：
+  #   parent=0.90 时候选 0.60 也过）。
+  # `tol = 0.05` 按轴分列、**不可互换**：illegal（步级，分母≈12k 尝试）/ fallback（步级，
+  #   分母≈3.7k 决策）的 0.05 远大于同臂批内噪声（se≈0.0017 / 0.0030）⇒ 防「真·退化」，
+  #   不承担「检微小漂移」；truncation 是**局级**（1/40 = 0.025）⇒ 0.05 = 2 局噪声。
+  # ⚠️ 诚实边界：§3.2「按同代内抖动标定」**未做**（需配对实测，未付费）⇒ 0.05 是起点值，
+  #   不是实测标定值。
+  illegal_tol: 0.05
+  fallback_tol: 0.05
+  # truncation 的绝对 backstop（只堵相对门的已知放宽，不替代相对门）。
+  truncation_backstop: 0.60
   hitl: true
   gate_timeout_hours: 24
   propose_max_retries: 2

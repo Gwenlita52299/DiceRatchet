@@ -562,6 +562,28 @@ class EvolveConfig:
     # 不像 illegal/fallback 那样有跨臂的绝对意义。
     # 0.05 = n=40 下的 2 局（粒度 0.025），与 win_rate_tol 同一依据。
     truncation_tol: float = 0.05
+    # ---- C5 的 M3 收紧（2026-10-11 D-M3-2 裁决 E）---------------------------------
+    # 现场：illegal/fallback 原为**绝对门**（`max_illegal_rate=0.35` / `max_fallback_rate=0.25`），
+    #   而 `C1` 实测 0.0291–0.0326 / 0.0000–0.0008 ⇒ 松 **11× / 147×**，等于非约束门
+    #   （与 M2 的「C5 临时非约束门」同一状态）。后果：「候选把非法率推高」这类退化候选
+    #   会被放行，**判据 2 的归因结论不成立**。
+    # 裁决：三轴统一为 **相对门 + 绝对 backstop**：
+    #   `candidate ≤ min(parent + tol, backstop_abs)`——rel 抓「相对退化」；
+    #   backstop 抓「parent 本身已经很烂时跟着烂」（MOD-07 §8.2.2 记录的已知放宽：
+    #   parent=0.90 时候选 0.60 也过）。
+    # `tol = 0.05` 的口径**按轴分列，不可互换**：
+    #   · `illegal`（**步级**：分母 = 成功步 + 非法尝试；`C1` hard×6 约 12k 尝试）
+    #     与 `fallback`（**步级**：分母 = 决策点；约 3.7k 决策）的 0.05 远大于同臂批内噪声
+    #     （二项 se ≈ 0.0017 / 0.0030）⇒ 优先防「真·退化」，**不承担**「检微小漂移」；
+    #   · `truncation`（**局级**：粒度 1/40 = 0.025）的 0.05 = 容忍 2 局的噪声，
+    #     与 `evolve.win_rate_tol` 同一依据（D-3）。
+    # **诚实边界**：§3.2 的「按同代内抖动标定」**未做**（需一批配对实测，未付费）⇒ 0.05 是
+    #   「与既有 `win_rate_tol`/`truncation_tol` 同口径 + 远大于步级噪声」定的**起点值**，
+    #   不是实测标定值；标定后只改数值，不改本设计。
+    illegal_tol: float = 0.05
+    fallback_tol: float = 0.05
+    # truncation 的绝对 backstop：**只**用于堵相对门的已知放宽，不替代相对门。
+    truncation_backstop: float = 0.60
     # 标定依据：full PolicyAgent 在 H1 子集（seed 2000–2009，n=10，eval）实测
     # illegal 0.3016 / fallback 0.2146 / truncation 0.10，与 fixed_prompt 基线同量级，
     # 原阈值下 C5 会 reject 每一个候选（见 docs/reviews/2026-10-07-M2-S31-full-agent基线实测.md）。
@@ -585,6 +607,10 @@ class EvolveConfig:
         _check("evolve.max_illegal_rate", self.max_illegal_rate, float, minv=0.0, maxv=1.0)
         _check("evolve.max_fallback_rate", self.max_fallback_rate, float, minv=0.0, maxv=1.0)
         _check("evolve.truncation_tol", self.truncation_tol, float, minv=0.0, maxv=1.0)
+        _check("evolve.illegal_tol", self.illegal_tol, float, minv=0.0, maxv=1.0)
+        _check("evolve.fallback_tol", self.fallback_tol, float, minv=0.0, maxv=1.0)
+        _check("evolve.truncation_backstop", self.truncation_backstop, float,
+               minv=0.0, maxv=1.0)
 
 
 @dataclass(frozen=True)
