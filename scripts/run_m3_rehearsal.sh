@@ -43,6 +43,11 @@ export DICERATCHET_INFERENCE__MODE=eval
 export DICERATCHET_EVOLVE__HITL=true
 # 彩排把 heldout 缩到 H3 的 20 局（正式实验用 H1 的 40 局）
 export DICERATCHET_EVAL__N_HELDOUT=20
+# ⚠️ 必须**同时**改 loop.heldout_n（`Config.validate()` 的跨段一致性：
+# `loop.heldout_n == evals.n_heldout`，`infra/config.py`）。只改前者会让 `loop run`
+# 在装配配置时就抛 `[E_IO_CONFIG_INVALID] loop.heldout_n=40 必须等于 eval.n_heldout=20`
+# （退出码 2）——实测确认（2026-10-11，修复前）。**彩排没跑过，所以这个死锁此前没暴露。**
+export DICERATCHET_LOOP__HELDOUT_N=20
 
 GENERATIONS=2
 K=30

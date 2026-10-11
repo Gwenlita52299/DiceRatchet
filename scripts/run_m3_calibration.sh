@@ -32,6 +32,12 @@ export DICERATCHET_INFERENCE__MODE=eval
 export DICERATCHET_INFERENCE__SEED=0
 # heldout 缩到 H3 的 20 局（正式实验用 H1 的 40 局）
 export DICERATCHET_EVAL__N_HELDOUT=20
+# ⚠️ 必须**同时**改 loop.heldout_n：`Config.validate()` 有跨段一致性检查
+# （`loop.heldout_n == evals.n_heldout`，`infra/config.py`，Spec §4.6）。
+# 只改 `EVAL__N_HELDOUT` 会让**每一条**命令在装配配置时就抛
+# `[E_IO_CONFIG_INVALID] loop.heldout_n=40 必须等于 eval.n_heldout=20`（退出码 2）
+# —— 实测：`baseline` 与 `loop run` 都过不去（2026-10-11，修复前）。
+export DICERATCHET_LOOP__HELDOUT_N=20
 
 echo "=== M3 标定数据（run-id=${RUN_ID}）==="
 echo "heldout: H3 731080–731099（20 局）——**不用 H1/H2/test**"
@@ -65,8 +71,19 @@ echo
 echo "--- ② heuristic 基线在 H3 上（秒级，¥0）---"
 echo "    用途：给出「同口径下一个已知强度策略的代际抖动」量级参照。"
 echo "    ⚠️ 边界：启发式的**绝对熵**与 LLM 不同源 ⇒ 只用它定抖动**量级**，不用于定绝对值。"
-"$PY" -m dice_ratchet baseline --kind heuristic --split heldout --basket H3 \
-  --run-id "$RUN_ID" || echo "  （heuristic 基线已存在或失败——不阻塞）"
+# F51-A：原写法是 `... || echo "（已存在或失败——不阻塞）"` ⇒ **任何**失败都被降级成
+# 一句提示，脚本继续走到 `exit 0`（实测：配置装配失败时退出码仍是 0，而 ② 一步没跑）。
+# 「已存在」与「失败」是两件事，必须分开：
+#   · 已存在（`baselines/heuristic-heldout.json` 在案）⇒ 打印后**跳过**（`--resume` 语义，
+#     且 `archive_baseline` 是**不可覆盖归档**——重跑会多留一份 `-<ts>.json`）；
+#   · 其它任何非 0 ⇒ **脚本失败**（`set -e` 直接出真退出码），不再静默吞掉。
+BASE_JSON="runs/_sweep/${RUN_ID}/baselines/heuristic-heldout.json"
+if [[ -f "$BASE_JSON" ]]; then
+  echo "  已存在：${BASE_JSON} ⇒ 跳过（如需重跑：删掉它，或用 --resume 口径单独跑）。"
+else
+  "$PY" -m dice_ratchet baseline --kind heuristic --split heldout --basket H3 \
+    --run-id "$RUN_ID"
+fi
 
 if [[ "$FREE_ONLY" == "1" ]]; then
   echo
