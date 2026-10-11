@@ -91,15 +91,37 @@ def test_c4_triggers_single_generation():
 
 
 def test_c3_needs_frozen_jsd_and_winrate_jump():
+    """C3 = 「分布冻结（jsd < freeze）**且** 胜率跳变 ≥ jump」。
+
+    **2026-10-11 修订（D-M3-5 的 c3 修复）**：C3 由「连续 `confirm=2` 代」改为
+    **单代即触发**（与 C4 同类——分布冻结 + 胜率跳变本身就是直接证据，不是趋势推断）。
+    原因：`c3_flags` 只在 `i ≥ 1` 上有定义（比较相邻两代）⇒ 要「末尾连续 2 代为 True」
+    需要 **≥3 代里连续两次**「冻结+跳变」；M3 只有 3 代 ⇒ 结构上几乎不可能触发。
+    这是 c3 从未触发的**第三个**原因（前两个：`eval report` 硬编码 null、
+    `evolve_generation` 的 pair 错位）。
+    """
     flat = [0.5] * 5
-    # C3 需要连续两代同时满足（jsd 冻结 + 胜率跳升），故至少三代数据
-    verdict = collapse_check(curves=[flat, flat, flat], jsd_kind=[None, 0.001, 0.001],
-                             win_rates=[0.30, 0.40, 0.50], cfg=_config())
+    # 两代即可：jsd 冻结 + 胜率跳升 +0.10 ≥ 0.05
+    verdict = collapse_check(curves=[flat, flat], jsd_kind=[None, 0.001],
+                             win_rates=[0.50, 0.60], cfg=_config())
     assert verdict.collapse_flag is True
     assert "C3" in verdict.collapse_reasons
-    no_jump = collapse_check(curves=[flat, flat, flat], jsd_kind=[None, 0.001, 0.001],
-                             win_rates=[0.40, 0.40, 0.40], cfg=_config())
-    assert "C3" not in no_jump.collapse_reasons
+
+    # 反例自检 ①：胜率没跳 ⇒ 不报
+    no_jump = collapse_check(curves=[flat, flat], jsd_kind=[None, 0.001],
+                             win_rates=[0.40, 0.44], cfg=_config())
+    assert "C3" not in no_jump.collapse_reasons, "跳变 < 0.05 不得报 C3"
+
+    # 反例自检 ②：分布**变了**（jsd 不冻结）⇒ 不报（免得把「策略变了」误判成「冻结」）
+    changed = collapse_check(curves=[flat, flat], jsd_kind=[None, 0.30],
+                             win_rates=[0.50, 0.60], cfg=_config())
+    assert "C3" not in changed.collapse_reasons, "分布明显变化时不得报 C3"
+
+    # 反例自检 ③：jsd 缺测（None）⇒ 不报。**None 不等于 0.0** ——
+    # 把缺失当 0.0 会读成「分布完全没变」从而误报冻结。
+    missing = collapse_check(curves=[flat, flat], jsd_kind=[None, None],
+                             win_rates=[0.50, 0.60], cfg=_config())
+    assert "C3" not in missing.collapse_reasons, "jsd 缺测不得当成 0.0 报冻结"
 
 
 # ---- 分布与重复度 ------------------------------------------------------------------

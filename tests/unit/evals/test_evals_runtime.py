@@ -195,3 +195,37 @@ def test_sandbox_runner_explicit_episode_wins(monkeypatch):
                            generation=0, harness_version=0, episode_config=explicit)
     assert seen["episode_config"].difficulty == "easy"
     assert seen["episode_config"].stage_count == 3
+
+
+def test_c34_evaluate_generation_persists_kind_distribution(tmp_path):
+    """**§3.4 的 c3 修复之三**：`evaluate_generation` 必须落该代的 kind 分布。
+
+    它是**唯一**能同时拿到 parent 与 winner 逐局结果的生产路径，所以 g−1 的分布
+    只能在这里落盘——`eval report` 的重算路径没有 g−1 的结果，只能读回。
+    修复前 `jsds` 是硬编码/错位的，且分布**从不落盘** ⇒ g+1 代无从计算 `jsd_kind`。
+    """
+    from dice_ratchet.evals.harness import (ArmResult, evaluate_generation,
+                                            kind_distribution_path,
+                                            read_kind_distribution)
+    from dice_ratchet.evals.metrics import aggregate
+
+    def _res(seed: int, kind_index: int) -> EpisodeResult:
+        counts = [0] * 16
+        counts[kind_index] = 10
+        return EpisodeResult(seed=seed, split="heldout", generation=1, harness_version=1,
+                             outcome="win", truncation_reason=None, stages_cleared=5,
+                             hearts_left=1, battles_won=10, decisions=90, steps=200,
+                             illegal_attempts=0, fallback_decisions=0,
+                             kind_counts=tuple(counts), slot_counts={},
+                             seq_hash=f"s{seed}", decision_kinds=(0, 1, 2))
+
+    parent_results = tuple(_res(_H1_START + i, 0) for i in range(8))
+    parent = ArmResult(arm="parent", split="heldout", basket="H1", harness_version=1,
+                       memory_version=0, run_id="r-c34", results=parent_results,
+                       metrics=aggregate(parent_results, basket="H1"))
+    evaluate_generation(1, parent, None, run_id="r-c34", run_dir=tmp_path,
+                        config=_CFG, protocol=_PROTO)
+    dist = read_kind_distribution(tmp_path, 1)
+    assert dist is not None, "g=1 的 kind 分布必须落盘"
+    assert kind_distribution_path(tmp_path, 1).is_file()
+    assert abs(sum(dist.values()) - 1.0) < 1e-6, "分布应归一化"

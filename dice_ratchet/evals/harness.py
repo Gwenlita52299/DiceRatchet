@@ -1146,18 +1146,46 @@ def _diversity_for_generation(run_id: str, generation: int, *, parent: ArmResult
         win_rates.append(parent.metrics.win_rate)
     base = getattr(getattr(config, "evals", config), "entropy", None)
     base_value = float(getattr(base, "base", 2.0) or 2.0)
-    distributions: list[Mapping[str, float]] = []
-    if parent is not None:
-        distributions.append(kind_distribution(parent.results))
+    # 落盘的 kind 分布（供下一代算 `jsd_kind`，也供 `eval report` 的重算路径读回）
+    current_dist: dict[str, float] = {}
     if winner is not None:
-        distributions.append(kind_distribution(winner.results))
-    if len(distributions) >= 2:
-        jsds = [None] + [js_divergence(distributions[0], distributions[1], base=base_value)]
+        current_dist = kind_distribution(winner.results)
+    elif parent is not None:
+        current_dist = kind_distribution(parent.results)
+    if current_dist:
+        write_kind_distribution(root, int(generation), current_dist)
+
+    # **`jsd_kind` 与 `win_rates` 必须对齐到同一个 pair**（2026-10-11 修 pair 错位）。
+    # 修复前是 `jsds = [None] + [jsd(parent, winner)]` 配
+    # `win_rates = [..., parent.win_rate, winner.win_rate]` ⇒ `c3` 在 `i=1` 上拿
+    # 「父→子的分布漂移」配「子相对父的胜率变化」，**不是同一对**。
+    # 现在两条路径都用 `aligned_jsd_kinds`：`jsds[i]` 恒为 `jsd(g_{i-1}, g_i)`，
+    # 且 `win_rates[i]` 恒为第 i 代的胜率。
+    gens = _generations_of_curves(root, curves)
+    jsds = aligned_jsd_kinds(root, gens, base=base_value) if gens else [None] * len(curves)
+    if len(jsds) != len(curves):   # 兜底：曲线来源与分布来源不一致时不要错位
+        jsds = [None] * len(curves)
     seq_ratios: list[float] = []
     if winner is not None:
         seq_ratios.append(distinct_sequence_ratio(winner.results))
     return collapse_check(curves=curves, jsd_kind=jsds, win_rates=win_rates, cfg=cfg,
                           seq_ratios=seq_ratios or None, generation=generation)
+
+
+def _generations_of_curves(root: Path, curves: Sequence[Sequence[Any]]) -> list[int]:
+    """``curves`` 是按代升序的熵曲线；这里回推对应的代数。
+
+    来源按优先级：`metrics/kind_distribution/` 里已落盘的代号（权威、单调），
+    兜底为「从 0 开始的连续代」（`_diversity_for_generation` 在缺 plots_data 时正是
+    这样补齐的）。**长度必须与 `curves` 一致**——不一致时调用方会把 `jsd_kind`
+    整体置 `None`（宁可不算，也不要错位）。
+    """
+    recorded = sorted(int(p.stem.split("-")[-1])
+                      for p in (Path(root) / "metrics" / "kind_distribution").glob("gen-*.json")
+                      if p.stem.split("-")[-1].isdigit())
+    if len(recorded) == len(curves):
+        return recorded
+    return list(range(len(curves)))
 
 
 def evaluate_generation(generation: int, parent: ArmResult, winner: ArmResult | None, *,
@@ -1552,6 +1580,76 @@ def write_plots_data(run_dir: Path | str, generation: int, curve: Sequence[float
                              "win_rate": round(float(win_rate), 4), "n": int(n),
                              "buckets": buckets, "jitter": None})
     return path
+
+
+def kind_distribution_path(run_dir: Path | str, generation: int) -> Path:
+    """``metrics/kind_distribution/gen-XXX.json`` —— 该代的 ``action.kind`` 分布。
+
+    **为什么必须落盘**（2026-10-11，D-M3-5/§3.4 的 `c3` 修复）：`c3` 的判据是
+    ``jsd_kind(g, g-1) < freeze`` 且 ``win_rate`` 跳变 ≥0.05，而
+    ``eval report`` 是**从轨迹重算**的路径——它手上只有当前代的结果，
+    **没有 g−1 的 kind 分布** ⇒ 原实现只能写 ``jsds = [None] * (n_gen - 1)``
+    （硬编码 null）⇒ **`c3` 在 `eval report` 路径上永不触发**（实测归档里 17 个代的
+    `jsd_kind` 全是空）。落盘之后，重算路径可以读回 g−1 的分布算出真值。
+    """
+    return Path(run_dir) / "metrics" / "kind_distribution" / f"gen-{int(generation):03d}.json"
+
+
+def write_kind_distribution(run_dir: Path | str, generation: int,
+                            distribution: Mapping[str, float]) -> Path:
+    """落该代的 kind 分布（供 g+1 算 ``jsd_kind``）。"""
+    path = kind_distribution_path(run_dir, generation)
+    write_json_atomic(path, {"generation": int(generation),
+                             "distribution": dict(distribution),
+                             "total": round(sum(float(v) for v in distribution.values()), 6)})
+    return path
+
+
+def read_kind_distribution(run_dir: Path | str, generation: int) -> dict[str, float] | None:
+    """读某代的 kind 分布；缺失/损坏 → ``None``（调用方据此把 jsd 记 ``None``，
+    **不是** 0.0——0.0 会被读成「分布完全没变」，从而**误报冻结**）。"""
+    path = kind_distribution_path(run_dir, generation)
+    if not path.is_file():
+        return None
+    try:
+        raw = read_json(path)
+    except InfraError: # pragma: no cover - 损坏文件按缺失处理
+        return None
+    dist = raw.get("distribution")
+    if not isinstance(dist, Mapping) or not dist:
+        return None
+    return {str(k): float(v) for k, v in dist.items()}
+
+
+def adjacent_jsd_kind(run_dir: Path | str, generation: int, *,
+                      base: float = 2.0) -> float | None:
+    """``jsd_kind(g−1, g)``；任一代的 kind 分布缺失 → ``None``。
+
+    **``None`` 不是 0.0**：0.0 会被 `c3` 读成「分布完全没变」⇒ **误报冻结**。
+    """
+    dist = read_kind_distribution(run_dir, generation)
+    prev = read_kind_distribution(run_dir, generation - 1)
+    if dist is None or prev is None:
+        return None
+    from .diversity import js_divergence
+
+    return float(js_divergence(prev, dist, base=base))
+
+
+def aligned_jsd_kinds(run_dir: Path | str, generations: Sequence[int], *,
+                      base: float = 2.0) -> list[float | None]:
+    """构造与 ``generations`` **等长**的 ``jsd_kind`` 序列（最后一个元素是相邻两代的真值）。
+
+    `collapse_check` 的 ``jsd_kind`` 必须与 ``curves`` 等长（它按代索引取 ``jsds[i]``）。
+    首位没有前驱 ⇒ ``None``；其余按 ``jsd(g-1, g)`` 逐个算（缺分布即 ``None``）。
+    """
+    gens = [int(g) for g in generations]
+    if not gens:
+        return []
+    out: list[float | None] = [None]
+    for gen in gens[1:]:
+        out.append(adjacent_jsd_kind(run_dir, gen, base=base))
+    return out[: len(gens)]
 
 
 def utc_now() -> str:

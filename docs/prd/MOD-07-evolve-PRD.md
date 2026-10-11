@@ -375,6 +375,10 @@ parent 与候选在**同一 held-out 篮子、同一预算**下评估（§8.2 C0
 - **实现归属**：原计划 M3 新增 `evolve.illegal_tol` / `evolve.fallback_tol` / `evolve.truncation_tol` 三个键。**2026-10-09 已提前落地其中一项**：`truncation` 的相对门已在 M2 落地（`evolve.truncation_tol`，见 §8.2.2），`illegal_tol` / `fallback_tol` 仍归 M3。
 - **保守兜底**：残差门之外**保留**一个宽松绝对上限作 backstop，避免 parent 自身已经很高时残差门被无限放宽。**2026-10-09 的边界**：`illegal` / `fallback` 保留绝对门（0.35 / 0.25）本身就充当了 backstop；`truncation` 按用户裁决**不设绝对 backstop**（相对门的对称放宽已在 §8.2.2 的「已知放宽」里写明，M3 标定 `tol` 时再评估）。
 
+> **✅ 2026-10-11 标定现状（Spec v2.15 / B-71/B-72）——C4 的输入与 C5 的 `tol` 都还没标定。**
+> ① **C4 的上游判据 `c3` 修好了，但阈值没标**：`c3`（「分布冻结 + 胜率跳变」）此前**从未触发**（实测 17 个归档代的 `jsd_kind` 全空；三个独立原因见 Spec B-71——生成侧不落 kind 分布、`evaluate_generation` 的 pair 错位、`confirm_generations=2` 对 `c3` 结构上不可达）。现已改为**单代即触发**并落 `metrics/kind_distribution/`。**但** `0.010` / `0.05` 这两个阈值**仍未经基线标定**。
+> ② **C5 的 `tol=0.05` 能算 MDE、标不出标定值**：`illegal` 的 0.05 ≈ **1,392 个步级事件**（≈48 个 se，分母 27,836 尝试/代）、`fallback` ≈ **451 个**（≈115 个 se，9,021 决策）、`truncation` ≈ **2 局**（单臂 40 局）⇒ **truncation 是约束轴**，三轴不可互换。标定（按同代内抖动）需要 ≥2 代配对实测，而**现有归档只有 1 个 run 有 2 代** ⇒ 结构上标不了。
+> ③ **M3 报告必须写明**：C4/C5 的阈值是**「起点值 + 待回填」**，不是实测标定值。工具：`scripts/run_m3_calibration.sh --free`（零成本部分）。
 > **✅ 2026-10-11 落地（D-M3-2 裁决 E，Spec v2.8 / B-64）**：本节 ② 的 M3 收紧路径**已完成**，
 > 且比原计划多了一项——`truncation` 也补上了绝对 backstop。C5 的最终形态（**三轴同构**）：
 >

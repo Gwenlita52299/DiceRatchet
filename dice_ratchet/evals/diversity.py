@@ -7,7 +7,8 @@
 ===== ================================================================ ==========
 C1    ``entropy_slope <= -0.010``（动作分布随回合快速收敛）                -0.010
 C2    ``entropy_mean_norm(g) < 0.60 × entropy_mean_norm(gen_0)``         0.60
-C3    ``jsd_kind(g, g-1) < 0.010`` 且 ``win_rate`` 提升 ≥0.05             0.010/0.05
+C3    ``jsd_kind(g, g-1) < 0.010`` 且 ``win_rate`` 提升 ≥0.05（**单代即触发**，
+      同 C4：分布冻结 + 胜率跳变本身即直接证据，不适用「两点确认」）   0.010/0.05
 C4    ``distinct_sequence_ratio < 0.50``（轨迹高度重复）                  0.50
 ===== ================================================================ ==========
 
@@ -209,14 +210,23 @@ def collapse_check(*, curves: Sequence[Sequence[float | None]],
 
     confirm = max(1, int(cfg.confirm_generations))
     reasons: list[str] = []
-    if _confirmed(c4_flags, confirm=1): # C4 单代即触发（坍缩最直接表征）
+    # 单代即触发的两条是**直接证据**（不是趋势推断，所以「两点确认」不适用）：
+    #   · C4 `distinct_sequence_ratio` 掉到阈值下；
+    #   · C3 「分布冻结（jsd < freeze）**且** 胜率跳变 ≥ jump」——
+    #     分布冻结说明**行为没变**，而胜率涨了，那增益不可能来自行为改变。
+    # **2026-10-11（D-M3-5 的 c3 修复）**：C3 原先走 `confirm`。但 `c3_flags` 只在
+    # `i ≥ 1` 上有定义（它比较相邻两代）⇒ 要「末尾连续 `confirm=2` 代为 True」
+    # 需要 **≥3 代里连续两次**「冻结+跳变」；M3 只有 3 代 ⇒ 结构上几乎不可能触发
+    # （这是 c3 从未触发的**第三个**原因，前两个是 `eval report` 硬编码 null 与
+    #  `evolve_generation` 的 pair 错位）。与 C4 同类处理：单代即可。
+    if _confirmed(c4_flags, confirm=1):
         reasons.append("C4")
+    if _confirmed(c3_flags, confirm=1):
+        reasons.append("C3")
     if _confirmed(c1_flags, confirm=confirm):
         reasons.append("C1")
     if _confirmed(c2_flags, confirm=confirm):
         reasons.append("C2")
-    if _confirmed(c3_flags, confirm=confirm):
-        reasons.append("C3")
 
     last = n_gen - 1
     verdict = CollapseVerdict(

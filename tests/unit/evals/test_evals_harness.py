@@ -405,3 +405,41 @@ def test_f47_error_reject_is_a_verdict_and_survives_recompute(tmp_path):
     assert len(rows) == 1
     assert rows[0]["decision"] == "error_reject", "重算不得覆盖基础设施失败判决"
     assert rows[0]["n"] == "117", "指标列仍由后写入方刷新"
+
+
+# =====================================================================
+# §3.4：`c3` 的三处缺陷（kind 分布没落盘 / 重算路径硬编码 null / pair 错位）
+# =====================================================================
+
+def test_c34_kind_distribution_round_trip(tmp_path):
+    """kind 分布必须能落盘并读回（`c3` 要 g−1 的分布，而 `eval report` 手上没有）。"""
+    from dice_ratchet.evals.harness import (kind_distribution_path, read_kind_distribution,
+                                            write_kind_distribution)
+
+    dist = {"map_choose": 0.3, "play_face": 0.6, "end_turn": 0.1}
+    path = write_kind_distribution(tmp_path, 1, dist)
+    assert path == kind_distribution_path(tmp_path, 1)
+    assert read_kind_distribution(tmp_path, 1) == dist
+    # 缺失 → None（**不是**空 dict、更不是 0.0）
+    assert read_kind_distribution(tmp_path, 7) is None
+
+
+def test_c34_aligned_jsd_kinds_length_matches_generations(tmp_path):
+    """`jsd_kind` 必须与 `curves` **等长**（`collapse_check` 按代索引取 `jsds[i]`）。"""
+    from dice_ratchet.evals.harness import aligned_jsd_kinds, write_kind_distribution
+
+    for gen in (0, 1, 2):
+        write_kind_distribution(tmp_path, gen, {"map_choose": 0.5, "play_face": 0.5})
+    jsds = aligned_jsd_kinds(tmp_path, [0, 1, 2])
+    assert len(jsds) == 3, "长度必须等于曲线数"
+    assert jsds[0] is None, "首位没有前驱 ⇒ None"
+    assert jsds[1] == 0.0 and jsds[2] == 0.0, "同分布 ⇒ jsd 0.0"
+
+
+def test_c34_missing_distribution_gives_none_not_zero(tmp_path):
+    """**反例自检**：缺分布 ⇒ `None`。写成 0.0 会被 `c3` 读成「分布完全没变」⇒ 误报冻结。"""
+    from dice_ratchet.evals.harness import aligned_jsd_kinds, write_kind_distribution
+
+    write_kind_distribution(tmp_path, 1, {"map_choose": 1.0})   # 只有 g=1，没有 g=0
+    jsds = aligned_jsd_kinds(tmp_path, [0, 1])
+    assert jsds[1] is None, "缺前驱分布必须是 None"

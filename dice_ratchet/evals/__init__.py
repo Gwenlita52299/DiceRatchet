@@ -41,6 +41,9 @@ from .acceptance import (AcceptanceReport, GenerationAcceptance,
                         evaluate_acceptance, write_acceptance)
 from .rehearsal import (CheckResult, RehearsalReport,
                        run_rehearsal_checks)
+from .tol_sensitivity import (AxisSensitivity, TolSensitivity,
+                             axis_sensitivity, denominators_from_run,
+                             tolerance_sensitivity)
 from .ablation import ARM_MECHANISM
 from . import seeds
 from .seeds import (SeedProtocol, assert_split_isolation, default_protocol,
@@ -75,6 +78,9 @@ __all__ = [
     "write_acceptance",
     # M3 彩排判据（D-M3-5）
     "CheckResult", "RehearsalReport", "run_rehearsal_checks",
+    # C5 tol 的 MDE 换算（§3.3）
+    "AxisSensitivity", "TolSensitivity", "axis_sensitivity",
+    "denominators_from_run", "tolerance_sensitivity",
     "write_ext_metrics", "write_plots_data", "generation_report_path", "report_sha_path",
     # baselines
     "BASELINE_KINDS", "BaselineAgent", "RandomAgent", "HeuristicAgent", "baseline_arm",

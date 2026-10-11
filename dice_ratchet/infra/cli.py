@@ -474,6 +474,9 @@ def _add_eval(sub: Any) -> None:
     _common_run_id(acc)
     acc.add_argument("--bootstrap-B", dest="bootstrap_B", type=int, default=None,
                      help="P(gap>0) 的配对 bootstrap 次数（默认取 eval.bootstrap_B）")
+    acc.add_argument("--sensitivity", action="store_true", default=False,
+                     help="顺带打印 C5 三个 tol 的**最小可判效应（MDE）**换算"
+                          "（零成本：只用分母与粒度，不做任何跑批；§3.3）")
     _set_func(acc, _deferred(["eval", "acceptance"], "eval"), ["eval", "acceptance"])
 
     div = _sp(sp, "diversity", help="动作熵 / 坍缩监控")

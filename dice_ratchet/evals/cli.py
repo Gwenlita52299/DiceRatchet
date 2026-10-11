@@ -257,6 +257,17 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
     train = aggregate(train_results, split="train", basket="train_window",
                       t_max=int(eval_cfg.t_max), min_support=int(eval_cfg.min_support),
                       drop_rate_max=float(eval_cfg.drop_rate_max))
+    # 落该代的 kind 分布（供 g+1 的 `c3` 与后续重算读回；见 harness.write_kind_distribution）
+    try:
+        from .diversity import kind_distribution
+        from .harness import write_kind_distribution
+
+        dist = kind_distribution(results or pool_results)
+        if dist:
+            write_kind_distribution(paths.root, generation, dist)
+    except InfraError as exc:
+        events.emit("eval.kind_distribution_skipped", code=str(exc.code),
+                    detail=str(exc)[:200])
     diversity = _diversity_from_history(paths.root, generation, cfg, pool_metrics, pool_results)
     gain = judge_gain(train=train, heldout=heldout,
                       gap_threshold=float(eval_cfg.gap_threshold),
@@ -398,7 +409,25 @@ def _diversity_from_history(run_dir: Path, generation: int, cfg: Any, heldout: A
     else:
         curves.append(current)
         win_rates.append(heldout.win_rate)
-    jsds: list[float | None] = [None] * max(0, len(curves) - 1)
+    # **修 `c3` 的死代码**（2026-10-11）：修复前这里是
+    # `jsds = [None] * max(0, len(curves) - 1)` —— **硬编码 null**，
+    # 于是 `c3`（冻结 + 胜率跳变）在 `eval report` 路径上**永不触发**
+    # （实测归档里 17 个代的 `jsd_kind` 全是空）。现在读回各代落盘的 kind 分布算真值。
+    #
+    # 长度必须 == `len(curves)`：`collapse_check` 按代索引取 `jsds[i]`。
+    from .harness import aligned_jsd_kinds, kind_distribution_path
+
+    gens: list[int] = []
+    for path in sorted((run_dir / "metrics" / "plots_data").glob("gen-*_entropy.json")):
+        stem = path.stem.split("_")[0]        # "gen-000"
+        if stem.startswith("gen-") and stem[4:].isdigit():
+            gens.append(int(stem[4:]))
+    if len(gens) != len(curves):
+        gens = list(range(len(curves)))
+    jsds = aligned_jsd_kinds(run_dir, gens, base=float(getattr(cfg.evals.entropy, "base", 2.0)))
+    if len(jsds) != len(curves):
+        jsds = [None] * len(curves)
+    del kind_distribution_path  # 仅为显式说明落盘口径来自 harness（此处只读回）
     seq_ratios = [distinct_sequence_ratio(results)] if results else None
     return collapse_check(curves=curves, jsd_kind=jsds, win_rates=win_rates,
                           cfg=collapse_cfg, seq_ratios=seq_ratios, generation=generation)
@@ -633,6 +662,21 @@ def cmd_eval_acceptance(args: argparse.Namespace) -> int:
     path = write_acceptance(paths.root, report)
     payload = report.as_dict()
     payload["acceptance_path"] = str(path)
+    if bool(getattr(args, "sensitivity", False)):
+        # §3.3 的**零成本**落地：把「tol=0.05 意味着多大漂移」变成实测数字。
+        # 分母优先用本 run 的**实测**值；读不到才回落到 `C1` hard×6 的一代口径。
+        from .tol_sensitivity import denominators_from_run, tolerance_sensitivity
+
+        measured = denominators_from_run(paths.root)
+        sens = tolerance_sensitivity(
+            illegal_tol=float(getattr(cfg.evolve, "illegal_tol", 0.05)),
+            fallback_tol=float(getattr(cfg.evolve, "fallback_tol", 0.05)),
+            truncation_tol=float(getattr(cfg.evolve, "truncation_tol", 0.05)),
+            denominators=(measured or None),
+            rates={"truncation": 0.30})
+        payload["tol_sensitivity"] = sens.as_dict()
+        payload["tol_sensitivity"]["denominators_source"] = (
+            "本 run 实测" if measured else "缺省估算（C1 hard×6 一代口径）")
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     if not report.ok:
         print(f"判据 1 **不通过**：{'; '.join(report.reasons)}", file=sys.stderr)

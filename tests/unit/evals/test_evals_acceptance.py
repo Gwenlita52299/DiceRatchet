@@ -335,3 +335,91 @@ def test_missing_ledger_raises(tmp_path):
     with pytest.raises(InfraError) as exc:
         _eval(tmp_path)
     assert exc.value.code == E.E_IO_STATE_MISSING
+
+
+# =====================================================================
+# §3.3：C5 的 `tol` 的最小可判效应（MDE）换算 —— 零成本
+# =====================================================================
+
+def test_tol_sensitivity_is_axis_specific_not_one_number():
+    """**核心口径**：同一个 `0.05` 在三个轴上是完全不同的量。
+
+    返回三轴各自的「相当于多少个原始单位 / 多少个 se」。若实现把三轴当同一个数
+    （比如只返回一个 `0.05`），本用例会失败——而那个误读会让「0.05 到底能拦什么」
+    这个问题得到错误答案。
+    """
+    from dice_ratchet.evals.tol_sensitivity import tolerance_sensitivity
+
+    s = tolerance_sensitivity(rates={"illegal": 0.0318, "fallback": 0.0017,
+                                     "truncation": 0.30})
+    by = {a.axis: a for a in s.axes}
+    assert set(by) == {"illegal", "fallback", "truncation"}
+
+    # 粒度必须分列
+    assert by["illegal"].granularity == "step"
+    assert by["fallback"].granularity == "step"
+    assert by["truncation"].granularity == "episode"
+
+    # 步级轴：tol 换算成几百到上千个「步级事件」，且远大于 1 个 se
+    for axis in ("illegal", "fallback"):
+        assert by[axis].raw_delta > 100, by[axis].raw_delta
+        assert by[axis].tol_in_se > 10, by[axis].tol_in_se
+    # 局级轴：tol 只相当于几局
+    assert 1 <= by["truncation"].raw_delta <= 4, by["truncation"].raw_delta
+    assert by["truncation"].tol_in_se < 3
+
+    # reading 必须自解释（报告直接引用它）
+    assert "步级事件" in by["illegal"].reading()
+    assert "局" in by["truncation"].reading()
+
+
+def test_tol_sensitivity_disclaims_calibration():
+    """**诚实边界必须在产物里**：这是 MDE 不是标定值。"""
+    from dice_ratchet.evals.tol_sensitivity import tolerance_sensitivity
+
+    payload = tolerance_sensitivity().as_dict()
+    assert "最小可判效应" in payload["disclaimer"]
+    assert "不是" in payload["disclaimer"]
+    assert any("未做" in n for n in payload["notes"])
+
+
+def test_tol_sensitivity_uses_measured_denominators_when_given():
+    """传入实测分母时必须**覆盖**缺省估算，并在产物里看得出差别。"""
+    from dice_ratchet.evals.tol_sensitivity import tolerance_sensitivity
+
+    default = {a.axis: a for a in tolerance_sensitivity().axes}
+    measured = {a.axis: a for a in tolerance_sensitivity(
+        denominators={"illegal": 1000.0, "fallback": 500.0, "truncation": 10.0}).axes}
+    assert measured["illegal"].raw_delta == 50.0          # 0.05 × 1000
+    assert measured["truncation"].raw_delta == 0.5
+    assert measured["illegal"].raw_delta != default["illegal"].raw_delta
+
+
+def test_unknown_axis_is_rejected():
+    """未知轴必须显式报错（否则会静默算出一个没有意义的数）。"""
+    from dice_ratchet.evals.tol_sensitivity import axis_sensitivity
+
+    with pytest.raises(ValueError):
+        axis_sensitivity("made_up_axis", tol=0.05)
+
+
+def test_denominators_from_run_reads_real_episodes(tmp_path):
+    """实测分母：步级 = 成功步 + 非法尝试；局级 = 局数。"""
+    from dice_ratchet.evals.tol_sensitivity import denominators_from_run
+
+    d = tmp_path / "r"
+    ep = d / "episodes" / "heldout"
+    ep.mkdir(parents=True)
+    for i in range(3):
+        (ep / f"e-{731000+i}-g000-parent.jsonl").write_text(json.dumps({
+            "type": "episode_end", "seed": 731000 + i, "split": "heldout",
+            "generation": 0, "arm": "parent", "outcome": "win", "stages_cleared": 3,
+            "hearts_left": 1, "battles_won": 5, "decisions": 10, "steps": 100,
+            "illegal_attempts": 4, "fallback_decisions": 1, "kind_counts": [0] * 16,
+            "decision_kinds": [0], "slot_counts": {}, "seq_hash": "s",
+        }) + "\n", encoding="utf-8")
+    got = denominators_from_run(d)
+    assert got["illegal"] == 3 * (100 + 4), "步级分母 = 成功步 + 非法尝试"
+    assert got["fallback"] == 3 * 10, "fallback 分母 = 决策点"
+    assert got["truncation"] == 3.0, "局级分母 = 局数"
+    assert denominators_from_run(tmp_path / "nope") == {}
