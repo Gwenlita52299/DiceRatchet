@@ -401,6 +401,16 @@ def test_gen000_baseline_report_is_written(tmp_path, monkeypatch):
 
     则 ``generations/gen-000/report.json`` 存在、``decision=="baseline"``、
     评估局轨迹落在 ``episodes/heldout/``（经 MOD-06 的 ``EvalRunnerAdapter``）。
+
+    **本用例曾因一个真实缺陷而失败（2026-10-11 修）**：`write_gen000_baseline`
+    调 `evaluate_generation` 时**没传 `run_dir`**，而 MOD-08 从 F48/F49 起会在该路径上
+    落**按代**产物（`metrics/kind_distribution/gen-XXX.json`）⇒ `run_dir=None` 回落到
+    **硬编码的 ``Path("runs")``**，于是真实 `runs/r-loop-test/` 被建出来。
+    后果不止「位置错」：该目录一旦存在，F42-A 的**臂归档**
+    （`_arm_archive_dir` 按 `runs_root/run_id` 推导且要求目录已存在）就生效
+    ⇒ 第二次评估**复用归档、不再执行任何局**（`heldout.n=3` 仍成立，因为结果来自归档），
+    而 `episodes/heldout/` 为空 ⇒ 本断言失败。**这不是 flaky**，是共享可写状态的确定性后果；
+    修法是让生产代码传 `run_dir`，并**在此断言 `runs/` 未被污染**。
     """
     monkeypatch.chdir(_REPO)
     from fakes import FakeEnv, FakePolicy
@@ -428,6 +438,11 @@ def test_gen000_baseline_report_is_written(tmp_path, monkeypatch):
     heldout = sorted(p.name for p in
                      (tmp_path / "r-loop-test" / "episodes" / "heldout").glob("*.jsonl"))
     assert heldout == [f"e-{s:06d}-g000-parent.jsonl" for s in _H1_SEEDS]
+    # **反向护栏**：本次调用不得在真实 runs/ 下留下任何按代产物
+    # （`run_dir` 漏传时 `kind_distribution/gen-000.json` 会落到那里）
+    assert not (_REPO / "runs" / "r-loop-test" / "metrics" / "kind_distribution").exists(), (
+        "write_gen000_baseline 必须把按代产物写进 run_ctx.paths.root，"
+        "不得回落到硬编码的 Path('runs')")
 
 
 def test_gen000_baseline_is_idempotent(tmp_path, monkeypatch):

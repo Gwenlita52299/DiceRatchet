@@ -410,7 +410,16 @@ def write_gen000_baseline(run_ctx: RunContext, *, harness_version: int = 0,
             n_workers=int(getattr(cfg.evals, "n_workers", 1)),
             n_rep=int(getattr(cfg.evals.determinism, "n_rep", 1)),
             episode_config=run_ctx.episode_config)
-        report = dict(evaluate_generation(0, parent, None, run_id=run_ctx.run_id))
+        # **必须传 run_dir**（2026-10-11 修）：MOD-08 从 F48/F49 起会在评估/报告路径上
+        # 落**按代**的产物（`metrics/kind_distribution/gen-XXX.json`，`c3` 判据要读它），
+        # 而 `evaluate_generation` 的 `run_dir=None` 会回落到**硬编码的 `Path("runs")`**
+        # ⇒ 那些文件落到真实 `runs/<run_id>/` 而不是 `run_ctx.paths.root`。
+        # 后果不止「位置错」：真实 `runs/<run_id>/` 一旦被建出来，F42-A 的**臂归档**
+        # （`_arm_archive_dir` 按 `runs_root/run_id` 推导，且要求目录已存在）就会开始
+        # 生效 ⇒ 第二次评估**复用归档、不再执行任何局**。MOD-07 的两处调用点都已传
+        # `run_dir`，这里原先漏了。
+        report = dict(evaluate_generation(0, parent, None, run_id=run_ctx.run_id,
+                                          run_dir=paths.root))
     except InfraError as exc:
         # 基线拿不到（模型/权重缺失）→ 降级，不阻塞 run
         events.emit("loop.resume", phase=str(run_ctx.state.phase), baseline="missing",
