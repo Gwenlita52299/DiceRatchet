@@ -612,3 +612,35 @@ def test_inference_api_mode_config():
     with pytest.raises(InfraError):
         cfg_mod.InferenceConfig(api_mode="sometimes").validate()
     cfg_mod.InferenceConfig(api_mode="replay", api_replay_dir="runs/x/llm_api").validate()
+
+
+# ---- F54：held-out 篮子可配置（彩排只用 H3 的前提）--------------------------------
+
+def test_heldout_basket_defaults_to_h1_and_is_overridable(monkeypatch):
+    """给定配置体系；当不设/设置 ``DICERATCHET_EVOLVE__HELDOUT_BASKET``；
+
+    则默认是 H1（M3 判据 1 的代际裁判篮子）、可被覆盖成 H3（reserve）。
+
+    **为什么需要这个键**：修复前 held-out 篮子**两处写死**——``evolve.judge.HOLDOUT_BASKET``
+    与 ``loop.generation.write_gen000_baseline(basket="H1")``——且没有配置项 ⇒
+    ``scripts/run_m3_rehearsal.sh``（声明只用 H3 731080–731099）实测跑在 **H1** 上
+    （2026-10-11 事故：已落盘 ``e-731000…731004-g000-parent.jsonl``，¥5.1 API + 5 个一次性 seed）。
+    """
+    assert cfg_mod.EvolveConfig().heldout_basket == "H1"
+    assert load_config(config_dir=CONFIGS).evolve.heldout_basket == "H1"
+
+    monkeypatch.setenv("DICERATCHET_EVOLVE__HELDOUT_BASKET", "H3")
+    assert load_config(config_dir=CONFIGS).evolve.heldout_basket == "H3"
+
+
+@pytest.mark.parametrize("bad", ["H4", "test_full", "h1", "", "train_window"])
+def test_heldout_basket_rejects_unknown_names_fail_closed(bad):
+    """拼错的篮子名必须在**配置装配**时就被拒。
+
+    修复前：只有跑到评估那一刻才由 ``resolve_basket`` 抛 ``E_EVAL_SEED_OVERLAP``
+    —— 那时代价是「gen-000 基线已经花了钱才发现」。
+    """
+    with pytest.raises(InfraError) as exc:
+        cfg_mod.EvolveConfig(heldout_basket=bad).validate()
+    assert exc.value.code == E.E_IO_CONFIG_INVALID
+    assert "heldout_basket" in str(exc.value)

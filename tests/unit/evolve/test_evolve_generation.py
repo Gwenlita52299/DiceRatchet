@@ -11,6 +11,7 @@ MOD-08 与 MOD-02 都打桩：
 
 from __future__ import annotations
 
+import importlib
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -670,3 +671,57 @@ def test_proposal_fingerprint_is_stable_and_input_sensitive():
     assert one != CHECKPOINT.proposal_fingerprint(
         **{**base, "inputs": {**inputs, "user": "U2"}})
     assert one != CHECKPOINT.proposal_fingerprint(**{**base, "run_id": "r2"})
+
+
+# =====================================================================
+# F54：候选评估的 held-out 篮子必须来自 `evolve.heldout_basket`
+# =====================================================================
+
+def test_f54_evaluator_uses_configured_heldout_basket(tmp_path, monkeypatch):
+    """给定 ``evolve.heldout_basket="H3"``；当编排装配默认评估器；
+
+    则 ``CandidateEvaluator.heldout_basket == "H3"``。
+
+    **为什么这是护栏而不是实现细节**：修复前该字段只在 ``judge.py`` 有类级默认
+    ``HOLDOUT_BASKET = "H1"``，而``loop.generation.write_gen000_baseline`` 也写死 H1
+    ⇒ 「彩排只用 H3」在代码层不可达，实测跑到 H1 上（一次性资源被消耗）。
+    这条用例把「候选评估篮子」钉在配置键上；「基线篮子」由
+    ``tests/integration/test_loop_closure.py::test_f54_gen000_baseline_uses_configured_basket``
+    从**真实产物文件名**上钉住。两者同源 ⇒ parent/candidate 不可能跨越两套 seed。
+    """
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(
+        tmp_path, heldout_basket="H3")
+    captured: dict[str, object] = {}
+    judge_mod = importlib.import_module("dice_ratchet.evolve.judge")
+    real = judge_mod.CandidateEvaluator
+
+    def _spy(**kwargs):
+        captured.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(judge_mod, "CandidateEvaluator", _spy)
+    GEN._build_evaluator(cfg=evolve, app_cfg=app_cfg, evaluator=None, runner=None,
+                         protocol=None, memory_version=1, run_id=RUN_ID, gen=0,
+                         smoke_seeds=(1000, 1001), episode_config=None, run_dir=run_root)
+    assert captured.get("heldout_basket") == "H3", (
+        f"`evolve.heldout_basket=H3` 必须转发给 CandidateEvaluator；实际 {captured!r}")
+
+
+def test_f54_evaluator_falls_back_to_class_default_when_config_lacks_key(tmp_path):
+    """配置对象缺 ``evolve.heldout_basket``（旧配置/替身）时**不静默换篮子**：不传该字段，
+    由 ``CandidateEvaluator`` 的类级默认（H1）兜底。"""
+    from evolve_support import make_config
+
+    class _NoBasket:
+        pass
+
+    class _AppCfg:
+        evolve = _NoBasket()
+
+    judge_mod = importlib.import_module("dice_ratchet.evolve.judge")
+    ev = GEN._build_evaluator(cfg=make_config(), app_cfg=_AppCfg(), evaluator=None,
+                              runner=None, protocol=None, memory_version=0,
+                              run_id=RUN_ID, gen=0, smoke_seeds=(), episode_config=None,
+                              run_dir=None)
+    assert isinstance(ev, judge_mod.CandidateEvaluator)
+    assert ev.heldout_basket == judge_mod.HOLDOUT_BASKET == "H1"

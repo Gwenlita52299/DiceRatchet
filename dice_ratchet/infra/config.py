@@ -584,6 +584,14 @@ class EvolveConfig:
     fallback_tol: float = 0.05
     # truncation 的绝对 backstop：**只**用于堵相对门的已知放宽，不替代相对门。
     truncation_backstop: float = 0.60
+    # `heldout_basket`（2026-10-11，F54）：**held-out 评估用哪个 seed 篮子**。
+    # 它同时决定 **gen-000 基线**（`loop.generation.write_gen000_baseline`）与
+    # **候选 arm 的 held-out 评估**（`evolve.judge.CandidateEvaluator`）——两者必须同源，
+    # 否则 parent 与 candidate 的对比会跨越两套 seed（C0 的「同预算」前提直接失效）。
+    # 默认 `H1`（`generation_judge`）= M3 判据 1 的代际裁判篮子，**不得**在正式实验里改。
+    # 允许 `H3`（`reserve`，非一次性）：只有「不参与 M3 判据」的彩排/干跑该用它
+    # （D-M3-5 裁决 A：彩排不碰 H1/H2/test；`H2` 是消融专用，不作代际裁判）。
+    heldout_basket: str = "H1"
     # 标定依据：full PolicyAgent 在 H1 子集（seed 2000–2009，n=10，eval）实测
     # illegal 0.3016 / fallback 0.2146 / truncation 0.10，与 fixed_prompt 基线同量级，
     # 原阈值下 C5 会 reject 每一个候选（见 docs/reviews/2026-10-07-M2-S31-full-agent基线实测.md）。
@@ -611,6 +619,13 @@ class EvolveConfig:
         _check("evolve.fallback_tol", self.fallback_tol, float, minv=0.0, maxv=1.0)
         _check("evolve.truncation_backstop", self.truncation_backstop, float,
                minv=0.0, maxv=1.0)
+        # F54：篮子名必须是协议里真的存在的那三个之一。**fail-closed**：拼错（如 `H4`）
+        # 以前只有在跑到评估那一刻才由 `resolve_basket` 抛 `E_EVAL_SEED_OVERLAP`，
+        # 那时代价是「gen-000 基线已经花了钱才发现」；这里前移到配置装配。
+        _check("evolve.heldout_basket", self.heldout_basket, str,
+               choices=("H1", "H2", "H3"),
+               extra="held-out 评估篮子；正式实验用 H1（generation_judge），"
+                     "彩排/干跑用 H3（reserve）；H2 是消融专用")
 
 
 @dataclass(frozen=True)
