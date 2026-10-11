@@ -27,7 +27,8 @@ from .harness import (ArmResult, EpisodeRunner, EvalResult, EvalSpec, SandboxRun
                       TraceWriter, append_generations_csv, check_report_determinism,
                       compare_all_metrics, compare_paired, episode_result_from_rows,
                       evaluate_arm, evaluate_generation, generation_report_path,
-                      enforce_report_determinism, kind_index, load_episode_results,
+                      enforce_report_determinism, generations_row_from_report,
+                      generations_rows_from_report, kind_index, load_episode_results,
                       read_episode_protocols, report_sha_path, reproducibility_of,
                       run_eval, slot_key, utc_now,
                       write_ext_metrics, write_generation_report, write_plots_data)
@@ -64,6 +65,7 @@ __all__ = [
     "episode_result_from_rows", "EPISODE_PROTOCOL", "kind_index", "slot_key",
     "write_generation_report", "check_report_determinism",
     "enforce_report_determinism", "reproducibility_of", "append_generations_csv",
+    "generations_rows_from_report", "generations_row_from_report",
     "write_ext_metrics", "write_plots_data", "generation_report_path", "report_sha_path",
     # baselines
     "BASELINE_KINDS", "BaselineAgent", "RandomAgent", "HeuristicAgent", "baseline_arm",

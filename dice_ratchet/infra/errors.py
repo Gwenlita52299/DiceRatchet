@@ -138,6 +138,9 @@ class E(StrEnum):
     E_IO_GUARD_RANDOM = "E_IO_GUARD_RANDOM" # 退出码 4
     E_IO_GUARD_LAYER = "E_IO_GUARD_LAYER" # 退出码 4
     E_IO_PLOT_UNAVAILABLE = "E_IO_PLOT_UNAVAILABLE" # 降级为警告，不中断
+    #: F-M3-3（2026-10-11）：绘图输入存在但**没有可用数据点** ⇒ 拒绝产出空白图。
+    #: 修复前 matplotlib 对空序列不报错，`runs/*/plots/` 里全是"成功生成"的空白 PNG。
+    E_IO_PLOT_NO_DATA = "E_IO_PLOT_NO_DATA" # 不允许空白图冒充产物
     E_IO_MEMORY_CORRUPT = "E_IO_MEMORY_CORRUPT"
     E_IO_MEMORY_LOCKED = "E_IO_MEMORY_LOCKED"
     E_IO_MEMORY_QUOTA = "E_IO_MEMORY_QUOTA"
@@ -196,6 +199,7 @@ EXIT_CODE: Final[Mapping[E, int]] = {
     E.E_IO_CONFIG_UNKNOWN: EXIT_OK,
     E.E_IO_GIT_UNAVAILABLE: EXIT_OK,
     E.E_IO_PLOT_UNAVAILABLE: EXIT_OK,
+    E.E_IO_PLOT_NO_DATA: EXIT_IO,
     E.E_IO_TRAILING_TRUNCATED: EXIT_OK,
     E.E_IO_REDACTION_HIT: EXIT_OK, # 命中本身写 guard_finding 事件，不直接退出
     E.E_ENV_PARITY_MISMATCH: EXIT_DOMAIN,
@@ -227,6 +231,7 @@ ERROR_MESSAGE: Final[Mapping[E, str]] = {
     E.E_IO_GUARD_RANDOM: "确定性守卫检出未显式 seed 的随机源",
     E.E_IO_GUARD_LAYER: "分层 import 门禁检出越权 import（违反 INV-1）",
     E.E_IO_PLOT_UNAVAILABLE: "matplotlib 不可用，绘图已降级",
+    E.E_IO_PLOT_NO_DATA: "绘图输入没有可用数据点（拒绝产出空白图）",
     E.E_IO_MODULE_PENDING: "命令面已冻结，但所属模块尚未落地",
     E.E_IO_SCHEMA_MISSING: "schema 文件缺失",
     E.E_IO_CONCURRENCY: "并发配置非法（MOD-06：训练局必须串行，train_concurrency 固定 1）",

@@ -59,6 +59,9 @@ def _build_registry() -> dict[str, EventSpec]:
         ("config_unknown_key", frozenset({"keys"})),
         ("trailing_truncated", frozenset({"path"})),
         ("plot_unavailable", frozenset()),
+        ("plot_skipped", frozenset({"generation"})),
+        ("plot_done", frozenset({"generation", "files"})),
+        ("plot_missing_split", frozenset({"split"})),
     ]:
         entries.append(_spec("infra", ev, "MOD-09 工程横切事件", req))
     # ---- env（MOD-01/02 转发内核事件）----------------------------------------------

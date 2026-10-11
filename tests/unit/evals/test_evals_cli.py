@@ -224,3 +224,45 @@ def test_generation_of_and_basket_of():
     assert cli_mod._basket_of(_ns(split="test")) == "test_full"
     assert cli_mod._basket_of(_ns(split="train")) == "train_window"
     assert cli_mod._basket_of(_ns(split="heldout", basket="H2")) == "H2"
+
+
+def test_fm33_eval_report_writes_all_splits_and_plots(wired, capsys):
+    """**F-M3-3 的端到端护栏**：`eval report` 必须 (a) 台账写全 split、(b) 真的产出 PNG。
+
+    修复前两处都坏：
+      · 台账只写 heldout 行（`_csv_row`）⇒ train 一侧永远缺席，train 对照曲线与 gap 图无源；
+      · `plot_generations` **没有生产调用点** ⇒ `runs/*/plots/` 全空。
+    且绘图侧的四列名在真实台账里不存在 ⇒ 即便接上了线，产出的也是**空白图**。
+    """
+    pytest.importorskip("matplotlib")
+    import csv
+
+    tmp_path, _cfg = wired
+    src = _FIXTURES / "episodes" / "heldout"
+    dst = tmp_path / "episodes" / "heldout"
+    dst.mkdir(parents=True)
+    for path in src.glob("*.jsonl"):
+        (dst / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    assert cli_mod.cmd_eval_report(_ns()) == 0
+    capsys.readouterr()
+
+    # (a) 台账：至少一行 heldout，且列名与权威清单一致
+    from dice_ratchet.infra.plotting import GENERATIONS_CSV_COLUMNS
+
+    csv_path = tmp_path / "metrics" / "generations.csv"
+    assert csv_path.is_file()
+    with csv_path.open(encoding="utf-8", newline="") as fh:
+        reader = csv.DictReader(fh)
+        assert tuple(reader.fieldnames or ()) == tuple(GENERATIONS_CSV_COLUMNS)
+        rows = list(reader)
+    assert [r["split"] for r in rows] == ["heldout"], "夹具没有 train 局 ⇒ 只有 heldout 行"
+    assert float(rows[0]["win_rate"] or 0) > 0, "win_rate 必须真的写进去了"
+
+    # (b) 绘图：5 张 PNG 真的落盘（不是空白——空白会被 E_IO_PLOT_NO_DATA 拦成异常）
+    from dice_ratchet.infra.plotting import PLOT_FILES
+
+    plots = tmp_path / "plots"
+    assert sorted(p.name for p in plots.glob("*.png")) == sorted(PLOT_FILES)
+    for name in PLOT_FILES:
+        assert (plots / name).stat().st_size > 0

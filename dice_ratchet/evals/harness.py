@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import (Any, Callable, Final, Iterable, Literal, Mapping, Protocol, Sequence,
                     runtime_checkable)
 
+from dice_ratchet.infra import plotting as plotting_mod
 from dice_ratchet.infra.errors import E, InfraError
 from dice_ratchet.infra.io import read_json, read_jsonl, sha256_file, write_json_atomic
 
@@ -59,7 +60,8 @@ __all__ = [
     "generation_report_path",
     "report_sha_path", "write_generation_report", "check_report_determinism",
     "enforce_report_determinism", "reproducibility_of",
-    "append_generations_csv", "write_ext_metrics", "write_plots_data",
+    "append_generations_csv", "generations_rows_from_report",
+    "generations_row_from_report", "write_ext_metrics", "write_plots_data",
     "write_episode_summaries",
     "GENERATIONS_COLUMNS", "rng_for", "GainVerdictDiversity",
 ]
@@ -72,14 +74,15 @@ __all__ = [
 #: 否则一次脏工作区在报告里长得像一次合法拒绝。
 VERDICT_DECISIONS: Final[tuple[str, ...]] = ("accept", "reject", "rollback", "error_reject")
 
-#: ``metrics/generations.csv`` 的固定列（PRD §13；列定义归 MOD-08，B-06）
-GENERATIONS_COLUMNS: tuple[str, ...] = (
-    "generation", "harness_version", "parent_version", "split", "basket", "n", "win_rate",
-    "ci_lo", "ci_hi", "mean_stages_cleared", "mean_hearts_left", "mean_battles_won",
-    "mean_decisions", "illegal_rate", "fallback_rate", "truncation_rate",
-    "entropy_mean_norm", "entropy_slope", "jsd_kind", "collapse_flag", "win_rate_gap",
-    "verdict", "decision", "bootstrap_seed", "config_hash", "git_commit", "ts",
-)
+#: ``metrics/generations.csv`` 的固定列（PRD §13；**口径**归 MOD-08，B-06）。
+#:
+#: **2026-10-11（F-M3-3 裁决 A）**：这份清单**不再是独立定义**，而是**直接取**
+#: ``infra.plotting.GENERATIONS_CSV_COLUMNS``——修复前两处各写一份，分叉出 4 个列名
+#: （``heldout_win_rate`` 等），而绘图侧 ``_g()`` 缺列时静默返回空 ⇒ **5 张空白 PNG**
+#: 被「文件存在」的判据当成 M3 交付物。权威定义落在 ``infra``（IO 层）是因为分层门禁
+#: 禁止 ``infra → evals``（NFR-09-5），而 ``evals → infra`` 合法。**口径仍归 MOD-08**：
+#: 改列要同时改这里的语义说明与 MOD-08 §13 / MOD-09 FR-09-13。
+GENERATIONS_COLUMNS: tuple[str, ...] = tuple(plotting_mod.GENERATIONS_CSV_COLUMNS)
 
 #: 单局硬看门狗的宽限（秒）。协同预算（``SandboxRunner`` 里的 deadline）已是第一道闸；
 #: 这里只兜住「worker 完全不消费 ``timeout_s``」的极端情形，宽限留给已进入的单次
@@ -1211,54 +1214,97 @@ def heldout_harness_version(parent: ArmResult, winner: ArmResult | None) -> int:
 # 报告落盘（FR-08-17 / FR-08-22 / FR-08-23/24）
 # =====================================================================
 
-def generations_row_from_report(report: Mapping[str, Any], *, cfg: Any = None,
-                                now: Any = None) -> dict[str, Any]:
-    """从**报告字典**（MOD-07 ``generations/gen-NNN/report.json`` 形态）构造 csv 行。
+def _generations_row(*, generation: int, harness_version: Any, parent_version: Any,
+                     split: str, metrics: Mapping[str, Any], diversity: Mapping[str, Any],
+                     gain: Mapping[str, Any], decision: Any, config_hash_value: Any,
+                     git_commit: Any, ts: str) -> dict[str, Any]:
+    """一行台账（``split`` 维度在**调用方**决定，本函数只做字段映射）。"""
+    ci = list(metrics.get("win_rate_ci95") or (0.0, 0.0))
+    return {
+        "generation": int(generation or 0),
+        "harness_version": harness_version,
+        "parent_version": parent_version,
+        "split": str(split),
+        "basket": metrics.get("basket"),
+        "n": metrics.get("n"),
+        "win_rate": metrics.get("win_rate"),
+        "ci_lo": ci[0],
+        "ci_hi": ci[1],
+        "mean_stages_cleared": metrics.get("mean_stages_cleared"),
+        "mean_hearts_left": metrics.get("mean_hearts_left"),
+        "mean_battles_won": metrics.get("mean_battles_won"),
+        "mean_decisions": metrics.get("mean_decisions"),
+        "illegal_rate": metrics.get("illegal_rate"),
+        "fallback_rate": metrics.get("fallback_rate"),
+        "truncation_rate": metrics.get("truncation_rate"),
+        "entropy_mean_norm": metrics.get("entropy_mean_norm"),
+        # entropy_slope / collapse_flag 是**代级**属性，只挂 heldout 行（避免 train 行与
+        # heldout 行给出两个互相矛盾的坍缩判定）。
+        "entropy_slope": diversity.get("entropy_slope") if split == "heldout" else None,
+        "jsd_kind": diversity.get("jsd_kind") if split == "heldout" else None,
+        "collapse_flag": diversity.get("collapse_flag") if split == "heldout" else None,
+        # win_rate_gap 是 heldout−train 的**一个**数，只挂 heldout 行。
+        "win_rate_gap": gain.get("win_rate_gap") if split == "heldout" else None,
+        "verdict": gain.get("verdict") if split == "heldout" else None,
+        "decision": decision if split == "heldout" else None,
+        "bootstrap_seed": None,
+        "config_hash": config_hash_value,
+        "git_commit": git_commit,
+        "ts": ts,
+    }
 
-    F43：``metrics/generations.csv`` 原先**只有** ``eval report`` 会写，而那条路径会把重算
-    结果写进**同一个** ``report.json`` ⇒ 判据②（csv 可复算）只能靠破坏判据①（MOD-07 的
-    决策记录）来满足。现在由**写报告的一方**（MOD-07 ``_finish_report``）追写本行，
-    列集与 ``evals/cli.py::_csv_row`` 共用 ``GENERATIONS_COLUMNS``。
+
+def generations_rows_from_report(report: Mapping[str, Any], *, cfg: Any = None,
+                                 now: Any = None) -> list[dict[str, Any]]:
+    """从**报告字典**构造台账行：``heldout`` 一行 + ``train`` 一行（F-M3-3，2026-10-11）。
+
+    返回**列表**（按 ``heldout`` → ``train`` 排序）。**为什么必须有两行**：
+    ``train_heldout_gap.png`` 与 ``win_rate.png`` 的 train 对照曲线都要 train 一侧的数，
+    而 ``generations.csv`` 原先**只有 heldout 行**（实测 8 个归档 run 的 train 行数全为 0）
+    ⇒ `gain_realism.win_rate_gap`（M3 判据 3 的量）在台账里**没有可核验的来源**，
+    绘图只能画出空白。
+
+    F43 的语义不变：本函数由**写报告的一方**（MOD-07 ``_finish_report``）调用，
+    列集与 ``evals/cli.py`` 共用 ``GENERATIONS_COLUMNS``。
     """
-    from dice_ratchet.infra.config import config_hash
     from datetime import datetime, timezone
 
+    from dice_ratchet.infra.config import config_hash
     from dice_ratchet.infra.run import git_short_sha
 
     heldout = dict(report.get("heldout") or {})
+    train = dict(report.get("train") or {})
     diversity = dict(report.get("diversity") or {})
     gain = dict(report.get("gain_realism") or {})
-    ci = list(heldout.get("win_rate_ci95") or (0.0, 0.0))
     moment = now or datetime.now(tz=timezone.utc)
-    return {
+    ts = moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    common = {
         "generation": int(report.get("generation") or 0),
         "harness_version": report.get("harness_version"),
         "parent_version": report.get("parent_version"),
-        "split": "heldout",
-        "basket": heldout.get("basket"),
-        "n": heldout.get("n"),
-        "win_rate": heldout.get("win_rate"),
-        "ci_lo": ci[0],
-        "ci_hi": ci[1],
-        "mean_stages_cleared": heldout.get("mean_stages_cleared"),
-        "mean_hearts_left": heldout.get("mean_hearts_left"),
-        "mean_battles_won": heldout.get("mean_battles_won"),
-        "mean_decisions": heldout.get("mean_decisions"),
-        "illegal_rate": heldout.get("illegal_rate"),
-        "fallback_rate": heldout.get("fallback_rate"),
-        "truncation_rate": heldout.get("truncation_rate"),
-        "entropy_mean_norm": heldout.get("entropy_mean_norm"),
-        "entropy_slope": diversity.get("entropy_slope"),
-        "jsd_kind": diversity.get("jsd_kind"),
-        "collapse_flag": diversity.get("collapse_flag"),
-        "win_rate_gap": gain.get("win_rate_gap"),
-        "verdict": gain.get("verdict"),
+        "diversity": diversity, "gain": gain,
         "decision": report.get("decision"),
-        "bootstrap_seed": None,
-        "config_hash": config_hash(cfg) if cfg is not None else None,
-        "git_commit": git_short_sha(),
-        "ts": moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "config_hash_value": config_hash(cfg) if cfg is not None else None,
+        "git_commit": git_short_sha(), "ts": ts,
     }
+    rows = [_generations_row(split="heldout", metrics=heldout, **common)]
+    # 只在**真的有训练局**时写 train 行。判据是 ``n > 0`` 而**不是**「train 段非空」：
+    # 引擎在无训练局时写的是 ``{"n": 0, "win_rate": 0.0, "low_confidence": true}``
+    # ——非空 dict（实测 gen-000 基线：``train.n == 0``），写成行会被绘图与统计
+    # 当成一个真实的「win_rate=0」数据点，在图上是**零点的假信号**。
+    if int(train.get("n") or 0) > 0:
+        rows.append(_generations_row(split="train", metrics=train, **common))
+    return rows
+
+
+def generations_row_from_report(report: Mapping[str, Any], *, cfg: Any = None,
+                                now: Any = None) -> dict[str, Any]:
+    """**heldout** 那一行（旧签名，保留给单测/调用方逐个字段核对的场景）。
+
+    新代码请用 ``generations_rows_from_report``：台账现在按 ``(generation, split)`` 双键
+    upsert，只写 heldout 行会让 train 一侧永远缺席（F-M3-3）。
+    """
+    return generations_rows_from_report(report, cfg=cfg, now=now)[0]
 
 
 def generation_report_path(run_dir: Path | str, generation: int) -> Path:
@@ -1406,21 +1452,35 @@ def _round_floats(obj: Any) -> Any:
     return obj
 
 
-def append_generations_csv(run_dir: Path | str, row: Mapping[str, Any]) -> Path:
-    """写一代一行到 ``metrics/generations.csv``（FR-08-22；列固定见 §13）。
+def _csv_split_key(row: Mapping[str, Any]) -> str:
+    """台账行的 split 键；**空值一律归一为 ``heldout``**。
 
-    **每代恰好一行**（F43 的配套）：按 ``generation`` **upsert**，不是无脑追加——因为现在
-    有**两个**写入方（MOD-07 ``_finish_report`` 在代末写它，``eval report`` 也写），无脑
-    追加会给同一代留下两行互相矛盾的数字。
+    历史台账（F-M3-3 之前）没有 ``train`` 行，且早期归档里有 ``split`` 列缺失/为空的行
+    （实测 `runs/g6-eval-smoke` 同代同值 5 行 = 单键 upsert 在空 split 上反复追加）。
+    归一化后这些旧行会被**正确替换**，而不是继续堆积。
+    """
+    return str(row.get("split") or "").strip() or "heldout"
+
+
+def append_generations_csv(run_dir: Path | str, row: Mapping[str, Any]) -> Path:
+    """写一行台账到 ``metrics/generations.csv``（FR-08-22；列固定见 §13）。
+
+    **按 ``(generation, split)`` 双键 upsert**（F-M3-3，2026-10-11）。修复前是
+    ``generation`` **单键**——那时台账只有 heldout 行，单键恰好够用；一旦按 F-M3-3 补上
+    ``train`` 行，同一代的 train/heldout 会**互相覆盖**，台账里永远只剩最后写的那一个
+    split（实测：单键实现下先写 heldout 再写 train，heldout 行被吃掉）。
+    无脑追加同样不行：有**两个**写入方（MOD-07 ``_finish_report`` 代末写、``eval report``
+    也写），会给同一代留下两行互相矛盾的数字（F43 已处置）。
 
     **已裁决的 ``decision``/``verdict`` 不被覆盖**：MOD-07 写下的判决是判据①的唯一记录，
     而 ``eval report`` 的重算报告 ``decision`` 恒为 ``baseline``/``pending``。若重算在后，
     只更新指标列、保留判决列（与 ``evals/cli.py::_write_report_preserving_verdict`` 同口径）。
+    该保留只作用于 heldout 行——train 行的 ``decision``/``verdict`` 本就是空。
     """
     path = Path(run_dir) / "metrics" / "generations.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     incoming = {k: _round_floats(row.get(k)) for k in GENERATIONS_COLUMNS}
-    generation = str(incoming.get("generation"))
+    key = (str(incoming.get("generation")), _csv_split_key(incoming))
 
     existing: list[dict[str, Any]] = []
     if path.is_file():
@@ -1430,11 +1490,23 @@ def append_generations_csv(run_dir: Path | str, row: Mapping[str, Any]) -> Path:
         except (OSError, csv.Error): # pragma: no cover - 坏账本按空重建
             existing = []
 
+    # **读入时按 (generation, split) 折叠历史重复行**（F-M3-3 的第二处缺陷）。
+    # 实测：`runs/g6-eval-smoke/metrics/generations.csv` 同一代同值有 **5 行**——
+    # 产生原因是 F45-2 之前的行**没有 `split` 列**，而当时的 upsert 比较 `prev.get("split")`
+    # 得到的 `None` 与任何值都不等 ⇒ 每次都走 `existing.append`。后果不只是文件脏：
+    # 任何按行读取的下游（绘图、汇总、判据判定）都会把同一代数 5 遍。
+    # 这里**顺手修好**：后写覆盖先写（保留末条），即「重复的最后一次写入」才代表真实值。
+    collapsed: dict[tuple[str, str], dict[str, Any]] = {}
+    for prev in existing:
+        collapsed[(str(prev.get("generation")), _csv_split_key(prev))] = prev
+    existing = list(collapsed.values())
+
     replaced = False
     for index, prev in enumerate(existing):
-        if str(prev.get("generation")) != generation:
+        if (str(prev.get("generation")), _csv_split_key(prev)) != key:
             continue
-        if str(prev.get("decision") or "") in VERDICT_DECISIONS:
+        if _csv_split_key(incoming) == "heldout" and \
+                str(prev.get("decision") or "") in VERDICT_DECISIONS:
             incoming["decision"] = prev.get("decision")
             if prev.get("verdict") not in (None, ""):
                 incoming["verdict"] = prev.get("verdict")
@@ -1443,7 +1515,7 @@ def append_generations_csv(run_dir: Path | str, row: Mapping[str, Any]) -> Path:
         break
     if not replaced:
         existing.append(incoming)
-    existing.sort(key=lambda r: int(r.get("generation") or 0))
+    existing.sort(key=lambda r: (int(r.get("generation") or 0), _csv_split_key(r) != "heldout"))
 
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=list(GENERATIONS_COLUMNS), extrasaction="ignore")

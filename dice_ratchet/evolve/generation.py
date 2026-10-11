@@ -535,7 +535,7 @@ def _finish_report(*, result: GenerationResult, run_ctx: Any, cfg: Any,
     try:
         from dice_ratchet.evals import (append_generations_csv, enforce_report_determinism,
                                         write_generation_report)
-        from dice_ratchet.evals.harness import generations_row_from_report
+        from dice_ratchet.evals.harness import generations_rows_from_report
 
         app_cfg = ctx_app_config(run_ctx, cfg)
         # G3 的**生产执行点**（2026-10-11 D-M3-3 裁决 A，Spec v2.9 / B-65）。
@@ -552,9 +552,15 @@ def _finish_report(*, result: GenerationResult, run_ctx: Any, cfg: Any,
         # `generations/gen-NNN/report.json`（decision 变 "pending"）⇒ 判据②（csv 可复算）
         # 只能靠破坏判据①（本模块刚写下的决策记录）来满足。
         # 台账是附属产物：失败**不阻塞**裁决落盘，但必须可观测（`evolve.ledger`）。
+        # F-M3-3（2026-10-11）：改为写**全部** split 行（heldout + train）。原先只写 heldout
+        # ⇒ `generations.csv` 里 train 一侧永远缺席（实测 8 个归档 run 的 train 行数全为 0），
+        # 而 `train_heldout_gap.png` 与 `win_rate.png` 的 train 对照曲线都要它。
         try:
-            append_generations_csv(run_root, generations_row_from_report(report, cfg=app_cfg))
-            events.emit("evolve.ledger", generation=int(gen), status="ok")
+            rows = generations_rows_from_report(report, cfg=app_cfg)
+            for row in rows:
+                append_generations_csv(run_root, row)
+            events.emit("evolve.ledger", generation=int(gen), status="ok",
+                        rows=len(rows), splits=[str(r.get("split")) for r in rows])
         except Exception as exc: # noqa: BLE001 - 附属台账失败不阻塞裁决
             events.emit("evolve.ledger", generation=int(gen), status="failed",
                         error_code=str(getattr(exc, "code", E.E_IO_WRITE)),

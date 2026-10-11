@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Final, Mapping, Sequence
 
 from dice_ratchet.infra import cli as infra_cli
+from dice_ratchet.infra import events
 from dice_ratchet.infra.config import load_config
 from dice_ratchet.infra.errors import E, InfraError, error_code_of
 from dice_ratchet.infra.io import read_json, write_json_atomic
@@ -29,7 +30,8 @@ from .baselines import BASELINE_KINDS, baseline_arm, baselines_dir, run_baseline
 from .diversity import (CollapseConfig, collapse_check, distinct_sequence_ratio,
                         js_divergence, kind_distribution, slot_distribution)
 from .harness import (VERDICT_DECISIONS, EvalSpec, append_generations_csv, evaluate_arm,
-                      generation_report_path, load_episode_results, run_eval, utc_now,
+                      generation_report_path, generations_rows_from_report,
+                      load_episode_results, run_eval, utc_now,
                       write_ext_metrics, write_generation_report, write_plots_data)
 from .metrics import (aggregate, bootstrap_seed, judge_gain, mcnemar_exact_p, power_note,
                       render_report_sections)
@@ -280,8 +282,16 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
                 "pool_n": pool_metrics.n, "arms_present": _arms_of(pool_results),
                 "requested_arm": (str(requested_arm) if requested_arm else None)})
     write_ext_metrics(paths.root, generation, ext)
-    append_generations_csv(paths.root, _csv_row(generation, heldout, diversity, gain,
-                                                report, cfg, eval_cfg))
+    # F-M3-3（2026-10-11）：台账写**全部** split 行（heldout + train），且**用与 MOD-07 同一个
+    # 构造器**（`generations_rows_from_report`）——原先这里用本地 `_csv_row` 只写 heldout 行，
+    # 于是 train 一侧在台账里永远缺席（实测 8 个归档 run 的 train 行数全为 0），
+    # `train_heldout_gap.png` 与 `win_rate.png` 的 train 对照曲线只能画成空白。
+    for row in generations_rows_from_report(report, cfg=cfg):
+        append_generations_csv(paths.root, row)
+    # F-M3-3：**绘图的生产调用点**。原先 `plot_generations` 只被它自己的单测调用
+    # ⇒ `runs/*/plots/` 全空、M3 的「曲线图」交付物不会产出。绘图是附属产物：
+    # 失败**不阻塞**报告/台账落盘，但必须**非静默**（事件 + stderr）。
+    _plot_or_warn(paths.root, generation)
     if mixed:
         print(f"[{E.E_EVAL_ARM_NOT_ALLOWED}] --arm all：heldout 是**混合池**"
               f"（n={heldout.n}，臂={_arms_of(pool_results)}），不是单臂口径，禁止当默认口径用",
@@ -478,28 +488,37 @@ def _write_report_preserving_verdict(run_root: Path | str, generation: int,
     return write_generation_report(run_root, generation, report)
 
 
-def _csv_row(generation: int, heldout: Any, diversity: Any, gain: Any, report: Any,
-             cfg: Any, eval_cfg: Any) -> dict[str, Any]:
-    from dice_ratchet.infra.config import config_hash
-    from dice_ratchet.infra.run import git_short_sha
+def _plot_or_warn(run_root: Path, generation: int) -> list[Path]:
+    """F-M3-3 的绘图生产调用点：画 ``runs/<run_id>/plots/`` 下的 5 张 PNG。
 
-    ci = list(heldout.win_rate_ci95 or (0.0, 0.0))
-    return {
-        "generation": generation, "harness_version": report.get("harness_version"),
-        "parent_version": report.get("parent_version"), "split": heldout.split,
-        "basket": heldout.basket, "n": heldout.n, "win_rate": heldout.win_rate,
-        "ci_lo": ci[0], "ci_hi": ci[1], "mean_stages_cleared": heldout.mean_stages_cleared,
-        "mean_hearts_left": heldout.mean_hearts_left,
-        "mean_battles_won": heldout.mean_battles_won,
-        "mean_decisions": heldout.mean_decisions, "illegal_rate": heldout.illegal_rate,
-        "fallback_rate": heldout.fallback_rate, "truncation_rate": heldout.truncation_rate,
-        "entropy_mean_norm": heldout.entropy_mean_norm,
-        "entropy_slope": float(diversity.entropy_slope),
-        "jsd_kind": diversity.jsd_kind, "collapse_flag": diversity.collapse_flag,
-        "win_rate_gap": gain.win_rate_gap, "verdict": gain.verdict,
-        "decision": report.get("decision"), "bootstrap_seed": None,
-        "config_hash": config_hash(cfg), "git_commit": git_short_sha(), "ts": utc_now(),
-    }
+    纪律（2026-10-11 裁决 A 的第 7 条）：**降级可以，静默不行**。绘图失败或没有数据点时
+    发 ``infra.plot_skipped`` 事件 + 写 stderr，**但不让 ``eval report`` 失败**——
+    报告与台账（判据的机读来源）必须先落盘。
+
+    ``PLOT_NO_DATA`` 单独提示：它意味着台账里**没有该 split 的数据点**，此时生成的会是
+    **空白图**（matplotlib 对空序列不报错）——正是 F-M3-3 修复前 `runs/*/plots/` 全空的
+    真实成因，必须显式说出来，不能让「文件存在」冒充「有图」。
+    """
+    from dice_ratchet.infra.plotting import plot_generations
+
+    csv_path = run_root / "metrics" / "generations.csv"
+    out_dir = run_root / "plots"
+    try:
+        written = plot_generations(csv_path, out_dir)
+    except InfraError as exc:
+        events.emit("infra.plot_skipped", generation=int(generation),
+                    code=str(exc.code), detail=str(exc)[:200])
+        print(f"[{exc.code}] 绘图跳过：{exc.message}", file=sys.stderr)
+        return []
+    if not written:
+        events.emit("infra.plot_skipped", generation=int(generation),
+                    code=str(E.E_IO_PLOT_UNAVAILABLE), detail="matplotlib 不可用或无数数据点")
+        print(f"[{E.E_IO_PLOT_UNAVAILABLE}] 绘图未产出任何文件（matplotlib 缺失或无数据点）",
+              file=sys.stderr)
+        return []
+    events.emit("infra.plot_done", generation=int(generation),
+                files=[p.name for p in written], out_dir=str(out_dir))
+    return written
 
 
 # =====================================================================

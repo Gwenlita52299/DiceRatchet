@@ -261,6 +261,91 @@ def test_f43_generations_csv_upserts_one_row_per_generation(tmp_path):
     assert gen1["n"] == "117", "指标列由后写入方（重算）刷新"
 
 
+def test_fm33_ledger_keeps_train_and_heldout_rows(tmp_path):
+    """**F-M3-3 的台账回归**：同代的 train 与 heldout 必须**共存**，不得互相覆盖。
+
+    修复前 `append_generations_csv` 按 `generation` **单键** upsert——那时台账只有 heldout
+    行，单键恰好够用。按 F-M3-3 补上 train 行后，同一代的 train/heldout 会互相吃掉，
+    台账里永远只剩最后写的那个 split。
+    """
+    from dice_ratchet.evals.harness import (append_generations_csv,
+                                            generations_rows_from_report)
+
+    report = {
+        "generation": 1, "harness_version": 1, "parent_version": 0, "decision": "reject",
+        "heldout": {"basket": "H1", "n": 40, "win_rate": 0.6, "win_rate_ci95": [0.5, 0.7]},
+        "train": {"basket": "train_window", "n": 30, "win_rate": 0.7,
+                  "win_rate_ci95": [0.6, 0.8]},
+        "diversity": {"entropy_slope": 0.0, "collapse_flag": False},
+        "gain_realism": {"win_rate_gap": 0.1, "verdict": "null"},
+    }
+    rows = generations_rows_from_report(report)
+    assert [r["split"] for r in rows] == ["heldout", "train"], "heldout 必须在前"
+    # 反例自检：**顺序反过来写也不得覆盖**（单键实现下会只剩 train）
+    for row in reversed(rows):
+        append_generations_csv(tmp_path, row)
+
+    import csv
+
+    got = list(csv.DictReader(
+        (tmp_path / "metrics" / "generations.csv").open(encoding="utf-8")))
+    assert len(got) == 2, f"train/heldout 必须共存，实际 {[r['split'] for r in got]}"
+    assert {r["split"] for r in got} == {"heldout", "train"}
+    by_split = {r["split"]: r for r in got}
+    assert by_split["heldout"]["n"] == "40" and by_split["train"]["n"] == "30"
+    # 代级属性只挂 heldout 行（避免两个互相矛盾的坍缩判定）
+    assert by_split["heldout"]["collapse_flag"] == "False"
+    assert by_split["train"]["collapse_flag"] in ("", None)
+    assert by_split["train"]["win_rate_gap"] in ("", None)
+    # 判决只挂 heldout 行
+    assert by_split["heldout"]["decision"] == "reject"
+    assert by_split["train"]["decision"] in ("", None)
+
+
+def test_fm33_train_row_skipped_when_train_section_empty(tmp_path):
+    """`train.n == 0`（该代没有已落盘训练局）⇒ **不写 train 行**。
+
+    写一行 n=0 会被绘图与统计当成真数据点（退化成一个"零点"）。
+    """
+    from dice_ratchet.evals.harness import generations_rows_from_report
+
+    for empty in ({}, {"n": 0, "win_rate": 0.0, "low_confidence": True}):
+        # 注意第二种形状：引擎在无训练局时写的**不是**空 dict，而是 ``n=0`` 的完整段
+        # （实测 `gen-000` 基线的 `report.json`）。用 `if train:` 判断会把它当有数据，
+        # 写出一行 `win_rate=0` 的**假零点**。
+        rows = generations_rows_from_report({
+            "generation": 2, "harness_version": 2, "parent_version": 1,
+            "heldout": {"basket": "H1", "n": 40, "win_rate": 0.6,
+                        "win_rate_ci95": [0.5, 0.7]},
+            "train": empty,
+            "diversity": {"entropy_slope": 0.0, "collapse_flag": False},
+            "gain_realism": {"win_rate_gap": 0.1, "verdict": "null"},
+        })
+        assert [r["split"] for r in rows] == ["heldout"], f"train={empty} 时不得写 train 行"
+
+
+def test_fm33_legacy_rows_with_empty_split_are_replaced_not_appended(tmp_path):
+    """历史台账里 `split` 为空的行必须被**替换**而不是继续追加。
+
+    实测来源：`runs/g6-eval-smoke/metrics/generations.csv` 同一代同值出现 **5 行**
+    ——单键 upsert 在空 split 上把 `str(prev.get("split")) != generation` 之外的比较
+    全部走空，于是每次都 `existing.append`。
+    """
+    import csv
+
+    from dice_ratchet.evals.harness import append_generations_csv
+
+    csv_path = tmp_path / "metrics" / "generations.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", encoding="utf-8", newline="") as fh:
+        fh.write("generation,n,win_rate\n0,40,0.45\n0,40,0.45\n0,40,0.45\n")
+    append_generations_csv(tmp_path, {"generation": 0, "split": "heldout",
+                                      "n": 40, "win_rate": 0.5})
+    got = list(csv.DictReader(csv_path.open(encoding="utf-8")))
+    assert len(got) == 1, f"空 split 的旧行必须被替换，实际 {len(got)} 行"
+    assert got[0]["win_rate"] == "0.5"
+
+
 def test_f43_recompute_report_goes_to_sidecar(tmp_path):
     """F43：``eval report`` 不得覆盖 MOD-07 已裁决的 ``report.json``。"""
     import json
