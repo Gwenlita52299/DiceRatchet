@@ -440,6 +440,20 @@ def write_gen000_baseline(run_ctx: RunContext, *, harness_version: int = 0,
     report["decided_by"] = "auto"
     report["reason"] = "harness v0 基线（gen-000，FR-06-13a）"
     write_generation_report(paths.root, 0, report)
+    # F56（2026-10-12，M3 彩排实测）：**基线也要进台账 + 出图**。
+    # 现场：`write_gen000_baseline` 原先只写 `report.json` ⇒ `metrics/generations.csv` 从
+    # gen-001 开始（缺 gen-000 行），于是判据 1 判定器手上没有「相邻两代」⇒
+    # `comparable=0` ⇒ 彩排的判据「判定器能给出结论」**必然不合格**；
+    # 同时 `plots/` 全空（两条写入路径都没接绘图，见 harness.ledger_and_plots 的 docstring）。
+    try:
+        from ..evals.harness import ledger_and_plots
+
+        ledger_and_plots(paths.root, 0, report, cfg=cfg)
+    except Exception as exc: # noqa: BLE001 - 附属产物失败不阻塞基线
+        from ..infra import events as _events
+
+        _events.emit("loop.resume", phase="baseline", baseline="ledger_failed",
+                     error_code=str(getattr(exc, "code", "E_IO_WRITE")))
     return report_path
 
 

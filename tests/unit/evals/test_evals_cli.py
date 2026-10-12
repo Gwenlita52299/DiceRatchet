@@ -14,6 +14,7 @@ from dice_ratchet.evals import seeds as S
 from dice_ratchet.evals.ablation import AblationReport
 from dice_ratchet.evals.harness import ArmResult, load_episode_results
 from dice_ratchet.evals.metrics import EpisodeResult, aggregate
+from dice_ratchet.infra.plotting import PLOT_FILES
 
 _REPO = Path(__file__).resolve().parents[3]
 _FIXTURES = _REPO / "tests" / "fixtures" / "evals"
@@ -392,3 +393,63 @@ def test_dm35_test_check_does_not_require_unlock_once(wired, capsys):
     rc = cli_mod.cmd_eval_test(_ns(check=True, unlock_once=False, transfer=False))
     assert rc == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+# =====================================================================
+# F56：台账 + 绘图必须由**同一个**助手写全（`loop run` 的两条路径都漏过）
+# =====================================================================
+
+def _f56_report(generation: int = 0) -> dict:
+    """一代最小合法报告段（含台账两行所需的 heldout/train 指标）。"""
+    return {
+        "generation": generation, "harness_version": 0, "parent_version": 0,
+        "decision": "baseline" if generation == 0 else "reject",
+        "heldout": {"basket": "H3", "n": 20, "win_rate": 0.15, "win_rate_ci95": [0.05, 0.36],
+                    "mean_stages_cleared": 4.3, "mean_hearts_left": 0.5,
+                    "mean_battles_won": 11.0, "mean_decisions": 100.0,
+                    "illegal_rate": 0.03, "fallback_rate": 0.001,
+                    "truncation_rate": 0.25, "entropy_mean_norm": 0.4, "low_confidence": False},
+        "train": {"window": 30, "n": 30, "win_rate": 0.25,
+                  "mean_stages_cleared": 5.0, "mean_hearts_left": 1.0,
+                  "mean_battles_won": 12.0, "mean_decisions": 110.0,
+                  "illegal_rate": 0.02, "fallback_rate": 0.0, "truncation_rate": 0.2,
+                  "entropy_mean_norm": 0.45},
+        "gain_realism": {"win_rate_gap": 0.1, "verdict": "null"},
+        "diversity": {"entropy_slope": 0.0, "collapse_flag": False, "jsd_kind": None},
+    }
+
+
+def test_f56_ledger_and_plots_writes_ledger_row_and_pngs(tmp_path):
+    """给定一代报告；当 ``harness.ledger_and_plots``；
+
+    则台账出现**该代**的 heldout 行、且 `plots/` 下 5 张 PNG **都有数据点**。
+
+    现场（2026-10-12 M3 彩排，实测）：`runs/_sweep/m3-rehearsal/` 跑完 2 代后
+    `plots/` **全空**、`metrics/generations.csv` **缺 gen-000 基线行** ⇒ 彩排的两条判据
+    （「5 张 PNG 有数据点」「判据 1 判定器能给出结论」）必然不合格。
+    """
+    pytest.importorskip("matplotlib")
+    from dice_ratchet.evals.harness import ledger_and_plots
+
+    run = tmp_path / "runs" / "r-f56"
+    (run / "metrics").mkdir(parents=True)
+    out = ledger_and_plots(run, 0, _f56_report(0))
+    assert out["ledger_error"] is None and out["plot_error"] is None, out
+    assert out["ledger_rows"] >= 1
+    rows = (run / "metrics" / "generations.csv").read_text(encoding="utf-8").splitlines()
+    assert any(r.startswith("0,") and ",heldout," in r for r in rows), rows
+    assert sorted(out["plots"]) == sorted(PLOT_FILES), out["plots"]
+    assert all((run / "plots" / n).is_file() for n in PLOT_FILES)
+
+
+def test_f56_ledger_and_plots_degrades_without_raising(tmp_path):
+    """台账/绘图失败**不得**抛出（附属产物失败不阻塞裁决），但必须留下非静默的错误码。"""
+    from dice_ratchet.evals.harness import ledger_and_plots
+
+    run = tmp_path / "runs" / "r-f56-bad"
+    run.mkdir(parents=True)
+    # 报告段缺 heldout ⇒ 台账行构造失败；本调用仍须返回而不抛
+    out = ledger_and_plots(run, 0, {"generation": 0, "harness_version": 0,
+                                    "parent_version": 0, "decision": "baseline"})
+    assert isinstance(out, dict)
+    assert out["ledger_error"] is not None or out["plot_error"] is not None

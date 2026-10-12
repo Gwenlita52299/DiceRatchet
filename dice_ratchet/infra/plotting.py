@@ -166,8 +166,8 @@ def _require_points(name: str, xs: Sequence[Any], ys: Sequence[Any],
              "（绘图列清单必须从 MOD-08 派生，不得另写一份）")
 
 
-def plot_generations(csv_path: Path, out_dir: Path, *, figures: list[Any] | None = None
-                     ) -> list[Path]:
+def plot_generations(csv_path: Path, out_dir: Path, *, figures: list[Any] | None = None,
+                     close_after: bool = False) -> list[Path]:
     """绘图；返回生成的 png 列表。
 
     - matplotlib 不可用 → ``E_IO_PLOT_UNAVAILABLE``（降级，返回 ``[]``，不失败）；
@@ -177,6 +177,11 @@ def plot_generations(csv_path: Path, out_dir: Path, *, figures: list[Any] | None
     供调用方**检查真实画出来的对象**。M3 彩排的「5 张 PNG 有数据点」判据走这条路——
     只查「文件存在」或「文件大小」会被空白图通过（F48 的教训：空白图 20–27 KB，
     非白像素比例 3.43% vs 有数据图 3.60%，两者分不开）。
+
+    ``close_after``（F56，2026-10-12）：画完**立刻**关掉每张 figure。生产路径每代都会调
+    本函数（`harness.ledger_and_plots`），不关会在长 run / 测试里撞上 matplotlib 的
+    "More than 20 figures" 上限（实测 RuntimeWarning）。**默认 False 不变**：彩排判据要
+    在返回后读 `Line2D.get_xydata()`，那时 figure 必须还活着。
     """
     try:
         plt = _import_matplotlib()
@@ -201,7 +206,7 @@ def plot_generations(csv_path: Path, out_dir: Path, *, figures: list[Any] | None
         fig.savefig(out_dir / name, dpi=120)
         if figures is not None:
             figures.append((name, fig))
-        else:
+        if figures is None or close_after:
             plt.close(fig)
         written.append(out_dir / name)
 

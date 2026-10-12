@@ -30,9 +30,9 @@ from .ablation import ablation_path, run_ablation
 from .baselines import BASELINE_KINDS, baseline_arm, baselines_dir, run_baseline
 from .diversity import (CollapseConfig, collapse_check, distinct_sequence_ratio,
                         js_divergence, kind_distribution, slot_distribution)
-from .harness import (VERDICT_DECISIONS, EvalSpec, append_generations_csv, evaluate_arm,
-                      generation_report_path, generations_rows_from_report,
-                      load_episode_results, run_eval, utc_now,
+from .harness import (VERDICT_DECISIONS, EvalSpec, evaluate_arm,
+                      ledger_and_plots,
+                      generation_report_path, load_episode_results, run_eval, utc_now,
                       write_ext_metrics, write_generation_report, write_plots_data)
 from .metrics import (aggregate, bootstrap_seed, judge_gain, mcnemar_exact_p, power_note,
                       render_report_sections)
@@ -315,12 +315,9 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
     # 构造器**（`generations_rows_from_report`）——原先这里用本地 `_csv_row` 只写 heldout 行，
     # 于是 train 一侧在台账里永远缺席（实测 8 个归档 run 的 train 行数全为 0），
     # `train_heldout_gap.png` 与 `win_rate.png` 的 train 对照曲线只能画成空白。
-    for row in generations_rows_from_report(report, cfg=cfg):
-        append_generations_csv(paths.root, row)
-    # F-M3-3：**绘图的生产调用点**。原先 `plot_generations` 只被它自己的单测调用
-    # ⇒ `runs/*/plots/` 全空、M3 的「曲线图」交付物不会产出。绘图是附属产物：
-    # 失败**不阻塞**报告/台账落盘，但必须**非静默**（事件 + stderr）。
-    _plot_or_warn(paths.root, generation)
+    # F56（2026-10-12）：台账与绘图走**同一个**助手（MOD-06 基线、MOD-07 代末、本命令
+    # 三方共用），避免「谁记得写哪一半」再分叉。纪律不变：附属产物失败不阻塞报告。
+    ledger_and_plots(paths.root, generation, report, cfg=cfg)
     if mixed:
         print(f"[{E.E_EVAL_ARM_NOT_ALLOWED}] --arm all：heldout 是**混合池**"
               f"（n={heldout.n}，臂={_arms_of(pool_results)}），不是单臂口径，禁止当默认口径用",
@@ -556,39 +553,6 @@ def _augment_ext_with_acceptance(ext: dict[str, Any], run_root: Path, run_id: st
                              "accepts": report.accepts}
         return
     ext["acceptance"] = report.as_dict()
-
-
-def _plot_or_warn(run_root: Path, generation: int) -> list[Path]:
-    """F-M3-3 的绘图生产调用点：画 ``runs/<run_id>/plots/`` 下的 5 张 PNG。
-
-    纪律（2026-10-11 裁决 A 的第 7 条）：**降级可以，静默不行**。绘图失败或没有数据点时
-    发 ``infra.plot_skipped`` 事件 + 写 stderr，**但不让 ``eval report`` 失败**——
-    报告与台账（判据的机读来源）必须先落盘。
-
-    ``PLOT_NO_DATA`` 单独提示：它意味着台账里**没有该 split 的数据点**，此时生成的会是
-    **空白图**（matplotlib 对空序列不报错）——正是 F-M3-3 修复前 `runs/*/plots/` 全空的
-    真实成因，必须显式说出来，不能让「文件存在」冒充「有图」。
-    """
-    from dice_ratchet.infra.plotting import plot_generations
-
-    csv_path = run_root / "metrics" / "generations.csv"
-    out_dir = run_root / "plots"
-    try:
-        written = plot_generations(csv_path, out_dir)
-    except InfraError as exc:
-        events.emit("infra.plot_skipped", generation=int(generation),
-                    code=str(exc.code), detail=str(exc)[:200])
-        print(f"[{exc.code}] 绘图跳过：{exc.message}", file=sys.stderr)
-        return []
-    if not written:
-        events.emit("infra.plot_skipped", generation=int(generation),
-                    code=str(E.E_IO_PLOT_UNAVAILABLE), detail="matplotlib 不可用或无数数据点")
-        print(f"[{E.E_IO_PLOT_UNAVAILABLE}] 绘图未产出任何文件（matplotlib 缺失或无数据点）",
-              file=sys.stderr)
-        return []
-    events.emit("infra.plot_done", generation=int(generation),
-                files=[p.name for p in written], out_dir=str(out_dir))
-    return written
 
 
 # =====================================================================

@@ -60,7 +60,7 @@ __all__ = [
     "generation_report_path",
     "report_sha_path", "write_generation_report", "check_report_determinism",
     "enforce_report_determinism", "reproducibility_of",
-    "append_generations_csv", "generations_rows_from_report",
+    "append_generations_csv", "generations_rows_from_report", "ledger_and_plots",
     "generations_row_from_report", "write_ext_metrics", "write_plots_data",
     "write_episode_summaries",
     "GENERATIONS_COLUMNS", "rng_for", "GainVerdictDiversity",
@@ -1555,6 +1555,63 @@ def append_generations_csv(run_dir: Path | str, row: Mapping[str, Any]) -> Path:
 
     write_bytes_atomic(path, buf.getvalue().encode("utf-8"))
     return path
+
+
+def ledger_and_plots(run_dir: Path | str, generation: int, report: Mapping[str, Any], *,
+                     cfg: Any = None) -> dict[str, Any]:
+    """把一代的**台账行**与**5 张 PNG** 一次写全（F56，2026-10-12）。
+
+    **为什么要有这个助手**：这两个产物原先各写一半 —— 台账只由 MOD-07 ``_finish_report``
+    与 ``eval report`` 写，绘图只由 ``eval report`` 写。后果在 2026-10-12 的 M3 彩排里
+    同时暴露（`loop run` 两条路径都没接）：
+      · ``runs/_sweep/m3-rehearsal/plots/`` **全空**（`loop run` 从不调绘图）；
+      · ``metrics/generations.csv`` **缺 gen-000 基线行**（`write_gen000_baseline` 不写台账）
+        ⇒ 判据 1 判定器拿不到「相邻两代」⇒ ``comparable=0`` ⇒ **彩排的判据 4 必然不合格**。
+    「写得全不全」不该由**调用方**记得，所以收敛到一处，两个写入方（MOD-06 基线与
+    MOD-07 代末）都走它。
+
+    纪律（沿用 F-M3-3 裁决 A 第 7 条）：附属产物**失败不阻塞**报告/裁决，但必须**非静默**
+    （``evolve.ledger`` / ``infra.plot_skipped`` 事件；绘图另写 stderr，便于人看日志）。
+    返回 ``{"ledger_rows": n, "ledger_error": str|None, "plots": [文件名], "plot_error": str|None}``。
+    """
+    import sys
+
+    out: dict[str, Any] = {"ledger_rows": 0, "ledger_error": None,
+                           "plots": [], "plot_error": None}
+    try:
+        rows = generations_rows_from_report(report, cfg=cfg)
+        for row in rows:
+            append_generations_csv(run_dir, row)
+        out["ledger_rows"] = len(rows)
+        _emit("evolve.ledger", generation=int(generation), status="ok", rows=len(rows),
+              splits=[str(r.get("split")) for r in rows])
+    except Exception as exc: # noqa: BLE001 - 台账是附属产物，失败不阻塞裁决
+        out["ledger_error"] = str(exc)[:200]
+        _emit("evolve.ledger", generation=int(generation), status="failed",
+              error_code=str(getattr(exc, "code", E.E_IO_WRITE)), detail=str(exc)[:200])
+    # 绘图：台账写完之后才画（否则画的是上一版台账）
+    csv_path = Path(run_dir) / "metrics" / "generations.csv"
+    out_dir = Path(run_dir) / "plots"
+    try:
+        written = plotting_mod.plot_generations(csv_path, out_dir,
+                                                close_after=True)
+    except InfraError as exc:
+        out["plot_error"] = str(exc.code)
+        _emit("infra.plot_skipped", generation=int(generation), code=str(exc.code),
+              detail=str(exc)[:200])
+        print(f"[{exc.code}] 绘图跳过：{exc.message}", file=sys.stderr)
+        return out
+    if not written:
+        out["plot_error"] = str(E.E_IO_PLOT_UNAVAILABLE)
+        _emit("infra.plot_skipped", generation=int(generation),
+              code=str(E.E_IO_PLOT_UNAVAILABLE), detail="matplotlib 不可用或没有数据点")
+        print(f"[{E.E_IO_PLOT_UNAVAILABLE}] 绘图未产出任何文件（matplotlib 缺失或无数据点）",
+              file=sys.stderr)
+        return out
+    out["plots"] = [p.name for p in written]
+    _emit("infra.plot_done", generation=int(generation), files=out["plots"],
+          out_dir=str(out_dir))
+    return out
 
 
 def write_ext_metrics(run_dir: Path | str, generation: int, data: Mapping[str, Any]) -> Path:

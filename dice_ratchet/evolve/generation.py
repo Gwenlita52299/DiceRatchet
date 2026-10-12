@@ -538,9 +538,9 @@ def _finish_report(*, result: GenerationResult, run_ctx: Any, cfg: Any,
                            cfg=cfg, run_id=run_id, run_root=run_root,
                            protocol=protocol, gen=gen, parent_version=parent_version)
     try:
-        from dice_ratchet.evals import (append_generations_csv, enforce_report_determinism,
+        from dice_ratchet.evals import (enforce_report_determinism,
                                         write_generation_report)
-        from dice_ratchet.evals.harness import generations_rows_from_report
+        from dice_ratchet.evals.harness import ledger_and_plots
 
         app_cfg = ctx_app_config(run_ctx, cfg)
         # G3 的**生产执行点**（2026-10-11 D-M3-3 裁决 A，Spec v2.9 / B-65）。
@@ -560,16 +560,9 @@ def _finish_report(*, result: GenerationResult, run_ctx: Any, cfg: Any,
         # F-M3-3（2026-10-11）：改为写**全部** split 行（heldout + train）。原先只写 heldout
         # ⇒ `generations.csv` 里 train 一侧永远缺席（实测 8 个归档 run 的 train 行数全为 0），
         # 而 `train_heldout_gap.png` 与 `win_rate.png` 的 train 对照曲线都要它。
-        try:
-            rows = generations_rows_from_report(report, cfg=app_cfg)
-            for row in rows:
-                append_generations_csv(run_root, row)
-            events.emit("evolve.ledger", generation=int(gen), status="ok",
-                        rows=len(rows), splits=[str(r.get("split")) for r in rows])
-        except Exception as exc: # noqa: BLE001 - 附属台账失败不阻塞裁决
-            events.emit("evolve.ledger", generation=int(gen), status="failed",
-                        error_code=str(getattr(exc, "code", E.E_IO_WRITE)),
-                        detail=str(exc)[:200])
+        # F56（2026-10-12）：台账与绘图收敛到 `harness.ledger_and_plots` —— 两处各自
+        # 写一半正是「`loop run` 的 run 没有 5 张 PNG」的成因（绘图原先只挂在 `eval report`）。
+        ledger_and_plots(run_root, gen, report, cfg=app_cfg)
     except InfraError as exc:
         # MOD-08 报告段不可用：降级为 MOD-07 自产的最小合法报告（不静默丢弃）
         events.emit("evolve.decision", gen=gen, candidate_id="", decision="reject",

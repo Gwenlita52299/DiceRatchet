@@ -489,6 +489,41 @@ def test_f54_gen000_baseline_uses_configured_basket(tmp_path, monkeypatch):
     assert report["heldout"].get("basket") == "H3", report["heldout"].get("basket")
 
 
+def test_f56_gen000_baseline_enters_ledger(tmp_path, monkeypatch):
+    """给定 ``write_gen000_baseline``；当它跑完；则 ``metrics/generations.csv`` 里**有
+    gen-000 的 heldout 行**。
+
+    **本用例对应 2026-10-12 彩排的第二处实测缺口**：基线原先只写 ``report.json``，不写台账
+    ⇒ 台账从 gen-001 起（缺 gen-000 行）⇒ 判据 1 判定器手上没有「相邻两代」⇒
+    ``comparable=0`` ⇒ 彩排的判据「判定器能给出结论」**必然不合格**（与彩排质量无关）。
+    """
+    monkeypatch.chdir(_REPO)
+    from fakes import FakeEnv, FakePolicy
+    from dice_ratchet.infra.config import load_config
+    from dice_ratchet.loop.generation import write_gen000_baseline
+    from loop_support import build_runner
+
+    cfg = load_config()
+    runner, ctx = build_runner(tmp_path, policy=FakePolicy(),
+                               env=FakeEnv(steps_to_terminate=3, outcome="win"),
+                               loop_cfg=cfg.loop, seeds=())
+    ctx.app_config = cfg
+    ctx.config = cfg.loop
+    runner.config = cfg.loop
+    assert write_gen000_baseline(ctx, basket=_H1_SEEDS, runner=runner) is not None
+    ledger = tmp_path / "r-loop-test" / "metrics" / "generations.csv"
+    assert ledger.is_file(), "gen-000 基线必须写 metrics/generations.csv"
+    rows = ledger.read_text(encoding="utf-8").splitlines()
+    assert any(r.startswith("0,") and ",heldout," in r for r in rows), rows
+    # 同一处缺口的另一半：**5 张 PNG 也要真的产出**（`loop run` 原先从不调绘图）
+    pytest.importorskip("matplotlib")
+    from dice_ratchet.infra.plotting import PLOT_FILES
+
+    plots = tmp_path / "r-loop-test" / "plots"
+    missing = [n for n in PLOT_FILES if not (plots / n).is_file()]
+    assert not missing, f"gen-000 基线必须产出 5 张 PNG；缺 {missing}"
+
+
 def test_gen000_baseline_is_idempotent(tmp_path, monkeypatch):
     """已存在的 gen-000 report 不再重算（FR-06-13a 的幂等）。"""
     monkeypatch.chdir(_REPO)
