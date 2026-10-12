@@ -205,11 +205,17 @@ def init_run_dir(run_id: str, cfg: AppConfig,
 
 def resolve_run_dir(run_id: str, cfg: AppConfig,
                     runs_root: Path = Path("runs"),
-                    *, resume: bool = False) -> RunPaths:
-    """``--resume`` 定位与一致性校验（FR-09-12）。
+                    *, resume: bool = False,
+                    strict_hash: bool = True) -> RunPaths:
+    """``--resume`` / 只读命令的定位与一致性校验（FR-09-12）。
 
     - 校验 ``config_hash`` 一致（``config_hash`` 不含 harness，故演化过的 run 也能续跑）。
     - ``state.json`` 缺失且 ``resume=True`` → ``E_IO_STATE_MISSING``。
+    - ``strict_hash=False``（F55，2026-10-12）：**只读命令**用——定位已有 run 但**不**校验
+      ``config_hash``。理由：「两套配置不许写同一个 run」是**写侧**的不变量；只读命令看的是
+      已落盘产物，而它们的 CLI 面本来就不含 run 的创建参数（如 `--generations`），
+      硬校验只会把「合法的只读」误判成冲突（实测：`rehearsal check` 读不了
+      `loop run --generations 2` 的 run）。**写侧调用方不得传 False。**
     """
     root = Path(runs_root) / run_id
     if not root.is_dir():
@@ -217,7 +223,7 @@ def resolve_run_dir(run_id: str, cfg: AppConfig,
                          f"run 目录不存在：{root}",
                          hint=f"检查 --run-id {run_id!r} 是否正确")
     paths = RunPaths(root)
-    if paths.config.is_file():
+    if strict_hash and paths.config.is_file():
         prev_hash = read_json(paths.config).get("config_hash")
         want = config_hash(cfg)
         if prev_hash != want:

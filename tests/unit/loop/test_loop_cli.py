@@ -365,3 +365,48 @@ def test_resolve_seeds_resume_uses_state(tmp_path, monkeypatch):
     monkeypatch.chdir(REPO_ROOT)
     assert loop_cli._resolve_seeds(argparse.Namespace(seeds=None), LoopConfig(),
                                    resume=True) is None
+
+
+# =====================================================================
+# F55：只读命令必须能定位「配置面不同」的 run
+# =====================================================================
+
+def test_f55_readonly_command_reads_run_with_different_max_generations(tmp_path, monkeypatch):
+    """给定一个用 ``--generations 2`` 建的 run（``loop.max_generations=2`` 进 config_hash）；
+
+    当 ``rehearsal check``（**只读**、没有 ``--generations`` 这个 CLI 面，算出 3）去读它；
+
+    则**不得**抛 ``E_IO_RUN_CONFLICT``，而要照常产出 6 项判据报告。
+
+    **现场（2026-10-12 彩排，实测）**：`eaf6f18ce6e7865a != 9403576ed90e79ba` —— 彩排 run 是
+    `loop run --generations 2` 建的，而 `scripts/run_m3_rehearsal.sh` 结尾调
+    `rehearsal check --run-id m3-rehearsal`（同一组 env、无 `--generations`）⇒ 必然被
+    config_hash 硬门拒。后果：**彩排永远不可能「合格」**（最后一关无论如何都失败），
+    而这不是彩排的问题、是只读路径的问题。
+    """
+    run_id = "readonly-target"
+    # ① 建一个 max_generations=2 的 run（只读命令的 CLI 面里没有这个参数）
+    code, out, err = _run(tmp_path, monkeypatch,
+                          ["loop", "run", "--generations", "2", "--no-evolve",
+                           "--no-baseline", "--agent", "heuristic", "--k", "1",
+                           "--run-id", run_id])
+    run_dir = tmp_path / "runs" / run_id
+    recorded = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))["config_hash"]
+
+    # ② 只读命令用默认配置（max_generations=3）读它 —— 修复前这里就是 E_IO_RUN_CONFLICT
+    code2, out2, err2 = _run(tmp_path, monkeypatch,
+                             ["rehearsal", "check", "--run-id", run_id])
+    assert "E_IO_RUN_CONFLICT" not in err2, err2
+    assert code2 in (0, 1), (code2, err2)   # 0=合格 / 1=不合格，都算「读到了」
+    payload = json.loads(out2)
+    assert {c["check"] for c in payload["checks"]} >= {
+        "mechanical_failures_zero", "plots_have_data_points",
+        "ledger_has_both_splits", "acceptance_judge_runs",
+        "arm_archive_present", "one_shot_resources_untouched"}
+
+    # ③ 反向护栏：**写侧**（--resume）仍然必须硬校验 config_hash
+    code3, _out3, err3 = _run(tmp_path, monkeypatch,
+                              ["loop", "run", "--resume", "--run-id", run_id,
+                               "--agent", "heuristic", "--k", "1"])
+    assert code3 != 0 and "E_IO_RUN_CONFLICT" in err3, (code3, err3)
+    assert recorded  # 起跑时的 hash 非空（上面第 ② 步的对照基准）

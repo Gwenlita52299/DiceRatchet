@@ -627,7 +627,8 @@ def parse_seeds_spec(spec: str, *, seeds_file_dir: Path = Path(".")) -> dict[str
 # ---- 供各模块复用的 run 定位助手 ------------------------------------------------------
 
 def cli_init_run(args: argparse.Namespace, *,
-                 require_state: bool = True) -> tuple[Any, Any, Any]:
+                 require_state: bool = True,
+                 read_existing: bool = False) -> tuple[Any, Any, Any]:
     """CLI 命令通用的启动序列（bootstrap 之后）：load_config → make_run_id → init_run_dir。
 
     同时：
@@ -639,14 +640,29 @@ def cli_init_run(args: argparse.Namespace, *,
     ``require_state=False``（``baseline --resume``，M1 验收 F18）：``--resume`` 定位已有 run
     时只校验 ``config_hash``，**不要求** ``state.json``——基线的续跑语义是「跳过
     ``episodes/`` 里已完成的局」，而 ``state.json`` 的语义归 MOD-06（基线从不写它）。
+
+    ``read_existing=True``（F55，2026-10-12）：**只读命令**用——定位已存在的 run 建目录树，
+    但**跳过 ``config_hash`` 一致性硬门**（``init_run_dir`` 仍会在目录不存在时正常创建）。
+    **为什么需要**：那条门禁防的是「两套配置写同一个 run」（写侧语义），而只读命令
+    （``eval report`` / ``eval acceptance`` / ``rehearsal check`` / ``eval test --check`` …）
+    看的是**已落盘的产物**，不需要这层保护。现场（实测）：`loop run --generations 2` 的 run
+    把 `loop.max_generations=2` 写进 ``config_hash``，而 `rehearsal check` 没有
+    ``--generations`` override（算出 3）⇒ ``E_IO_RUN_CONFLICT``
+    （`eaf6f18ce6e7865a != 9403576ed90e79ba`）⇒ `scripts/run_m3_rehearsal.sh` 结尾那一关
+    **必然失败**（彩排永远不可能「合格」）。
     """
     global _ACTIVE_RUN
     cfg = load_config(config_overrides(args), config_dir=Path(args.config_dir))
     unknown = list(getattr(load_config, "unknown_keys", []) or [])
     run_id, _sha = make_run_id(cfg, explicit=getattr(args, "run_id", None))
-    if getattr(args, "resume", False):
+    if getattr(args, "resume", False) or read_existing:
+        # F55：只读定位**不要求 state.json**——`baseline`（F18）与 `eval report` 这类
+        # 路径本来就可能没有 state.json（那是 MOD-06 的语义），而只读命令要的是「已落盘的
+        # 产物」。写侧（`--resume`）的 require_state 语义**不变**（`read_existing` 为假时
+        # 原样透传）。
         paths = resolve_run_dir(run_id, cfg, Path(cfg.infra.runs_root),
-                                resume=bool(require_state))
+                                resume=(bool(require_state) and not read_existing),
+                                strict_hash=not read_existing)
     else:
         paths = init_run_dir(run_id, cfg, Path(cfg.infra.runs_root),
                              content_hash=_content_hash())

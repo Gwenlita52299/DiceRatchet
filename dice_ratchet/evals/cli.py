@@ -68,13 +68,24 @@ def build_inference_client(cfg: Any, *, run_id: str, runs_root: Path) -> Any:
 
 
 
-def _paths(args: argparse.Namespace, *, require_state: bool = True) -> tuple[Any, Any, str]:
+def _paths(args: argparse.Namespace, *, require_state: bool = True,
+           read_existing: bool = False) -> tuple[Any, Any, str]:
     """建/定位 run（复用 MOD-09 的启动序列：load_config → run_id → events.bind）。
 
     ``require_state=False``：``baseline --resume`` 用——基线 run 从不写 ``state.json``
     （那是 MOD-06 的语义），因此续跑只要求 run 目录 + ``episodes/`` 已存在的局（F18）。
+
+    ``read_existing=True``（F55，2026-10-12）：**只读命令**（``eval report`` /
+    ``eval diversity`` / ``eval acceptance`` / ``rehearsal check`` / ``eval test --check``）
+    用——它们**不改 run 的配置语义**，也不该被 ``config_hash`` 一致性门禁拦下：
+    该门禁防的是「两套配置写同一个 run」，而只看已落盘产物不需要这层保护。
+    现场（实测）：`loop run --generations 2` 的 run，`loop.max_generations=2` 进
+    ``config_hash``；而 ``rehearsal check`` 没有 ``--generations`` override ⇒ 算出
+    ``3`` ⇒ ``E_IO_RUN_CONFLICT``（`eaf6f18ce6e7865a != 9403576ed90e79ba`）。后果是
+    `scripts/run_m3_rehearsal.sh` **结尾那一关必然失败**（彩排永远不可能「合格」）。
     """
-    return infra_cli.cli_init_run(args, require_state=require_state)
+    return infra_cli.cli_init_run(args, require_state=require_state,
+                                  read_existing=read_existing)
 
 
 def _default_basket_for(split: str) -> str:
@@ -228,7 +239,7 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
     - 缺省：该代 ``report.json`` 里**胜出的候选臂**（``winner``，其 ``decision=accept``）
       或唯一候选；该代没有候选/候选全被拒时回落到 ``parent``。
     """
-    paths, cfg, run_id = _paths(args)
+    paths, cfg, run_id = _paths(args, read_existing=True)
     split = str(getattr(args, "split", "heldout") or "heldout")
     generation = _generation_of(args, paths.root)
     proto = _protocol(cfg, args.config_dir)
@@ -590,7 +601,7 @@ def cmd_eval_diversity(args: argparse.Namespace) -> int:
     F46-A：`generation` 现在是真过滤（同 ``load_episode_results`` 口径）。``--arm`` 缺省
     仍是**整池**（坍缩是代际现象，只看单一臂会退化成单臂曲线）；给出具体臂名时只看该臂。
     """
-    paths, cfg, run_id = _paths(args)
+    paths, cfg, run_id = _paths(args, read_existing=True)
     generation = _generation_of(args, paths.root)
     pool_results = load_episode_results(paths.root, "heldout", generation=generation,
                                         exclude_arms=_BASELINE_ARMS)
@@ -653,7 +664,7 @@ def cmd_eval_acceptance(args: argparse.Namespace) -> int:
     """
     from .acceptance import evaluate_acceptance, write_acceptance
 
-    paths, cfg, run_id = _paths(args)
+    paths, cfg, run_id = _paths(args, read_existing=True)
     B = getattr(args, "bootstrap_B", None) or int(getattr(cfg.evals, "bootstrap_B", 10000))
     report = evaluate_acceptance(
         paths.root, run_id=run_id,
@@ -685,7 +696,7 @@ def cmd_eval_acceptance(args: argparse.Namespace) -> int:
 
 def cmd_eval_ablation(args: argparse.Namespace) -> int:
     """H2 上跑 3 臂消融并做配对检验（FR-08-21；G6）。"""
-    paths, cfg, run_id = _paths(args)
+    paths, cfg, run_id = _paths(args, read_existing=True)
     generation = _generation_of(args, paths.root)
     arms_arg = str(getattr(args, "arms", "") or "")
     arms = [a.strip() for a in arms_arg.split(",") if a.strip()] or ["full"]
@@ -719,7 +730,7 @@ def cmd_eval_test(args: argparse.Namespace) -> int:
     **那 100 局已经花掉、却拿不到有效存证** —— 这是 test 池上唯一真正不可逆的失败模式，
     而它可以零成本提前查出来。
     """
-    paths, cfg, run_id = _paths(args)
+    paths, cfg, run_id = _paths(args, read_existing=True)
     generation = _generation_of(args, paths.root)
     proto = _protocol(cfg, args.config_dir)
     if bool(getattr(args, "check", False)):
@@ -785,7 +796,7 @@ def cmd_rehearsal_check(args: argparse.Namespace) -> int:
     """
     from .rehearsal import run_rehearsal_checks
 
-    paths, _cfg, run_id = _paths(args)
+    paths, _cfg, run_id = _paths(args, read_existing=True)
     report = run_rehearsal_checks(paths.root, run_id=run_id,
                                   min_comparable=int(getattr(args, "min_comparable", 1)))
     payload = report.as_dict()
