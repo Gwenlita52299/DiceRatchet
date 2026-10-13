@@ -29,6 +29,13 @@
    现在按 ``split`` 取行（heldout 行画曲线 + CI，train 行画对照曲线）。
 3. **"文件存在"≠"有图"**：任何一张图**没有数据点**时抛 ``E_IO_PLOT_NO_DATA``，
    不再允许空白图冒充 M3 的「曲线图」交付物。
+
+**2026-10-12（F57，Spec B-78）——台账多了 ``arm`` 列**：``(generation, split)`` 双键
+在**同一代有 parent 与候选两套测量**时是**不够的键**——后写的那一方**无声**覆盖前一方
+（实测：`m3-rehearsal` 的 `gen=1, split=heldout` 行先被 `loop run` 写成 parent 的 `0.10`，
+20 分钟后被 `eval report` 写成候选的 `0.35`）。现在键是 ``(generation, split, arm)``，
+且父行与候选行**并列共存**——判据 1 显式读 ``arm="parent"``（代际比的是**起点**）。
+绘图按 ``arm`` **分层取点**：``parent``/``parent-smoke`` 是主曲线，其它臂不混进主线。
 """
 
 from __future__ import annotations
@@ -53,7 +60,7 @@ PLOT_FILES: Final[tuple[str, ...]] = (
 #: 见模块 docstring 第 1 条的分层理由）。``evals.harness.GENERATIONS_COLUMNS``
 #: **直接取本常量**，因此「改列名忘改绘图」这类漂移在结构上不可能发生。
 GENERATIONS_CSV_COLUMNS: Final[tuple[str, ...]] = (
-    "generation", "harness_version", "parent_version", "split", "basket", "n",
+    "generation", "harness_version", "parent_version", "split", "basket", "arm", "n",
     "win_rate", "ci_lo", "ci_hi",
     "mean_stages_cleared", "mean_hearts_left", "mean_battles_won", "mean_decisions",
     "illegal_rate", "fallback_rate", "truncation_rate",
@@ -122,15 +129,30 @@ def _annotate(ax: Any, xs: Sequence[float], ys: Sequence[float],
                     xytext=(0, 8), ha="center", fontsize=8)
 
 
-def _split_rows(rows: Sequence[dict[str, Any]], split: str) -> list[dict[str, Any]]:
+#: 主曲线（代际曲线）只画**起点臂**（F57，2026-10-12）。``""``/缺列 = F57 之前的旧台账，
+#: 那时台账没有 ``arm`` 列、每代恰好一行，**那一行就是起点臂**——按起点处理才与旧图一致。
+PARENT_ARMS: Final[tuple[str, ...]] = ("", "parent", "parent-smoke")
+
+
+def _split_rows(rows: Sequence[dict[str, Any]], split: str, *,
+                parents_only: bool = False) -> list[dict[str, Any]]:
     """取某个 split 的行。
 
     **兼容空 ``split``**：F-M3-3 之前的台账没有 train 行，且早期归档里有 ``split`` 列
     为空的行（实测 `runs/g6-eval-smoke`）。空值按 ``heldout`` 处理——否则那些 run 会
     一张图都画不出来。
+
+    ``parents_only``（F57）：只保留起点臂（``arm ∈ PARENT_ARMS``）。代际曲线的语义是
+    「这一代的起点在哪」，候选臂的数（``arm="cand-…"``）是**代内**比较，混进曲线会让
+    图上出现「同一代两个点」或「候选数冒充代际进展」——实测 `m3-rehearsal` 的 gen-001
+    就这样被 ``eval report`` 无声改写（`0.10` → `0.35`）。
     """
     want = "heldout" if split == "heldout" else "train"
-    return [r for r in rows if str(r.get("split") or "").strip() in ("", want)]
+    out = [r for r in rows if str(r.get("split") or "").strip() in ("", want)]
+    if parents_only:
+        out = [r for r in out
+               if str(r.get("arm") or "").strip() in PARENT_ARMS]
+    return out
 
 
 def _dedup_by_generation(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -193,8 +215,8 @@ def plot_generations(csv_path: Path, out_dir: Path, *, figures: list[Any] | None
     rows = _read_csv(csv_path)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    heldout = _dedup_by_generation(_split_rows(rows, "heldout"))
-    train = _dedup_by_generation(_split_rows(rows, "train"))
+    heldout = _dedup_by_generation(_split_rows(rows, "heldout", parents_only=True))
+    train = _dedup_by_generation(_split_rows(rows, "train", parents_only=True))
     hgen = [float(r["generation"]) for r in heldout]
     tgen = [float(r["generation"]) for r in train]
     hns = [int(r.get("n") or 0) for r in heldout]

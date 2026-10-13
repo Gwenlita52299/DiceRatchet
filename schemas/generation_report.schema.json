@@ -86,6 +86,10 @@
       ],
       "properties": {
         "basket": { "type": "string" },
+        "source": {
+          "type": "string",
+          "description": "F57：该 split 段的测量来源。`measured` = 本代真测；`inherited:gen-00X` = 跨代继承第 X 代的同一臂测量（不重复付费）。缺省视作 measured。"
+        },
         "n": { "type": "integer", "minimum": 0 },
         "n_dropped": { "type": "integer", "minimum": 0 },
         "low_confidence": { "type": "boolean" },

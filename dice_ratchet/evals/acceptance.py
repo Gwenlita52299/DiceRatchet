@@ -40,7 +40,8 @@ from dice_ratchet.infra.errors import E, InfraError
 from dice_ratchet.infra.io import read_json
 
 from .metrics import bootstrap_seed
-from .harness import VERDICT_DECISIONS, generation_report_path
+from .harness import (PARENT_ARM, VERDICT_DECISIONS, arm_of_row,
+                      generation_report_path)
 
 __all__ = ["ACCEPTANCE_VERSION", "CRITERION_TOL", "P_GAP_THRESHOLD",
            "GenerationAcceptance", "AcceptanceReport", "evaluate_acceptance",
@@ -75,6 +76,13 @@ class GenerationAcceptance:
     p_gap_n_pairs: int | None = None
     pass_p_gap: bool | None = None
     decision: str | None = None             # 该代 report.json 的判决
+    harness_version: int | None = None      # 该代台账行的 harness_version
+    prev_harness_version: int | None = None
+    #: F57：相邻两代的 ``harness_version`` **相同** ⇒ 起点没变（本代没有接受任何补丁），
+    #: 「held-out 是否不降」在两个**完全相同的起点**之间**无处可判**——不是通过，也不是失败。
+    #: 计入失败会让「补丁被拒」被记成「单调性破坏」（现场 gen-001 正是如此：`0.10` 的
+    #: 来源就是 gen-000 的 v0，两代起点同为 v0）；计入通过则成了「退化通过」。
+    not_applicable: bool = False
 
     @property
     def passed(self) -> bool:
@@ -86,11 +94,13 @@ class GenerationAcceptance:
             "n": int(self.n),
             "win_rate": round(float(self.win_rate), 4),
             "ci_lo": round(float(self.ci_lo), 4),
+            "harness_version": self.harness_version,
             "prev_generation": (None if self.prev_generation is None
                                 else int(self.prev_generation)),
             "prev_win_rate": (None if self.prev_win_rate is None
                               else round(float(self.prev_win_rate), 4)),
-            "threshold": (None if self.threshold is None else round(self.threshold, 4)),
+            "prev_harness_version": self.prev_harness_version,
+            "threshold": (None if self.threshold is None else round(float(self.threshold), 4)),
             "pass_ci": self.pass_ci,
             "p_gap_gt_0": (None if self.p_gap_gt_0 is None
                            else round(float(self.p_gap_gt_0), 4)),
@@ -98,6 +108,7 @@ class GenerationAcceptance:
             "p_gap_n_pairs": self.p_gap_n_pairs,
             "pass_p_gap": self.pass_p_gap,
             "decision": self.decision,
+            "not_applicable": bool(self.not_applicable),
             "passed": self.passed,
         }
 
@@ -115,8 +126,18 @@ class AcceptanceReport:
 
     @property
     def comparable(self) -> tuple[GenerationAcceptance, ...]:
-        """**可比较**的代：有上一代可比的那些（第一代没有可比对象）。"""
-        return tuple(g for g in self.generations if g.prev_generation is not None)
+        """**可比较**的代：有上一代可比、且**不是同版本起点**的那些。
+
+        ``not_applicable``（F57）不算一对：那一代的起点与上一代**逐字节相同**，
+        「不降」在这两行之间是恒真命题，判它没有信息量（却又会被当成一次「通过」）。
+        """
+        return tuple(g for g in self.generations
+                     if g.prev_generation is not None and not g.not_applicable)
+
+    @property
+    def not_applicable_pairs(self) -> tuple[GenerationAcceptance, ...]:
+        """因起点未变而**跳过**判定的代（F57；产物里逐代列出，不许静默）。"""
+        return tuple(g for g in self.generations if g.not_applicable)
 
     @property
     def monotonic_ok(self) -> bool:
@@ -125,6 +146,7 @@ class AcceptanceReport:
         **第一代不参与判定**（它没有可比对象）——把 `passed=False` 的默认值算进去会让
         「只有一代」永远判失败，那是语义错误而非严格。但**至少要有一对可比**：
         否则「单调不降」这句话无从谈起（只有 gen-000 基线的 run 不能算通过判据 1）。
+        **起点未变的代**（``not_applicable``）同样不参与，也不占「可比」名额。
         """
         pairs = self.comparable
         if not pairs:
@@ -151,6 +173,7 @@ class AcceptanceReport:
             "p_gap_threshold": P_GAP_THRESHOLD,
             "monotonic_ok": self.monotonic_ok,
             "comparable_pairs": len(self.comparable),
+            "not_applicable_pairs": len(self.not_applicable_pairs),
             "accepts": int(self.accepts),
             "decisions": dict(self.decisions),
             "ok": self.ok,
@@ -164,9 +187,17 @@ class AcceptanceReport:
 # =====================================================================
 
 def _heldout_rows(run_dir: Path) -> list[dict[str, Any]]:
-    """读台账里 ``split="heldout"`` 的行，按代升序、**按代去重取末条**。
+    """读台账里**起点臂**的 ``split="heldout"`` 行，按代升序、**按代去重取末条**。
 
-    F48 之后台账是「每代每 split 一行」——**不过滤 split 会把 train 行当成第二个数据点**。
+    两个过滤都是必需的：
+
+    - ``split``：F48 之后台账是「每代每 split 一行」——**不过滤 split 会把 train 行
+      当成第二个数据点**。
+    - ``arm``（F57）：同一代**可能同时有 parent 与候选两套测量**。判据 1 比的是
+      「这一代的**起点**在哪」，所以只读 ``arm="parent"``（缺列的旧行由
+      ``arm_of_row`` 归为 parent——那时每代只有一行）。不过滤会按写入顺序任取一个，
+      实测就是这么翻的面：`loop run` 写 parent `0.10`，`eval report` 写候选 `0.35`。
+
     去重取末条与 ``infra.plotting`` 同口径（历史台账有过同代重复行）。
     """
     path = Path(run_dir) / "metrics" / "generations.csv"
@@ -180,15 +211,32 @@ def _heldout_rows(run_dir: Path) -> list[dict[str, Any]]:
     for row in rows:
         if str(row.get("split") or "").strip() not in ("", "heldout"):
             continue
+        if arm_of_row(row) != PARENT_ARM:
+            continue
         raw = row.get("generation")
         if raw in (None, ""):
             continue
         by_gen[int(float(raw))] = row
     if not by_gen:
         raise InfraError(E.E_IO_STATE_MISSING,
-                         f"台账里没有 heldout 行：{path}",
-                         hint="F48 之后台账含 train 行，判定器必须按 split=\"heldout\" 过滤")
+                         f"台账里没有起点臂（arm={PARENT_ARM!r}）的 heldout 行：{path}",
+                         hint="F48 之后台账含 train 行、F57 之后含候选行——判定器必须"
+                              f"按 split=\"heldout\" 且 arm=\"{PARENT_ARM}\" 过滤")
     return [by_gen[g] for g in sorted(by_gen)]
+
+
+def _int_or_none(value: Any) -> int | None:
+    """台账列 → ``int``；缺失/空/非数字 → ``None``（**不得**默默当 0：0 是 v0 这个真实版本）。
+
+    F57 的豁免依赖这个区分：``harness_version`` 读不到时**不做**豁免（fail-closed，
+    宁可照旧判单调性，也不要因为列缺失而把两代当成「同一起点」）。
+    """
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _decision_of(run_dir: Path, generation: int) -> str | None:
@@ -282,6 +330,7 @@ def evaluate_acceptance(run_dir: Path | str, *, run_id: str = "",
         n = int(float(row.get("n") or 0))
         win_rate = float(row.get("win_rate") or 0.0)
         ci_lo = float(row.get("ci_lo") or 0.0)
+        hver = _int_or_none(row.get("harness_version"))
         decision = _decision_of(run_path, generation)
         if decision:
             decisions[decision] = decisions.get(decision, 0) + 1
@@ -289,7 +338,7 @@ def evaluate_acceptance(run_dir: Path | str, *, run_id: str = "",
         prev = rows[index - 1] if index > 0 else None
         entry = GenerationAcceptance(
             generation=generation, win_rate=win_rate, ci_lo=ci_lo, n=n,
-            decision=decision)
+            decision=decision, harness_version=hver)
         if n < int(min_heldout_n):
             reasons.append(
                 f"gen-{generation:03d} 的 heldout n={n} < min_heldout_n={min_heldout_n}"
@@ -302,6 +351,20 @@ def evaluate_acceptance(run_dir: Path | str, *, run_id: str = "",
 
         prev_gen = int(float(prev["generation"]))
         prev_win = float(prev.get("win_rate") or 0.0)
+        prev_hver = _int_or_none(prev.get("harness_version"))
+        if hver is not None and prev_hver is not None and hver == prev_hver:
+            # F57 豁免：相邻两代的**起点逐字节相同**（本代没有接受任何补丁）。
+            # 「held-out 不降」在这两行之间是恒真命题，判它既会把「合法拒绝」误记成
+            # 「单调性破坏」（现场 gen-001：`ci_lo=0.0279 < 0.10−0.02`，而两代的 0.10 与
+            # 0.15 只是同一 harness 的**两次重测**，5pp 是本 run 的噪声底），也会被
+            # 当成一次「通过」而虚增可比对数。记 `not_applicable` 并**逐代列出**。
+            per_gen.append(GenerationAcceptance(
+                generation=generation, win_rate=win_rate, ci_lo=ci_lo, n=n,
+                prev_generation=prev_gen, prev_win_rate=prev_win,
+                harness_version=hver, prev_harness_version=prev_hver,
+                decision=decision, not_applicable=True))
+            continue
+
         threshold = prev_win - CRITERION_TOL
         pass_ci = ci_lo >= threshold
         stages_cache[generation] = stages_cache.get(generation) or _episode_stages(
@@ -319,7 +382,7 @@ def evaluate_acceptance(run_dir: Path | str, *, run_id: str = "",
             p_gap_metric=(CONTINUOUS_METRIC if p_gap is not None else None),
             p_gap_n_pairs=n_pairs,
             pass_p_gap=(None if p_gap is None else bool(p_gap >= P_GAP_THRESHOLD)),
-            decision=decision)
+            decision=decision, harness_version=hver, prev_harness_version=prev_hver)
         if not entry.passed:
             reasons.append(
                 f"gen-{generation:03d} 单调性不成立：ci_lo={ci_lo:.4f} < "

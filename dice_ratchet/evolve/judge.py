@@ -443,6 +443,31 @@ class CandidateEvaluator:
     #: ``config.infra.runs_root / run_id`` 推导。
     run_dir: Any = None
 
+    def heldout_seeds(self, generation: int | None = None) -> tuple[int, ...]:
+        """本代 held-out 篮子的 seed 列表（F57 继承资格检查用；**不跑任何局**）。
+
+        与 ``_evaluate_arm`` 走的解析链一致（``evals.seeds.resolve_basket``），
+        所以「继承来的局是否覆盖本代篮子」这个判断问的是**同一个篮子**。
+        """
+        from dice_ratchet.evals import seeds as seeds_mod
+
+        proto = seeds_mod.validate_protocol(seeds_mod.coerce_protocol(self.protocol))
+        gen = int(self.generation if generation is None else generation)
+        return tuple(int(s) for s in
+                     seeds_mod.resolve_basket(self.heldout_basket, generation=gen,
+                                              protocol=proto))
+
+    def eval_limits(self) -> dict[str, Any]:
+        """还原历史 ``ArmResult`` 需要的聚合参数（``t_max`` / ``min_support`` / ``drop_rate_max``）。
+
+        F57：继承来的逐局结果必须用**同一套聚合口径**重算，否则「继承」会悄悄改变测量
+        结果（与 ``_evaluate_arm`` 里对齐 ``n_workers``/``n_rep`` 同一条纪律）。
+        """
+        eval_cfg = getattr(self.config, "evals", None)
+        return {"t_max": int(getattr(eval_cfg, "t_max", 120) or 120),
+                "min_support": int(getattr(eval_cfg, "min_support", 3) or 3),
+                "drop_rate_max": float(getattr(eval_cfg, "drop_rate_max", 0.10) or 0.10)}
+
     def _evaluate_arm(self, arm_dir: Any, *, split: str, basket: Any, arm: str,
                       harness_version: int) -> Any:
         from dice_ratchet.evals import evaluate_arm
@@ -466,12 +491,30 @@ class CandidateEvaluator:
             generation=int(self.generation), harness_version=int(harness_version),
             episode_config=self.episode_config, **kwargs)
 
-    def parent_arms(self, parent_dir: Any, *, parent_version: int
-                    ) -> tuple[Any, Any]:
-        """parent 的 heldout + 冒烟（FR-07-7：parent 每代都要重新评估）。"""
-        heldout = self._evaluate_arm(parent_dir, split="heldout",
-                                     basket=self.heldout_basket, arm="parent",
-                                     harness_version=int(parent_version))
+    def parent_arms(self, parent_dir: Any, *, parent_version: int,
+                    inherited: Any = None) -> tuple[Any, Any]:
+        """parent 的 heldout + 冒烟。
+
+        **F57（2026-10-12）——``inherited``：跨代继承。** 原先这里**每代都重测**
+        parent（``parent 每代都要重新评估``）：一代 20 局 heldout + 2 局冒烟 ≈ ¥18.7，
+        而**上一代被接受的那个候选就是本代的 parent**（accept ⇒ ``versions/v{N}``）——
+        它刚刚**已经**被完整测过一次（那批局就是 accept 决策的依据）。重测同一份
+        harness 只是再买一次同一批局（API 臂不可复现 ⇒ 还会得到略微不同的数字）。
+
+        ``inherited`` 为**已还原的 parent ``ArmResult``**（见
+        ``harness.restore_arm_from_archive``）时，heldout **一次 ``evaluate_arm`` 都不调**。
+
+        **冒烟为什么仍然重测**：冒烟 seed 取的是**本代训练块末尾**（FR-07-6），
+        逐代不同；而候选的冒烟跑在本代的 seed 上 ⇒ 「parent 与候选同预算」（FR-07-7）
+        要求 parent 的冒烟也落在**同一批 seed** 上。冒烟只有 ``smoke_n``（默认 2）局，
+        省它的收益 ≈¥1.7 而会破坏快速淘汰的配对前提，不划算。
+        """
+        if inherited is not None:
+            heldout = inherited
+        else:
+            heldout = self._evaluate_arm(parent_dir, split="heldout",
+                                        basket=self.heldout_basket, arm="parent",
+                                        harness_version=int(parent_version))
         smoke = self._evaluate_arm(parent_dir, split="train", basket=self.smoke_seeds,
                                    arm="parent-smoke", harness_version=int(parent_version))
         return heldout, smoke

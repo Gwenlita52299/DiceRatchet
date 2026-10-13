@@ -57,12 +57,13 @@ __all__ = [
     "run_eval", "evaluate_arm", "compare_paired", "compare_all_metrics",
     "evaluate_generation", "SandboxRunner", "episode_result_from_rows",
     "load_episode_results", "gather_results", "read_episode_protocols",
+    "restore_arm_from_archive", "arms_dir", "arm_archive_path", "load_arm_archive",
     "generation_report_path",
     "report_sha_path", "write_generation_report", "check_report_determinism",
     "enforce_report_determinism", "reproducibility_of",
     "append_generations_csv", "generations_rows_from_report", "ledger_and_plots",
     "generations_row_from_report", "write_ext_metrics", "write_plots_data",
-    "write_episode_summaries",
+    "write_episode_summaries", "PARENT_ARM", "PARENT_SMOKE_ARM", "arm_of_row",
     "GENERATIONS_COLUMNS", "rng_for", "GainVerdictDiversity",
 ]
 
@@ -83,6 +84,22 @@ VERDICT_DECISIONS: Final[tuple[str, ...]] = ("accept", "reject", "rollback", "er
 #: 禁止 ``infra → evals``（NFR-09-5），而 ``evals → infra`` 合法。**口径仍归 MOD-08**：
 #: 改列要同时改这里的语义说明与 MOD-08 §13 / MOD-09 FR-09-13。
 GENERATIONS_COLUMNS: tuple[str, ...] = tuple(plotting_mod.GENERATIONS_CSV_COLUMNS)
+
+#: 起点臂名（F57，2026-10-12）。代际台账与判据 1 只读**起点臂**的行：这一代的
+#: ``heldout`` 数字是「起点在哪」，候选自己的测量在 ``metrics/arms/`` 与
+#: ``candidates/*.json``。``arm`` 列缺失的旧行按起点处理（那时每代只有一行）。
+PARENT_ARM: Final[str] = "parent"
+#: 起点臂的冒烟臂名（``evolve/judge.py::CandidateEvaluator.parent_arms`` 同口径）。
+PARENT_SMOKE_ARM: Final[str] = "parent-smoke"
+
+
+def arm_of_row(row: Mapping[str, Any]) -> str:
+    """台账行的臂名；**缺列/空值一律归为 ``PARENT_ARM``**（F57 兼容旧台账）。
+
+    F57 之前的台账没有 ``arm`` 列，而那时每代每 split 恰好一行、写的就是起点臂——
+    按起点处理既向后兼容，也避免旧行被当成「未知臂」而在判据里消失。
+    """
+    return str(row.get("arm") or "").strip() or PARENT_ARM
 
 #: 单局硬看门狗的宽限（秒）。协同预算（``SandboxRunner`` 里的 deadline）已是第一道闸；
 #: 这里只兜住「worker 完全不消费 ``timeout_s``」的极端情形，宽限留给已进入的单次
@@ -1066,6 +1083,71 @@ def load_arm_archive(path: Path | str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def restore_arm_from_archive(archive: Mapping[str, Any] | None, *,
+                             generation: int, harness_version: int, arm: str,
+                             required_seeds: Sequence[int] = (),
+                             t_max: int = 120, min_support: int = 3,
+                             drop_rate_max: float = 0.10) -> ArmResult | None:
+    """把臂归档**还原**成 ``ArmResult``（**不跑任何局**；F57 跨代继承用）。
+
+    与 ``evaluate_arm`` 的**复用**分支（``evals.arm_reused``）的区别在于**代际**：
+    复用分支要求 provenance 里的 ``generation`` 与本次相同（同代重跑），而跨代继承要的
+    正是**另一代**的同一臂测量——它的 ``harness_version`` 与当前 parent 逐字节相同，
+    只是当年写在 ``gen-00X`` 的归档里。
+
+    因此这里**只**校验「测量身份」而与代际无关的三件事，任一不满足返回 ``None``
+    （fail-closed，调用方据此**重测**）：
+
+    - ``archive["harness_version"] == harness_version``（同一个 harness 才有资格当起点）；
+    - ``archive["basket"] == archive["provenance"]["basket"]``（自洽；外部 basket 由调用方在
+      **选文件时**比对——``required_seeds`` 也覆盖了它）；
+    - ``required_seeds ⊆ 归档的 seed 集合``（**不少于**要用的局；篮子是子集时可裁剪）。
+
+    ``arm`` 覆写为请求值：候选臂名是 ``cand-<id>``，作为下一代的 parent 时它扮演的是
+    ``parent``——这正是「接受后自动成为起点」的语义。
+    """
+    if not archive:
+        return None
+    if _int_or_none_field(archive.get("harness_version")) != int(harness_version):
+        return None
+    provenance = archive.get("provenance") or {}
+    if not isinstance(provenance, Mapping):
+        return None
+    if str(archive.get("basket") or "") != str(provenance.get("basket") or ""):
+        return None
+    seeds = [int(s) for s in (required_seeds or ())]
+    results, missing = reuse_from_archive(archive, seeds=seeds,
+                                          split=str(archive.get("split") or "heldout"),
+                                          generation=int(generation),
+                                          harness_version=int(harness_version), arm=arm)
+    if missing:
+        return None
+    by_seed = {int(r.seed): r for r in results}
+    ordered = tuple(by_seed[int(s)] for s in seeds if int(s) in by_seed)
+    metrics = aggregate(ordered, split=str(archive.get("split") or "heldout"),
+                        basket=str(archive.get("basket") or ""),
+                        t_max=int(t_max), min_support=int(min_support),
+                        drop_rate_max=float(drop_rate_max))
+    return ArmResult(arm=str(arm), split=str(archive.get("split") or "heldout"),
+                     basket=str(archive.get("basket") or ""),
+                     harness_version=int(harness_version),
+                     memory_version=int(archive.get("memory_version") or 0),
+                     run_id=str(archive.get("run_id") or ""),
+                     results=ordered, metrics=metrics, dur_s=0.0,
+                     resumed_n=len(ordered), pending_seeds=(),
+                     archive_path=str(archive.get("archive_path") or ""))
+
+
+def _int_or_none_field(value: Any) -> int | None:
+    """归档字段 → ``int``；缺失/非数字 → ``None``（``None != harness_version`` ⇒ 不复用）。"""
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def write_arm_archive(run_root: Path | str, *, generation: int, split: str, basket: str,
                       arm: str, result: ArmResult,
                       provenance: Mapping[str, Any]) -> Path:
@@ -1191,15 +1273,28 @@ def _generations_of_curves(root: Path, curves: Sequence[Sequence[Any]]) -> list[
 def evaluate_generation(generation: int, parent: ArmResult, winner: ArmResult | None, *,
                         run_id: str, run_dir: Path | str | None = None,
                         config: Any = None,
-                        protocol: seeds_mod.SeedProtocol | Any = None) -> dict[str, Any]:
+                        protocol: seeds_mod.SeedProtocol | Any = None,
+                        heldout_source: str = "measured") -> dict[str, Any]:
     """产出 report 的指标段（Spec §4.7；decision 段由 MOD-07 合并）。
 
-    - ``winner`` 为候选的 H1 ``ArmResult``；``None`` 表示本代无候选通过（与 parent 同分）。
+    - ``heldout`` 段**恒取 parent**（= 该代的起点臂），**不是** winner（F57，2026-10-12）。
+      修复前是 ``winner.metrics if winner is not None else parent.metrics``：候选胜出时
+      代际台账里的数字突然变成**候选**的，而判据 1（held-out 单调不降）比的是**起点**。
+      实测现场（`runs/_sweep/m3-rehearsal` gen-001）：同一批产物先写 parent 的 `0.10`
+      （判「单调性不成立」），被 ``eval report`` 按候选臂重算后变成 `0.35`
+      （判 `monotonic_ok=true`）——同一批局，两个相反结论。
+      候选自己的测量归 ``metrics/arms/gen{NNN}-heldout-{basket}-cand-*.json`` 与
+      ``generations/gen-NNN/candidates/*.json``，**不进**代际台账。
+    - ``harness_version`` 仍取 winner 的版本（accept 时即新版本）：台账要能看出「这一代
+      把起点带到了哪个版本」。``heldout`` 的数字是起点臂的，``harness_version`` 是本代
+      结束时的在役版本——两者语义不同且都需要，故并列保留。
     - ``train`` 段取 ``train_window(generation)`` 在 run 里的训练局（滚动窗口，默认 60 局）。
+    - ``heldout_source``：``"measured"`` / ``"inherited:gen-00X"``（F57 跨代继承，见
+      ``evolve/generation.py::_inherited_parent_arms``）。
     """
     proto = seeds_mod.validate_protocol(seeds_mod.coerce_protocol(protocol))
     eval_cfg = getattr(config, "evals", config)
-    heldout = (winner.metrics if winner is not None else parent.metrics)
+    heldout = parent.metrics
     window_seeds = seeds_mod.train_window(generation, protocol=proto, window=60)
     root = Path(run_dir) if run_dir is not None else Path("runs") / run_id
     train_results = load_episode_results(root, "train", generation=generation,
@@ -1209,7 +1304,10 @@ def evaluate_generation(generation: int, parent: ArmResult, winner: ArmResult | 
                               t_max=int(getattr(eval_cfg, "t_max", 120)),
                               min_support=int(getattr(eval_cfg, "min_support", 3)),
                               drop_rate_max=float(getattr(eval_cfg, "drop_rate_max", 0.10)))
-    diversity = _diversity_for_generation(run_id, generation, parent=parent, winner=winner,
+    # F57：坍缩/多样性也走**同一个臂**（parent）——否则报告里 heldout 块是 parent 的
+    # 熵曲线、diversity 块是候选的，读者会以为它们是同一次测量。
+    diversity = _diversity_for_generation(run_id, generation, parent=parent,
+                                          winner=None,
                                           config=config, run_dir=root)
     spec = EvalSpec(run_id=run_id, generation=int(generation),
                     harness_version=heldout_harness_version(parent, winner),
@@ -1219,17 +1317,22 @@ def evaluate_generation(generation: int, parent: ArmResult, winner: ArmResult | 
         gap_threshold=float(getattr(eval_cfg, "gap_threshold", 0.15)),
         alpha=float(getattr(eval_cfg, "alpha", 0.05)),
         collapse_flag=diversity.collapse_flag,
-        candidate=(winner.results if winner is not None else parent.results),
-        parent=parent.results, low_confidence=heldout.low_confidence,
+        candidate=parent.results, parent=parent.results,
+        low_confidence=heldout.low_confidence,
         rng=rng_for(spec), B=int(getattr(eval_cfg, "bootstrap_B", 10000)))
     report = render_report_sections(
         generation=generation,
+        # ``harness_version`` = 本代**结束**时在役的版本（accept 时即新版本）：
+        # 它是「这一代把起点带到了哪个版本」的唯一记录，台账的连续性靠它。
         harness_version=heldout_harness_version(parent, winner),
+        # ``parent_version`` = ``heldout`` 段**测在哪份 harness 上**（F57 起 heldout 恒取
+        # 起点臂，所以这里恒等于起点臂的版本；不得写成 ``max(0, gen-1)`` 之类的猜想）。
         parent_version=parent.harness_version,
         heldout=heldout, train=train_metrics, gain=gain, diversity=diversity,
         ablation=None, decision="pending", decided_by="auto", reason="",
         episode_config_hash=_config_digest(
             getattr(getattr(config, "env", None), "episode", None) if config else None),
+        heldout_source=str(heldout_source or "measured"),
         extra={"power_note": power_note(heldout.n)})
     return report
 
@@ -1245,8 +1348,14 @@ def heldout_harness_version(parent: ArmResult, winner: ArmResult | None) -> int:
 def _generations_row(*, generation: int, harness_version: Any, parent_version: Any,
                      split: str, metrics: Mapping[str, Any], diversity: Mapping[str, Any],
                      gain: Mapping[str, Any], decision: Any, config_hash_value: Any,
-                     git_commit: Any, ts: str) -> dict[str, Any]:
-    """一行台账（``split`` 维度在**调用方**决定，本函数只做字段映射）。"""
+                     git_commit: Any, ts: str, arm: str) -> dict[str, Any]:
+    """一行台账（``split`` 维度在**调用方**决定，本函数只做字段映射）。
+
+    ``arm``（F57，2026-10-12）：这一行是**哪个臂**的测量。缺了它，
+    ``(generation, split)`` 在「同代有 parent 与候选两套测量」时是**不够的键**——
+    后写的会无声覆盖先写的（实测 `m3-rehearsal` gen-001：parent `0.10` 被判「单调性
+    不成立」，20 分钟后被候选的 `0.35` 覆盖，同一批产物给出相反结论）。
+    """
     ci = list(metrics.get("win_rate_ci95") or (0.0, 0.0))
     return {
         "generation": int(generation or 0),
@@ -1254,6 +1363,7 @@ def _generations_row(*, generation: int, harness_version: Any, parent_version: A
         "parent_version": parent_version,
         "split": str(split),
         "basket": metrics.get("basket"),
+        "arm": str(arm or PARENT_ARM),
         "n": metrics.get("n"),
         "win_rate": metrics.get("win_rate"),
         "ci_lo": ci[0],
@@ -1283,7 +1393,8 @@ def _generations_row(*, generation: int, harness_version: Any, parent_version: A
 
 
 def generations_rows_from_report(report: Mapping[str, Any], *, cfg: Any = None,
-                                 now: Any = None) -> list[dict[str, Any]]:
+                                 now: Any = None, arm: str = PARENT_ARM
+                                 ) -> list[dict[str, Any]]:
     """从**报告字典**构造台账行：``heldout`` 一行 + ``train`` 一行（F-M3-3，2026-10-11）。
 
     返回**列表**（按 ``heldout`` → ``train`` 排序）。**为什么必须有两行**：
@@ -1294,6 +1405,11 @@ def generations_rows_from_report(report: Mapping[str, Any], *, cfg: Any = None,
 
     F43 的语义不变：本函数由**写报告的一方**（MOD-07 ``_finish_report``）调用，
     列集与 ``evals/cli.py`` 共用 ``GENERATIONS_COLUMNS``。
+
+    ``arm``（F57，2026-10-12）：本行属于哪个臂。缺省 ``"parent"``——报告里的 ``heldout``
+    段自 F57 起**恒为起点臂**（``evaluate_generation`` 不再回落到 winner），所以由报告
+    派生出的台账行天然是起点臂。``eval report --arm cand-…`` 显式申报别的臂时，
+    ``ledger_and_plots`` 会把 ``report["heldout"]["arm"]`` 传进来。
     """
     from datetime import datetime, timezone
 
@@ -1313,16 +1429,28 @@ def generations_rows_from_report(report: Mapping[str, Any], *, cfg: Any = None,
         "diversity": diversity, "gain": gain,
         "decision": report.get("decision"),
         "config_hash_value": config_hash(cfg) if cfg is not None else None,
-        "git_commit": git_short_sha(), "ts": ts,
+        "git_commit": git_short_sha(), "ts": ts, "arm": str(arm or PARENT_ARM),
     }
-    rows = [_generations_row(split="heldout", metrics=heldout, **common)]
+    rows: list[dict[str, Any]] = []
+    # F57：``heldout`` **继承自上一代**时代不新增 heldout 行——本代没有真实测量，
+    # 写行会在图上多出一个与上一代**重合**的点（看起来像测了两次）。
+    # 与 F48 的先例同一条纪律：``train.n == 0`` 也不写行（没有测量就不写行）。
+    # 出处记在 ``report.json`` 的 ``heldout.source``（``"inherited:gen-00X"``）。
+    if not _is_inherited_source(heldout.get("source")):
+        rows.append(_generations_row(split="heldout", metrics=heldout, **common))
     # 只在**真的有训练局**时写 train 行。判据是 ``n > 0`` 而**不是**「train 段非空」：
     # 引擎在无训练局时写的是 ``{"n": 0, "win_rate": 0.0, "low_confidence": true}``
     # ——非空 dict（实测 gen-000 基线：``train.n == 0``），写成行会被绘图与统计
     # 当成一个真实的「win_rate=0」数据点，在图上是**零点的假信号**。
+    # train 行**不受继承影响**：本代确实跑了本代的训练局（继承的只有 parent 的 heldout）。
     if int(train.get("n") or 0) > 0:
         rows.append(_generations_row(split="train", metrics=train, **common))
     return rows
+
+
+def _is_inherited_source(value: Any) -> bool:
+    """``heldout.source`` 是否表明「本段是继承来的、本代没有测」（F57）。"""
+    return str(value or "").strip().lower().startswith("inherited:")
 
 
 def generations_row_from_report(report: Mapping[str, Any], *, cfg: Any = None,
@@ -1490,25 +1618,44 @@ def _csv_split_key(row: Mapping[str, Any]) -> str:
     return str(row.get("split") or "").strip() or "heldout"
 
 
+def _csv_row_key(row: Mapping[str, Any]) -> tuple[str, str, str]:
+    """台账行的三键：``(generation, split, arm)``（F57）。
+
+    三键缺一都会造成「不同测量互相覆盖」：少 ``split`` ⇒ train/heldout 互吃（F-M3-3），
+    少 ``arm`` ⇒ parent/候选互吃（F57）。
+    """
+    return (str(row.get("generation") if row.get("generation") is not None else ""),
+            _csv_split_key(row), arm_of_row(row))
+
+
 def append_generations_csv(run_dir: Path | str, row: Mapping[str, Any]) -> Path:
     """写一行台账到 ``metrics/generations.csv``（FR-08-22；列固定见 §13）。
 
-    **按 ``(generation, split)`` 双键 upsert**（F-M3-3，2026-10-11）。修复前是
-    ``generation`` **单键**——那时台账只有 heldout 行，单键恰好够用；一旦按 F-M3-3 补上
-    ``train`` 行，同一代的 train/heldout 会**互相覆盖**，台账里永远只剩最后写的那一个
-    split（实测：单键实现下先写 heldout 再写 train，heldout 行被吃掉）。
-    无脑追加同样不行：有**两个**写入方（MOD-07 ``_finish_report`` 代末写、``eval report``
-    也写），会给同一代留下两行互相矛盾的数字（F43 已处置）。
+    **按 ``(generation, split, arm)`` 三键 upsert**（F57，2026-10-12；此前是
+    ``(generation, split)`` 双键）。为什么非加 ``arm`` 不可：同一代**同时存在**起点臂与
+    候选臂两套测量，而双键**不足以区分它们** ⇒ 后写的**无声覆盖**先写的。实测现场
+    （`runs/_sweep/m3-rehearsal` gen-001 heldout）：`loop run` 15:34 写 parent 的 `0.10`
+    （据此判「单调性不成立」），`eval report` 16:05 把它改成候选的 `0.35`
+    （据此判 `monotonic_ok=true`）——**同一批局，两个相反结论**，而 27 列的台账里
+    没有任何一列能看出发生过这件事（B-77）。
+    三键之后：parent 行与候选行**并列共存**，判据 1 显式读 ``arm="parent"``（代际比的是
+    起点），候选数仍可查（``--arm cand-…``）。
+
+    历史沿革：``generation`` 单键（F43 前）→ ``(generation, split)`` 双键（F-M3-3，2026-10-11）
+    → ``(generation, split, arm)`` 三键（本版）。**每次加键都是因为「有新的维度在悄悄
+    互相覆盖」**，这也是为什么列清单必须与 upsert 键一起评审。
 
     **已裁决的 ``decision``/``verdict`` 不被覆盖**：MOD-07 写下的判决是判据①的唯一记录，
     而 ``eval report`` 的重算报告 ``decision`` 恒为 ``baseline``/``pending``。若重算在后，
     只更新指标列、保留判决列（与 ``evals/cli.py::_write_report_preserving_verdict`` 同口径）。
     该保留只作用于 heldout 行——train 行的 ``decision``/``verdict`` 本就是空。
+    **臂不同 ⇒ 不是同一行**，判决列也各自独立（候选行的判决来自它自己的裁决）。
     """
     path = Path(run_dir) / "metrics" / "generations.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     incoming = {k: _round_floats(row.get(k)) for k in GENERATIONS_COLUMNS}
-    key = (str(incoming.get("generation")), _csv_split_key(incoming))
+    incoming["arm"] = arm_of_row(incoming)
+    key = _csv_row_key(incoming)
 
     existing: list[dict[str, Any]] = []
     if path.is_file():
@@ -1518,20 +1665,20 @@ def append_generations_csv(run_dir: Path | str, row: Mapping[str, Any]) -> Path:
         except (OSError, csv.Error): # pragma: no cover - 坏账本按空重建
             existing = []
 
-    # **读入时按 (generation, split) 折叠历史重复行**（F-M3-3 的第二处缺陷）。
+    # **读入时按三键折叠历史重复行**（F-M3-3 的第二处缺陷）。
     # 实测：`runs/g6-eval-smoke/metrics/generations.csv` 同一代同值有 **5 行**——
     # 产生原因是 F45-2 之前的行**没有 `split` 列**，而当时的 upsert 比较 `prev.get("split")`
     # 得到的 `None` 与任何值都不等 ⇒ 每次都走 `existing.append`。后果不只是文件脏：
     # 任何按行读取的下游（绘图、汇总、判据判定）都会把同一代数 5 遍。
     # 这里**顺手修好**：后写覆盖先写（保留末条），即「重复的最后一次写入」才代表真实值。
-    collapsed: dict[tuple[str, str], dict[str, Any]] = {}
+    collapsed: dict[tuple[str, str, str], dict[str, Any]] = {}
     for prev in existing:
-        collapsed[(str(prev.get("generation")), _csv_split_key(prev))] = prev
+        collapsed[_csv_row_key(prev)] = prev
     existing = list(collapsed.values())
 
     replaced = False
     for index, prev in enumerate(existing):
-        if (str(prev.get("generation")), _csv_split_key(prev)) != key:
+        if _csv_row_key(prev) != key:
             continue
         if _csv_split_key(incoming) == "heldout" and \
                 str(prev.get("decision") or "") in VERDICT_DECISIONS:
@@ -1543,7 +1690,8 @@ def append_generations_csv(run_dir: Path | str, row: Mapping[str, Any]) -> Path:
         break
     if not replaced:
         existing.append(incoming)
-    existing.sort(key=lambda r: (int(r.get("generation") or 0), _csv_split_key(r) != "heldout"))
+    existing.sort(key=lambda r: (int(r.get("generation") or 0), _csv_split_key(r) != "heldout",
+                                 arm_of_row(r) != PARENT_ARM, arm_of_row(r)))
 
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=list(GENERATIONS_COLUMNS), extrasaction="ignore")
@@ -1558,7 +1706,8 @@ def append_generations_csv(run_dir: Path | str, row: Mapping[str, Any]) -> Path:
 
 
 def ledger_and_plots(run_dir: Path | str, generation: int, report: Mapping[str, Any], *,
-                     cfg: Any = None) -> dict[str, Any]:
+                     cfg: Any = None, arm: str = PARENT_ARM,
+                     write_ledger: bool = True) -> dict[str, Any]:
     """把一代的**台账行**与**5 张 PNG** 一次写全（F56，2026-10-12）。
 
     **为什么要有这个助手**：这两个产物原先各写一半 —— 台账只由 MOD-07 ``_finish_report``
@@ -1579,12 +1728,18 @@ def ledger_and_plots(run_dir: Path | str, generation: int, report: Mapping[str, 
     out: dict[str, Any] = {"ledger_rows": 0, "ledger_error": None,
                            "plots": [], "plot_error": None}
     try:
-        rows = generations_rows_from_report(report, cfg=cfg)
-        for row in rows:
-            append_generations_csv(run_dir, row)
-        out["ledger_rows"] = len(rows)
-        _emit("evolve.ledger", generation=int(generation), status="ok", rows=len(rows),
-              splits=[str(r.get("split")) for r in rows])
+        rows = generations_rows_from_report(
+            report, cfg=cfg,
+            arm=str(arm or (report.get("heldout") or {}).get("arm") or PARENT_ARM))
+        if write_ledger:
+            for row in rows:
+                append_generations_csv(run_dir, row)
+        out["ledger_rows"] = len(rows) if write_ledger else 0
+        out["ledger_skipped"] = not write_ledger
+        _emit("evolve.ledger", generation=int(generation),
+              status="ok" if write_ledger else "skipped", rows=out["ledger_rows"],
+              splits=[str(r.get("split")) for r in rows],
+              arms=sorted({arm_of_row(r) for r in rows}))
     except Exception as exc: # noqa: BLE001 - 台账是附属产物，失败不阻塞裁决
         out["ledger_error"] = str(exc)[:200]
         _emit("evolve.ledger", generation=int(generation), status="failed",

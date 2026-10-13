@@ -234,10 +234,16 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
     ``candidates[0].heldout.n=37 / win_rate=0.6757``。两个口径都不等于 77。
     现在：
 
-    - ``--arm <name>``：只看见该臂；
-    - ``--arm all``：**显式**申报的混合池（并在 stdout 与 ext 里标注 ``mixed_pool=true``）；
-    - 缺省：该代 ``report.json`` 里**胜出的候选臂**（``winner``，其 ``decision=accept``）
-      或唯一候选；该代没有候选/候选全被拒时回落到 ``parent``。
+    - ``--arm <name>``：只看见该臂；**臂名不存在即失败**（``E_EVAL_ARM_NOT_ALLOWED``，
+      不再静默回落到 parent——那会让 `--arm` 的拼写错误安静地给出 parent 的数）；
+    - ``--arm all``：**显式**申报的混合池（并在 stdout 与 ext 里标注 ``mixed_pool=true``），
+      **禁止落进代际台账**（混合池没有「哪个臂」的物理含义）；
+    - 缺省（F57，2026-10-12 起）：**``parent``**（该代的起点臂）。修复前默认是
+      「该代胜出候选 → 唯一候选 → parent」，后果是**一次重算就能改写代际台账**：
+      实测 `runs/_sweep/m3-rehearsal` gen-001 的 heldout 行先由 ``loop run`` 写成
+      parent 的 `0.10`，被本命令按候选臂重算后变成 `0.35`，判据 1 的结论随之从
+      「单调性不成立」翻成 `monotonic_ok=true`。候选自己的测量请显式
+      ``--arm cand-<candidate_id>``（它落在**另一行**，见 ``arm`` 列）。
     """
     paths, cfg, run_id = _paths(args, read_existing=True)
     split = str(getattr(args, "split", "heldout") or "heldout")
@@ -317,11 +323,26 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
     # `train_heldout_gap.png` 与 `win_rate.png` 的 train 对照曲线只能画成空白。
     # F56（2026-10-12）：台账与绘图走**同一个**助手（MOD-06 基线、MOD-07 代末、本命令
     # 三方共用），避免「谁记得写哪一半」再分叉。纪律不变：附属产物失败不阻塞报告。
-    ledger_and_plots(paths.root, generation, report, cfg=cfg)
+    # F57：臂**显式**传进去（台账行按 `(generation, split, arm)` 落键）。`--arm all` 是
+    # 混合池，没有「哪个臂」的物理含义 ⇒ **不允许**进代际台账（否则判据 1 会读到一个
+    # 谁也不是的数）；此时按 parent 记行，并在 stderr 说清。
+    # F57：该代 heldout 若是**继承**来的（本代没有真实测量），重算也**不新增台账行**
+    # （`write_ledger=False`）——继承的出处只在 `report.json` 的 `heldout.source`；
+    # 补一行会在图上多出一个与上一代**重合**的点。绘图仍照跑（读既有台账）。
+    source = _ledger_source_of(paths.root, generation)
+    inherited_row = source.startswith("inherited:")
     if mixed:
         print(f"[{E.E_EVAL_ARM_NOT_ALLOWED}] --arm all：heldout 是**混合池**"
-              f"（n={heldout.n}，臂={_arms_of(pool_results)}），不是单臂口径，禁止当默认口径用",
-              file=sys.stderr)
+              f"（n={heldout.n}，臂={_arms_of(pool_results)}），不是单臂口径："
+              f"禁止当默认口径用，且**不写代际台账**", file=sys.stderr)
+        ledger_and_plots(paths.root, generation, report, cfg=cfg, write_ledger=False)
+    elif inherited_row:
+        print(f"[{E.E_EVAL_ARM_NOT_ALLOWED}] 第 {generation} 代的 heldout 是**继承**来的"
+              f"（{source}）：不新增台账行，只重画图", file=sys.stderr)
+        ledger_and_plots(paths.root, generation, report, cfg=cfg, arm=arm,
+                         write_ledger=False)
+    else:
+        ledger_and_plots(paths.root, generation, report, cfg=cfg, arm=arm)
     print(f"report: {path}")
     print(f"sha256: {sha}")
     print(f"arm: {arm}{'（混合池，--arm all）' if mixed else ''} n={heldout.n}")
@@ -336,25 +357,51 @@ def _arms_of(results: Sequence[Any]) -> list[str]:
 
 def _resolve_report_arm(run_root: Path, generation: int, pool: Sequence[Any], *,
                         requested: Any) -> tuple[str, bool]:
-    """``eval report`` 该按哪个臂重算（F46-A）。
+    """``eval report`` 该按哪个臂重算（F46-A；**默认臂 F57 改为 parent**）。
 
-    返回 ``(arm, mixed_pool)``。``requested`` 的取值：``None``/``""`` → 自动（该代
-    ``report.json`` 的胜出候选，无则唯一候选，再退 ``parent``）；``"all"`` → 混合池；
-    其它字符串 → 原样使用。
+    返回 ``(arm, mixed_pool)``。``requested`` 的取值：
+
+    - ``None``/``""`` → **``parent``**（该代的起点臂），前提是它在这个 split 里真的有局；
+      否则回落该代胜出候选 → 唯一候选 → 该代唯一的臂 → 抛 ``E_EVAL_ARM_NOT_ALLOWED``。
+      **为什么默认是 parent**：代际台账/判据 1 的口径是「这一代的**起点**在哪」，
+      而候选测量是**代内**比较。F57 现场：默认解析到候选后，一次重算就把 gen-001 的
+      台账从 parent 的 `0.10` 改成候选的 `0.35`，判据 1 的结论跟着翻面。
+    - ``"all"`` → 混合池（``mixed_pool=True``）；调用方必须拒绝把它落进台账。
+    - 其它字符串 → **必须真的在盘上**：不存在即抛 ``E_EVAL_ARM_NOT_ALLOWED``
+      （修复前静默回落到 ``"parent"``，于是 ``--arm cand-typo`` 会安静地给出 parent 的数，
+      调用方以为拿到的是候选的数）。
     """
     text = str(requested or "").strip()
     if text.lower() == "all":
         return "all", True
-    if text:
-        return text, False
-    winner = _winner_arm_of(run_root, generation)
     present = set(_arms_of(pool))
+    if not present:
+        # 一个臂都没有（该 split 的局缺失/为空）：退回起点臂名，让下游按它去报
+        # 「没有局」的具体数字与 `E_EVAL_ARM_NOT_ALLOWED` 消息——**不在这里猜**。
+        return "parent", False
+    if text:
+        if text not in present:
+            raise InfraError(
+                E.E_EVAL_ARM_NOT_ALLOWED,
+                f"第 {generation} 代在该 split 上没有臂 {text!r} 的局"
+                f"（已出现：{sorted(present)}）",
+                hint="臂名必须与落盘的 arm 逐字一致（候选臂是 `cand-<candidate_id>`）")
+        return text, False
+    if "parent" in present:
+        return "parent", False
+    winner = _winner_arm_of(run_root, generation)
     if winner and winner in present:
+        print(f"[{E.E_EVAL_ARM_NOT_ALLOWED}] 第 {generation} 代没有起点臂（parent）的局；"
+              f"回落到胜出候选 {winner!r}（该代台账口径与别的代不同，注意）",
+              file=sys.stderr)
         return winner, False
-    if winner: # 胜出臂的局不在这个 split/run 里（例如只跑了 parent）：如实告知调用方
-        print(f"[{E.E_EVAL_ARM_NOT_ALLOWED}] 第 {generation} 代的胜出臂 {winner!r} 在已落盘的"
-              f"局里没有出现（已落盘：{sorted(present)}）；回落到 parent", file=sys.stderr)
-    return "parent", False
+    if len(present) == 1:
+        return next(iter(present)), False
+    raise InfraError(
+        E.E_EVAL_ARM_NOT_ALLOWED,
+        f"第 {generation} 代既没有臂 'parent'，也推不出唯一候选臂"
+        f"（已落盘：{sorted(present)}）",
+        hint="显式传 --arm <name>；`--arm all` 是混合池，禁止当默认口径")
 
 
 def _winner_arm_of(run_root: Path | str, generation: int) -> str | None:
@@ -465,6 +512,30 @@ def _ext_payload(generation: int, heldout: Any, gain: Any, diversity: Any,
     }
     payload.update(dict(provenance or {}))
     return payload
+
+
+def _ledger_source_of(run_root: Path | str, generation: int) -> str:
+    """已落盘报告中该代 ``heldout.source``（F57）；读不到 → ``""``。
+
+    用途只有一个：判断「这一代的 heldout 是**本代真测**还是**跨代继承**」——
+    继承的代重算时**不得**新增台账行（写行会造出一个与上一代重合的数据点）。
+    """
+    data = _read_existing_report(run_root, generation)
+    if not data:
+        return ""
+    return str((data.get("heldout") or {}).get("source") or "")
+
+
+def _read_existing_report(run_root: Path | str, generation: int) -> dict[str, Any]:
+    """读已存在的 ``report.json``（缺失/损坏 → 空 dict，不抛）。F57 用。"""
+    path = generation_report_path(run_root, generation)
+    if not path.is_file():
+        return {}
+    try:
+        data = read_json(path)
+    except InfraError: # pragma: no cover - 损坏报告按「读不到」处理
+        return {}
+    return dict(data) if isinstance(data, Mapping) else {}
 
 
 def _provenance(cfg: Any, run_id: str, generation: int, basket: str,

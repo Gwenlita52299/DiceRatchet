@@ -10,6 +10,7 @@ PRD §8.1 伪代码的落地：**一次调用 = 一个演化周期**。
     prop    = propose(bundle, cfg, rng_seed)        # FR-07-1
     smoke   = seeds.take("train", generation=g)[-smoke_n:]   # FR-07-6
     parent_ho / parent_smoke = evaluate_arm(...)    # FR-07-7：parent 每代重算
+                                                    #   （上一代 accept 过则**继承**测量）
     for cand in order_candidates(prop.candidates):
         staging = stage_candidate(...)              # 落盘 + 应用 diff
         validate_candidate → guard.gate → smoke → heldout → judge
@@ -17,6 +18,15 @@ PRD §8.1 伪代码的落地：**一次调用 = 一个演化周期**。
 
 **绝不静默退化**（FR-07-15）：空候选、全淘汰、扫描失败都落 ``report.json``
 （``decision="reject"`` + 对应错误码）。
+
+**F57（2026-10-12）——parent 的测量跨代继承**：上一代**被接受**的候选就是本代的
+parent（``accept()`` 写 ``harness/versions/v{N}/`` 并移动 ``version.json`` 指针，本模块
+第 0 步的 ``load_version(current_version())`` 因此自动取到它），而它**已经**被完整测过
+一次——那批局正是 accept 决策的依据。再测一遍等于为同一份 harness 再买一次同样的局
+（≈20 局 / ≈¥17/代），且在「API 臂不可复现」的前提下还会得到**略微不同**的数字
+（实测同一 harness 同一批 seed 两次测量：`0.15` vs `0.10`，5pp 就是本 run 的噪声底）。
+继承时本代**不新增 heldout 台账行**（沿用 F48 的先例：没有真实测量的代不写行），
+只在 ``report.json`` 的 ``heldout.source`` 记 ``"inherited:gen-00X"``。
 """
 
 from __future__ import annotations
@@ -156,6 +166,9 @@ class GenerationResult:
     parent: HarnessRef | None = None
     accepted: HarnessRef | None = None
     parent_heldout: Any = None
+    #: F57（2026-10-12）：本代 ``heldout`` 段的来源。``"measured"`` = 本代真测；
+    #: ``"inherited:gen-00X"`` = 跨代继承第 X 代同一臂的测量（**0 次 evaluate_arm**）。
+    heldout_source: str = "measured"
     reports: list[CandidateReport] = field(default_factory=list)
     winner: CandidateReport | None = None
     gate_state: GateState | None = None
@@ -312,13 +325,18 @@ def _run_generation(*, state: Any, run_ctx: Any, runner: Any, cfg: Any, app_cfg:
     smoke_seeds = tuple(take("train", generation=gen, protocol=protocol)[-max(1, smoke_n):])
 
     # ---- 3) parent 的 heldout + 冒烟（每代重算；NFR-07-5 成本）-----------------------
+    # F57：上一代 accept 过 ⇒ parent 就是那个候选，而它已被完整测过 ⇒ **继承**那批局
+    # （heldout 0 次 evaluate_arm；冒烟仍按本代 seed 重测，见 judge.parent_arms）。
     ev = _build_evaluator(cfg=cfg, app_cfg=app_cfg, evaluator=evaluator, runner=runner,
                           protocol=protocol, memory_version=memory_version,
                           run_id=run_id, gen=gen, smoke_seeds=smoke_seeds,
                           episode_config=episode_config, seed=seed, run_dir=run_root)
     if not result.pending_human:
+        inherited, source = _inherited_parent_arms(ev, run_root=run_root, gen=gen,
+                                                   parent=parent)
+        result.heldout_source = source
         parent_heldout, parent_smoke = _parent_arms(
-            ev, result, parent=parent, harness=harness)
+            ev, result, parent=parent, harness=harness, inherited=inherited)
     else: # pragma: no cover - 首轮不会走到
         parent_heldout, parent_smoke = None, None
     result.parent_heldout = parent_heldout
@@ -369,8 +387,11 @@ def _build_evaluator(*, cfg: Any, app_cfg: Any, evaluator: Any, runner: Any,
 
 
 def _parent_arms(ev: Any, result: GenerationResult, *, parent: HarnessRef,
-                 harness: Path) -> tuple[Any, Any]:
+                 harness: Path, inherited: Any = None) -> tuple[Any, Any]:
     """parent 的 heldout + 冒烟；MOD-08 异常 → 保守 reject（NFR-07-7）。
+
+    ``inherited``（F57）：上一代接受过的同一份 harness 的**已还原**测量。非 ``None``
+    时 heldout 直接复用（0 次 ``evaluate_arm``）。
 
     F42-B：``KeyboardInterrupt`` / ``SystemExit`` **必须穿透**（``except Exception`` 本来
     就不会捕获它们，这里显式写明契约）。一代 84 局 ≈ 3.75 h，Ctrl-C 是最常见的中断；
@@ -379,13 +400,137 @@ def _parent_arms(ev: Any, result: GenerationResult, *, parent: HarnessRef,
     """
     parent_dir = getattr(parent, "dir", None) or harness
     try:
-        return ev.parent_arms(parent_dir, parent_version=int(parent.version))
+        return ev.parent_arms(parent_dir, parent_version=int(parent.version),
+                              inherited=inherited)
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception as exc: # noqa: BLE001 - 评审链路整体不可用 → 空报告
         events.emit("evolve.evaluate", candidate_id="parent",
                     error_code=str(getattr(exc, "code", E.E_EVOLVE_EVAL_FAILED)))
         return None, None
+
+
+# =====================================================================
+# F57：parent 测量的跨代继承
+# =====================================================================
+
+def _inherited_parent_arms(ev: Any, *, run_root: Path, gen: int,
+                           parent: HarnessRef) -> tuple[Any, str]:
+    """找上一代**同一份 harness** 的已测 winner，还原成 parent 的 ``ArmResult``。
+
+    返回 ``(arm_or_None, source)``；``source`` 是写进 ``report.json``
+    ``heldout.source`` 的字面量：命中继承时 ``"inherited:gen-00X"``，否则 ``"measured"``。
+
+    **资格条件（全部满足才继承，任一不满足即重测）**：
+
+    1. 上一代 ``report.json`` 的 ``decision == "accept"``——只有被接受的候选才变成了
+       版本；reject 的话 parent 还是原来那份，**没有任何新测量可继承**（用户裁决：
+       补丁被拒不重跑同一 ``harness_version`` 以省 token）；
+    2. 该报告的 ``harness_version`` == 本代 ``parent.version``——**同版本才叫「同一份
+       harness」**（跨版本继承会把上一代的旧数字当成新起点的数）；
+    3. 候选臂名可由 ``candidates[]`` 推出（``cand-<candidate_id>``，F46-A 同口径）；
+    4. ``metrics/arms/gen{prev:03d}-heldout-*-cand-*.json`` 能被
+       ``harness.restore_arm_from_archive`` 还原且 seed 覆盖本代 parent 篮子。
+
+    第 1 条的代**不一定**是 ``gen-1``：中断/续跑下上一代可以是任意更早的代号，
+    「最近一个 accept 且版本匹配的代」才是正确的来源。
+    """
+    from dice_ratchet.evals import harness as eval_harness
+
+    parent_version = int(getattr(parent, "version", 0) or 0)
+    arms_dir = eval_harness.arms_dir(run_root)
+
+    for prev in range(int(gen) - 1, 0, -1):
+        report = _prior_report(run_root, prev)
+        if report is None or str(report.get("decision") or "") != "accept":
+            continue
+        # **不能**写 ``report.get("harness_version") or -1``：``harness_version == 0``
+        # （v0，最初始的 harness）是**合法值且是 falsy**，那样写会把它读成 -1 而
+        # 静默跳过一个真正可继承的来源——实测就是这个 bug 让「v0 上 accept」无法继承。
+        if _int_or_none(report.get("harness_version")) != parent_version:
+            continue
+        for cand in _accepted_candidates(report):
+            archive_path = _heldout_archive_for(arms_dir, prev,
+                                                str(cand.get("candidate_id") or ""))
+            if archive_path is None:
+                continue
+            try:
+                limits = (ev.eval_limits() if hasattr(ev, "eval_limits")
+                          else {"t_max": 120, "min_support": 3, "drop_rate_max": 0.10})
+                restored = eval_harness.restore_arm_from_archive(
+                    eval_harness.load_arm_archive(archive_path),
+                    generation=int(gen), harness_version=parent_version, arm="parent",
+                    required_seeds=tuple(_heldout_seeds_of(ev)), **limits)
+            except Exception as exc: # noqa: BLE001 - 继承失败必须重测，不得中断本代
+                events.emit("evolve.parent_inherit", generation=int(gen), status="failed",
+                            detail=f"{type(exc).__name__}: {exc}"[:200])
+                continue
+            if restored is None:
+                continue
+            events.emit("evolve.parent_inherit", generation=int(gen), status="ok",
+                        source=f"gen-{prev:03d}", harness_version=parent_version,
+                        n=int(getattr(getattr(restored, "metrics", None), "n", 0) or 0))
+            return restored, f"inherited:gen-{prev:03d}"
+    return None, "measured"
+
+
+def _int_or_none(value: Any) -> int | None:
+    """字段 → ``int``；缺失/非数字 → ``None``（**不得**把 ``0`` 当缺失，见调用点注释）。"""
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _heldout_seeds_of(ev: Any) -> Sequence[int]:
+    """该代 held-out 篮子的 seed（继承资格检查用）；取不到时返回空 ⇒ **不继承**（fail-closed）。"""
+    getter = getattr(ev, "heldout_seeds", None)
+    if not callable(getter):
+        return ()
+    try:
+        return tuple(int(s) for s in getter())
+    except Exception: # noqa: BLE001 - 篮子解析失败 ⇒ 退回重测（绝不猜）
+        return ()
+
+
+def _prior_report(run_root: Path, generation: int) -> Mapping[str, Any] | None:
+    """读某一代已落盘的 ``report.json``；缺失/损坏 → ``None``（按「无历史」处理）。"""
+    from dice_ratchet.infra.io import read_json
+
+    path = GenPaths.of(run_root, generation).report
+    if not path.is_file():
+        return None
+    try:
+        data = read_json(path)
+    except InfraError: # pragma: no cover - 损坏报告按「推不出」处理
+        return None
+    return data if isinstance(data, Mapping) else None
+
+
+def _accepted_candidates(report: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """报告里 ``decision="accept"`` 的候选（F57 继承的来源）；无则空列表。"""
+    out: list[Mapping[str, Any]] = []
+    for item in report.get("candidates") or ():
+        if isinstance(item, Mapping) and str(item.get("decision") or "") == "accept":
+            out.append(item)
+    return out
+
+
+def _heldout_archive_for(arms_dir: Path, generation: int, candidate_id: str) -> Path | None:
+    """该代该候选的 heldout 臂归档路径（``gen{NNN}-heldout-{basket}-cand-{id}.json``）。
+
+    文件名里的 ``basket`` 由**当年**的配置决定，可能与本代不同，所以这里通配
+    ``gen{NNN}-heldout-*-cand-{id}.json``；basket 是否可用由
+    ``restore_arm_from_archive`` 的 seed 覆盖检查兜住（fail-closed）。
+    结果排序后取第一个，保证**可复现**（同一 run 内不会同时存在两个同名臂）。
+    """
+    if not candidate_id or not Path(arms_dir).is_dir():
+        return None
+    matches = sorted(Path(arms_dir).glob(
+        f"gen{int(generation):03d}-heldout-*-cand-{candidate_id}.json"))
+    return matches[0] if matches else None
 
 
 def _evaluate_one(*, cand: Candidate, cfg: Any, ev: Any, parent: HarnessRef,
@@ -599,7 +744,8 @@ def _build_report(*, result: GenerationResult, app_cfg: Any, cfg: Any, run_id: s
                 winner_arm = _arm_like(result.winner, harness_version=parent_version)
             metrics = dict(evaluate_generation(
                 gen, result.parent_heldout, winner_arm, run_id=run_id, run_dir=run_root,
-                config=app_cfg, protocol=protocol))
+                config=app_cfg, protocol=protocol,
+                heldout_source=str(result.heldout_source or "measured")))
         except Exception as exc: # noqa: BLE001 - 指标段失败：用最小骨架（保守 reject）
             events.emit("evolve.decision", gen=gen, candidate_id="", decision="reject",
                         decided_by="auto", reason=f"metrics_unavailable:{type(exc).__name__}")
@@ -627,7 +773,8 @@ def _build_report(*, result: GenerationResult, app_cfg: Any, cfg: Any, run_id: s
 def _skeleton_report(*, result: GenerationResult, gen: int, parent_version: int,
                      sections: Mapping[str, Any]) -> dict[str, Any]:
     """MOD-08 指标段不可用时的最小合法 report（全部缺失字段用 ``null``；FR-07-14）。"""
-    zero = {"basket": "H1", "n": 0, "n_dropped": 0, "low_confidence": True,
+    zero = {"basket": "H1", "source": "unavailable", "n": 0, "n_dropped": 0,
+            "low_confidence": True,
             "win_rate": 0.0, "win_rate_ci95": [0.0, 0.0], "mean_stages_cleared": 0.0,
             "mean_hearts_left": 0.0, "mean_battles_won": 0.0, "mean_decisions": 0.0,
             "illegal_rate": 0.0, "fallback_rate": 0.0, "truncation_rate": 0.0,

@@ -444,8 +444,9 @@ def _add_eval(sub: Any) -> None:
     rep.add_argument("--basket", default="H1", help="seed 篮子（heldout）")
     rep.add_argument("--generation", type=int, default=None, help="代数（默认取最大已存在代）")
     rep.add_argument("--arm", default=None,
-                     help="臂（默认 = 该代胜出/候选臂；all = 申报的混合池；"
-                          "也可显式给 parent / cand-<id> 等，F46-A）")
+                     help="臂（**默认 = parent**，即该代的起点臂——F57；"
+                          "all = 申报的混合池，不进台账；"
+                          "也可显式给 cand-<id> 等，F46-A。臂名不存在即失败）")
     _set_func(rep, _deferred(["eval", "report"], "eval"), ["eval", "report"])
 
     abl = _sp(sp, "ablation", help="消融三臂（FR-08-21）")
