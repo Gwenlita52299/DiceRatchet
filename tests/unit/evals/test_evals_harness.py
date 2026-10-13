@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -443,3 +444,159 @@ def test_c34_missing_distribution_gives_none_not_zero(tmp_path):
     write_kind_distribution(tmp_path, 1, {"map_choose": 1.0})   # 只有 g=1，没有 g=0
     jsds = aligned_jsd_kinds(tmp_path, [0, 1])
     assert jsds[1] is None, "缺前驱分布必须是 None"
+
+
+# =====================================================================
+# F57（2026-10-12）：heldout 恒取 parent、台账 arm 列、跨代继承
+# =====================================================================
+
+def _archive_episodes(seeds, *, arm: str) -> list[dict]:
+    """一条臂归档里的逐局明细（形状与 ``write_arm_archive`` 落的一致）。"""
+    return [{"arm": arm, "seed": int(s), "outcome": "win", "stages_cleared": 5,
+             "hearts_left": 1, "battles_won": 5, "decisions": 90, "decisions_llm": 90,
+             "steps": 200, "illegal_attempts": 0, "fallback_decisions": 0,
+             "kind_counts": [0] * 16, "slot_counts": {}, "seq_hash": f"s{s}",
+             "dropped": False, "degraded": False, "decision_kinds": [0],
+             "error_code": None, "truncation_reason": None}
+            for s in seeds]
+
+
+def test_f57_evaluate_generation_takes_heldout_from_parent_not_winner(tmp_path):
+    """F57：``heldout`` 段**恒取 parent**（起点臂）。
+
+    修复前是 ``winner.metrics if winner is not None else parent.metrics``：候选胜出时
+    代际台账里的数字突然变成**候选**的，而判据 1 比的是**起点**。实测现场
+    （`runs/_sweep/m3-rehearsal` gen-001）同一批产物因此给出两个相反结论。
+    """
+    runner = FakeRunner({seed: ("win" if seed % 2 else "lose") for seed in _SEEDS})
+    parent = evaluate_arm(Path("harness"), split="heldout", basket="H1", memory_version=0,
+                          arm="parent", run_id="r-57", protocol=_PROTO, runner=runner,
+                          generation=0, harness_version=0)
+    # winner 的 metrics **刻意与 parent 不同**（否则「取的是谁」这件事测不出来）。
+    # `evaluate_generation` 现在只从 parent 取 ``.metrics/.split/.basket/.seeds``。
+    winner_metrics = replace(parent.metrics, win_rate=0.99, n=999)
+    winner = ArmResult(arm="cand-x", split="heldout", basket="H1", harness_version=1,
+                       memory_version=0, run_id="r-57", results=parent.results,
+                       metrics=winner_metrics, dur_s=0.0)
+    report = evaluate_generation(1, parent, winner, run_id="r-57", run_dir=tmp_path,
+                                 protocol=_PROTO)
+    assert report["heldout"]["win_rate"] == parent.metrics.win_rate, (
+        f"heldout 必须是 parent 的数，实际 {report['heldout']['win_rate']}")
+    assert report["heldout"]["n"] == parent.metrics.n
+    assert report["heldout"]["source"] == "measured"
+    # harness_version 仍取 winner 的版本（台账要能看出「这一代把起点带到了哪个版本」）
+    assert report["harness_version"] == 1
+    validate("generation_report", report)
+
+
+def test_f57_report_records_inherited_source(tmp_path):
+    """``heldout.source`` 必须如实写 ``inherited:gen-00X``（不许静默成 measured）。"""
+    runner = FakeRunner({seed: "win" for seed in _SEEDS})
+    parent = evaluate_arm(Path("harness"), split="heldout", basket="H1", memory_version=0,
+                          arm="parent", run_id="r-57i", protocol=_PROTO, runner=runner,
+                          generation=0, harness_version=0)
+    report = evaluate_generation(1, parent, None, run_id="r-57i", run_dir=tmp_path,
+                                 protocol=_PROTO, heldout_source="inherited:gen-000")
+    assert report["heldout"]["source"] == "inherited:gen-000"
+    validate("generation_report", report)
+
+
+def test_f57_ledger_has_arm_column_and_keeps_parent_and_candidate_rows(tmp_path):
+    """F57 的核心：``(generation, split, arm)`` 三键 —— parent 行与候选行**并列共存**。
+
+    修复前 ``(generation, split)`` 双键 ⇒ 后写的**无声覆盖**先写的（现场：parent
+    `0.10` 被判「单调性不成立」，20 分钟后被候选 `0.35` 覆盖，结论翻面）。
+    """
+    import csv as _csv
+
+    from dice_ratchet.evals.harness import GENERATIONS_COLUMNS
+
+    parent = _row(1, decision="reject", n=20, win=0.10)
+    cand = _row(1, decision="reject", n=20, win=0.35)
+    cand["arm"] = "cand-abc"
+    append_generations_csv(tmp_path, parent)
+    append_generations_csv(tmp_path, cand)
+    with (tmp_path / "metrics" / "generations.csv").open(encoding="utf-8") as fh:
+        reader = _csv.DictReader(fh)
+        assert tuple(reader.fieldnames or ()) == GENERATIONS_COLUMNS
+        rows = list(reader)
+    assert [r["arm"] for r in rows] == ["parent", "cand-abc"], (
+        "parent 行与前排；候选行靠 arm 列区分")
+    assert {(r["arm"], round(float(r["win_rate"]), 4)) for r in rows} == {
+        ("parent", 0.10), ("cand-abc", 0.35)}
+
+
+def test_f57_ledger_keeps_parent_row_when_candidate_recompute_overwrites(tmp_path):
+    """F57 的反例自检：**候选行不得吃掉 parent 行**（这就是现场的两个相反结论）。"""
+    import csv as _csv
+
+    parent = _row(1, decision="reject", n=20, win=0.10)
+    append_generations_csv(tmp_path, parent)
+    cand = dict(_row(1, decision="reject", n=20, win=0.35))
+    cand["arm"] = "cand-abc"
+    append_generations_csv(tmp_path, cand)
+    with (tmp_path / "metrics" / "generations.csv").open(encoding="utf-8") as fh:
+        rows = list(_csv.DictReader(fh))
+    by_arm = {r["arm"]: float(r["win_rate"]) for r in rows}
+    assert by_arm == {"parent": 0.10, "cand-abc": 0.35}, (
+        f"两个臂必须各留一行，实际 {by_arm}")
+
+
+def test_f57_inherited_heldout_writes_no_ledger_row(tmp_path):
+    """F57：**继承**来的 heldout 不新增台账行（沿用 F48「没有测量就不写行」的先例）。
+
+    出处只记在 ``report.json`` 的 ``heldout.source``。写行会在图上多出一个与上一代
+    **重合**的点，看起来像测了两次。
+    """
+    import csv as _csv
+
+    from dice_ratchet.evals.harness import generations_rows_from_report
+
+    report = {"generation": 2, "harness_version": 1, "parent_version": 1,
+              "decision": "reject",
+              "heldout": {"basket": "H3", "source": "inherited:gen-001", "n": 20,
+                          "win_rate": 0.35, "win_rate_ci95": [0.18, 0.57]},
+              "train": {"n": 30, "win_rate": 0.4, "low_confidence": False},
+              "diversity": {"entropy_slope": 0.0, "collapse_flag": False},
+              "gain_realism": {"win_rate_gap": 0.05, "verdict": "null"}}
+    rows = generations_rows_from_report(report)
+    assert [r["split"] for r in rows] == ["train"], (
+        "继承的 heldout 不写行；本代真实跑过的 train 仍要写")
+    for row in rows:
+        append_generations_csv(tmp_path, row)
+    with (tmp_path / "metrics" / "generations.csv").open(encoding="utf-8") as fh:
+        assert [r["split"] for r in _csv.DictReader(fh)] == ["train"]
+
+
+def test_f57_restore_arm_from_archive_reuses_another_generations_measurement(tmp_path):
+    """F57：跨代继承靠 ``restore_arm_from_archive`` 还原（**不跑任何局**）。
+
+    与 ``evaluate_arm`` 的 ``arm_reused`` 分支的区别：那个要求 provenance 的
+    ``generation`` 相同（同代重跑），继承要的正是**另一代**的同一臂测量。
+    """
+    from dice_ratchet.evals.harness import load_arm_archive, restore_arm_from_archive
+
+    seeds = (731080, 731081)
+    archive = {"harness_version": 1, "memory_version": 0, "arm": "cand-abc",
+               "split": "heldout", "basket": "H3", "run_id": "r-57",
+               "archive_path": "metrics/arms/gen001-heldout-H3-cand-abc.json",
+               "provenance": {"basket": "H3", "harness_version": 1},
+               "episodes": _archive_episodes(seeds, arm="cand-abc")}
+    path = tmp_path / "arm.json"
+    path.write_text(json.dumps(archive), encoding="utf-8")
+    restored = restore_arm_from_archive(load_arm_archive(path), generation=2,
+                                        harness_version=1, arm="parent",
+                                        required_seeds=seeds)
+    assert restored is not None, "同 harness 同篮子 ⇒ 必须能还原"
+    assert restored.arm == "parent", "作为下一代的起点，臂名应记为 parent"
+    assert restored.metrics.n == 2 and restored.metrics.win_rate == 1.0
+    assert all(r.generation == 2 for r in restored.results), "局要落到本代（复算读得到）"
+
+    # fail-closed：换 harness 版本 / 篮子覆盖不全 ⇒ 一律 None（调用方重测）
+    assert restore_arm_from_archive(archive, generation=2, harness_version=2,
+                                    arm="parent", required_seeds=seeds) is None
+    assert restore_arm_from_archive(archive, generation=2, harness_version=1,
+                                    arm="parent", required_seeds=(731080, 731081,
+                                                                   731082)) is None
+    assert restore_arm_from_archive(None, generation=2, harness_version=1,
+                                    arm="parent", required_seeds=seeds) is None

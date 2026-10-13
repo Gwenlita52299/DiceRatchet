@@ -606,3 +606,81 @@ set_evolve_provider(provider)
     assert state["phase"] == "done"
     keys = _keys(tmp_path, "t9")
     assert len(keys) == len(set(keys)) == 3
+
+
+# =====================================================================
+# F57（2026-10-12）：parent 的测量跨代继承 —— 真实 CandidateEvaluator 上零重测
+# =====================================================================
+
+def test_f57_parent_measurement_is_inherited_without_any_evaluate_arm(tmp_path,
+                                                                     monkeypatch):
+    """给定上一代 ``decision="accept"`` 且版本与本代 parent 一致；当本代解析 parent 臂；
+    则 heldout **沿用那批已落盘的局**（``evaluate_arm`` 调用次数 = 0）。
+
+    **为什么这是成本判据而不是实现细节**：一代 parent 的 heldout 是 20 局 ≈¥17
+    （实测 C1 臂 ≈¥0.83/局）。上一代被接受的候选**就是**本代的 parent，而它刚刚被测过
+    ——那批局正是 accept 决策的依据。重测等于为同一份 harness 再买一次同样的局。
+    本用例把「省掉」钉在**函数调用**上：``dice_ratchet.evals.harness.evaluate_arm``
+    被替换成「一调就失败」，因此只要实现偷偷重测，用例立刻红。
+
+    这里用**真实** ``CandidateEvaluator``（不注入替身）：鉴权链上的 ``heldout_seeds`` /
+    ``eval_limits`` / ``restore_arm_from_archive`` 全部走到真实实现——替身会让
+    「篮子解析错了」这类缺陷从用例里漏过去。
+    """
+    import dice_ratchet.evals.harness as eval_harness
+    from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol
+    from dice_ratchet.evolve.generation import _inherited_parent_arms
+    from dice_ratchet.evolve.judge import CandidateEvaluator
+    from dice_ratchet.infra.config import load_config
+
+    monkeypatch.chdir(_REPO)
+    proto = validate_protocol(coerce_protocol(None))
+    from dice_ratchet.evals.seeds import resolve_basket
+
+    seeds = tuple(resolve_basket("H1", generation=1, protocol=proto))
+    assert len(seeds) == 40, "H1 篮子 40 局（与真实 evaluator 解析出的篮子一致）"
+
+    run_root = tmp_path / "runs" / "r-f57"
+    (run_root / "generations" / "gen-001").mkdir(parents=True)
+    (run_root / "generations" / "gen-001" / "report.json").write_text(
+        json.dumps({"generation": 1, "decision": "accept", "harness_version": 1,
+                    "parent_version": 0,
+                    "candidates": [{"candidate_id": "abc123", "decision": "accept"}]}),
+        encoding="utf-8")
+    # 归档的**内容**（restore_arm_from_archive 只读这些键）：harness_version / basket /
+    # provenance.basket / episodes。`metrics` 由继承方从 episodes 重算，故这里不写。
+    archive = eval_harness.arm_archive_path(run_root, generation=1, split="heldout",
+                                            basket="H1", arm="cand-abc123")
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.write_text(json.dumps({
+        "arm": "cand-abc123", "split": "heldout", "basket": "H1",
+        "harness_version": 1, "memory_version": 0, "run_id": "r-f57",
+        "provenance": {"basket": "H1", "harness_version": 1},
+        "episodes": [{"arm": "cand-abc123", "seed": int(s), "outcome": "win",
+                      "stages_cleared": 6, "hearts_left": 1, "battles_won": 6,
+                      "decisions": 100, "decisions_llm": 100, "steps": 250,
+                      "illegal_attempts": 0, "fallback_decisions": 0,
+                      "kind_counts": [0] * 16, "slot_counts": {},
+                      "seq_hash": f"s{s}", "dropped": False, "degraded": False,
+                      "decision_kinds": [0], "error_code": None,
+                      "truncation_reason": None} for s in seeds],
+    }), encoding="utf-8")
+
+    cfg = load_config()
+    evaluator = CandidateEvaluator(protocol=proto, config=cfg, memory_version=0,
+                                   run_id="r-f57", generation=2, smoke_seeds=(),
+                                   heldout_basket="H1", run_dir=run_root)
+    parent = type("P", (), {"version": 1, "dir": tmp_path / "harness"})()
+
+    def _boom(*_a, **_kw):  # pragma: no cover - 只有在实现偷偷重测时才会被执行
+        raise AssertionError("F57：parent 的 heldout 被重测了（本代应继承上一代的测量）")
+
+    monkeypatch.setattr(eval_harness, "evaluate_arm", _boom)
+    inherited, source = _inherited_parent_arms(evaluator, run_root=run_root, gen=2,
+                                               parent=parent)
+    assert source == "inherited:gen-001", source
+    assert inherited is not None
+    assert inherited.metrics.n == len(seeds)
+    assert inherited.metrics.win_rate == 1.0
+    assert all(int(r.generation) == 2 for r in inherited.results), (
+        "继承的局必须落到本代，否则重算读不到")

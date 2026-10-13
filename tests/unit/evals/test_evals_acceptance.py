@@ -423,3 +423,94 @@ def test_denominators_from_run_reads_real_episodes(tmp_path):
     assert got["fallback"] == 3 * 10, "fallback 分母 = 决策点"
     assert got["truncation"] == 3.0, "局级分母 = 局数"
     assert denominators_from_run(tmp_path / "nope") == {}
+
+
+# =====================================================================
+# F57（2026-10-12）：判据 1 读**起点臂**行；起点未变的相邻代**豁免**
+# =====================================================================
+
+def _write_ledger_rows(run_dir: Path, rows: list[dict]) -> None:
+    """写台账的**显式行**（可逐行指定 ``arm`` / ``harness_version``）。"""
+    import csv as _csv
+
+    path = run_dir / "metrics" / "generations.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        writer = _csv.DictWriter(fh, fieldnames=list(GENERATIONS_COLUMNS))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+
+
+def test_f57_judge_reads_parent_rows_and_ignores_candidate_rows(tmp_path):
+    """F57 的核心：同代有 parent 与候选两行时，判据 1 必须读 **parent**。
+
+    现场（`runs/_sweep/m3-rehearsal` gen-001）：parent 行 `0.10` 被判「单调性不成立」，
+    20 分钟后候选行 `0.35` 覆盖同一 ``(generation, split)`` 键 ⇒ 同一批产物给出
+    `monotonic_ok=true`。三键之后两行共存，判定器**显式**只读 parent。
+    """
+    _write_ledger_rows(tmp_path, [
+        {"generation": 0, "split": "heldout", "arm": "parent", "harness_version": 0,
+         "n": N, "win_rate": 0.15, "ci_lo": 0.05, "ci_hi": 0.36, "decision": "baseline"},
+        {"generation": 1, "split": "heldout", "arm": "parent", "harness_version": 0,
+         "n": N, "win_rate": 0.10, "ci_lo": 0.03, "ci_hi": 0.30},
+        {"generation": 1, "split": "heldout", "arm": "cand-abc", "harness_version": 1,
+         "n": N, "win_rate": 0.90, "ci_lo": 0.80, "ci_hi": 0.99},
+    ])
+    _write_report(tmp_path, generation=0, decision="baseline")
+    _write_report(tmp_path, generation=1, decision="reject")
+    report = _eval(tmp_path)
+    assert [g.generation for g in report.generations] == [0, 1], (
+        "候选行不得当成第二个数据点")
+    assert report.generations[1].win_rate == 0.10, "读的必须是 parent 行"
+    # 两代同 harness_version ⇒ 起点没变 ⇒ 无处可判（不是失败，也不是通过）
+    assert report.generations[1].not_applicable is True
+    assert len(report.comparable) == 0
+
+
+def test_f57_same_harness_version_pair_is_not_applicable(tmp_path):
+    """F57 豁免：相邻两代 ``harness_version`` 相同 ⇒ ``not_applicable``。
+
+    「held-out 不降」在同一份 harness 的两次重测之间是恒真命题。判成失败会把**合法拒绝**
+    误记成「单调性破坏」（现场 gen-001：`ci_lo=0.0279 < 0.10−0.02`——而 0.15 与 0.10
+    都来自 v0，5pp 就是本 run 的噪声底）；判成通过则虚增可比对数（退化通过）。
+    """
+    _write_ledger_rows(tmp_path, [
+        {"generation": 0, "split": "heldout", "arm": "parent", "harness_version": 0,
+         "n": N, "win_rate": 0.15, "ci_lo": 0.05, "ci_hi": 0.36, "decision": "baseline"},
+        {"generation": 1, "split": "heldout", "arm": "parent", "harness_version": 0,
+         "n": N, "win_rate": 0.10, "ci_lo": 0.03, "ci_hi": 0.30, "decision": "reject"},
+        {"generation": 2, "split": "heldout", "arm": "parent", "harness_version": 1,
+         "n": N, "win_rate": 0.40, "ci_lo": 0.20, "ci_hi": 0.60, "decision": "accept"},
+    ])
+    _write_report(tmp_path, generation=0, decision="baseline")
+    _write_report(tmp_path, generation=1, decision="reject")
+    _write_report(tmp_path, generation=2, decision="accept")
+    report = _eval(tmp_path)
+    by_gen = {g.generation: g for g in report.generations}
+    assert by_gen[1].not_applicable is True, "v0 → v0：起点没变"
+    assert by_gen[1].harness_version == 0 and by_gen[1].prev_harness_version == 0
+    assert by_gen[2].not_applicable is False, "v0 → v1：起点变了，必须判"
+    assert [g.generation for g in report.comparable] == [2], (
+        "豁免的代不占「可比」名额")
+    assert report.accepts == 1
+
+
+def test_f57_missing_harness_version_does_not_exempt(tmp_path):
+    """fail-closed：``harness_version`` 读不到时**不做**豁免（宁可照旧判）。
+
+    把缺列当 0 会把任意两代都当成「同一起点」而全部豁免——那等于关掉判据 1。
+    """
+    _write_ledger_rows(tmp_path, [
+        {"generation": 0, "split": "heldout", "arm": "parent",
+         "n": N, "win_rate": 0.60, "ci_lo": 0.40, "ci_hi": 0.80, "decision": "baseline"},
+        {"generation": 1, "split": "heldout", "arm": "parent",
+         "n": N, "win_rate": 0.10, "ci_lo": 0.03, "ci_hi": 0.30, "decision": "accept"},
+    ])
+    _write_report(tmp_path, generation=0, decision="baseline")
+    _write_report(tmp_path, generation=1, decision="accept")
+    report = _eval(tmp_path)
+    assert report.generations[1].not_applicable is False
+    assert report.generations[1].harness_version is None
+    assert len(report.comparable) == 1, "缺列 ⇒ 照旧判（这一对明显不成立）"
+    assert report.monotonic_ok is False

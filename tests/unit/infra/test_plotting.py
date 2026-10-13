@@ -250,3 +250,35 @@ def test_legacy_rows_without_split_are_treated_as_heldout(tmp_path):
                              "entropy_mean_norm": 0.7, "win_rate_gap": 0.05})
     out = plot_generations(csv_path, tmp_path / "plots")
     assert len(out) == 5
+
+
+def test_f57_main_curve_skips_candidate_arm_rows(tmp_path):
+    """F57：代际主曲线只画**起点臂**（``arm="parent"``），候选行不得混进来。
+
+    修复前 ``(generation, split)`` 双键 ⇒ 候选行**覆盖** parent 行，图上那一点到底是
+    谁的数看不出来。现在两行共存，绘图必须**显式分层**取 parent：否则同一代会出现两个点
+    或候选数冒充代际进展。
+    """
+    pytest.importorskip("matplotlib")
+    csv_path = tmp_path / "f57.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=list(GENERATIONS_CSV_COLUMNS))
+        writer.writeheader()
+        writer.writerow({"generation": 1, "split": "heldout", "arm": "parent", "n": 20,
+                         "win_rate": 0.10, "mean_stages_cleared": 4.35,
+                         "mean_hearts_left": 0.25, "entropy_mean_norm": 0.3788,
+                         "win_rate_gap": 0.15})
+        writer.writerow({"generation": 1, "split": "heldout", "arm": "cand-1708efeb010a",
+                         "n": 20, "win_rate": 0.35, "mean_stages_cleared": 4.75,
+                         "mean_hearts_left": 0.40, "entropy_mean_norm": 0.3848,
+                         "win_rate_gap": 0.05})
+    figures: list = []
+    plot_generations(csv_path, tmp_path / "plots", figures=figures)
+    heldout_rows = plotting._dedup_by_generation(
+        plotting._split_rows(plotting._read_csv(csv_path), "heldout", parents_only=True))
+    assert [r["arm"] for r in heldout_rows] == ["parent"], "主曲线只认起点臂"
+    assert [float(r["win_rate"]) for r in heldout_rows] == [0.10]
+    win = dict(figures)["win_rate.png"]
+    ax = win.axes[0]
+    ys = [y for _x, y in ax.lines[0].get_xydata()]
+    assert ys == [0.10], f"win_rate.png 的主曲线必须是 parent 的 0.10，实际 {ys}"

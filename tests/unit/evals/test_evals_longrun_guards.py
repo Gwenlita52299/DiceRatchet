@@ -506,25 +506,44 @@ def test_eval_report_shows_one_arm_not_a_pool(tmp_path):
     assert aggregate(cand, split="heldout", basket="H1").win_rate == 0.0
 
 
-def test_resolve_report_arm_defaults_to_the_generations_candidate(tmp_path):
-    """缺省臂 = 该代 `report.json` 里的候选臂；候选臂局不在时回落 `parent`。"""
+def test_resolve_report_arm_defaults_to_the_parent_arm(tmp_path):
+    """F57：缺省臂 = **parent**（该代的起点臂），**不是**胜出候选。
+
+    修复前缺省解析到候选臂 ⇒ 一次 `eval report` 就把代际台账从 parent 的数改成候选的数
+    （实测 `runs/_sweep/m3-rehearsal` gen-001：`0.10` → `0.35`，判据 1 的结论跟着翻面）。
+    候选臂必须**显式** `--arm cand-…` 才看得到（它落在台账的**另一行**）。
+    """
     from dice_ratchet.evals import cli as cli_mod
     from dice_ratchet.evals.harness import write_generation_report
 
-    report = {"generation": 1, "candidates": [{"candidate_id": "abc", "decision": "reject"}]}
+    report = {"generation": 1, "candidates": [{"candidate_id": "abc", "decision": "accept"}]}
     write_generation_report(tmp_path, 1, report, validate=False)
     for seed in (2000, 2001):
         _write_generation_row(tmp_path, seed, "parent", 1)
     for seed in (2000,):
         _write_generation_row(tmp_path, seed, "cand-abc", 1)
     pool = load_episode_results(tmp_path, "heldout", generation=1)
-    assert cli_mod._resolve_report_arm(tmp_path, 1, pool, requested=None) == ("cand-abc", False)
+    assert cli_mod._resolve_report_arm(tmp_path, 1, pool, requested=None) == ("parent", False)
+    # 候选臂显式可见（修复前 `--arm cand-abc` 也能取到；这里守住它没被一起砍掉）
+    assert cli_mod._resolve_report_arm(tmp_path, 1, pool,
+                                       requested="cand-abc") == ("cand-abc", False)
     assert cli_mod._resolve_report_arm(tmp_path, 1, pool, requested="all") == ("all", True)
-    assert cli_mod._resolve_report_arm(tmp_path, 1, pool, requested="parent") == ("parent", False)
 
-    # 胜出臂的局不在已落盘集合里（例如只跑了 parent）⇒ 回落 parent
-    only_parent = load_episode_results(tmp_path, "heldout", generation=1, arm="parent")
-    assert cli_mod._resolve_report_arm(tmp_path, 1, only_parent, requested=None) == ("parent", False)
+
+def test_resolve_report_arm_rejects_unknown_arm_name(tmp_path):
+    """F57：``--arm`` 拼错必须**失败**，不得静默回落到 parent。"""
+    import pytest as _pytest
+
+    from dice_ratchet.evals import cli as cli_mod
+    from dice_ratchet.evals.harness import write_generation_report
+    from dice_ratchet.infra.errors import E, InfraError
+
+    write_generation_report(tmp_path, 1, {"generation": 1, "candidates": []}, validate=False)
+    _write_generation_row(tmp_path, 2000, "parent", 1)
+    pool = load_episode_results(tmp_path, "heldout", generation=1)
+    with _pytest.raises(InfraError) as exc:
+        cli_mod._resolve_report_arm(tmp_path, 1, pool, requested="cand-typo")
+    assert exc.value.code == E.E_EVAL_ARM_NOT_ALLOWED
 
 
 def test_resolve_report_arm_prefers_accepted_candidate(tmp_path):

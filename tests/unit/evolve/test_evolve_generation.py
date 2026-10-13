@@ -36,7 +36,14 @@ RUN_ID = "1111111-abcdef12-20260930T120000Z"
 # =====================================================================
 
 class ScriptedEvaluator:
-    """``judge.CandidateEvaluator`` 的替身（不跑局、不调模型）。"""
+    """``judge.CandidateEvaluator`` 的替身（不跑局、不调模型）。
+
+    ``**kwargs`` 是**有意**的（F57）：``parent_arms`` 新增了 ``inherited=``
+    （上一代已测测量的跨代继承）。替身用 ``**kwargs`` 接收未识别的参数，否则新增
+    可选参数会被测试替身**静默**挡掉——实测教训：不接受新参数的 ``parent_arms`` 抛
+    ``TypeError``，而 ``_parent_arms`` 把它折成「parent 评估不可用」
+    （报告里出现 ``heldout.source="unavailable"``），看起来像环境问题而不是契约漂移。
+    """
 
     def __init__(self, *, parent_heldout=None, parent_smoke=None,
                  smoke=None, heldout=None, paired=None, error=None) -> None:
@@ -47,11 +54,17 @@ class ScriptedEvaluator:
         self.paired = paired
         self.error = error
         self.calls: list[str] = []
+        self.inherited_seen: list = []
+        self.seeds: tuple[int, ...] = (5000, 5001)
 
-    def parent_arms(self, parent_dir, *, parent_version):
+    def parent_arms(self, parent_dir, *, parent_version, **kwargs):
         self.calls.append("parent")
+        inherited = kwargs.get("inherited")
+        self.inherited_seen.append(inherited)
         if self.error is not None:
             raise self.error
+        if inherited is not None:  # F57：heldout 复用；冒烟按本代 seed 重测
+            return inherited, self.parent_smoke
         return self.parent_heldout, self.parent_smoke
 
     def candidate_arms(self, staging_dir, *, candidate, harness_version):
@@ -59,6 +72,14 @@ class ScriptedEvaluator:
         if self.error is not None:
             raise self.error
         return self.smoke, self.heldout, {}
+
+    # -- F57：跨代继承的资格检查（真实 ``CandidateEvaluator`` 由 evals.seeds 解析篮子）--
+
+    def heldout_seeds(self, generation: int | None = None):
+        return tuple(self.seeds)
+
+    def eval_limits(self) -> dict:
+        return {"t_max": 120, "min_support": 3, "drop_rate_max": 0.10}
 
 
 @pytest.fixture(autouse=True)
@@ -725,3 +746,119 @@ def test_f54_evaluator_falls_back_to_class_default_when_config_lacks_key(tmp_pat
                               run_dir=None)
     assert isinstance(ev, judge_mod.CandidateEvaluator)
     assert ev.heldout_basket == judge_mod.HOLDOUT_BASKET == "H1"
+
+
+# =====================================================================
+# F57（2026-10-12）：parent 的测量**跨代继承**（上一代 accept ⇒ 本代不重测）
+# =====================================================================
+
+def _write_winner_archive(run_root: Path, *, generation: int, candidate_id: str,
+                          harness_version: int, seeds: tuple[int, ...],
+                          win_rate_result: str = "win") -> Path:
+    """写一份「上一代胜出候选的 heldout 臂归档」（形状与 ``write_arm_archive`` 一致）。"""
+    arms = run_root / "metrics" / "arms"
+    arms.mkdir(parents=True, exist_ok=True)
+    path = arms / f"gen{generation:03d}-heldout-H1-cand-{candidate_id}.json"
+    path.write_text(json.dumps({
+        "arm": f"cand-{candidate_id}", "split": "heldout", "basket": "H1",
+        "harness_version": int(harness_version), "memory_version": 1,
+        "run_id": RUN_ID, "provenance": {"basket": "H1",
+                                         "harness_version": int(harness_version)},
+        "episodes": [{"arm": f"cand-{candidate_id}", "seed": int(s),
+                      "outcome": win_rate_result, "stages_cleared": 5,
+                      "hearts_left": 1, "battles_won": 5, "decisions": 90,
+                      "decisions_llm": 90, "steps": 200, "illegal_attempts": 0,
+                      "fallback_decisions": 0, "kind_counts": [0] * 16,
+                      "slot_counts": {}, "seq_hash": f"s{s}", "dropped": False,
+                      "degraded": False, "decision_kinds": [0], "error_code": None,
+                      "truncation_reason": None} for s in seeds],
+    }, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_f57_parent_measurement_is_inherited_after_accept(tmp_path, stub_pairing):
+    """上一代 **accept** ⇒ 本代 parent 的 heldout **继承**那批局（0 次重测），出处写进报告。
+
+    这正是用户口径：``gen-001 = v0+P1 被接受`` ⇒ ``v1`` 自动成为下一代的起点，
+    ``gen-002`` 直接在 ``v1`` 上跑 ``P2``，**不重跑 v1 的评估**。
+    「不重跑」在这里是硬断言：``ev2.inherited_seen`` 拿到了非 ``None`` 的继承结果，
+    且报告的 ``heldout.source == "inherited:gen-001"``。
+    """
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+    ev1 = ScriptedEvaluator(heldout=FakeArm(win_rate=0.40), paired=_paired(delta=0.10))
+    out1 = _run(run_ctx, state, evaluator=ev1, client=_one_candidate_llm())
+    assert out1.decision == "accept" and int(out1.harness_version) == 1
+    cid = GenPaths.of(run_root, 1).candidate_ids()[0]
+
+    # gen-001 的 winner 归档（真实运行时由 evaluate_arm 落；这里只造那份工件）
+    _write_winner_archive(run_root, generation=1, candidate_id=cid, harness_version=1,
+                          seeds=ev1.seeds)
+
+    ev2 = ScriptedEvaluator()
+    state2 = FakeState(generation=1, run_id=RUN_ID)
+    out2 = _run(run_ctx, state2, evaluator=ev2, client=_one_candidate_llm())
+    assert ev2.inherited_seen, "parent_arms 必须被调用"
+    inherited = ev2.inherited_seen[-1]
+    assert inherited is not None, "上一代 accept 且版本匹配 ⇒ 必须继承（不是重测）"
+    assert inherited.arm == "parent"
+    assert inherited.metrics.n == len(ev1.seeds)
+    report2 = _read_report(run_root, 2)
+    assert report2["heldout"]["source"] == "inherited:gen-001"
+    assert report2["heldout"]["win_rate"] == 1.0, "继承的是那份归档的数字（全胜）"
+
+
+def test_f57_rejected_generation_is_not_an_inheritance_source(tmp_path):
+    """上一代 **reject** ⇒ 不是继承来源：即便同名归档躺在盘上也不许用。
+
+    用户裁决「补丁被拒不重跑同一 ``harness_version``」说的是**不给被拒的候选再花一次
+    钱**，不是「拿旧数字当新测量」。资格的**唯一**依据是上一代 ``report.json`` 里
+    ``decision="accept"`` + ``harness_version`` 与本代 parent 一致——本用例把这两条
+    分别破坏一次（reject / 版本不匹配），断言都退回重测。
+
+    用**手工构造**的上一代报告（而不是跑一代）：这里测的是 ``_inherited_parent_arms``
+    的资格判断，跑一代只会引入无关的夹具依赖。
+    """
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    ev = ScriptedEvaluator()
+    cid = "deadbeef0001"
+    _write_winner_archive(run_root, generation=1, candidate_id=cid, harness_version=0,
+                          seeds=ev.seeds)
+    parent = GEN.versioning_mod.load_version(0, harness=harness)
+    assert int(parent.version) == 0
+
+    def _write_prev_report(decision: str, harness_version: int) -> None:
+        path = GenPaths.of(run_root, 1).report
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"generation": 1, "decision": decision,
+                                    "harness_version": harness_version,
+                                    "parent_version": 0,
+                                    "candidates": [{"candidate_id": cid,
+                                                    "decision": decision}]},
+                                   ensure_ascii=False), encoding="utf-8")
+
+    # ① reject：归档再全也不能用
+    _write_prev_report("reject", 0)
+    inherited, source = GEN._inherited_parent_arms(ev, run_root=run_root, gen=2,
+                                                   parent=parent)
+    assert inherited is None and source == "measured", "reject 不是继承来源"
+
+    # ② accept 但版本不匹配（例如报告来自别的 harness）：同样不能用
+    _write_prev_report("accept", 7)
+    inherited, source = GEN._inherited_parent_arms(ev, run_root=run_root, gen=2,
+                                                   parent=parent)
+    assert inherited is None and source == "measured", "版本不同不得继承"
+
+    # ③ 正例：accept + 版本匹配 ⇒ 继承（证明 ①② 的 None 不是「函数永远返回 None」）
+    _write_prev_report("accept", 0)
+    inherited, source = GEN._inherited_parent_arms(ev, run_root=run_root, gen=2,
+                                                   parent=parent)
+    assert inherited is not None and source == "inherited:gen-001"
+    assert inherited.arm == "parent" and inherited.metrics.n == len(ev.seeds)
+
+    # ④ 归档不在 ⇒ 退回重测（fail-closed）
+    for path in (run_root / "metrics" / "arms").glob("*.json"):
+        path.unlink()
+    inherited, source = GEN._inherited_parent_arms(ev, run_root=run_root, gen=2,
+                                                   parent=parent)
+    assert inherited is None and source == "measured"
