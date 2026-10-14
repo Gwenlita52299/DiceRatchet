@@ -191,10 +191,13 @@ def test_decision_error_codes_are_registered_codes():
 
 def test_prompt_surface_has_no_leak_findings(tmp_path, build_run):
     built = build_run(tmp_path, run_id="policy-integration", seed=1000)
+    # F58（2026-10-14）：``derive_hidden_tokens`` 现在返回**逐局索引**
+    # （``HiddenTokenIndex``）。单局场景取该局的隐藏集合；跨局出口用 ``unscoped`` 兜底。
     hidden = derive_hidden_tokens(built.root, split="train")
+    episode_hidden = hidden.by_episode.get("e-001000-g000-train", hidden.unscoped)
     visible = VisibleSet(obs_paths=(), obs_digests=(), memory_texts=(),
                          harness_version=0, seeds_seen=(1000,))
-    forbidden = build_forbidden(visible, hidden=hidden)
+    forbidden = build_forbidden(visible, hidden=episode_hidden)
 
     agent = PolicyAgent(PolicyConfig(), harness_dir=REPO / "harness")
     env = SandboxEnv(engine=_engine(), episode_config=EpisodeConfig())

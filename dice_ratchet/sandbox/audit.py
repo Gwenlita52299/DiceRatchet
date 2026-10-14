@@ -32,10 +32,14 @@ __all__ = [
     "SEVERITY", "HIDDEN_FIELD_NAMES", "FULL_STATE_FIELD_NAMES",
     "rebuild_visible_set", "scan_text", "build_forbidden", "register_sensitive",
     "run_audit", "write_report", "audit_to_console", "load_forbidden_seeds",
-    "derive_hidden_tokens", "VERDICT_CLEAN", "VERDICT_WARN", "VERDICT_CRITICAL",
+    "derive_hidden_tokens", "HiddenTokenIndex",
+    "VERDICT_CLEAN", "VERDICT_WARN", "VERDICT_CRITICAL",
 ]
 
-RULESET_VERSION: Final[str] = "1.0.0"
+#: 规则集版本。**1.1.0（2026-10-14，F58/F59）**：`future_room_leak` 改**逐局作用域**、
+#: seed 数字扫描的前导边界加 `.`（浮点小数部分不算 seed）。历史报告里的 `1.0.0`
+#: 因此可辨识：「那一版的 future_room findings 是全局作用域下的产物」。
+RULESET_VERSION: Final[str] = "1.1.0"
 VERDICT_CLEAN: Final[str] = "clean"
 VERDICT_WARN: Final[str] = "warn"
 VERDICT_CRITICAL: Final[str] = "critical"
@@ -91,7 +95,25 @@ FULL_STATE_FIELD_NAMES: Final[tuple[str, ...]] = (
 
 #: 数值型 token（seed）用数字串扫描代替逐 token find（NFR-02-2：≤2 s/1000 步）。
 #: 边界要求两侧都不是字母数字——hex 摘要里的数字串不算 seed（否则 sha256 会刷屏假阳性）。
-_NUM_RUN_RE: Final[re.Pattern[str]] = re.compile(r"(?<![0-9A-Za-z_])[0-9]{3,6}(?![0-9A-Za-z_])")
+#: 数值型 token（seed）的数字串扫描（NFR-02-2：≤2 s/1000 步）。
+#: 边界要求两侧都不是字母数字——hex 摘要里的数字串不算 seed（否则 sha256 会刷屏假阳性）。
+#:
+#: **F59（2026-10-14）——前导边界加 `.`**：紧跟在 `.` 之后的数字段**不算 seed**。
+#:
+#: 现场（`runs/m3-formal`，`audit leak` 的 4 条 `seed_leak`）：`elapsed_ms: 0.731042`
+#: 命中 H2 的 731040–731079、`0.947084 / 0.947042 / 1.947041` 命中 test 的
+#: 947000–947099——命中的都是**浮点数的小数部分**，而它们的整数部分是 `0` / `1`。
+#: F45-2 把 heldout/test 移到六位端口空间，是为了避开「耗时/预算/年份」这类**整数**字面量；
+#: 六位**小数**分数当时没被考虑，于是端口空间重新撞上了另一类机器元数据。
+#:
+#: 边界方向（**只放宽「跟在点号之后」这一种情形**，其余一字不动）：
+#: - `0.731042` ⇒ 不命中（小数部分）；
+#: - `"seed": 731042` ⇒ 命中（真泄漏仍然被抓）；
+#: - `947042.5` ⇒ **命中**（整数部分就是那个值）：刻意的 fail-closed——整数部分与 seed
+#:   相等时宁可报，也不因为「它长得像浮点」而漏掉一个真泄漏；
+#: - `sha256:ab12…731042…` ⇒ 不命中（前后环视早已排除 hex 内部）。
+_NUM_RUN_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?<![0-9A-Za-z_.])[0-9]{3,6}(?![0-9A-Za-z_])")
 _SEED_RANGE_LIMIT: Final[int] = 20000
 
 #: seed 扫描默认覆盖的 split。依据 ``configs/seeds.yaml::exposure_guard.numeric_scan``：
@@ -128,6 +150,29 @@ LOG_STRUCTURAL_KEYS: Final[frozenset[str]] = frozenset({"seed", "episode_key", "
 # ----------------------------------------------------------------------
 # 数据结构（PRD §6）
 # ----------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class HiddenTokenIndex:
+    """逐局隐藏 token 索引（F58，2026-10-14）。
+
+    ``by_episode``：``episode_key`` → ``{token: token_class}``，**只对该局的出口有效**。
+    ``unscoped``：无法定位到单局的出口（``memory/`` 全局库、``events.jsonl``）用的兜底集合——
+    判据是「**任何一局都从未合法展示过**」的 token 仍算泄漏（fail-closed，但无跨局假阳性）。
+    ``replayed``：成功重放的局数（报告 ``scanned`` 段用它，便于说明派生面）。
+    """
+
+    by_episode: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
+    unscoped: Mapping[str, str] = field(default_factory=dict)
+    replayed: int = 0
+    #: 有轨迹但**重放失败/不一致**的局数（那些局只剩 ``unscoped`` 兜底 ⇒ 必须在 warnings 里可见）。
+    failed: int = 0
+    #: 只有 ``episode_end``（如基线臂的摘要文件）的局数：**没有可重放的步**，不算降级。
+    no_trajectory: int = 0
+
+    def for_episode(self, episode_id: str) -> Mapping[str, str]:
+        """该局的隐藏 token（没有该局时返回空——调用方再用 ``unscoped`` 兜底）。"""
+        return dict(self.by_episode.get(str(episode_id)) or {})
+
 
 @dataclass(frozen=True)
 class VisibleSet:
@@ -541,52 +586,95 @@ def scan_text(text: str, *, forbidden: Mapping[str, str], surface: str,
 # ----------------------------------------------------------------------
 
 def derive_hidden_tokens(run_dir: Path, *, split: str = "train",
-                         warnings: list[str] | None = None) -> dict[str, str]:
-    """重放 ``episodes/<split>/*.jsonl``，重建隐藏行的节点 id 与未展示的商店条目。
+                         warnings: list[str] | None = None,
+                         splits: Sequence[str] | None = None) -> "HiddenTokenIndex":
+    """重放 ``episodes/<split>/*.jsonl``，重建**逐局**的隐藏行节点 id 与未展示的商店条目。
 
     - 隐藏行：``row > map.currentRow + 1`` 的节点 ``nodeId`` 与 ``enemyGroupId``；
     - 商店内容：``phase != "shop"`` 时 ``node.shop`` 里存在的条目 ``defId``；
     - **同一局内曾经合法出现过**的 token（曾进入 obs 的节点/商店条目）会被剔除，
-      避免把「曾经展示过」误判成泄漏。
+      避免把「曾经展示过」误判成泄漏；
     - 重放不可行（缺包表/动作与内核不一致/缺 config.json）→ 记 ``warnings``，不静默。
+
+    **F58（2026-10-14）——返回值从「一个全局 dict」改为「逐局索引」**：
+
+    现场（`runs/m3-formal`）：`future_room_leak` 报 **5,852 次 / 200 条 finding，全是假阳性**
+    （逐局复核 280 局 / 96,583 行 **0 命中**）。根因是**作用域错配**：派生把**整批 train 局**
+    的未揭示节点并成一个集合，而扫描遍历 ``episodes/**``（含 heldout）——
+    节点 id（``n-03-2-0`` 之类）是**地图模板的结构 id，跨局复用**，
+    于是「A 局里还没揭示」被当成「B 局里出现即泄漏」。而 B 局里它是**合法揭示**的（agent 走到了那一行）。
+
+    现在：每局**自己**的隐藏集合只用于**同一局**的出口；无法定位到某一局的出口
+    （``memory/`` 全局库、``events.jsonl``）用 ``unscoped``——那条规则是
+    「**任何一局都从未合法展示过**的 token 仍算泄漏」，仍然 fail-closed，但不再有跨局假阳性。
+
+    ``splits``：要重放的 split；缺省 ``(split,)``（兼容旧行为）。``run_audit`` 传
+    ``episodes/`` 下**全部**有局文件的 split——**派生面必须与扫描面一致**，
+    这正是 F58 的另一半。
     """
     warn = warnings if warnings is not None else []
     run_dir = Path(run_dir)
-    out: dict[str, str] = {}
-    episodes_dir = run_dir / "episodes" / split
-    if not episodes_dir.is_dir():
-        return out
-    try:
-        from dice_ratchet.env import GameEngine, load_tables
-        from dice_ratchet.env.map import current_stage_map
-    except Exception as exc: # noqa: BLE001 - 环境层不可用：重放降级
-        warn.append(f"轨迹重放不可用（{exc}）：future_room/shop 规则集降级为空")
-        return out
-    episode_cfg = _episode_config_from_run(run_dir, warn)
-    content_dir = _content_dir(run_dir)
-    try:
-        tables = load_tables(content_dir) if content_dir else load_tables()
-    except Exception as exc: # noqa: BLE001
-        warn.append(f"配表加载失败（{exc}）：future_room/shop 规则集降级为空")
-        return out
-    engine = GameEngine(tables)
-    for path in sorted(episodes_dir.glob("*.jsonl")):
+    wanted = tuple(splits) if splits is not None else (str(split),)
+    by_episode: dict[str, dict[str, str]] = {}
+    ever_shown: set[str] = set()
+    klass_of: dict[str, str] = {}
+    replayed = 0
+    failed = 0
+    no_trajectory = 0
+    episodes_dir_root = run_dir / "episodes"
+    if not episodes_dir_root.is_dir():
+        return HiddenTokenIndex()
+    # **没有任何可重放的局**时直接返回：不加载配表、不发「缺 config.json」这类
+    # 与本次审计无关的告警（修复前是 `episodes/<split>/` 不存在就早退，等价口径）。
+    wanted_paths = [p for name in wanted
+                    for p in sorted((episodes_dir_root / name).glob("*.jsonl"))]
+    if not wanted_paths:
+        return HiddenTokenIndex()
+    # 配表/内核**懒加载**：只有真的遇到「有可重放的步」的文件才加载。否则一个只含
+    # `episode_end` 摘要（或空）的 run 会因为「缺 config.json」被无谓地记一条告警，
+    # 而 `_verdict` 会把非空 warnings 抬到 `warn`（修复前的口径是「没有局就早退」，
+    # 这里保持等价：没有可重放的步 ⇒ 不加载、不告警）。
+    engine: Any = None
+    current_stage_map: Any = None
+    episode_cfg: dict[str, Any] = {}
+    for path in wanted_paths:
         rows = [r for r in _read_jsonl(path, []) if r.get("type") != "episode_end"]
         if not rows:
+            # 只有 episode_end 的文件（基线臂摘要）**没有可重放的步**：不是降级，不计 failed。
+            no_trajectory += 1
             continue
+        if engine is None:
+            try:
+                from dice_ratchet.env import GameEngine, load_tables
+                from dice_ratchet.env.map import current_stage_map as _stage_map
+            except Exception as exc: # noqa: BLE001 - 环境层不可用：重放降级
+                warn.append(f"轨迹重放不可用（{exc}）：future_room/shop 规则集降级为空")
+                return HiddenTokenIndex(no_trajectory=no_trajectory)
+            current_stage_map = _stage_map
+            episode_cfg = _episode_config_from_run(run_dir, warn)
+            content_dir = _content_dir(run_dir)
+            try:
+                tables = load_tables(content_dir) if content_dir else load_tables()
+            except Exception as exc: # noqa: BLE001
+                warn.append(f"配表加载失败（{exc}）：future_room/shop 规则集降级为空")
+                return HiddenTokenIndex(no_trajectory=no_trajectory)
+            engine = GameEngine(tables)
         seed = rows[0].get("seed")
         if not isinstance(seed, int):
             warn.append(f"{path.name}: 轨迹缺 seed，跳过重放")
+            failed += 1
             continue
         try:
             state = engine.create({**episode_cfg, "seed": seed})
         except Exception as exc: # noqa: BLE001
             warn.append(f"{path.name}: create 失败（{exc}），跳过重放")
+            failed += 1
             continue
         hidden_nodes: set[str] = set()
         hidden_groups: set[str] = set()
         hidden_items: set[str] = set()
         shown: set[str] = set()
+        replay_failed = False
         for row in rows:
             if row.get("illegal"):
                 continue
@@ -597,11 +685,13 @@ def derive_hidden_tokens(run_dir: Path, *, split: str = "train",
                 result = engine.reduce(state, action)
             except Exception as exc: # noqa: BLE001
                 warn.append(f"{path.name}: 重放在 step={row.get('step')} 失败（{exc}）")
+                replay_failed = True
                 break
             if result.get("illegal") or result.get("error"):
                 warn.append(f"{path.name}: 重放在 step={row.get('step')} 与轨迹不一致"
                             f"（{'illegal' if result.get('illegal') else 'error'}），"
                             f"该局后续不再提取隐藏 token")
+                replay_failed = True
                 break
             state = result["state"]
             try:
@@ -610,11 +700,47 @@ def derive_hidden_tokens(run_dir: Path, *, split: str = "train",
                     hidden_items, shown)
             except Exception as exc: # noqa: BLE001
                 warn.append(f"{path.name}: 隐藏 token 提取失败（{exc}）")
+                replay_failed = True
                 break
-        out.update({t: "future_room" for t in hidden_nodes - shown})
-        out.update({t: "future_room" for t in hidden_groups - shown})
-        out.update({t: "shop_item" for t in hidden_items - shown})
-    return out
+        episode_key = _episode_key_of(path, rows[0])
+        # **同一局内曾经合法出现过**的 token 必须剔除（原实现在这里做 `hidden - shown`）：
+        # agent 走到那一行之后，该节点 id 出现在**本局自己的**轨迹里是合法的。
+        episode_map: dict[str, str] = {}
+        for token in (hidden_nodes | hidden_groups) - shown:
+            if len(token) >= _MIN_HIDDEN_TOKEN_LEN:
+                episode_map[token] = "future_room"
+        for token in hidden_items - shown:
+            if len(token) >= _MIN_HIDDEN_TOKEN_LEN:
+                episode_map[token] = "shop_item"
+        by_episode[episode_key] = episode_map
+        if replay_failed:
+            failed += 1
+        else:
+            replayed += 1
+        klass_of.update(episode_map)
+        ever_shown.update(t for t in shown if len(t) >= _MIN_HIDDEN_TOKEN_LEN)
+    unscoped = {t: klass_of[t] for t in sorted(set(klass_of) - ever_shown)}
+    return HiddenTokenIndex(by_episode=by_episode, unscoped=unscoped, replayed=replayed,
+                            failed=failed, no_trajectory=no_trajectory)
+
+
+def _episode_splits(run_dir: Path) -> tuple[str, ...]:
+    """``episodes/`` 下**有局文件**的 split（字典序）——F58：派生面与扫描面必须一致。"""
+    root = Path(run_dir) / "episodes"
+    if not root.is_dir():
+        return ()
+    return tuple(sorted(p.name for p in root.iterdir()
+                        if p.is_dir() and any(p.glob("*.jsonl"))))
+
+
+def _episode_key_of(path: Path, first_row: Mapping[str, Any]) -> str:
+    """episode 文件 → ``episode_key``（行里优先，退回文件名；与 ``load_episode_results`` 同口径）。"""
+    key = str(first_row.get("episode_key") or "")
+    return key or path.stem
+
+
+#: 进 forbidden 面所需的**最短**隐藏 token 长度（与 ``build_forbidden`` 的过滤同值）。
+_MIN_HIDDEN_TOKEN_LEN: Final[int] = 4
 
 
 def _collect_hidden(state: Mapping[str, Any], current_stage_map: Any,
@@ -732,14 +858,17 @@ def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "tr
     hp_result = HP.self_test() if self_test else None
     hp_ok = True if hp_result is None else hp_result.ok
 
-    hidden: dict[str, str] = {}
+    hidden = HiddenTokenIndex()
     if replay:
-        hidden = derive_hidden_tokens(run_dir, split=split, warnings=warnings)
+        # F58：**派生面必须与扫描面一致**——扫描遍历 ``episodes/**``，所以重放也要覆盖
+        # ``episodes/`` 下全部有局文件的 split（只重放 train 而扫描 heldout 正是误报的温床）。
+        hidden = derive_hidden_tokens(run_dir, split=split, warnings=warnings,
+                                      splits=_episode_splits(run_dir))
     seeds = load_forbidden_seeds(config_dir, split_filter=seed_splits)
     if not seeds:
         warnings.append("未枚举到 heldout/test seed（缺 configs/seeds.yaml）："
                         "seed_leak 规则集降级，可能假阴性")
-    forbidden = build_forbidden(visible, seeds=seeds, hidden=hidden)
+    forbidden = build_forbidden(visible, seeds=seeds, hidden=hidden.unscoped)
     # canary 由 honeypot.scan 单独处理（同时产 P0 事件），避免重复计数
     for token in HP.sentinel_tokens():
         forbidden.pop(token, None)
@@ -749,9 +878,36 @@ def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "tr
     findings: list[LeakFinding] = []
     counts: dict[str, int] = {}
     stats = {"episodes": 0, "steps": 0, "memory_entries": len(visible.memory_texts)}
+    # F58：**重放失败**的局只剩「全局从未合法展示」兜底（比逐局作用域弱）⇒ 必须在
+    # warnings 里可见（`_verdict` 会把非空 warnings 抬到 `warn`）。
+    # **不**把「只有 episode_end 的摘要文件」（基线臂，实测 80/462）算成降级：它们本来就
+    # 没有可重放的步，把它们计入只会让每一次含基线的 run 都无谓地停在 `warn`。
+    # 也不塞进 ``scanned``：审计报告 schema 是冻结契约（`additionalProperties: false` + golden）。
+    if replay and int(hidden.failed):
+        warnings.append(f"隐藏 token 重放失败 {int(hidden.failed)} 局"
+                        f"（成功 {int(hidden.replayed)}、无可重放轨迹 "
+                        f"{int(hidden.no_trajectory)}）：失败的那些局只用「全局从未展示」兜底")
     episode_keys: set[str] = set()
-    seed_tokens = {t: k for t, k in forbidden.items() if k == "seed"}
-    other_tokens = {t: k for t, k in forbidden.items() if k != "seed"}
+
+    # F58：**逐局作用域**。某个出口属于哪一局，就只用那一局的隐藏 token；定位不到
+    # （``memory/`` 全局库、``events.jsonl``）用 ``hidden.unscoped`` 兜底。
+    # 按 episode_id 缓存：每行都要用，不缓存会把集合合并做成 O(行数 × token 数)。
+    _scope_cache: dict[str, dict[str, str]] = {}
+
+    def forbidden_for(episode_id: str) -> dict[str, str]:
+        """该出口的 forbidden 映射（基准集在前；逐局隐藏 token **不覆盖**基准集）。"""
+        cached = _scope_cache.get(episode_id)
+        if cached is not None:
+            return cached
+        merged = dict(forbidden)
+        for token, klass in hidden.for_episode(episode_id).items():
+            merged.setdefault(token, klass)
+        _scope_cache[episode_id] = merged
+        return merged
+
+    baseline_members = forbidden_for("")
+    seed_tokens = {t: k for t, k in baseline_members.items() if k == "seed"}
+    other_tokens = {t: k for t, k in baseline_members.items() if k != "seed"}
 
     def record(hits: Iterable[LeakFinding]) -> None:
         for hit in hits:
@@ -767,8 +923,9 @@ def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "tr
             episode_keys.add(episode_id)
             text = _read_text(path, io_errors)
             rel = _rel(path, run_dir)
+            member = forbidden_for(episode_id)
             for line_no, line in enumerate(text.splitlines(), start=1):
-                record(scan_text(line, forbidden=forbidden, surface="prompt",
+                record(scan_text(line, forbidden=member, surface="prompt",
                                  episode_id=episode_id, step=max(0, line_no - 1),
                                  evidence_chars=evidence_chars,
                                  line_ref=f"{rel}:{line_no}"))
@@ -779,9 +936,15 @@ def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "tr
     # ---- surface: memory（记忆 + 反思写入）-----------------------------------
     if "memory" in surfaces:
         for root in (run_dir / "memory", run_dir / "reflections"):
+            # ``reflections/<episode_key>.json`` 是**该局**的产物 ⇒ 逐局作用域；
+            # ``memory/`` 是跨局的全局库 ⇒ 兜底集合（``unscoped``）。
+            scoped_dir = root.name == "reflections"
             for path in _iter_text_files(root, ("*.jsonl", "*.json", "*.txt", "*.md")):
                 rel = _rel(path, run_dir)
                 text = _read_text(path, io_errors)
+                member = forbidden_for(path.stem) if scoped_dir else baseline_members
+                member_seed_tokens = {t: k for t, k in member.items() if k == "seed"}
+                member_other_tokens = {t: k for t, k in member.items() if k != "seed"}
                 # F45a（2026-10-10 实跑登记）：`.json` 在这里是**多行 JSON 文档**
                 # （MOD-06 的 `reflections/<episode_key>.json` 实测 51 行），逐行
                 # `json.loads` 必失败 ⇒ `row=None`。原先靠「投影掉机器元数据键」补救；
@@ -794,16 +957,17 @@ def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "tr
                     # F45-2：seed 规则扫**原始行/原始文档**（不再有字段豁免）。
                     if is_document:
                         if not seed_scanned_doc:
-                            record(scan_text(text, forbidden=seed_tokens, surface="memory",
+                            record(scan_text(text, forbidden=member_seed_tokens,
+                                             surface="memory",
                                              episode_id=path.stem, step=0,
                                              evidence_chars=evidence_chars, line_ref=rel))
                             seed_scanned_doc = True
                     else:
-                        record(scan_text(line, forbidden=seed_tokens, surface="memory",
+                        record(scan_text(line, forbidden=member_seed_tokens, surface="memory",
                                          episode_id=path.stem, step=step,
                                          evidence_chars=evidence_chars,
                                          line_ref=f"{rel}:{line_no}"))
-                    record(scan_text(line, forbidden=other_tokens, surface="memory",
+                    record(scan_text(line, forbidden=member_other_tokens, surface="memory",
                                      episode_id=path.stem, step=step,
                                      evidence_chars=evidence_chars,
                                      line_ref=f"{rel}:{line_no}"))
@@ -838,17 +1002,22 @@ def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "tr
                 # （``LOG_STRUCTURAL_KEYS``：本局 ``seed`` / ``episode_key`` / ``spec.seeds``），
                 # 其余字段（含摘要、token 计数、耗时、采样浮点、模型产出）全部在扫描面内。
                 # 修复前这里有 136+ 条人工死名单；六位端口空间把它们全部变成不必要。
+                # F59（2026-10-14）：耗时/采样**浮点的小数部分**不再被当成 seed
+                # （见 ``_NUM_RUN_RE``）；F58：本行的隐藏 token 只在**本局**作用域内生效。
+                line_member = forbidden_for(episode_id)
+                line_seed_tokens = {t: k for t, k in line_member.items() if k == "seed"}
+                line_other_tokens = {t: k for t, k in line_member.items() if k != "seed"}
                 if isinstance(row, dict):
                     seed_line = json.dumps(
                         {k: v for k, v in row.items() if k not in LOG_STRUCTURAL_KEYS},
                         ensure_ascii=False, sort_keys=True)
                 else:
                     seed_line = line
-                record(scan_text(seed_line, forbidden=seed_tokens, surface="log",
+                record(scan_text(seed_line, forbidden=line_seed_tokens, surface="log",
                                  episode_id=episode_id, step=step,
                                  evidence_chars=evidence_chars,
                                  line_ref=f"{rel}:{line_no}"))
-                record(scan_text(line, forbidden=other_tokens, surface="log",
+                record(scan_text(line, forbidden=line_other_tokens, surface="log",
                                  episode_id=episode_id, step=step,
                                  evidence_chars=evidence_chars,
                                  line_ref=f"{rel}:{line_no}"))

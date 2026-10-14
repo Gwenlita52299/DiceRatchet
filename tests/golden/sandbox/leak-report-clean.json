@@ -9,7 +9,7 @@
   "io_errors": [],
   "leak_counts": {},
   "machinery_errors": [],
-  "ruleset_version": "1.0.0",
+  "ruleset_version": "1.1.0",
   "run_id": "sandbox-golden-clean",
   "scanned": {
     "episodes": 1,

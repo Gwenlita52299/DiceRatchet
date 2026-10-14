@@ -711,3 +711,69 @@ def test_dm35_heldout_section_follows_the_retained_arm(tmp_path):
     assert report["harness_version"] == 1 and report["parent_version"] == 0
     assert report["harness_play_hash"] == "sha256:" + "a" * 64
     validate("generation_report", report)
+
+
+# =====================================================================
+# F60（2026-10-14）：台账的版本列以 report.json 为权威
+# =====================================================================
+
+def _write_min_report(root: Path, generation: int, *, harness_version: int,
+                      parent_version: int, decision: str = "reject") -> None:
+    path = generation_report_path(root, generation)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "generation": generation, "harness_version": harness_version,
+        "parent_version": parent_version, "decision": decision, "decided_by": "auto",
+        "reason": "测试", "harness_play_hash": "sha256:" + "a" * 64,
+        "heldout": {"basket": "H1", "n": 40, "win_rate": 0.1, "source": "measured"},
+        "train": {"window": 30, "win_rate": 0.2, "n": 30, "source": "measured"},
+        "gain_realism": {"win_rate_gap": 0.1, "gap_threshold": 0.15, "verdict": "null"},
+        "diversity": {"entropy_slope": 0.0, "collapse_flag": False},
+        "ablation": None, "candidates": [],
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+def _ledger_rows(root: Path) -> list[dict]:
+    import csv as _csv
+
+    with (root / "metrics" / "generations.csv").open(encoding="utf-8") as fh:
+        return list(_csv.DictReader(fh))
+
+
+def test_f60_ledger_version_columns_follow_report_json(tmp_path):
+    """**只读命令不得伪造版本列**：台账的 ``harness_version``/``parent_version`` 以
+    ``generations/gen-NNN/report.json`` 为准。
+
+    现场：`eval report` 的重算路径凭空写 `harness_version=generation /
+    parent_version=generation-1`，而它算出的行经 `append_generations_csv` upsert
+    ⇒ 把 loop 写下的 0/0 **静默覆盖**成 3/2（`runs/m3-formal` gen-003 实测），
+    判据 1 因此把 `not_applicable` 翻成假结论「单调性不成立」。
+    """
+    from dice_ratchet.evals.harness import _generations_row
+    from dice_ratchet.evals.harness import append_generations_csv as _append
+
+    _write_min_report(tmp_path, 3, harness_version=0, parent_version=0)
+    row = _generations_row(generation=3, harness_version=3, parent_version=2,
+                           split="heldout", metrics={"n": 40, "win_rate": 0.1,
+                                                     "win_rate_ci95": [0.04, 0.2]},
+                           diversity={}, gain={}, decision="reject",
+                           config_hash_value=None, git_commit="", ts="T", arm="parent")
+    _append(tmp_path, row)
+    rows = _ledger_rows(tmp_path)
+    assert [r["harness_version"] for r in rows] == ["0"], rows
+    assert [r["parent_version"] for r in rows] == ["0"], rows
+
+
+def test_f60_ledger_keeps_caller_versions_when_no_report(tmp_path):
+    """**没有** report.json 时（纯测量 run / 单测）保持调用方的值：不猜、不报错。"""
+    from dice_ratchet.evals.harness import _generations_row
+    from dice_ratchet.evals.harness import append_generations_csv as _append
+
+    row = _generations_row(generation=1, harness_version=7, parent_version=5,
+                           split="heldout", metrics={"n": 40, "win_rate": 0.1,
+                                                     "win_rate_ci95": [0.04, 0.2]},
+                           diversity={}, gain={}, decision="pending",
+                           config_hash_value=None, git_commit="", ts="T", arm="parent")
+    _append(tmp_path, row)
+    rows = _ledger_rows(tmp_path)
+    assert rows[0]["harness_version"] == "7" and rows[0]["parent_version"] == "5"

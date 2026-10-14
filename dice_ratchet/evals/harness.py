@@ -1670,6 +1670,38 @@ def _csv_row_key(row: Mapping[str, Any]) -> tuple[str, str, str]:
             _csv_split_key(row), arm_of_row(row))
 
 
+def _version_cell(value: Any) -> str:
+    """版本单元格的**逐字比较**口径（``0`` 是合法版本号，缺列是 ``""``——两者不可混同）。"""
+    if value in (None, ""):
+        return ""
+    try:
+        return str(int(float(value)))
+    except (TypeError, ValueError):
+        return str(value).strip()
+
+
+def _report_version_columns(run_dir: Path | str, generation: Any
+                            ) -> dict[str, Any] | None:
+    """``generations/gen-NNN/report.json`` 里的版本列（F60 的权威来源）；无/损坏 → ``None``。"""
+    if generation in (None, ""):
+        return None
+    try:
+        gen = int(generation)
+    except (TypeError, ValueError):
+        return None
+    path = generation_report_path(run_dir, gen)
+    if not path.is_file():
+        return None
+    try:
+        data = read_json(path)
+    except InfraError: # pragma: no cover - 损坏报告按「无权威」处理
+        return None
+    if not isinstance(data, Mapping) or "harness_version" not in data:
+        return None
+    return {"harness_version": data.get("harness_version"),
+            "parent_version": data.get("parent_version")}
+
+
 def append_generations_csv(run_dir: Path | str, row: Mapping[str, Any]) -> Path:
     """写一行台账到 ``metrics/generations.csv``（FR-08-22；列固定见 §13）。
 
@@ -1697,6 +1729,31 @@ def append_generations_csv(run_dir: Path | str, row: Mapping[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     incoming = {k: _round_floats(row.get(k)) for k in GENERATIONS_COLUMNS}
     incoming["arm"] = arm_of_row(incoming)
+    # F60（2026-10-14）：**版本列的权威来源是 `generations/gen-NNN/report.json`**。
+    # 现场：`eval report` 的重算路径凭空写 `harness_version=generation`，而它算出的行
+    # 经本函数 upsert ⇒ 把 `loop run` 写下的 0/0 **静默覆盖**成 3/2（`runs/m3-formal`
+    # gen-003），判据 1 把 `not_applicable` 翻成假结论「单调性不成立」。
+    # 现在：调用方给的值与报告不符时**以报告为准**，并把分歧**非静默**地记下来
+    # （事件 + stderr）。报告不存在（纯测量 run / 单测）时保持调用方的值不变。
+    authority = _report_version_columns(run_dir, incoming.get("generation"))
+    if authority is not None:
+        for column in ("harness_version", "parent_version"):
+            want = authority.get(column)
+            got = incoming.get(column)
+            if want is None:
+                continue
+            if _version_cell(got) == _version_cell(want):
+                continue
+            if _version_cell(got) != "":
+                _emit("evals.ledger_version_conflict",
+                      generation=incoming.get("generation"), arm=incoming["arm"],
+                      column=column, ledger_value=got, report_value=want)
+                import sys as _sys
+
+                print(f"[{E.E_IO_RUN_CONFLICT}] 台账第 {incoming.get('generation')} 代 "
+                      f"（arm={incoming['arm']}）的 {column}={got!r} 与权威 report.json 的 "
+                      f"{want!r} 不一致：以报告为准（不静默覆盖，F60）", file=_sys.stderr)
+            incoming[column] = want
     key = _csv_row_key(incoming)
 
     existing: list[dict[str, Any]] = []

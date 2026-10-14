@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import sys
 from pathlib import Path
@@ -267,13 +268,30 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
     pool_metrics = aggregate(pool_results, split=split, basket=_basket_of(args),  # type: ignore[arg-type]
                              t_max=int(eval_cfg.t_max), min_support=int(eval_cfg.min_support),
                              drop_rate_max=float(eval_cfg.drop_rate_max))
-    window = seeds_mod.train_window(generation, protocol=proto, window=60)
-    train_results = load_episode_results(paths.root, "train", generation=generation,
-                                         harness_version=generation, seeds=window,
-                                         exclude_arms=_BASELINE_ARMS)
+    # F64（2026-10-14）：train 段与 `evals/harness.evaluate_generation` **同一口径**——
+    # 取 ``take("train", generation)`` 那个块、按 ``arm="train"`` 真过滤（同代冒烟局用的是
+    # 本代训练块的末尾 seed，不过滤会混进来）、不足则标注 ``insufficient``。
+    # 修复前这里是 `train_window` + 无臂过滤 ⇒ 实测拿到的是**4 局冒烟局**（`train.n=4`），
+    # 而它在 `generations.csv` 里长得跟真训练段一模一样。两处各写一半正是 F43/F56 的教训。
+    if int(generation) >= 1:
+        train_seeds = seeds_mod.take("train", generation=int(generation), protocol=proto)
+        train_results = load_episode_results(paths.root, "train", generation=generation,
+                                             harness_version=generation, seeds=train_seeds,
+                                             arm="train")
+    else:
+        train_results = []
     train = aggregate(train_results, split="train", basket="train_window",
                       t_max=int(eval_cfg.t_max), min_support=int(eval_cfg.min_support),
                       drop_rate_max=float(eval_cfg.drop_rate_max))
+    min_support = int(eval_cfg.min_support)
+    if int(generation) < 1:
+        train_source = "unavailable"
+        train = replace(train, low_confidence=True)
+    elif len(train_results) >= min_support:
+        train_source = "measured"
+    else:
+        train_source = "insufficient"
+        train = replace(train, low_confidence=True)
     # 落该代的 kind 分布（供 g+1 的 `c3` 与后续重算读回；见 harness.write_kind_distribution）
     try:
         from .diversity import kind_distribution
@@ -297,11 +315,31 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
         if baseline is None: # PRD §10：baselines 缺失 → 标注，不中断
             print(f"[{E.E_EVAL_BASELINE_MISSING}] 基线归档缺失：{baselines_dir(run_id, paths.root)}",
                   file=sys.stderr)
+    # F60（2026-10-14）：版本列 / play 面指纹 / heldout 出处**只能来自已落盘的 report.json**。
+    # 现场：这里原先凭空写 `harness_version=generation / parent_version=generation-1`，
+    # 而这张**内存里**的 report 随后进了 `ledger_and_plots` ⇒ 台账按 (gen, split, arm) upsert
+    # 把 loop 写下的 0/0 **静默覆盖**成 3/2（`runs/m3-formal` gen-003 实测），
+    # 判据 1 因此把 `not_applicable` 翻成假结论「单调性不成立」（comparable_pairs 0→1）。
+    # ``heldout`` 是 ``SplitMetrics``（没有 harness_version 字段）⇒ 版本从**逐局记录**取：
+    # 那是「这批局真在哪份 harness 上跑的」的唯一落盘事实。
+    arm_version = int(getattr(results[0], "harness_version", 0) or 0) if results else 0
+    versions = _report_versions(paths.root, generation, arm_version=arm_version,
+                               existing=_read_existing_report(paths.root, generation))
+    if versions["source"] != "report_json":
+        print(f"[{E.E_IO_RUN_CONFLICT}] 第 {generation} 代没有权威 report.json：版本列退回"
+              f"**该臂归档里的实测版本**（harness_version={versions['harness_version']}），"
+              f"不臆造 generation/generation-1", file=sys.stderr)
     report = render_report_sections(
-        generation=generation, harness_version=generation, parent_version=max(0, generation - 1),
+        generation=generation,
+        harness_version=int(versions["harness_version"]),
+        parent_version=int(versions["parent_version"]),
         heldout=heldout, train=train, gain=gain, diversity=diversity, ablation=None,
         decision="baseline" if generation == 0 else "pending", decided_by="auto",
-        reason="eval report（从轨迹重算）", extra={"power_note": power_note(heldout.n)})
+        reason="eval report（从轨迹重算）",
+        heldout_source=str(versions["heldout_source"] or "measured"),
+        play_hash=str(versions["play_hash"] or ""),
+        train_source=str(versions["train_source"] or "measured"),
+        extra={"power_note": power_note(heldout.n)})
     path, sha = _write_report_preserving_verdict(
         paths.root, generation, report, existing_decided=_verdict_of(paths.root, generation))
     _write_plots(paths.root, generation, heldout, diversity)
@@ -311,7 +349,11 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
     # 不能塞进 report.json：`generation_report.schema.json` 是 `additionalProperties:false`。
     ext.update({"recomputed_arm": arm, "mixed_pool": bool(mixed),
                 "pool_n": pool_metrics.n, "arms_present": _arms_of(pool_results),
-                "requested_arm": (str(requested_arm) if requested_arm else None)})
+                "requested_arm": (str(requested_arm) if requested_arm else None),
+                # F60：版本列/play 面指纹的出处；`report_json` = 权威（MOD-07 写下的事实），
+                # `arm_archive` = 没有报告时退回臂归档里的实测版本。
+                "version_source": str(versions["source"]),
+                "play_hash": str(versions["play_hash"] or "")})
     # F-M3-9：判据 1 的结论随报告一起可读。**只在台账里有两代可比时才算**——
     # 每代都算会退化；且单代 run（如 gen-000 基线）本来就没有「单调性」可言。
     # 配对 bootstrap 的开销按「可比较的代数」增长，不随本命令重复调用而放大。
@@ -524,6 +566,37 @@ def _ledger_source_of(run_root: Path | str, generation: int) -> str:
     if not data:
         return ""
     return str((data.get("heldout") or {}).get("source") or "")
+
+
+def _report_versions(run_root: Path | str, generation: int, *, arm_version: int,
+                     existing: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """版本列 / play 面指纹 / heldout 出处的**唯一权威来源**（F60，2026-10-14）。
+
+    优先级只有一个方向：**已落盘的 ``generations/gen-NNN/report.json``**（MOD-07/MOD-06
+    写下的事实）。没有报告（纯测量 run、报告损坏）时退回**该臂归档里的实测版本**
+    （``ArmResult.harness_version``，那是「这批局真在哪份 harness 上跑的」），
+    ``parent_version`` 与它取同值——**绝不臆造 ``generation`` / ``generation-1``**。
+
+    现场（F60）：``eval report`` 原先写死 ``harness_version=generation``，
+    而它算出的行会按 ``(generation, split, arm)`` upsert 进台账 ⇒ 一条**只读**命令
+    把 ``runs/m3-formal`` gen-003 的 0/0 改成 3/2，判据 1 的结论随之翻面。
+
+    返回 ``{harness_version, parent_version, play_hash, heldout_source, train_source,
+    source}``；``source ∈ {"report_json", "arm_archive"}``。
+    """
+    data = existing if existing is not None else _read_existing_report(run_root, generation)
+    if data and "harness_version" in data:
+        heldout = dict(data.get("heldout") or {})
+        train = dict(data.get("train") or {})
+        return {"harness_version": int(data.get("harness_version") or 0),
+                "parent_version": int(data.get("parent_version") or 0),
+                "play_hash": str(data.get("harness_play_hash") or ""),
+                "heldout_source": str(heldout.get("source") or "measured"),
+                "train_source": str(train.get("source") or "measured"),
+                "source": "report_json"}
+    return {"harness_version": int(arm_version), "parent_version": int(arm_version),
+            "play_hash": "", "heldout_source": "measured", "train_source": "measured",
+            "source": "arm_archive"}
 
 
 def _read_existing_report(run_root: Path | str, generation: int) -> dict[str, Any]:

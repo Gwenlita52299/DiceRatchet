@@ -453,3 +453,102 @@ def test_f56_ledger_and_plots_degrades_without_raising(tmp_path):
                                     "parent_version": 0, "decision": "baseline"})
     assert isinstance(out, dict)
     assert out["ledger_error"] is not None or out["plot_error"] is not None
+
+
+# =====================================================================
+# F60（2026-10-14）：`eval report` 不得伪造版本列
+# =====================================================================
+
+def test_f60_eval_report_reads_versions_from_existing_report(wired, capsys):
+    """已裁决的代重算时，版本列 / play 面指纹必须**沿用 report.json 里的事实**。
+
+    现场：这里原先写死 `harness_version=generation / parent_version=generation-1`，
+    而这份内存里的 report 随后进 `ledger_and_plots` ⇒ 台账被静默覆盖（0/0 → 3/2），
+    判据 1 把 `not_applicable` 翻成假结论「单调性不成立」。
+    """
+    tmp_path, _cfg = wired
+    from dice_ratchet.evals.harness import generation_report_path
+
+    src = _FIXTURES / "episodes" / "heldout"
+    dst = tmp_path / "episodes" / "heldout"
+    dst.mkdir(parents=True)
+    for path in src.glob("*.jsonl"):
+        (dst / path.name).write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    # MOD-07 写下的权威报告（gen-002：起点 v0、结束时也在役 v0，play 面指纹 P）
+    path = generation_report_path(tmp_path, 2)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "generation": 2, "harness_version": 0, "parent_version": 0,
+        "harness_play_hash": "sha256:" + "a" * 64,
+        "decision": "reject", "decided_by": "auto", "reason": "C2:no_significant_gain",
+        # `measured`：本代真测过 ⇒ 重算会写台账行（继承的代不写行，那条规则另有用例）
+        "heldout": {"basket": "H1", "n": 4, "win_rate": 0.25, "source": "measured"},
+        "train": {"window": 30, "win_rate": 0.2, "n": 30, "source": "measured"},
+        "gain_realism": {"win_rate_gap": 0.1, "gap_threshold": 0.15, "verdict": "null"},
+        "diversity": {"entropy_slope": 0.0, "collapse_flag": False},
+        "ablation": None, "candidates": [],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    assert cli_mod.cmd_eval_report(_ns(generation=2)) == 0
+    # 已裁决的代：重算报告落 **sidecar**，权威 report.json 不被覆盖
+    assert (path.parent / "report.eval.json").is_file()
+    authoritative = json.loads(path.read_text(encoding="utf-8"))
+    assert authoritative["harness_version"] == 0 and authoritative["parent_version"] == 0
+    # 台账行的版本列同样来自权威报告（不是 generation=2 / generation-1=1）
+    import csv as _csv
+
+    with (tmp_path / "metrics" / "generations.csv").open(encoding="utf-8") as fh:
+        rows = [r for r in _csv.DictReader(fh) if r["split"] == "heldout"]
+    assert rows and rows[0]["harness_version"] == "0", rows
+    assert rows[0]["parent_version"] == "0", rows
+    # ext 里记录版本列的出处（可核验）
+    ext = json.loads((tmp_path / "metrics" / "gen-002.ext.json").read_text(encoding="utf-8"))
+    assert ext["version_source"] == "report_json"
+    assert ext["play_hash"] == "sha256:" + "a" * 64
+
+
+def test_f64_eval_report_train_section_uses_the_served_block(wired):
+    """``eval report`` 的 train 段与 ``evaluate_generation`` **同一口径**（F64）。
+
+    修复前这里用 ``train_window`` 且**不过滤臂** ⇒ 在 `m3-formal` 上拿到的是 4 局冒烟局
+    （``train.n=4``），还被写进台账当训练段。现在：取 ``take("train", generation)`` 的块 +
+    ``arm="train"`` 真过滤；不足则 ``source="insufficient"``。
+    """
+    tmp_path, _cfg = wired
+    from dice_ratchet.evals.seeds import take
+
+    heldout_dir = tmp_path / "episodes" / "heldout"
+    heldout_dir.mkdir(parents=True)
+    for path in (_FIXTURES / "episodes" / "heldout").glob("*.jsonl"):
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                if line.strip()]
+        for row in rows:
+            row["generation"] = 1
+        (heldout_dir / path.name).write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
+            encoding="utf-8")
+
+    block = take("train", generation=1, protocol=S.default_protocol())
+    train_dir = tmp_path / "episodes" / "train"
+    train_dir.mkdir(parents=True)
+
+    def _write(seed: int, arm: str) -> None:
+        key = f"e-{seed:06d}-g001-{arm}"
+        row = {"type": "episode_end", "episode_key": key, "generation": 1,
+               "harness_version": 0, "arm": arm, "seed": seed, "split": "train",
+               "outcome": "win", "stages_cleared": 5, "hearts_left": 1, "battles_won": 9,
+               "decisions": 90, "steps": 200, "illegal_attempts": 0,
+               "fallback_decisions": 0, "truncation_reason": None, "dropped": False,
+               "degraded": False, "kind_counts": [1] * 16, "slot_counts": {},
+               "seq_hash": f"s{seed}", "decision_kinds": [0]}
+        (train_dir / f"{key}.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+
+    for seed in block[:3]:
+        _write(seed, "train")
+    _write(block[-1], "parent-smoke")     # 同代冒烟局：用的是本代训练块末尾 seed
+
+    assert cli_mod.cmd_eval_report(_ns(generation=1)) == 0
+    report = json.loads((tmp_path / "generations" / "gen-001" / "report.json")
+                        .read_text(encoding="utf-8"))
+    assert report["train"]["n"] == 3, report["train"]
+    assert report["train"]["source"] == "measured"

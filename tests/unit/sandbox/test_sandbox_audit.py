@@ -443,3 +443,96 @@ def test_register_sensitive_feeds_redactor(build_run, tmp_path):
     assert "1000" not in registered # 本 run 的 train seed 不注册
     redacted, hits = redactor.redact({"text": "seed 731000 与 drawPile"})
     assert hits >= 1 and "731000" not in redacted["text"]
+
+
+# =====================================================================
+# F59（2026-10-14）：浮点小数部分不得当成 seed
+# =====================================================================
+
+def test_f59_float_fraction_is_not_a_seed():
+    """现场（`runs/m3-formal`）：`elapsed_ms: 0.731042` 命中 H2（731040–731079），
+    `0.947084 / 0.947042 / 1.947041` 命中 test（947000–947099）。
+
+    命中的都是**浮点数的小数部分**（整数部分是 `0` / `1`）。F45-2 把 heldout/test 移到
+    六位端口空间是为了避开**整数**字面量（耗时/预算/年份），六位**小数**分数当时没考虑。
+    """
+    text = '{"elapsed_ms": 0.731042, "x": 1.947041, "y": 0.947084, "z": 0.947042}'
+    findings = A.scan_text(text, surface="log", episode_id="e-1", step=3,
+                           forbidden={"731042": "seed", "947041": "seed",
+                                      "947084": "seed", "947042": "seed"})
+    assert findings == [], [f.evidence for f in findings]
+
+
+def test_f59_integer_forms_are_still_caught():
+    """**反例自检**：整数形态与「整数部分等于 seed 的浮点」仍必须被抓。
+
+    `947042.5` 是刻意的 fail-closed：整数部分就是那个值，宁可报也不漏。
+    """
+    for text, token in (('{"reason": 731042}', "731042"),
+                        ('{"v": 947042.5}', "947042"),
+                        ('{"v": -947042}', "947042"),
+                        ('{"note": "best seed 947042"}', "947042")):
+        findings = A.scan_text(text, surface="log", episode_id="e-1", step=0,
+                               forbidden={token: "seed"})
+        assert len(findings) == 1, f"{text!r} 必须命中（修复不得把审计变瞎）"
+
+
+# =====================================================================
+# F58（2026-10-14）：future_room 的**逐局作用域**（跨局误报）
+# =====================================================================
+
+def test_f58_hidden_tokens_are_scoped_per_episode(build_run, tmp_path, monkeypatch):
+    """现场：5,852 次 `future_room_leak` / 200 条 finding **全是假阳性**。
+
+    根因是作用域错配：派生把**整批 train 局**的未揭示节点并成一个集合，而扫描遍历
+    ``episodes/**``（含 heldout）——节点 id 是**地图模板的结构 id、跨局复用**，
+    于是「A 局里还没揭示」被当成「B 局里出现即泄漏」，而 B 局里它是合法揭示的。
+
+    本用例把两条规则钉死（手工注入逐局索引，避免依赖某个 seed 的具体地图）：
+    ① 逐局隐藏的 token **只在**那一局的出口里算泄漏；
+    ② 任何一局都从未合法展示过的 token（``unscoped``）**仍然**算泄漏。
+    """
+    built = build_run(tmp_path, run_id="r-f58", seed=1000, split="train",
+                      prompt_text="提示：无\n", memory_text="记忆：无\n")
+    other = build_run(tmp_path, run_id="r-f58", seed=731000, split="heldout",
+                      generation=0, arm="parent", prompt_text="提示：无\n",
+                      memory_text="记忆：无\n")
+    assert built.episode_key != other.episode_key
+
+    scoped_token, global_token = "n-99-9-9", "n-77-7-7"
+    monkeypatch.setattr(A, "derive_hidden_tokens", lambda *a, **kw: A.HiddenTokenIndex(
+        by_episode={built.episode_key: {scoped_token: "future_room"}},
+        unscoped={global_token: "future_room"}, replayed=2))
+    for key, path in ((built.episode_key, built.episode_path),
+                      (other.episode_key, other.episode_path)):
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"episode_key": key, "step": 900,
+                                     "action": {"kind": "map_choose", "nodeId": scoped_token,
+                                                "note": global_token}},
+                                    ensure_ascii=False) + "\n")
+
+    result = A.run_audit(built.root, generated_at=FIXED)
+    hits = [(f.episode_id, f.evidence) for f in result.findings
+            if f.leak_class is A.LeakClass.FUTURE_ROOM_LEAK]
+    assert hits, "注入的 token 必须至少被抓到（否则本用例是空转）"
+    scoped_hits = [ep for ep, ev in hits if scoped_token in ev]
+    global_hits = [ep for ep, ev in hits if global_token in ev]
+    assert set(scoped_hits) == {built.episode_key}, (
+        f"逐局隐藏的 token 只许在它自己那一局算泄漏，实际 {scoped_hits}")
+    assert set(global_hits) == {built.episode_key, other.episode_key}, (
+        f"「任何局都没展示过」的 token 必须在所有出口被抓，实际 {global_hits}")
+
+
+def test_f58_replay_index_is_keyed_by_episode(build_run, tmp_path):
+    """``derive_hidden_tokens`` 的返回形状：**按 episode_key 分桶**，且带重放计数。
+
+    修复前它返回一个**全局 dict**（无法表达「这个 token 属于哪一局」），
+    正是跨局误报的结构性根源。
+    """
+    built = build_run(tmp_path, run_id="r-f58b", seed=1000, split="train")
+    index = A.derive_hidden_tokens(built.root, splits=A._episode_splits(built.root))
+    assert isinstance(index, A.HiddenTokenIndex)
+    assert built.episode_key in index.by_episode
+    assert index.replayed + index.failed + index.no_trajectory >= 1
+    # 逐局集合与兜底集合都必须 ⊆ 该局出现过/未出现过的隐藏 token（形状自检）
+    assert set(index.unscoped) <= set().union(*index.by_episode.values()) or not index.unscoped
