@@ -439,6 +439,17 @@ def write_gen000_baseline(run_ctx: RunContext, *, harness_version: int = 0,
     report["decision"] = "baseline"
     report["decided_by"] = "auto"
     report["reason"] = "harness v0 基线（gen-000，FR-06-13a）"
+    # D-M3-7（2026-10-14）：基线必须写下 v0 的 play 面指纹——它是后续各代「能否直接继承
+    # 这份 40 局测量」的**唯一依据**（用户的步骤 2/3：cycle 0 用 v0 train，起点 heldout
+    # 直接复用基线这 40 局，不重跑）。
+    try:
+        from ..evolve.versioning import play_hash as _play_hash
+
+        report["harness_play_hash"] = str(_play_hash(run_ctx.harness_dir))
+    except Exception as exc: # noqa: BLE001 - 指纹算不出不阻断基线（后代将退回实测）
+        events.emit("loop.resume", phase="baseline", baseline="play_hash_failed",
+                    detail=f"{type(exc).__name__}: {exc}"[:200])
+        report.setdefault("harness_play_hash", "")
     write_generation_report(paths.root, 0, report)
     # F56（2026-10-12，M3 彩排实测）：**基线也要进台账 + 出图**。
     # 现场：`write_gen000_baseline` 原先只写 `report.json` ⇒ `metrics/generations.csv` 从
@@ -632,11 +643,21 @@ class LoopOrchestrator:
         _save(self.run_ctx, state)
 
     def _run_training_episode(self, seed: int) -> RecordedEpisode | None:
-        """跑一局并落实 PRD §10 的失败恢复矩阵；``None`` = 该 seed 被跳过。"""
+        """跑一局并落实 PRD §10 的失败恢复矩阵；``None`` = 该 seed 被跳过。
+
+        **F64（2026-10-14）——训练局的 ``generation`` 标签**：训练块跑在**触发演化之前**，
+        此时 ``state.generation`` 还停在 ``c-1``。原先把它原样当标签写进 episode，于是
+        「第 c 代的训练局」在产物里叫 ``generation=c-1``，而 ``train`` 段要按
+        ``take("train", c)`` 取数 ⇒ 交集只剩 4 局冒烟局（实测 gen-001：``train.n=4``、
+        ``low_confidence=False``，``win_rate_gap`` 建在垃圾上）。这里显式传
+        ``state.generation + 1``：**训练局属于它服务的那一代**（用户架构里的
+        「cycle 0 用 v0 train 30 轮，得到补丁 P1」⇒ 那 30 局就是 generation=1 的 ``train``）。
+        """
         state = self.state
         try:
             return self.runner.run_episode(
                 seed, split="train", arm="train",
+                generation=int(state.generation) + 1,
                 episode_config=self.run_ctx.episode_config,
                 harness_version=int(state.harness_version))
         except InfraError as exc:

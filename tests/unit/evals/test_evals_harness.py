@@ -600,3 +600,114 @@ def test_f57_restore_arm_from_archive_reuses_another_generations_measurement(tmp
                                                                    731082)) is None
     assert restore_arm_from_archive(None, generation=2, harness_version=1,
                                     arm="parent", required_seeds=seeds) is None
+
+
+# =====================================================================
+# F64（2026-10-14）：train 段必须取**本代训练块**，取不到就显式标注
+# =====================================================================
+
+def _write_train_episodes(root: Path, *, generation: int, seeds, arm: str = "train",
+                          win_rate: float = 0.5) -> None:
+    """写 ``episodes/train/e-{seed:06d}-g{gen:03d}-{arm}.jsonl``（一行 episode_end）。"""
+    split_dir = Path(root) / "episodes" / "train"
+    split_dir.mkdir(parents=True, exist_ok=True)
+    for index, seed in enumerate(seeds):
+        key = f"e-{int(seed):06d}-g{int(generation):03d}-{arm}"
+        row = {"type": "episode_end", "episode_key": key, "generation": int(generation),
+               "harness_version": 0, "arm": arm, "seed": int(seed), "split": "train",
+               "outcome": "win" if index < round(len(seeds) * win_rate) else "lose",
+               "stages_cleared": 3, "hearts_left": 1, "battles_won": 5, "decisions": 90,
+               "steps": 200, "illegal_attempts": 0, "fallback_decisions": 0,
+               "truncation_reason": None, "dropped": False, "degraded": False,
+               "kind_counts": [1] * 16, "slot_counts": {}, "seq_hash": f"s{seed}",
+               "decision_kinds": [0], "reward": 0.0}
+        (split_dir / f"{key}.jsonl").write_text(json.dumps(row, ensure_ascii=False) + "\n",
+                                               encoding="utf-8")
+
+
+def test_f64_train_section_takes_the_block_that_served_the_generation(tmp_path):
+    """``train`` 段取 ``take("train", generation)`` 的块（不是滚动窗口 ∩ 错标签）。
+
+    现场（m3-formal）：循环把第 g 代的训练局标成 ``generation=g-1``，而取数用
+    ``train_window(g)`` ⇒ 交集只剩 **4 局冒烟局**，且 ``low_confidence`` 还是 ``False``
+    —— ``gain_realism.win_rate_gap``（判据 3 的量）就建在那上面。
+    """
+    block = S.take("train", generation=1, protocol=_PROTO)
+    assert len(block) == 30
+    _write_train_episodes(tmp_path, generation=1, seeds=block, win_rate=0.5)
+    # 另一代的局（不得混进来）+ 同代的冒烟局（不属于本代训练块）
+    _write_train_episodes(tmp_path, generation=2,
+                          seeds=S.take("train", generation=2, protocol=_PROTO))
+    _write_train_episodes(tmp_path, generation=1, seeds=(block[-1],), arm="parent-smoke")
+
+    parent = evaluate_arm(Path("harness"), split="heldout", basket="H1", memory_version=0,
+                          arm="parent", run_id="r-f64", protocol=_PROTO,
+                          runner=FakeRunner({int(s): "win" for s in _SEEDS}),
+                          generation=0, harness_version=0)
+    report = evaluate_generation(1, parent, None, run_id="r-f64", run_dir=tmp_path,
+                                 protocol=_PROTO)
+    assert report["train"]["n"] == 30, report["train"]
+    assert report["train"]["source"] == "measured"
+    assert report["train"]["win_rate"] == 0.5
+    assert report["train"]["low_confidence"] is False
+    validate("generation_report", report)
+
+
+def test_f64_insufficient_train_section_is_marked_not_silently_zero(tmp_path):
+    """训练段取不到足量局 ⇒ ``source="insufficient"`` + ``low_confidence=true``（fail-closed）。
+
+    修复前这种局面写成 ``{"n": 0, "win_rate": 0.0, "low_confidence": true}`` 或
+    ``{"n": 4, "low_confidence": false}``，两种都让 ``win_rate_gap`` 看起来是个真数。
+    """
+    parent = evaluate_arm(Path("harness"), split="heldout", basket="H1", memory_version=0,
+                          arm="parent", run_id="r-f64b", protocol=_PROTO,
+                          runner=FakeRunner({int(s): "win" for s in _SEEDS}),
+                          generation=0, harness_version=0)
+    report = evaluate_generation(1, parent, None, run_id="r-f64b", run_dir=tmp_path,
+                                 protocol=_PROTO)
+    assert report["train"]["n"] == 0
+    assert report["train"]["source"] == "insufficient"
+    assert report["train"]["low_confidence"] is True
+    validate("generation_report", report)
+
+
+def test_f64_baseline_train_section_is_unavailable_not_insufficient(tmp_path):
+    """gen-000 基线**没有**训练块服务它 ⇒ ``source="unavailable"``。
+
+    ``take("train", 0)`` 按契约抛 ``E_EVAL_SEED_EXHAUSTED``（「gen-000 不消耗训练 seed」）。
+    实现若照直调用，基线整段以 ``E_EVAL_SEED_EXHAUSTED`` 失败 ⇒ 基线报告再也写不出来
+    （实测：``write_gen000_baseline`` 返回 None）。
+    """
+    parent = evaluate_arm(Path("harness"), split="heldout", basket="H1", memory_version=0,
+                          arm="parent", run_id="r-f64c", protocol=_PROTO,
+                          runner=FakeRunner({int(s): "win" for s in _SEEDS}),
+                          generation=0, harness_version=0)
+    report = evaluate_generation(0, parent, None, run_id="r-f64c", run_dir=tmp_path,
+                                 protocol=_PROTO)
+    assert report["train"]["source"] == "unavailable"
+    assert report["train"]["n"] == 0
+    validate("generation_report", report)
+
+
+def test_dm35_heldout_section_follows_the_retained_arm(tmp_path):
+    """``retained_arm`` 非空时 ``heldout`` 段取它（= 本代结束时在役那份 harness 的测量）。
+
+    D-M3-7（2026-10-14）：接受一代之后，台账里的数必须是**新** harness 的，否则「接受」
+    在代际序列里不可见，判据 1 退化成拿起点与起点比的恒真命题。
+    """
+    runner = FakeRunner({int(s): "win" for s in _SEEDS})
+    start = evaluate_arm(Path("harness"), split="heldout", basket="H1", memory_version=0,
+                         arm="parent", run_id="r-dm35", protocol=_PROTO, runner=runner,
+                         generation=0, harness_version=0)
+    assert start.metrics.win_rate == 1.0
+    # 起点那份一局没赢；本代结束时在役的那份（v1）全胜。
+    weak = replace(start, metrics=replace(start.metrics, win_rate=0.0,
+                                          mean_stages_cleared=0.0))
+    retained = replace(start, harness_version=1)
+    report = evaluate_generation(1, weak, None, run_id="r-dm35", run_dir=tmp_path,
+                                 protocol=_PROTO, retained_arm=retained,
+                                 retained_version=1, play_hash="sha256:" + "a" * 64)
+    assert report["heldout"]["win_rate"] == 1.0, "在役那份 harness 的测量才是台账的数"
+    assert report["harness_version"] == 1 and report["parent_version"] == 0
+    assert report["harness_play_hash"] == "sha256:" + "a" * 64
+    validate("generation_report", report)

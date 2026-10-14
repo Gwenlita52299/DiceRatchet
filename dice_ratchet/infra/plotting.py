@@ -239,10 +239,19 @@ def plot_generations(csv_path: Path, out_dir: Path, *, figures: list[Any] | None
     ax.plot(hgen, hw, "o-", label="heldout win_rate", color="#1f77b4")
     lo, hi = _g(heldout, "ci_lo"), _g(heldout, "ci_hi")
     if len(lo) == len(hw) == len(hi):
-        ax.errorbar(hgen, hw, yerr=[hw[i] - lo[i] for i in range(len(hw))],
-                    fmt="none", ecolor="#1f77b4", alpha=0.4, capsize=4, label="ci95")
-        ax.errorbar(hgen, hw, yerr=[hi[i] - hw[i] for i in range(len(hw))],
-                    fmt="none", ecolor="#1f77b4", alpha=0.4, capsize=4)
+        # F69（2026-10-14）：CI 与点估计**可能互不自洽**（例如骨架/替身报告给出
+        # ``ci_lo=ci_hi=0`` 而 ``win_rate=0.4``）。原先直接把差值交给 matplotlib ⇒
+        # ``ValueError: 'yerr' must not contain negative values``，而该异常**不是**
+        # ``InfraError``，会穿透 ``ledger_and_plots`` 的 except 与 ``_finish_report``，
+        # 在报告已落盘之后**炸掉整代**（辅助产物反过来毁掉主产物）。
+        # 这里夹到 ≥0：图画得不那么好看，但绝不因为一张图丢掉一代的裁决记录。
+        yerr_lo = [max(0.0, hw[i] - lo[i]) for i in range(len(hw))]
+        yerr_hi = [max(0.0, hi[i] - hw[i]) for i in range(len(hw))]
+        if any(yerr_lo) or any(yerr_hi):
+            ax.errorbar(hgen, hw, yerr=yerr_lo, fmt="none", ecolor="#1f77b4",
+                        alpha=0.4, capsize=4, label="ci95")
+            ax.errorbar(hgen, hw, yerr=yerr_hi, fmt="none", ecolor="#1f77b4",
+                        alpha=0.4, capsize=4)
     # train 是**另一行**（`split="train"`），不是另一个列名——修复前按列名找，永远找不到。
     tw = _g(train, "win_rate")
     if tw:

@@ -1274,36 +1274,69 @@ def evaluate_generation(generation: int, parent: ArmResult, winner: ArmResult | 
                         run_id: str, run_dir: Path | str | None = None,
                         config: Any = None,
                         protocol: seeds_mod.SeedProtocol | Any = None,
-                        heldout_source: str = "measured") -> dict[str, Any]:
+                        heldout_source: str = "measured",
+                        retained_arm: ArmResult | None = None,
+                        retained_version: int | None = None,
+                        play_hash: str = "") -> dict[str, Any]:
     """产出 report 的指标段（Spec §4.7；decision 段由 MOD-07 合并）。
 
-    - ``heldout`` 段**恒取 parent**（= 该代的起点臂），**不是** winner（F57，2026-10-12）。
-      修复前是 ``winner.metrics if winner is not None else parent.metrics``：候选胜出时
-      代际台账里的数字突然变成**候选**的，而判据 1（held-out 单调不降）比的是**起点**。
-      实测现场（`runs/_sweep/m3-rehearsal` gen-001）：同一批产物先写 parent 的 `0.10`
-      （判「单调性不成立」），被 ``eval report`` 按候选臂重算后变成 `0.35`
-      （判 `monotonic_ok=true`）——同一批局，两个相反结论。
-      候选自己的测量归 ``metrics/arms/gen{NNN}-heldout-{basket}-cand-*.json`` 与
-      ``generations/gen-NNN/candidates/*.json``，**不进**代际台账。
-    - ``harness_version`` 仍取 winner 的版本（accept 时即新版本）：台账要能看出「这一代
-      把起点带到了哪个版本」。``heldout`` 的数字是起点臂的，``harness_version`` 是本代
-      结束时的在役版本——两者语义不同且都需要，故并列保留。
-    - ``train`` 段取 ``train_window(generation)`` 在 run 里的训练局（滚动窗口，默认 60 局）。
-    - ``heldout_source``：``"measured"`` / ``"inherited:gen-00X"``（F57 跨代继承，见
-      ``evolve/generation.py::_inherited_parent_arms``）。
+    **``heldout`` 段 = 本代结束时在役那份 harness 的测量**（D-M3-7，2026-10-14 用户裁决；
+    取代 F57 的「恒取 parent」）：
+
+    - 补丁被拒 ⇒ 在役 harness 就是起点那份 ⇒ ``heldout`` 取 ``parent``（其测量可能由
+      ``heldout_source="inherited:gen-00X"`` 标明是**复用**来的，本代 0 局）；
+    - 补丁被接受 ⇒ 在役 harness 是**新版本** ⇒ ``heldout`` 取 ``retained_arm``（即那个
+      候选自己的臂）。这正是用户的步骤 3/5：「后续比较的 heldout 是步骤 3 的 heldout」。
+
+    F57 的**原口径为什么必须改**：判据 1 比的是「相邻两代在役 harness 的 heldout」。
+    若 ``heldout`` 恒取 parent，则「接受了一代」这件事在台账里**永远不可见**（接受后的
+    新测量没有落点），判据 1 就成了「拿起点与起点比」的恒真命题。F57 当初选 parent 是为了
+    让两个写入方（``loop run`` 与 ``eval report``）写同一个数——那个**症状**现在由 F60
+    的「报告是唯一权威」解决，而不是靠牺牲语义。
+
+    - ``retained_version``：本代结束时在役的版本号（拒绝时 = parent+1，D2=A）。缺省回落
+      到 ``winner or parent`` 的版本。
+    - ``train`` 段取 ``take("train", generation)`` 那个 seed 块（F64）：训练局属于**它服务
+      的那一代**。原先取 ``train_window(generation)`` 且按 ``generation`` 过滤，而循环把
+      第 g 代的训练局标成了 ``generation=g-1`` ⇒ 交集只剩 4 局冒烟局（实测 gen-001：
+      ``train.n=4, low_confidence=False``，``win_rate_gap`` 建在垃圾上）。取不到足量训练局
+      时**不静默**：记 ``train.source="insufficient"`` + ``low_confidence=True``。
     """
     proto = seeds_mod.validate_protocol(seeds_mod.coerce_protocol(protocol))
     eval_cfg = getattr(config, "evals", config)
-    heldout = parent.metrics
-    window_seeds = seeds_mod.train_window(generation, protocol=proto, window=60)
+    served = retained_arm if retained_arm is not None else parent
+    heldout = served.metrics
+    # F64：训练段取 ``take("train", generation)`` —— 训练局属于**它服务的那一代**。
+    # gen-000 是基线：**没有**训练块服务它（``take("train", 0)`` 按契约抛
+    # ``E_EVAL_SEED_EXHAUSTED``：「gen-000 不消耗训练 seed」），故显式取空，标 unavailable。
+    gen_index = int(generation)
+    train_seeds = (seeds_mod.take("train", generation=gen_index, protocol=proto)
+                   if gen_index >= 1 else ())
     root = Path(run_dir) if run_dir is not None else Path("runs") / run_id
-    train_results = load_episode_results(root, "train", generation=generation,
+    # ``arm="train"`` 是**真过滤**：同一代的冒烟局（``parent-smoke`` / ``cand-*-smoke``）
+    # 用的正是本代训练块的**末尾 seed**（FR-07-6），不过滤会把它们混进训练段
+    # （实测：30 局训练块 + 1 局 parent-smoke = n=31）。
+    train_results = load_episode_results(root, "train", generation=gen_index,
                                          harness_version=parent.harness_version,
-                                         seeds=window_seeds)
+                                         seeds=train_seeds, arm="train")
     train_metrics = aggregate(train_results, split="train", basket="train_window",
                               t_max=int(getattr(eval_cfg, "t_max", 120)),
                               min_support=int(getattr(eval_cfg, "min_support", 3)),
                               drop_rate_max=float(getattr(eval_cfg, "drop_rate_max", 0.10)))
+    # F64 fail-closed：训练段必须真的覆盖本代的训练块。不足时**显式标注**（而不是像
+    # 现场那样让 n=4 的冒烟局冒充训练段、还把 low_confidence 记成 False）。
+    min_support = int(getattr(eval_cfg, "min_support", 3))
+    if gen_index < 1:
+        train_source = "unavailable"
+        train_metrics = replace(train_metrics, low_confidence=True)
+    elif len(train_results) >= min_support:
+        train_source = "measured"
+    else:
+        train_source = "insufficient"
+        train_metrics = replace(train_metrics, low_confidence=True)
+    if train_source != "measured":
+        _emit_train_insufficient(generation=gen_index, run_id=str(run_id),
+                                 n=len(train_results), expected=len(train_seeds))
     # F57：坍缩/多样性也走**同一个臂**（parent）——否则报告里 heldout 块是 parent 的
     # 熵曲线、diversity 块是候选的，读者会以为它们是同一次测量。
     diversity = _diversity_for_generation(run_id, generation, parent=parent,
@@ -1322,19 +1355,28 @@ def evaluate_generation(generation: int, parent: ArmResult, winner: ArmResult | 
         rng=rng_for(spec), B=int(getattr(eval_cfg, "bootstrap_B", 10000)))
     report = render_report_sections(
         generation=generation,
-        # ``harness_version`` = 本代**结束**时在役的版本（accept 时即新版本）：
-        # 它是「这一代把起点带到了哪个版本」的唯一记录，台账的连续性靠它。
-        harness_version=heldout_harness_version(parent, winner),
-        # ``parent_version`` = ``heldout`` 段**测在哪份 harness 上**（F57 起 heldout 恒取
-        # 起点臂，所以这里恒等于起点臂的版本；不得写成 ``max(0, gen-1)`` 之类的猜想）。
+        # ``harness_version`` = 本代**结束**时在役的版本（accept 时即新版本；拒绝时按
+        # D2=A 也推进一格）：台账的连续性靠它。
+        harness_version=(int(retained_version) if retained_version is not None
+                         else heldout_harness_version(parent, winner)),
+        # ``parent_version`` = 本代的**起点**版本（D-M3-7 起语义收紧为「起点」，不再兼任
+        # 「heldout 测在哪份 harness 上」——那个信息由 ``heldout.source`` 与
+        # ``harness_version`` 共同表达）。
         parent_version=parent.harness_version,
         heldout=heldout, train=train_metrics, gain=gain, diversity=diversity,
         ablation=None, decision="pending", decided_by="auto", reason="",
         episode_config_hash=_config_digest(
             getattr(getattr(config, "env", None), "episode", None) if config else None),
         heldout_source=str(heldout_source or "measured"),
+        play_hash=str(play_hash or ""), train_source=train_source,
         extra={"power_note": power_note(heldout.n)})
     return report
+
+
+def _emit_train_insufficient(*, generation: int, run_id: str, n: int, expected: int) -> None:
+    """F64：训练段取不到足量训练局（**必须可在事件流里看到**，不得静默）。"""
+    _emit("evals.train_insufficient", generation=int(generation), run_id=str(run_id),
+          n=int(n), expected=int(expected))
 
 
 def heldout_harness_version(parent: ArmResult, winner: ArmResult | None) -> int:

@@ -94,8 +94,11 @@ def test_train_episode_writes_reflection_into_memory_store(tmp_path, memory_stor
     assert updated.n_ref == 1, "FR-06-3：局末必须回写本局的记忆使用情况"
     assert updated.n_adopted == 1
 
+    # F64（2026-10-14）：训练局的 ``generation`` 标签 = **它服务的那一代**
+    # （``LoopOrchestrator._run_training_episode`` 传 ``state.generation + 1``）。
+    # 修复前这里落成 ``g000``——而 seed 1042 属于 ``take("train", 1)`` 那个训练块。
     record = json.loads((Path(paths.reflections) /
-                         f"e-{_TRAIN_SEED:06d}-g000-train.json").read_text(encoding="utf-8"))
+                         f"e-{_TRAIN_SEED:06d}-g001-train.json").read_text(encoding="utf-8"))
     assert record["status"] == "ok"
 
 

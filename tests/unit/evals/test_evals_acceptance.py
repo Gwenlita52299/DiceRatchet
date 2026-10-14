@@ -66,6 +66,7 @@ def _write_ledger(run_dir: Path, gens: list[dict]) -> None:
             writer.writerow({"generation": g["generation"], "split": "heldout",
                              "n": g.get("n", N), "win_rate": g["win_rate"],
                              "ci_lo": g["ci_lo"], "ci_hi": g.get("ci_hi", 0.9),
+                             "harness_version": g.get("harness_version", ""),
                              "decision": g.get("decision", "")})
             writer.writerow({"generation": g["generation"], "split": "train",
                              "n": 30, "win_rate": 0.99, "ci_lo": 0.9, "ci_hi": 0.99})
@@ -514,3 +515,109 @@ def test_f57_missing_harness_version_does_not_exempt(tmp_path):
     assert report.generations[1].harness_version is None
     assert len(report.comparable) == 1, "缺列 ⇒ 照旧判（这一对明显不成立）"
     assert report.monotonic_ok is False
+
+
+# =====================================================================
+# D-M3-7（2026-10-14）：同起点豁免改判 **play 面指纹**（版本号不再可信）
+# =====================================================================
+
+def _write_report_full(run_dir: Path, *, generation: int, decision: str,
+                       play_hash: str, harness_version: int,
+                       heldout_source: str = "measured") -> None:
+    d = run_dir / "generations" / f"gen-{generation:03d}"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "report.json").write_text(json.dumps({
+        "generation": generation, "harness_version": harness_version,
+        "parent_version": max(0, harness_version - 1), "decision": decision,
+        "harness_play_hash": play_hash,
+        "decided_by": "auto", "reason": "",
+        "heldout": {"source": heldout_source}, "train": {},
+    }, ensure_ascii=False), encoding="utf-8")
+
+
+def test_dm35_same_play_hash_is_not_applicable_even_when_versions_differ(tmp_path):
+    """相邻两代 **play_hash 相同**（同一份起点）⇒ ``not_applicable``，**即便版本号不同**。
+
+    为什么这是必需的：拒绝时版本号也会推进（D2=A：``v_{N+1} = v_N + 死路记录``），
+    于是「版本号相同」不再是「起点逐字节相同」的充分条件。若仍按版本号豁免，
+    同一份 harness 的两次重测会被当成两个真实起点去判单调性（F57 要修的正是这件事）。
+    """
+    ph = "sha256:" + "a" * 64
+    _write_ledger(tmp_path, [{"generation": 0, "win_rate": 0.50, "ci_lo": 0.40,
+                              "decision": "baseline"},
+                             {"generation": 1, "win_rate": 0.10, "ci_lo": 0.02,
+                              "decision": "reject"}])
+    _write_report_full(tmp_path, generation=0, decision="baseline", play_hash=ph,
+                       harness_version=0)
+    _write_report_full(tmp_path, generation=1, decision="reject", play_hash=ph,
+                       harness_version=1, heldout_source="inherited:gen-000")
+    rep = _eval(tmp_path)
+    assert rep.generations[1].not_applicable is True
+    assert rep.generations[1].play_hash == ph
+    assert len(rep.comparable) == 0 and len(rep.not_applicable_pairs) == 1
+
+
+def test_dm35_different_play_hash_is_compared_even_when_versions_match(tmp_path):
+    """play_hash 不同 ⇒ **必须判**（即便台账里的 ``harness_version`` 恰好相同）。
+
+    反例：补丁被接受后版本号推进、但两人工件的 ``harness_version`` 列被写坏成同一个值
+    （F60 现场的同类污染）。旧判据（版本号相同 ⇒ 豁免）会**静默跳过**一代真实比较。
+    """
+    _write_ledger(tmp_path, [{"generation": 0, "win_rate": 0.50, "ci_lo": 0.40,
+                              "decision": "baseline", "harness_version": 0},
+                             {"generation": 1, "win_rate": 0.10, "ci_lo": 0.02,
+                              "decision": "reject", "harness_version": 0}])
+    _write_report_full(tmp_path, generation=0, decision="baseline",
+                       play_hash="sha256:" + "a" * 64, harness_version=0)
+    _write_report_full(tmp_path, generation=1, decision="reject",
+                       play_hash="sha256:" + "b" * 64, harness_version=0)
+    _episodes(tmp_path, generation=0, stages=[6, 6, 6, 6, 6, 6])
+    _episodes(tmp_path, generation=1, stages=[1, 1, 1, 1, 1, 1])
+    rep = _eval(tmp_path)
+    assert rep.generations[1].not_applicable is False
+    assert len(rep.comparable) == 1
+    assert rep.generations[1].pass_ci is False, "0.02 < 0.50 − 0.02 ⇒ 单调性不成立"
+
+
+def test_dm35_missing_play_hash_falls_back_to_version_equality(tmp_path):
+    """旧 run 的 ``report.json`` **没有** play_hash ⇒ 回落「版本号相同」判据（不静默放宽）。"""
+    _write_ledger(tmp_path, [{"generation": 0, "win_rate": 0.50, "ci_lo": 0.40,
+                              "decision": "baseline"},
+                             {"generation": 1, "win_rate": 0.10, "ci_lo": 0.02,
+                              "decision": "reject"}])
+    # 只改台账里的 harness_version：report.json 里没有 harness_play_hash
+    rows = [{"generation": 0, "win_rate": 0.50, "ci_lo": 0.40, "decision": "baseline",
+             "harness_version": 3},
+            {"generation": 1, "win_rate": 0.10, "ci_lo": 0.02, "decision": "reject",
+             "harness_version": 3}]
+    _write_ledger(tmp_path, rows)
+    for gen in (0, 1):                   # 两代台账版本号相同 ⇒ 旧判据豁免
+        _write_report_full(tmp_path, generation=gen,
+                           decision="baseline" if gen == 0 else "reject",
+                           play_hash="", harness_version=3)
+    rep = _eval(tmp_path)
+    assert rep.generations[1].not_applicable is True
+    assert rep.generations[1].play_hash == ""
+
+
+def test_dm35_episode_stages_follows_the_inheritance_chain(tmp_path):
+    """继承来的 heldout 段**本代没有局**：``P(gap>0)`` 必须去**来源代**取逐局数据。
+
+    否则 ``_episode_stages(g)`` 拿到空集 ⇒ ``p_gap=None`` ⇒ 判据 1 只剩 ``pass_ci``
+    一条路（第二判定路径被静默废掉）。
+    """
+    from dice_ratchet.evals.acceptance import _episode_stages, _inherited_origin
+
+    _write_report_full(tmp_path, generation=1, decision="reject",
+                       play_hash="sha256:" + "a" * 64, harness_version=1)
+    _write_report_full(tmp_path, generation=2, decision="reject",
+                       play_hash="sha256:" + "a" * 64, harness_version=2,
+                       heldout_source="inherited:gen-001")
+    _write_report_full(tmp_path, generation=3, decision="reject",
+                       play_hash="sha256:" + "a" * 64, harness_version=3,
+                       heldout_source="inherited:gen-002")
+    _episodes(tmp_path, generation=1, stages=[6, 6, 6, 6, 6, 6])
+
+    assert _inherited_origin(tmp_path, 3) == 1, "链要一路跟随到真正测过的那一代"
+    assert _episode_stages(tmp_path, 2) == _episode_stages(tmp_path, 1)
+    assert len(_episode_stages(tmp_path, 3)) == 6, "必须能读到来源代的逐局数据"

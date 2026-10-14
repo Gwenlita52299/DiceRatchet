@@ -812,12 +812,11 @@ def test_f57_rejected_generation_is_not_an_inheritance_source(tmp_path):
     """上一代 **reject** ⇒ 不是继承来源：即便同名归档躺在盘上也不许用。
 
     用户裁决「补丁被拒不重跑同一 ``harness_version``」说的是**不给被拒的候选再花一次
-    钱**，不是「拿旧数字当新测量」。资格的**唯一**依据是上一代 ``report.json`` 里
-    ``decision="accept"`` + ``harness_version`` 与本代 parent 一致——本用例把这两条
-    分别破坏一次（reject / 版本不匹配），断言都退回重测。
+    钱**，不是「拿旧数字当新测量」。旧 run（``report.json`` 里**没有**
+    ``harness_play_hash``）沿用这条判据——本用例把它当**回落分支**逐条钉住。
 
-    用**手工构造**的上一代报告（而不是跑一代）：这里测的是 ``_inherited_parent_arms``
-    的资格判断，跑一代只会引入无关的夹具依赖。
+    用**手工构造**的上一代报告（而不是跑一代）：这里测的是
+    ``_inherited_parent_heldout`` 的资格判断，跑一代只会引入无关的夹具依赖。
     """
     harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
     ev = ScriptedEvaluator()
@@ -839,26 +838,179 @@ def test_f57_rejected_generation_is_not_an_inheritance_source(tmp_path):
 
     # ① reject：归档再全也不能用
     _write_prev_report("reject", 0)
-    inherited, source = GEN._inherited_parent_arms(ev, run_root=run_root, gen=2,
-                                                   parent=parent)
+    inherited, source = GEN._inherited_parent_heldout(ev, run_root=run_root, gen=2,
+                                                      parent=parent)
     assert inherited is None and source == "measured", "reject 不是继承来源"
 
     # ② accept 但版本不匹配（例如报告来自别的 harness）：同样不能用
     _write_prev_report("accept", 7)
-    inherited, source = GEN._inherited_parent_arms(ev, run_root=run_root, gen=2,
-                                                   parent=parent)
+    inherited, source = GEN._inherited_parent_heldout(ev, run_root=run_root, gen=2,
+                                                      parent=parent)
     assert inherited is None and source == "measured", "版本不同不得继承"
 
     # ③ 正例：accept + 版本匹配 ⇒ 继承（证明 ①② 的 None 不是「函数永远返回 None」）
     _write_prev_report("accept", 0)
-    inherited, source = GEN._inherited_parent_arms(ev, run_root=run_root, gen=2,
-                                                   parent=parent)
+    inherited, source = GEN._inherited_parent_heldout(ev, run_root=run_root, gen=2,
+                                                      parent=parent)
     assert inherited is not None and source == "inherited:gen-001"
     assert inherited.arm == "parent" and inherited.metrics.n == len(ev.seeds)
 
     # ④ 归档不在 ⇒ 退回重测（fail-closed）
     for path in (run_root / "metrics" / "arms").glob("*.json"):
         path.unlink()
-    inherited, source = GEN._inherited_parent_arms(ev, run_root=run_root, gen=2,
-                                                   parent=parent)
+    inherited, source = GEN._inherited_parent_heldout(ev, run_root=run_root, gen=2,
+                                                      parent=parent)
     assert inherited is None and source == "measured"
+
+
+def test_dm35_inheritance_is_keyed_on_play_hash_not_version(tmp_path):
+    """D-M3-7：继承的资格是 **play 面指纹相同**，不是「上一代 accept」。
+
+    用户的架构（步骤 3/5）：``v1 = v0 + （仅 P1 不可行的提示词）``——补丁被拒时 play 面
+    逐字节不变，所以 cycle 1 的起点 heldout 应当**直接复用** cycle 0 的起点那份测量
+    （它最终来自 gen-000 基线那 40 局），不必重跑。修复前的资格判据要求
+    ``decision == "accept"``，于是**每一代都白跑一遍 parent 的 heldout**（实测 m3-formal：
+    每代 40 局 ≈¥21，共 3 代）。
+
+    本用例覆盖三条：
+    ① 中间代全是 reject，但 play_hash 与 gen-000 相同 ⇒ 仍能从 **gen-000** 继承；
+    ② play_hash 变了 ⇒ 一律不继承（fail-closed）；
+    ③ 报告里有 play_hash 时**不看** ``decision``/``harness_version``（拒绝也照样继承）。
+    """
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    ev = ScriptedEvaluator()
+    arms = run_root / "metrics" / "arms"
+    arms.mkdir(parents=True, exist_ok=True)
+
+    # gen-000 的基线臂（真实运行时由 `write_gen000_baseline` 的 evaluate_arm 落）
+    _write_winner_archive(run_root, generation=0, candidate_id="baseline0001",
+                          harness_version=0, seeds=ev.seeds)
+    baseline_arm = arms / "gen000-heldout-H1-parent.json"
+    (arms / "gen000-heldout-H1-cand-baseline0001.json").rename(baseline_arm)
+
+    def _write_report(gen: int, *, decision: str, play_hash: str,
+                      harness_version: int = 0) -> None:
+        path = GenPaths.of(run_root, gen).report
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"generation": gen, "decision": decision,
+                                    "harness_version": harness_version,
+                                    "parent_version": 0,
+                                    "harness_play_hash": play_hash,
+                                    "candidates": []}, ensure_ascii=False),
+                        encoding="utf-8")
+
+    parent = GEN.versioning_mod.load_version(0, harness=harness)
+    same = "sha256:" + "a" * 64
+    _write_report(0, decision="baseline", play_hash=same)
+
+    # ① 中间代 reject，但 play 面相同 ⇒ 继续往前找到 gen-000 的基线臂
+    _write_report(1, decision="reject", play_hash=same, harness_version=1)
+    inherited, source = GEN._inherited_parent_heldout(ev, run_root=run_root, gen=2,
+                                                      parent=parent, play_hash=same)
+    assert inherited is not None, "同 play 面就必须能继承（拒绝不是障碍）"
+    assert source == "inherited:gen-000", source
+
+    # ② play 面不同 ⇒ 不得继承
+    inherited, source = GEN._inherited_parent_heldout(
+        ev, run_root=run_root, gen=2, parent=parent, play_hash="sha256:" + "b" * 64)
+    assert inherited is None and source == "measured", "play 面变了就必须重测"
+
+    # ③ 有 play_hash 时不看 decision：把 gen-001 改成 reject + 版本乱写，仍从 gen-000 继承
+    _write_report(1, decision="reject", play_hash=same, harness_version=99)
+    inherited, source = GEN._inherited_parent_heldout(ev, run_root=run_root, gen=2,
+                                                      parent=parent, play_hash=same)
+    assert inherited is not None and source == "inherited:gen-000"
+
+
+def test_dm35_dead_end_bump_does_not_change_play_hash(tmp_path):
+    """``v1 = v0 + dead_ends.md`` 必须与 ``v0`` **同 play 面**（用户的步骤 3 成立）。
+
+    现场：``dead_ends.md`` 一旦被算进 play 面，补丁被拒就会「改变起点」，于是
+    ① 继承失效（每代重测 40 局），② 判据 1 把「同一个 harness 的两次重测」当成两代比较
+    （F57 要修的正是这件事）。本用例把这条写成可执行的断言。
+    """
+    harness, _evolve, _cfg, run_root, _ctx, _state = _setup(tmp_path)
+    from dice_ratchet.evolve.versioning import play_hash, play_plane_files, write_dead_end
+    from dice_ratchet.evolve.schemas import Candidate
+
+    before = play_hash(harness)
+    assert "dead_ends.md" not in play_plane_files(harness), "死路记录不在 play 面内"
+    write_dead_end(harness, generation=1,
+                   candidate=Candidate.create(
+                       kind="prompt_patch",
+                       diff="--- a/harness/prompts/decision.md\n"
+                            "+++ b/harness/prompts/decision.md\n@@ -1 +1 @@\n-a\n+b\n",
+                       rationale="试过了", expected_effect=("win_rate", "up", 2),
+                       touched_files=["harness/prompts/decision.md"]),
+                   reason="C2:no_significant_gain", error_code="E_EVOLVE_NO_GAIN")
+    assert play_hash(harness) == before, "写死路记录不得改变 play 面指纹"
+    assert "dead_ends.md" in [p.name for p in harness.iterdir()]
+
+
+# =====================================================================
+# D-M3-7（2026-10-14）：`heldout` 段 = **本代结束时在役**那份 harness 的测量
+# =====================================================================
+
+def test_dm35_accepted_generation_records_the_new_harness_measurement(tmp_path, stub_pairing):
+    """接受一代 ⇒ 该代 ``heldout`` 段必须是**新** harness 的测量（不是起点的）。
+
+    用户的架构（步骤 3）：门禁通过则 ``v1 = v0 + P1``，**后续比较的 heldout 就是步骤 3
+    的 heldout**。若 ``heldout`` 恒取起点臂（F57 原口径），「接受了一代」在台账里
+    **永远不可见**（新测量没有落点）⇒ 判据 1 的「held-out 单调不降」退化成拿起点与
+    起点比的恒真命题。
+    """
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.10)
+    ev = ScriptedEvaluator(heldout=FakeArm(win_rate=0.40),
+                           paired=_paired(delta=0.10))
+    outcome = _run(run_ctx, state, evaluator=ev, client=_one_candidate_llm())
+    assert outcome.decision == "accept"
+
+    report = _read_report(run_root, 1)
+    assert report["heldout"]["win_rate"] == 0.40, "接受的代必须记**新** harness 的数"
+    assert report["heldout"]["source"] == "measured"
+    assert report["harness_version"] == 1 and report["parent_version"] == 0
+    assert report["harness_play_hash"], "报告必须带在役 harness 的 play 面指纹"
+    # 起点（v0）的指纹在 accept **之后**已不可得 ⇒ 实现必须在任何写入前取好它
+    assert report["harness_play_hash"] != GEN.versioning_mod.play_hash(
+        harness / "versions" / "v0")
+
+
+def test_dm35_rejected_generation_keeps_start_measurement_and_bumps_lightweight(
+        tmp_path, stub_pairing):
+    """拒绝 ⇒ ① 台账数字仍是起点那份（``measured``/``inherited`` 如实标注）；
+    ② 版本号**轻量推进**到 v1（无快照、无 tag）；③ 死路记录落盘（D1=A/D2=A）。
+    """
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.01, significant=False)
+    ev = ScriptedEvaluator(heldout=FakeArm(win_rate=0.31),
+                           paired=_paired(delta=0.01, significant=False))
+    outcome = _run(run_ctx, state, evaluator=ev, client=_one_candidate_llm())
+    assert outcome.decision == "reject"
+    assert int(outcome.harness_version) == 1, "拒绝也推进版本号（D2=A）"
+
+    report = _read_report(run_root, 1)
+    assert report["heldout"]["win_rate"] == 0.30, "拒绝 ⇒ 在役 harness 还是起点那份"
+    assert report["harness_version"] == 1 and report["parent_version"] == 0
+
+    pointer = json.loads((harness / "version.json").read_text(encoding="utf-8"))
+    assert pointer["version"] == 1, "version.json 必须指到 v1"
+    assert pointer["reason"].startswith("rejected:"), pointer["reason"]
+    assert not (harness / "versions" / "v1").exists(), "拒绝不得复制全量快照"
+
+    dead = (harness / "dead_ends.md").read_text(encoding="utf-8")
+    cid = GenPaths.of(run_root, 1).candidate_ids()[0]
+    assert cid in dead and "gen-001" in dead, dead
+    assert "C2" in dead, "死路记录必须写明挂在哪个判定条件上"
+
+
+def test_dm35_play_plane_unchanged_after_rejection(tmp_path, stub_pairing):
+    """拒绝之后 ``play_hash`` 必须**逐字节不变**——继承的资格全靠它（用户的步骤 3）。"""
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    before = GEN.versioning_mod.play_hash(harness)
+    stub_pairing(delta=0.01, significant=False)
+    _run(run_ctx, state, evaluator=ScriptedEvaluator(paired=_paired(delta=0.01,
+                                                                  significant=False)),
+         client=_one_candidate_llm())
+    assert GEN.versioning_mod.play_hash(harness) == before
+    assert _read_report(run_root, 1)["harness_play_hash"] == before

@@ -77,10 +77,11 @@ def test_t06_7_resume_does_not_rescore(tmp_path, mk_orchestrator, mk_memory):
     rows = scoreboard_rows(ctx2)
     keys = [r["episode_key"] for r in rows]
     assert len(keys) == len(set(keys)) == 6, f"计分幂等被破坏：{keys}"
-    # 前 3 局在 gen-000；第 3 局收尾触发周期边界后 generation=1，其余 3 局属 gen-001
-    # （§7.3：同一 seed 在不同代各计一条记录）
-    assert set(keys) == ({f"e-{s:06d}-g000-train" for s in seeds[:3]}
-                         | {f"e-{s:06d}-g001-train" for s in seeds[3:]})
+    # F64（2026-10-14）：标签 = 该局**服务的那一代**（不是跑它时的 state.generation）。
+    # k=3 ⇒ 前 3 局是 ``take("train", 1)`` 那个训练块（标 g001）；第 3 局收尾触发周期边界后
+    # state.generation=1，其余 3 局属第 2 代（标 g002）。§7.3：同一 seed 在不同代各计一条。
+    assert set(keys) == ({f"e-{s:06d}-g001-train" for s in seeds[:3]}
+                         | {f"e-{s:06d}-g002-train" for s in seeds[3:]})
 
 
 def _noop_evolve(state, run_ctx):
@@ -120,7 +121,8 @@ def test_t06_7_force_rerun_supersedes_not_deletes(tmp_path, mk_orchestrator, mk_
     orch.run(None, resume=True, force_rerun=True)
     rows = scoreboard_rows(ctx)
     assert len(rows) == 2
-    assert rows[0]["superseded_by"] == "e-001000-g000-train"
+    # F64（2026-10-14）：seed 1000 属 ``take("train", 1)`` 那个块 ⇒ 标签 g001。
+    assert rows[0]["superseded_by"] == "e-001000-g001-train"
     assert rows[1]["superseded_by"] is None
 
 
@@ -135,7 +137,8 @@ def test_t06_8_interrupt_mid_episode_then_resume(tmp_path, mk_orchestrator, mk_m
     ``episode_key``。
     """
     seeds = list(range(1000, 1007))
-    key = "e-001006-g000-train"
+    # F64（2026-10-14）：k=99 ⇒ 不跨周期边界，标签恒为 ``state.generation + 1 = 1``。
+    key = "e-001006-g001-train"
 
     class InterruptingPolicy(FakePolicy):
         def __init__(self) -> None:

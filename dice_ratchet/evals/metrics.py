@@ -654,15 +654,25 @@ def render_report_sections(*, generation: int, harness_version: int, parent_vers
                            reason: str, episode_config_hash: str | None = None,
                            candidates: Sequence[Mapping[str, Any]] | None = None,
                            heldout_source: str = "measured",
+                           play_hash: str = "", train_source: str = "measured",
                            extra: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """产出 ``report.json`` 的指标段（Spec §4.5；decision 段由 MOD-07 填）。
 
     与 ``schemas/generation_report.schema.json`` 一一对应；``ablation`` 可为 ``null``。
 
     ``heldout_source``（F57，2026-10-12）：该代 ``heldout`` 段的**来源**。代际口径定为
-    **本代起点（parent）的测量**，而该测量可能**跨代继承**（见 ``evolve/generation.py``）；
-    继承时记 ``"inherited:gen-00X"``，本代真测时记 ``"measured"``。没有这个字段，
-    「这个 0.10 是本代测的，还是复用的上一代」在产物里**看不出来**——而两者在图上一模一样。
+    **本代结束时在役 harness 的测量**（D-M3-7，2026-10-14 修订；见 ``evolve/generation.py``）；
+    该测量可能**跨代继承**：继承时记 ``"inherited:gen-00X"``，本代真测时记 ``"measured"``。
+    没有这个字段，「这个 0.10 是本代测的，还是复用的上一代」在产物里**看不出来**。
+
+    ``play_hash``（D-M3-7，2026-10-14）：该代**结束时在役** harness 的 play 面指纹。
+    版本号在拒绝时也会推进（D2=A），所以「版本相同 ⇔ 起点相同」不再成立；代际继承与
+    判据 1 的同起点豁免都以本字段为准（``versioning.play_hash``）。
+
+    ``train_source``：``train`` 段取到了哪个 seed 块的训练局（``"measured"`` /
+    ``"insufficient"``，F64）。该字段存在的唯一目的是让「训练段只拿到 4 局冒烟局」这类
+    退化**在产物里可见**——实测 gen-001 的 ``gain_realism.win_rate_gap`` 就是建在 n=4 的
+    垃圾训练段上而 ``low_confidence=False``。
     """
     if generation < 0:
         raise InfraError(E.E_EVAL_SCHEMA, f"generation 必须 >= 0，实际 {generation}")
@@ -670,6 +680,7 @@ def render_report_sections(*, generation: int, harness_version: int, parent_vers
         "window": train.n, "win_rate": train.win_rate,
         "n": train.n, "n_dropped": train.n_dropped,
         "low_confidence": train.low_confidence,
+        "source": str(train_source or "measured"),
     }
     heldout_section = dict(heldout.as_dict())
     heldout_section["source"] = str(heldout_source or "measured")
@@ -677,6 +688,7 @@ def render_report_sections(*, generation: int, harness_version: int, parent_vers
         "generation": int(generation),
         "harness_version": int(harness_version),
         "parent_version": int(parent_version),
+        "harness_play_hash": str(play_hash or ""),
         "episode_config_hash": episode_config_hash,
         "heldout": heldout_section,
         "train": train_section,

@@ -139,8 +139,13 @@ def test_t06_14_smoke_completes_and_writes_three_episodes(tmp_path):
 
     train_dir = _run_dir(tmp_path, run_id) / "episodes" / "train"
     files = sorted(p.name for p in train_dir.glob("*.jsonl"))
-    assert files == ["e-001000-g000-train.jsonl", "e-001001-g000-train.jsonl",
-                     "e-001002-g000-train.jsonl"]
+    # F64（2026-10-14）：训练块 1000-1002 属于 ``take("train", generation=1)`` 那个块
+    # （Spec §4.7：``train`` 的 g 代 = ``start + per_generation*(g-1)``），因此训练局的
+    # 标签是 **g001** 而不是 g000。修复前用的是 ``state.generation``（训练块跑在演化之前，
+    # 那一格恒比它服务的那一代小 1），于是 ``train`` 段按 ``generation`` 取数时交集只剩
+    # 冒烟局（实测 gen-001：``train.n=4``、``low_confidence=False``）。
+    assert files == ["e-001000-g001-train.jsonl", "e-001001-g001-train.jsonl",
+                     "e-001002-g001-train.jsonl"]
     # 每局都以 episode_end 收尾（且只有一条）
     for name in files:
         rows = [json.loads(line) for line in
@@ -345,7 +350,9 @@ def test_t06_17_sigkill_then_resume_loses_no_completed_seed(tmp_path):
     state = _state(tmp_path, run_id)
     assert state["completed_train_seeds"][:len(completed_before)] == completed_before
     keys_before = _keys(tmp_path, run_id)
-    assert set(keys_before) == {f"e-{s:06d}-g000-train" for s in completed_before}
+    # F64（2026-10-14）：标签 = 训练局**服务的那一代**（``take("train", 1)`` 的块），
+    # 不再是 ``state.generation``（恒小 1）。
+    assert set(keys_before) == {f"e-{s:06d}-g001-train" for s in completed_before}
     assert len(keys_before) == len(set(keys_before))
 
     # ---- 续跑跑完 -------------------------------------------------------
@@ -629,7 +636,7 @@ def test_f57_parent_measurement_is_inherited_without_any_evaluate_arm(tmp_path,
     """
     import dice_ratchet.evals.harness as eval_harness
     from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol
-    from dice_ratchet.evolve.generation import _inherited_parent_arms
+    from dice_ratchet.evolve.generation import _inherited_parent_heldout
     from dice_ratchet.evolve.judge import CandidateEvaluator
     from dice_ratchet.infra.config import load_config
 
@@ -676,8 +683,8 @@ def test_f57_parent_measurement_is_inherited_without_any_evaluate_arm(tmp_path,
         raise AssertionError("F57：parent 的 heldout 被重测了（本代应继承上一代的测量）")
 
     monkeypatch.setattr(eval_harness, "evaluate_arm", _boom)
-    inherited, source = _inherited_parent_arms(evaluator, run_root=run_root, gen=2,
-                                               parent=parent)
+    inherited, source = _inherited_parent_heldout(evaluator, run_root=run_root, gen=2,
+                                                  parent=parent)
     assert source == "inherited:gen-001", source
     assert inherited is not None
     assert inherited.metrics.n == len(seeds)

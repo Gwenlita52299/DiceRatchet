@@ -469,3 +469,127 @@ def test_git_commit_message_format(tmp_path, monkeypatch):
     assert ref.git_commit == "deadbeef"
     assert seen and seen[0][0] == 1
     assert seen[0][1].startswith("gen-1 prompt_patch ")
+
+
+# =====================================================================
+# D2=A（2026-10-14）：拒绝的**轻量版本推进** —— 推进指针 + commit，但
+# **不建全量快照、不打 tag**（用户裁决：`v1 = v0 + 仅 P1 不可行的提示词`）
+# =====================================================================
+
+def test_record_rejection_bumps_pointer_without_snapshot_or_tag(tmp_path, monkeypatch):
+    """拒绝 ⇒ ``version.json`` 进到 v1，但 ``versions/v1/`` **不存在**、**不打 tag**。
+
+    为什么这是用户口径而不是实现细节：play 工件逐字节没变（唯一变化是
+    ``dead_ends.md``），复制一份与 v0 完全相同的快照会让「版本 = 一份不同的 harness」
+    这个不变量失真；而 ``harness-v{N}`` 是「可回滚的版本」的标记，这里没有可回滚的内容。
+    """
+    harness = write_harness(tmp_path)
+    ctx = context_for(tmp_path, harness=harness)
+    from dice_ratchet.infra import git_ops
+
+    tags: list[int] = []
+    messages: list[str] = []
+    monkeypatch.setattr(git_ops, "git_available", lambda repo=Path("."): True)
+    monkeypatch.setattr(git_ops, "commit_harness",
+                        lambda repo, version, message: (
+                            messages.append(message), "c0ffee")[1])
+    monkeypatch.setattr(git_ops, "tag_version",
+                        lambda repo, version: tags.append(int(version)) or "t")
+
+    ref = V.record_rejection(run_id=ctx.run_id, generation=1, reason="C2:no_significant_gain",
+                             cfg=ctx, harness=harness)
+    assert ref.version == 1 and ref.parent == 0
+    pointer = json.loads((harness / "version.json").read_text(encoding="utf-8"))
+    assert pointer["version"] == 1 and pointer["git_commit"] == "c0ffee"
+    assert pointer["reason"] == "C2:no_significant_gain"
+    assert not (harness / "versions" / "v1").exists(), "拒绝不得复制全量快照"
+    assert tags == [], "拒绝不得打 tag（没有可回滚的内容）"
+    assert messages and messages[0].startswith("gen-1 reject ")
+    # 幂等：同代重复调用返回首次结果，不产生第二个版本号
+    again = V.record_rejection(run_id=ctx.run_id, generation=1, reason="C2:no_significant_gain",
+                               cfg=ctx, harness=harness)
+    assert again.version == 1
+    assert json.loads((harness / "version.json").read_text(encoding="utf-8"))["version"] == 1
+
+
+def test_record_rejection_ledger_has_no_versions_key(tmp_path):
+    """拒绝的账本条目**不带** ``versions`` 键。
+
+    为什么必须这样：``accept()`` 的幂等分支按 ``prior["versions"]`` 判「这一代已产生过
+    版本号」，命中就 ``load_version(max(existing))``。拒绝推进的版本号**没有快照**，
+    带上它会让一次「拒绝后重跑该代并接受」以 ``VersionConflictError`` 炸掉整代。
+    """
+    harness = write_harness(tmp_path)
+    ctx = context_for(tmp_path, harness=harness)
+    V.record_rejection(run_id=ctx.run_id, generation=2, reason="C1:no_gain",
+                       cfg=ctx, harness=harness)
+    ledger = V.read_ledger(ctx.ledger_path(2))
+    entry = ledger["gen-002"]
+    assert entry["action"] == "reject" and entry["bumped_version"] == 1
+    assert "versions" not in entry
+
+
+def test_record_rejection_git_failure_rolls_back_pointer(tmp_path, monkeypatch):
+    """git 提交失败 ⇒ **指针回滚**（不留「幻影版本号」）+ 抛 ``E_EVOLVE_GIT_FAILED``。
+
+    现场纪律（PRD §10 失败保守 / F47-D）：版本没落成，就不能声称 ``v_{N+1}`` 已存在，
+    否则下一次 accept 会在「历史里有一个不存在的版本」之上继续编号。
+    """
+    harness = write_harness(tmp_path)
+    ctx = context_for(tmp_path, harness=harness)
+    from dice_ratchet.infra import git_ops
+    from dice_ratchet.evolve.errors import GitFailedError
+
+    monkeypatch.setattr(git_ops, "git_available", lambda repo=Path("."): True)
+
+    def _boom(repo, version, message):
+        raise InfraError(E.E_IO_GIT_FAILED, "git commit 失败")
+
+    monkeypatch.setattr(git_ops, "commit_harness", _boom)
+    with pytest.raises(GitFailedError):
+        V.record_rejection(run_id=ctx.run_id, generation=1, reason="C2", cfg=ctx,
+                           harness=harness)
+    assert json.loads((harness / "version.json").read_text(encoding="utf-8"))["version"] == 0
+
+
+# =====================================================================
+# play 面指纹（D-M3-7）：版本号在拒绝时也推进 ⇒ 「同版本 ⇔ 同起点」不再成立
+# =====================================================================
+
+def test_play_hash_ignores_learning_side_and_dead_ends(tmp_path):
+    """``play_hash`` 只看 play 面：``reflection.md`` 与 ``dead_ends.md`` 都不算。
+
+    - ``reflection.md`` 影响的是「反思 → 记忆 → 下一轮 prompt 的内容」（学习侧输入）；
+    - ``dead_ends.md`` 是**只给提案方看**的死路记录（D1=A）。
+    两者都不改变「同一局面下怎么打」。这条是用户的步骤 3 在代码上的落点。
+    """
+    harness = write_harness(tmp_path)
+    before = V.play_hash(harness)
+    (harness / "prompts" / "reflection.md").write_text("# 换了反思模板\n", encoding="utf-8")
+    (harness / "dead_ends.md").write_text("## gen-001 · x\n- 结局：reject\n",
+                                          encoding="utf-8")
+    assert V.play_hash(harness) == before
+    assert V.play_plane_files(harness) == ("config.json", "prompts/decision.md",
+                                           "tools/score.py")
+
+
+def test_play_hash_tracks_play_plane_and_deletions(tmp_path):
+    """play 面的三个来源（decision.md / config.json / tools/*.py）任一变化都必须换指纹。
+
+    删掉一个 play 文件也要换（``"<missing>"`` 占位）——否则「删掉工具」会被当成
+    「什么都没变」而继承一份不再适用的 heldout 测量。
+    """
+    harness = write_harness(tmp_path)
+    base = V.play_hash(harness)
+    (harness / "prompts" / "decision.md").write_text("# 改了打法\n", encoding="utf-8")
+    changed = V.play_hash(harness)
+    assert changed != base
+    (harness / "prompts" / "decision.md").write_text(
+        (Path(harness) / "versions" / "v0" / "prompts" / "decision.md").read_text(
+            encoding="utf-8"), encoding="utf-8")
+    assert V.play_hash(harness) == base
+    (harness / "config.json").write_text('{"sampling": {"temperature": 0.9}}\n',
+                                         encoding="utf-8")
+    assert V.play_hash(harness) != base
+    (harness / "tools" / "score.py").unlink()
+    assert V.play_hash(harness) != base

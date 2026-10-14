@@ -369,3 +369,101 @@ def test_tool_candidate_normalizes_paths():
                           diff=tool_diff(added=["# 微调打分"]),
                           touched=["harness/tools/score.py"])
     assert cand.touched_files == ("harness/tools/score.py",)
+
+
+# =====================================================================
+# D1=A（2026-10-14）：死路记录进提案 prompt（**只读**）
+# =====================================================================
+
+def _dead_ends_bundle(harness) -> EvidenceBundle:
+    return EvidenceBundle(bundle_id="ev-dead", memory_items=(),
+                          trajectory_summaries=(), reflections=(),
+                          harness_snapshot=P.harness_snapshot(harness),
+                          source_tags=("harness:current",))
+
+
+def test_d1a_dead_ends_are_inlined_into_proposer_prompt(tmp_path):
+    """死路记录必须**真的**出现在提案 prompt 里，并标注为只读。
+
+    为什么需要（现场）：m3-formal 三代的候选补丁高度重合——证据束里只有
+    memory + train 轨迹 + 反思，**没有拒绝历史**，模型在同一片信息上重复提出同一个
+    已被否决的改动。本用例把「提案方看得到」钉在渲染产物上。
+    """
+    from dice_ratchet.evolve.versioning import write_dead_end
+    from dice_ratchet.evolve.schemas import Candidate
+
+    harness = tmp_path / "harness"
+    (harness / "prompts").mkdir(parents=True)
+    (harness / "prompts" / "decision.md").write_text("# 决策模板\n", encoding="utf-8")
+    write_dead_end(
+        harness, generation=1,
+        candidate=Candidate.create(
+            kind="prompt_patch",
+            diff="--- a/harness/prompts/decision.md\n+++ b/harness/prompts/decision.md\n"
+                 "@@ -1 +1 @@\n-# 决策模板\n+# 决策模板（加约束）\n",
+            rationale="在输出契约里加一条「先清护卫」", expected_effect=("win_rate", "up", 2),
+            touched_files=["harness/prompts/decision.md"]),
+        reason="C2:no_significant_gain", error_code="E_EVOLVE_NO_GAIN",
+        metrics={"paired": {"metric": "win_rate", "delta": 0.025, "p": 1.0},
+                 "heldout": {"win_rate": 0.125, "mean_stages_cleared": 4.45}})
+
+    snap = P.harness_snapshot(harness)
+    assert [name for name, _ in snap.context] == ["dead_ends.md"], "死路记录必须是只读上下文"
+    assert "dead_ends.md" not in [name for name, _ in snap.contents], "不得混进可改文件"
+
+    _system, user = P.render_proposer_prompt(_dead_ends_bundle(harness), make_config())
+    assert "## dead_ends" in user and "只读" in user
+    assert "gen-001" in user and "C2:no_significant_gain" in user
+    assert "先清护卫" in user, "提案理由（下一次提案要避开的东西）必须可见"
+    # system 里必须写明「不得重复 dead_ends 里的改动」这条硬约束
+    system, _user = P.render_proposer_prompt(_dead_ends_bundle(harness), make_config())
+    assert "dead_ends" in system
+
+
+def test_d1a_dead_ends_free_text_is_sanitized_before_reaching_the_prompt(tmp_path):
+    """死路记录里的**自由文本**必须脱敏后才进 prompt（否则整代以 E_EVAL_INV5_LEAK 中止）。
+
+    现场纪律：``assert_no_holdout_leak`` / ``assert_prompt_is_clean`` 对**全部**渲染文本做
+    INV-3/INV-5 禁用词扫描，命中即中止本代（PRD §10）。而死路记录里的 ``rationale`` 与判定
+    ``reason`` 都是自由文本 ⇒ 唯一的预防点就在渲染处。落盘原文保持可审计。
+    """
+    from dice_ratchet.evolve.versioning import write_dead_end
+    from dice_ratchet.evolve.schemas import Candidate
+
+    harness = tmp_path / "harness"
+    (harness / "prompts").mkdir(parents=True)
+    (harness / "prompts" / "decision.md").write_text("# 决策模板\n", encoding="utf-8")
+    write_dead_end(
+        harness, generation=1,
+        candidate=Candidate.create(
+            kind="prompt_patch", diff="", rationale="试试 heldout 上的 H1 篮子表现",
+            expected_effect=("win_rate", "up", 1),
+            touched_files=["harness/prompts/decision.md"]),
+        reason="C2", error_code="E_EVOLVE_NO_GAIN")
+
+    bundle = _dead_ends_bundle(harness)
+    # 证据束的 INV-5 扫描也必须过（它扫的是同一份 context 文本）
+    P.assert_no_holdout_leak(bundle, cfg=make_config())
+    system, user = P.render_proposer_prompt(bundle, make_config())
+    lowered = (system + "\n" + user).lower()
+    for word in ("heldout", "seeds.yaml", "test_full"):
+        assert word not in lowered, f"禁用词 {word!r} 泄漏进 prompt"
+    assert "[已屏蔽]" in user, "脱敏必须留下痕迹（读者能看出这里被替换过）"
+    # 落盘原文不脱敏：审计要看到模型当时写了什么
+    assert "heldout" in (harness / "dead_ends.md").read_text(encoding="utf-8")
+
+
+def test_d1a_dead_ends_cannot_be_modified_by_a_candidate(tmp_path):
+    """候选**不得改写** ``harness/dead_ends.md``：否则可以抹掉自己的拒绝记录再提同一份补丁。"""
+    from dice_ratchet.evolve.schemas import Candidate
+
+    cand = Candidate.create(
+        kind="prompt_patch",
+        diff="--- a/harness/dead_ends.md\n+++ b/harness/dead_ends.md\n"
+             "@@ -1 +1 @@\n-## gen-001\n+（清空）\n",
+        rationale="引用 harness:current#0", expected_effect=("win_rate", "up", 1),
+        touched_files=["harness/dead_ends.md"])
+    result = P.validate_candidate(cand, cfg=make_config())
+    assert not result.ok
+    assert any("forbidden_path" in v for v in result.violations), result.violations
+    assert not P._is_allowed_path("harness/dead_ends.md")

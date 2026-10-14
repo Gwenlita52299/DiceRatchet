@@ -65,7 +65,10 @@ EVIDENCE_SOURCE_TAGS: Final[frozenset[str]] = frozenset({
 VALIDATION_STATUSES: Final[tuple[str, ...]] = ("pass", "fail")
 
 CANDIDATE_SCHEMA_VERSION: Final[str] = "evolve-candidate-1.0.0"
-HARNESS_SNAPSHOT_SCHEMA_VERSION: Final[str] = "evolve-harness-snapshot-1.1.0"
+#: 1.2.0（D1=A，2026-10-14）：新增 ``HarnessSnapshot.context``——**只读**上下文文件
+#: （``harness/dead_ends.md``）的正文。它与 ``contents``（候选**可改**文件的正文）职责
+#: 不同：``contents`` 是 diff 的上下文来源，``context`` 只给提案方看、禁止改动。
+HARNESS_SNAPSHOT_SCHEMA_VERSION: Final[str] = "evolve-harness-snapshot-1.2.0"
 
 _ID_ALPHABET: Final[str] = "0123456789abcdef"
 _RATIONALE_MAX: Final[int] = 300
@@ -263,18 +266,26 @@ class HarnessSnapshot:
     ``config.json``、``tools/*.py``）。原因：候选是 unified diff，hunk 的上下文行**必须
     与目标文件逐字符一致**，而只给 sha256 时模型看不到任何一行原文，产出的 diff 必然
     ``E_EVOLVE_PATCH_INVALID``（实测：``hunk 上下文不匹配（decision.md 第 1 行）``）。
+
+    ``context``（D1=A，2026-10-14）只带**只读**上下文文件的正文（``harness/dead_ends.md``）：
+    提案方必须读到「哪些改动已经被否决过」，但**不得**改动它们。
     """
 
     version: int
     files: tuple[tuple[str, str], ...] = ()
     artifact_hash: str = ""
     contents: tuple[tuple[str, str], ...] = ()
+    #: D1=A（2026-10-14）：**只读**上下文文件的正文（``harness/dead_ends.md``）。
+    #: 渲染进提案 prompt 时必须与 ``contents`` **分开标注**——模型的 diff 只能落在
+    #: ``contents`` 那一组上，改 ``context`` 里的文件会被 ``forbidden_path`` 直接拒。
+    context: tuple[tuple[str, str], ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {"schema_version": HARNESS_SNAPSHOT_SCHEMA_VERSION,
                 "version": int(self.version), "artifact_hash": self.artifact_hash,
                 "files": [[str(p), str(h)] for p, h in self.files],
-                "contents": [[str(p), str(t)] for p, t in self.contents]}
+                "contents": [[str(p), str(t)] for p, t in self.contents],
+                "context": [[str(p), str(t)] for p, t in self.context]}
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> "HarnessSnapshot":
@@ -282,7 +293,9 @@ class HarnessSnapshot:
                    files=tuple((str(p), str(h)) for p, h in (raw.get("files") or ())),
                    artifact_hash=str(raw.get("artifact_hash", "")),
                    contents=tuple((str(p), str(t))
-                                  for p, t in (raw.get("contents") or ())))
+                                  for p, t in (raw.get("contents") or ())),
+                   context=tuple((str(p), str(t))
+                                 for p, t in (raw.get("context") or ())))
 
 
 @dataclass(frozen=True)

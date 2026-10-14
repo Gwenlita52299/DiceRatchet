@@ -196,11 +196,18 @@ class FakeArm:
                  harness_version: int = 0, seeds: Sequence[int] = (),
                  entropy_slope: float | None = None,
                  collapse_flag: bool | None = None,
-                 curve: Sequence[float | None] = (0.50, 0.52, 0.54)) -> None:
+                 curve: Sequence[float | None] = (0.50, 0.52, 0.54),
+                 results: Sequence[Any] = ()) -> None:
         self.arm = arm
         self.error_codes = tuple(error_codes)
         self.harness_version = int(harness_version)
         self.seeds = tuple(seeds)
+        #: D-M3-7（2026-10-14）：``ArmResult`` 的逐局结果。``evaluate_generation`` 会把它
+        #: 传给 ``judge_gain``（``candidate=``/``parent=``）；缺这个属性会让整段指标不可用
+        #: ——原先的替身没有它，于是 §4.5 的指标段在这些用例里**一直**退化成骨架
+        #: （``heldout.win_rate`` 恒 0.0），而用例只断言 decision/harness_version，
+        #: 所以从没被发现。空元组 = 「没有逐局结果」。
+        self.results = tuple(results)
         extra: dict[str, Any] = {"action_entropy_curve": list(curve)}
         if entropy_slope is not None:
             extra["entropy_slope"] = float(entropy_slope)
@@ -219,7 +226,10 @@ class FakeArm:
 class _Metrics:
     def __init__(self, **values: Any) -> None:
         self._values = {"basket": "H1", "n_dropped": 0, "low_confidence": False,
-                        "win_rate_ci95": [0.0, 0.0], "mean_hearts_left": 1.0,
+                        # F69：CI 必须**自洽**（原先写死 [0.0, 0.0] 而 win_rate=0.30 ⇒
+                        # 绘图算出的 yerr 为负，matplotlib 抛 ValueError 炸掉整代）。
+                        # 用一个最宽的区间：[0, 1] 永远包含点估计。
+                        "win_rate_ci95": [0.0, 1.0], "mean_hearts_left": 1.0,
                         "mean_battles_won": 1.0, "mean_decisions": 10.0,
                         "degraded_n": 0, "entropy_mean_norm": 0.5,
                         "action_entropy_curve": [], "split": "heldout", **values}

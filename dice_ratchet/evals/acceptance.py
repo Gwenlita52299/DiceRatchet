@@ -78,6 +78,11 @@ class GenerationAcceptance:
     decision: str | None = None             # 该代 report.json 的判决
     harness_version: int | None = None      # 该代台账行的 harness_version
     prev_harness_version: int | None = None
+    #: D-M3-7（2026-10-14）：该代 / 上一代 report.json 里的**在役 play 面指纹**。
+    #: ``not_applicable`` 的自 F57 起由「版本号相同」改判为「play_hash 相同」——
+    #: 拒绝时版本号也推进（D2=A），版本号不再是起点的可靠代理。
+    play_hash: str = ""
+    prev_play_hash: str = ""
     #: F57：相邻两代的 ``harness_version`` **相同** ⇒ 起点没变（本代没有接受任何补丁），
     #: 「held-out 是否不降」在两个**完全相同的起点**之间**无处可判**——不是通过，也不是失败。
     #: 计入失败会让「补丁被拒」被记成「单调性破坏」（现场 gen-001 正是如此：`0.10` 的
@@ -100,6 +105,8 @@ class GenerationAcceptance:
             "prev_win_rate": (None if self.prev_win_rate is None
                               else round(float(self.prev_win_rate), 4)),
             "prev_harness_version": self.prev_harness_version,
+            "play_hash": self.play_hash,
+            "prev_play_hash": self.prev_play_hash,
             "threshold": (None if self.threshold is None else round(float(self.threshold), 4)),
             "pass_ci": self.pass_ci,
             "p_gap_gt_0": (None if self.p_gap_gt_0 is None
@@ -250,12 +257,59 @@ def _decision_of(run_dir: Path, generation: int) -> str | None:
         return None
 
 
+def _play_hash_of(run_dir: Path, generation: int) -> str:
+    """该代 ``report.json`` 里**在役 harness 的 play 面指纹**（D-M3-7，2026-10-14）。
+
+    缺字段（旧 run）→ ``""``：调用方据此回落到「版本号相同」那条旧判据，而不是把
+    两代当成同起点（少豁免 ⇒ 更严格，不会静默放宽判据 1）。
+    """
+    path = generation_report_path(run_dir, generation)
+    if not path.is_file():
+        return ""
+    try:
+        return str(read_json(path).get("harness_play_hash") or "")
+    except InfraError: # pragma: no cover - 损坏报告按「无指纹」处理
+        return ""
+
+
+def _inherited_origin(run_dir: Path, generation: int, *, _depth: int = 0) -> int:
+    """本代 ``heldout`` 局的**真实所在代**（跟随 ``inherited:gen-00X`` 链）。
+
+    为什么需要（D-M3-7）：代际继承时本代**没有跑局**，那批局躺在来源代的
+    ``episodes/heldout/`` 下。判据 1 的 ``P(gap>0)`` 需要逐局连续量，若直接在
+    「本代」下找会得到空集 ⇒ ``p_gap=None`` ⇒ 只剩 ``pass_ci`` 一条路（白白弱化判据）。
+    链深上限 8 与环检测都是 fail-closed：推不出来就用本代（结果是空集，不猜）。
+    """
+    if _depth >= 8:
+        return int(generation)
+    path = generation_report_path(run_dir, generation)
+    if not path.is_file():
+        return int(generation)
+    try:
+        source = str((read_json(path).get("heldout") or {}).get("source") or "")
+    except InfraError: # pragma: no cover
+        return int(generation)
+    if not source.startswith("inherited:"):
+        return int(generation)
+    raw = source.split(":", 1)[1].strip()
+    try:
+        origin = int(raw.removeprefix("gen-").lstrip("0") or "0")
+    except ValueError:
+        return int(generation)
+    if origin == int(generation):
+        return int(generation)
+    return _inherited_origin(run_dir, origin, _depth=_depth + 1)
+
+
 def _episode_stages(run_dir: Path, generation: int, *, seeds: Sequence[int] | None = None
                     ) -> dict[int, int]:
     """该代 heldout 局的 ``{seed: stages_cleared}``（配对 bootstrap 的输入）。
 
     读不到任何一局时返回 ``{}``——调用方据此把 ``p_gap_gt_0`` 记为 ``None``
     （**不是** 0.0：0.0 会被读成「显著退步」）。
+
+    ``generation`` 先经 ``_inherited_origin`` 归一：继承来的 heldout 段在本代**没有局**，
+    那批局在来源代的目录下（D-M3-7）。
     """
     from .harness import load_episode_results
 
@@ -264,7 +318,8 @@ def _episode_stages(run_dir: Path, generation: int, *, seeds: Sequence[int] | No
     # 逐局连续量**，且在 M3 的判据 1 语境下要的是「这一代相对上一代」——两代都取
     # **同代内的全部非基线臂局**并由 `_paired_p_gap` 在**共有 seed** 上配对，
     # 这比绑定某个臂名更稳（臂名会漂移，F46-A 刚为此把「臂显式化」做进 CLI）。
-    results = load_episode_results(run_dir, "heldout", generation=generation,
+    origin = _inherited_origin(run_dir, int(generation))
+    results = load_episode_results(run_dir, "heldout", generation=int(origin),
                                    seeds=seeds, exclude_arms=_BASELINE_ARMS_FOR_ACCEPTANCE)
     if not results:
         return {}
@@ -332,13 +387,14 @@ def evaluate_acceptance(run_dir: Path | str, *, run_id: str = "",
         ci_lo = float(row.get("ci_lo") or 0.0)
         hver = _int_or_none(row.get("harness_version"))
         decision = _decision_of(run_path, generation)
+        ph = _play_hash_of(run_path, generation)
         if decision:
             decisions[decision] = decisions.get(decision, 0) + 1
 
         prev = rows[index - 1] if index > 0 else None
         entry = GenerationAcceptance(
             generation=generation, win_rate=win_rate, ci_lo=ci_lo, n=n,
-            decision=decision, harness_version=hver)
+            decision=decision, harness_version=hver, play_hash=ph)
         if n < int(min_heldout_n):
             reasons.append(
                 f"gen-{generation:03d} 的 heldout n={n} < min_heldout_n={min_heldout_n}"
@@ -352,7 +408,18 @@ def evaluate_acceptance(run_dir: Path | str, *, run_id: str = "",
         prev_gen = int(float(prev["generation"]))
         prev_win = float(prev.get("win_rate") or 0.0)
         prev_hver = _int_or_none(prev.get("harness_version"))
-        if hver is not None and prev_hver is not None and hver == prev_hver:
+        prev_ph = _play_hash_of(run_path, prev_gen)
+        # D-M3-7（2026-10-14）：`not_applicable` 的判据从「版本号相同」换成
+        # **「play 面指纹相同」**。原因：拒绝时版本号也会推进（D2=A），版本号相同
+        # 不再是「起点逐字节相同」的充分条件；反过来版本号不同也不再意味着起点变了。
+        #   · 两侧都有 play_hash ⇒ 以它为准；
+        #   · 任一侧缺（旧 run 的 report.json）⇒ 回落「版本号相同」（保守：宁可判单调性，
+        #     也不因为字段缺失而静默放宽）。
+        if ph and prev_ph:
+            same_origin = ph == prev_ph
+        else:
+            same_origin = (hver is not None and prev_hver is not None and hver == prev_hver)
+        if same_origin:
             # F57 豁免：相邻两代的**起点逐字节相同**（本代没有接受任何补丁）。
             # 「held-out 不降」在这两行之间是恒真命题，判它既会把「合法拒绝」误记成
             # 「单调性破坏」（现场 gen-001：`ci_lo=0.0279 < 0.10−0.02`，而两代的 0.10 与
@@ -362,6 +429,7 @@ def evaluate_acceptance(run_dir: Path | str, *, run_id: str = "",
                 generation=generation, win_rate=win_rate, ci_lo=ci_lo, n=n,
                 prev_generation=prev_gen, prev_win_rate=prev_win,
                 harness_version=hver, prev_harness_version=prev_hver,
+                play_hash=ph, prev_play_hash=prev_ph,
                 decision=decision, not_applicable=True))
             continue
 
@@ -382,7 +450,8 @@ def evaluate_acceptance(run_dir: Path | str, *, run_id: str = "",
             p_gap_metric=(CONTINUOUS_METRIC if p_gap is not None else None),
             p_gap_n_pairs=n_pairs,
             pass_p_gap=(None if p_gap is None else bool(p_gap >= P_GAP_THRESHOLD)),
-            decision=decision, harness_version=hver, prev_harness_version=prev_hver)
+            decision=decision, harness_version=hver, prev_harness_version=prev_hver,
+            play_hash=ph, prev_play_hash=prev_ph)
         if not entry.passed:
             reasons.append(
                 f"gen-{generation:03d} 单调性不成立：ci_lo={ci_lo:.4f} < "

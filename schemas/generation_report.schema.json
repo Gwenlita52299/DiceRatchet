@@ -18,6 +18,10 @@
     },
     "harness_version": { "type": "integer", "minimum": 0 },
     "parent_version": { "type": "integer", "minimum": 0 },
+    "harness_play_hash": {
+      "type": "string",
+      "description": "D-M3-7（2026-10-14）：本代**结束时在役** harness 的 play 面指纹（decision.md + config.json + tools/*.py 的 sha256 复合）。版本号在拒绝时也会推进（D2=A），所以「版本相同 ⇔ 起点相同」不再成立——代际继承与判据 1 的同起点豁免都以本字段为准。旧 run 缺此字段时回落「版本号相同」判据。"
+    },
     "episode_config_hash": { "type": ["string", "null"] },
     "heldout": { "$ref": "#/$defs/split_metrics" },
     "train": {
@@ -29,7 +33,11 @@
         "win_rate": { "type": "number", "minimum": 0, "maximum": 1 },
         "n": { "type": "integer", "minimum": 0 },
         "n_dropped": { "type": "integer", "minimum": 0 },
-        "low_confidence": { "type": "boolean" }
+        "low_confidence": { "type": "boolean" },
+        "source": {
+          "type": "string",
+          "description": "F64（2026-10-14）：本段训练局的取数口径。`measured` = 取到了本代训练块（take(\"train\", generation)）且 n ≥ min_support；`insufficient` = 不足（已强制 low_confidence=true 并发 evals.train_insufficient 事件，绝不静默）。实测 gen-001 修复前 train.n=4（全是冒烟局）而 low_confidence=False，win_rate_gap 就建在那上面。"
+        }
       }
     },
     "gain_realism": {

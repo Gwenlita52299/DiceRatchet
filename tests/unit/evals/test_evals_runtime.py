@@ -105,7 +105,11 @@ def test_evaluate_arm_default_runner_policy_loop(tmp_path):
 
 def test_evaluate_generation_reads_train_window(tmp_path):
     for seed in (1000, 1001):
+        # F64（2026-10-14）：训练段现在按 ``arm="train"`` **真过滤**（同代的冒烟局用的是
+        # 本代训练块的末尾 seed，不过滤会被混进训练段），因此夹具必须像真实写入方那样
+        # 写上 ``arm`` / ``generation`` / ``harness_version`` / ``split``。
         row = {"type": "episode_end", "seed": seed, "outcome": "win",
+               "arm": "train", "split": "train", "generation": 1, "harness_version": 1,
                "truncation_reason": None, "stages_cleared": 6, "hearts_left": 2,
                "battles_won": 12, "decisions": 90, "steps": 200, "illegal_attempts": 0,
                "fallback_decisions": 0, "kind_counts": [0] * 16, "decision_kinds": [0],

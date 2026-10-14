@@ -38,7 +38,8 @@ from .schemas import (CANDIDATE_SCHEMA, Candidate, EvidenceBundle, ExpectedEffec
                       canonical_json, count_diff_lines, diff_digest, parse_diff_paths)
 
 __all__ = [
-    "ALLOWED_TOOL_EXT", "CONFIG_FILE", "DECISION_PROMPT", "EVIDENCE_SCHEMA_VERSION",
+    "ALLOWED_TOOL_EXT", "CONFIG_FILE", "DEAD_ENDS_FILE", "DEAD_ENDS_REL", "DECISION_PROMPT",
+    "EVIDENCE_SCHEMA_VERSION",
     "FROZEN_SIGNATURE", "PROMPT_PLACEHOLDERS", "REFLECTION_PROMPT", "TOOLS_GLOB",
     "apply_unified_diff", "assert_no_holdout_leak", "authoring_prompt",
     "build_evidence_bundle", "candidate_id_of_raw", "candidate_schema_dict",
@@ -59,6 +60,12 @@ REFLECTION_PROMPT: Final[str] = "harness/prompts/reflection.md"
 CONFIG_FILE: Final[str] = "harness/config.json"
 TOOLS_GLOB: Final[str] = "harness/tools/*.py"
 ALLOWED_TOOL_EXT: Final[str] = ".py"
+
+#: 死路记录（D1=A，2026-10-14 用户裁决）：**只给提案方看**、**禁止候选改动**。
+#: ``DEAD_ENDS_REL`` 是 ``harness/`` 根下的相对名（``versioning`` 也用它做落盘路径，
+#: 常量只有这一处定义，避免两个模块各写一份而漂移）。
+DEAD_ENDS_REL: Final[str] = "dead_ends.md"
+DEAD_ENDS_FILE: Final[str] = f"harness/{DEAD_ENDS_REL}"
 
 #: 冻结的签名字符串（改动它的 diff 一律拒；Spec B-31 / FR-07-4）。
 FROZEN_SIGNATURE: Final[str] = "rank_actions"
@@ -90,8 +97,11 @@ _BANNED_CALL_PATTERNS: Final[tuple[tuple[str, str], ...]] = (
 )
 
 #: 禁止改写的 harness 元数据路径（MAL-6：历史重写 / 版本伪造）。
+#: ``harness/dead_ends.md``（D1=A，2026-10-14）也在其中：模型若能改它，就能**抹掉自己的
+#: 拒绝记录**再提同一份补丁——那正是这个机制要防的事。
 _FORBIDDEN_PATH_PATTERNS: Final[tuple[str, ...]] = (
     "harness/version.json", "harness/versions", "harness/.git", "version.json",
+    "harness/dead_ends.md", "dead_ends.md",
 )
 
 _IMPORT_RE: Final[re.Pattern[str]] = re.compile(
@@ -178,6 +188,7 @@ def harness_snapshot(harness: Path | str | None = None) -> HarnessSnapshot:
     root = default_harness_dir(harness)
     files: list[tuple[str, str]] = []
     contents: list[tuple[str, str]] = []
+    context: list[tuple[str, str]] = []
     if root.is_dir():
         for path in sorted(root.rglob("*")):
             if not path.is_file():
@@ -190,13 +201,22 @@ def harness_snapshot(harness: Path | str | None = None) -> HarnessSnapshot:
             except OSError: # pragma: no cover - 读失败不阻塞证据束
                 continue
             files.append((rel, hashlib.sha256(raw_bytes).hexdigest()))
-            # 只有「允许被改」的文件才需要正文；单个文件超限则只留摘要。
-            if not _is_allowed_path(f"harness/{rel}") or len(raw_bytes) > _MAX_HARNESS_BODY_CHARS:
-                continue
             try:
-                contents.append((rel, raw_bytes.decode("utf-8")))
+                text = raw_bytes.decode("utf-8")
             except UnicodeDecodeError: # pragma: no cover - 非文本不进正文
                 continue
+            # 可改文件的正文（diff 的上下文来源）与只读上下文（死路记录）分开收：
+            # 前者能在候选里被改，后者只能被读。超限一律只留 sha256（避免 prompt 无界）。
+            if _is_context_path(f"harness/{rel}"):
+                if len(raw_bytes) <= _MAX_CONTEXT_BODY_CHARS:
+                    # **唯一的入口脱敏**：死路记录是自由文本（补丁 rationale + 判定 reason），
+                    # 而 `assert_no_holdout_leak` 扫的是**证据束**（不只是渲染产物）——
+                    # 一个偶然的 `heldout` 会让整代以 `E_EVAL_INV5_LEAK` 中止（PRD §10）。
+                    # 落盘的 `dead_ends.md` 保持原文（审计要看模型当时写了什么）。
+                    context.append((rel, _sanitize_agent_text(text)))
+            elif (_is_allowed_path(f"harness/{rel}")
+                  and len(raw_bytes) <= _MAX_HARNESS_BODY_CHARS):
+                contents.append((rel, text))
     version = 0
     artifact_hash = ""
     version_file = root / "version.json"
@@ -209,7 +229,8 @@ def harness_snapshot(harness: Path | str | None = None) -> HarnessSnapshot:
             version = int(raw.get("version", 0) or 0)
             artifact_hash = str(raw.get("artifact_hash", "") or "")
     return HarnessSnapshot(version=version, files=tuple(files),
-                           artifact_hash=artifact_hash, contents=tuple(contents))
+                           artifact_hash=artifact_hash, contents=tuple(contents),
+                           context=tuple(context))
 
 
 #: 反思条目进证据束的字段白名单（F35，2026-10-09 登记）。
@@ -554,6 +575,9 @@ _SYSTEM_TEMPLATE = """你是 DiceRatchet 的 harness 改进提案者（proposer�
 9. 只输出一个 JSON 对象，字段见 user 消息的输出契约。
 10. `diff` 的上下文行必须与上面给出的文件正文**逐字符一致**；行号数不准没关系
     （应用时会按上下文自动定位），但正文抄错就作废。
+11. `## dead_ends` 段是**只读**的：那里列出的改动**已经被否决过**（含被否决的原因）。
+    不得提交与其中任一条**同一文件 + 同一意图**的改动；必须换一个改动面或换一种机制，
+    并在 `rationale` 里说明「与 dead_ends 里哪一条不同、为什么这次能成」。
 
 你看不到留出集数据，也不需要它们。"""
 
@@ -602,6 +626,7 @@ def render_proposer_prompt(bundle: EvidenceBundle, cfg: Any) -> tuple[str, str]:
     traj_block = _render_items(bundle.trajectory_summaries, empty="（无可用轨迹摘要）")
     reflect_block = _render_items(bundle.reflections, empty="（无可用反思）")
     harness_block = _render_harness(bundle.harness_snapshot)
+    dead_ends_block = _render_dead_ends(bundle.harness_snapshot)
 
     # 占位符与证据束一一对应：observation→traj 摘要，memory→记忆，harness→快照，task→任务
     user = "\n\n".join((
@@ -610,6 +635,9 @@ def render_proposer_prompt(bundle: EvidenceBundle, cfg: Any) -> tuple[str, str]:
         "## memory（train 策略记忆）\n" + memory_block,
         "## reflections（train 反思）\n" + reflect_block,
         "## harness（当前生效工件的 sha256）\n" + harness_block,
+        # D1=A（2026-10-14）：**只读**的死路记录段。位置紧邻 harness 段：模型读到「当前
+        # 工件长什么样」之后立刻读到「哪些改动已经被否决、为什么」。
+        "## dead_ends（**只读**：已被否决的改动，不得重复提交）\n" + dead_ends_block,
         "## evidence 条目 id（rationale 必须引用其中之一）\n" + _render_evidence_ids(bundle),
         _OUTPUT_CONTRACT,
     ))
@@ -654,6 +682,9 @@ def _render_harness(snap: HarnessSnapshot) -> str:
 
     F38：正文是 unified diff 能对齐的前提（hunk 上下文必须逐字符一致）。只渲染
     ``_is_allowed_path`` 白名单内且未超限的文件（见 ``harness_snapshot``）。
+
+    D1=A（2026-10-14）：``snap.context``（死路记录）渲染在**单独一段**里，并**显式声明
+    只读**——模型必须知道「这些改动已经被否决过」，同时不得把它们当成 diff 的目标。
     """
     lines = [f"- version: {int(snap.version)}",
              f"- artifact_hash: {snap.artifact_hash or '(未计算)'}"]
@@ -673,6 +704,50 @@ def _render_harness(snap: HarnessSnapshot) -> str:
         lines.append(text.rstrip("\n"))
         lines.append("```")
     return "\n".join(lines)
+
+
+def _render_dead_ends(snap: HarnessSnapshot) -> str:
+    """渲染**只读**的死路记录段（D1=A，2026-10-14）。
+
+    两个必须的处理：
+
+    1. **脱敏**（``_sanitize_agent_text``）：死路记录里的文本源自补丁的 ``rationale``
+       与判定 ``reason``，属**自由文本**。而 ``assert_no_holdout_leak`` /
+       ``assert_prompt_is_clean`` 对**全部**渲染文本执行 INV-3/INV-5 的禁用词扫描
+       —— 一个偶然出现的 ``heldout`` 会让整代以 ``E_EVAL_INV5_LEAK`` 中止（PRD §10）。
+       在**渲染处**（唯一入口）统一替换，落盘原文保持可审计。
+    2. **封顶**：``_MAX_CONTEXT_BODY_CHARS`` 字节，超限保留**最近**的条目（新的失败比
+       旧的有价值），并在段首注明被截断。
+    """
+    entries = [(name, text) for name, text in snap.context if text.strip()]
+    if not entries:
+        return "（暂无被否决的改动记录）"
+    lines: list[str] = []
+    for _name, text in entries:
+        body = _sanitize_agent_text(text)
+        if len(body) > _MAX_CONTEXT_BODY_CHARS:
+            kept = body[-_MAX_CONTEXT_BODY_CHARS:]
+            body = "（…更早的条目已省略）\n" + kept
+        lines.append(body.rstrip("\n"))
+    return "\n\n".join(lines)
+
+
+#: agent 可见文本里必须替换掉的禁用词（与 ``assert_no_holdout_leak`` /
+#: ``assert_prompt_is_clean`` 的清单**同源**；那两处的扫描是 fail-closed，这里是唯一的
+#: 预防点）。大小写不敏感；``H1/H2/H3`` 按词边界匹配（避免误伤 ``H1N1`` 之类的正常词）。
+_AGENT_TEXT_REDACTIONS: Final[tuple[str, ...]] = (
+    "heldout", "seeds.yaml", "test_full",
+)
+
+
+def _sanitize_agent_text(text: str) -> str:
+    """把自由文本里的留出集侧标签替换为 ``[已屏蔽]``（INV-3/INV-5 的唯一预防点）。"""
+    out = str(text)
+    for word in _AGENT_TEXT_REDACTIONS:
+        out = re.sub(re.escape(word), "[已屏蔽]", out, flags=re.IGNORECASE)
+    for word in ("H1", "H2", "H3"):
+        out = re.sub(r"(?<![0-9A-Za-z_])" + word + r"(?![0-9A-Za-z_])", "[已屏蔽]", out)
+    return out
 
 
 def _render_evidence_ids(bundle: EvidenceBundle) -> str:
@@ -739,10 +814,23 @@ _MAX_HUNK_OFFSET: Final[int] = 200
 #: 避免 prompt 无界增长（``tools/*.py`` 未来可能变大）。上限内联不做截断——
 #: 截断会让 diff 的上下文行失真，比不内联更糟。
 _MAX_HARNESS_BODY_CHARS: Final[int] = 20000
+#: D1=A（2026-10-14）：``harness/dead_ends.md`` 内联进提案 prompt 的正文上限。
+#: 死路记录是**累积**的（每代每条候选一行），必须封顶，否则提案 prompt 会逐代膨胀。
+#: 超限时**保留最近的部分**（见 ``_render_dead_ends``）——最近的失败信息最有价值。
+_MAX_CONTEXT_BODY_CHARS: Final[int] = 8000
 
 
 def _allowed_file_specs() -> tuple[str, ...]:
     return (DECISION_PROMPT, REFLECTION_PROMPT, CONFIG_FILE, TOOLS_GLOB)
+
+
+def _context_file_specs() -> tuple[str, ...]:
+    """**只读**上下文文件（渲染进提案 prompt，但候选不得改动）。"""
+    return (DEAD_ENDS_FILE,)
+
+
+def _is_context_path(path: str) -> bool:
+    return _rel_under_harness(path) == DEAD_ENDS_FILE
 
 
 def _is_allowed_path(path: str) -> bool:

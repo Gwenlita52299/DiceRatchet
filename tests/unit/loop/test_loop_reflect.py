@@ -41,9 +41,13 @@ def test_t06_4_train_episode_reflects_and_records_usage(tmp_path, mk_orchestrato
     summary = orch.run(seeds=[1000])
 
     assert summary.exit_code == 0
-    record = _load(_reflection_path(ctx, "e-001000-g000-train"))
+    # F64（2026-10-14）：由 ``LoopOrchestrator`` 驱动的训练局，其 ``generation`` 标签是
+    # **它服务的那一代**（``state.generation + 1``）——seed 1000 属于
+    # ``take("train", generation=1)`` 那个训练块。直接调 ``runner.run_episode`` 的用例
+    # （没有 generation 参数）仍取 ``state.generation``，故那些键保持 ``g000``。
+    record = _load(_reflection_path(ctx, "e-001000-g001-train"))
     assert record["status"] == "ok"
-    assert record["episode_key"] == "e-001000-g000-train"
+    assert record["episode_key"] == "e-001000-g001-train"
     assert record["entry"]["text"] == "净化值低时优先防守。"
     assert record["entry"]["failure_cause"] == "low_damage"
     assert record["entry"]["tags"] == ["defense"]
@@ -52,7 +56,7 @@ def test_t06_4_train_episode_reflects_and_records_usage(tmp_path, mk_orchestrato
     assert len(memory.reflections) == 1
     assert len(memory.usages) == 1
     usage = memory.usages[0]
-    assert usage["episode_key"] == "e-001000-g000-train"
+    assert usage["episode_key"] == "e-001000-g001-train"
     assert usage["memory_ids"] == ["m-1"]      # 去重
     assert usage["adopted_ids"] == ["m-1"]
     assert usage["outcome"] == "lose"
@@ -96,7 +100,7 @@ def test_t06_4_reflect_disabled_writes_skipped(tmp_path, mk_orchestrator, mk_mem
     orch.config = replace(orch.config, reflect_enabled=False)
     orch.runner.config = orch.config
     orch.run(seeds=[1000])
-    record = _load(_reflection_path(ctx, "e-001000-g000-train"))
+    record = _load(_reflection_path(ctx, "e-001000-g001-train"))
     assert record["status"] == "skipped"
     assert record["reason"] == "reflect_disabled"
     assert client.n_calls == 0
@@ -123,7 +127,7 @@ def test_t06_5_reflect_timeout_degrades(tmp_path, mk_orchestrator, mk_memory, mk
 
     assert summary.exit_code == 0
     assert summary.phase == "done"
-    record = _load(_reflection_path(ctx, "e-001000-g000-train"))
+    record = _load(_reflection_path(ctx, "e-001000-g001-train"))
     assert record["status"] == "skipped"
     assert record["reason"] == str(E.E_LLM_TIMEOUT)
     assert record["entry"] is None
@@ -146,7 +150,7 @@ def test_t06_5_reflect_failure_reasons(tmp_path, mk_orchestrator, mk_memory, mk_
                                 env=FakeEnv(steps_to_terminate=2), memory=memory,
                                 client=mk_client([failure]), seeds=(1000,))
     orch.run(seeds=[1000])
-    record = _load(_reflection_path(ctx, "e-001000-g000-train"))
+    record = _load(_reflection_path(ctx, "e-001000-g001-train"))
     assert record["status"] == "skipped"
     assert record["reason"] == str(expected)
 
@@ -163,7 +167,7 @@ def test_t06_5_memory_write_failure_degrades(tmp_path, mk_orchestrator, mk_memor
                                                   "tags": []}]), seeds=(1000,))
     summary = orch.run(seeds=[1000])
     assert summary.exit_code == 0
-    record = _load(_reflection_path(ctx, "e-001000-g000-train"))
+    record = _load(_reflection_path(ctx, "e-001000-g001-train"))
     assert record["status"] == "skipped"
     assert record["reason"] == str(E.E_IO_MEMORY_WRITE_FAILED)
     assert memory.reflections == []
@@ -205,7 +209,7 @@ def test_skipped_reflections_are_retried_on_resume(tmp_path, mk_orchestrator, mk
                                 env=FakeEnv(steps_to_terminate=2), memory=memory,
                                 client=client, seeds=(1000,))
     orch.run(seeds=[1000])
-    record = _load(_reflection_path(ctx, "e-001000-g000-train"))
+    record = _load(_reflection_path(ctx, "e-001000-g001-train"))
     assert record["status"] == "skipped"
 
     # 默认关闭：resume 不补跑
@@ -214,7 +218,7 @@ def test_skipped_reflections_are_retried_on_resume(tmp_path, mk_orchestrator, mk
                                      env=FakeEnv(steps_to_terminate=2), memory=memory,
                                      client=mk_client([]), state=reloaded, seeds=(1000,))
     orch2.run(None, resume=True)
-    assert _load(_reflection_path(ctx2, "e-001000-g000-train"))["status"] == "skipped"
+    assert _load(_reflection_path(ctx2, "e-001000-g001-train"))["status"] == "skipped"
     assert memory.reflections == []
 
     # 显式开启：补跑成功（模型这次返回合法 JSON）
@@ -228,7 +232,7 @@ def test_skipped_reflections_are_retried_on_resume(tmp_path, mk_orchestrator, mk
     orch3.runner.config = orch3.config
     ctx3.config = orch3.config
     orch3.run(None, resume=True)
-    record = _load(_reflection_path(ctx3, "e-001000-g000-train"))
+    record = _load(_reflection_path(ctx3, "e-001000-g001-train"))
     assert record["status"] == "ok"
     assert record["entry"]["text"] == "补跑成功。"
     assert len(memory.reflections) == 1

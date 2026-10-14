@@ -38,16 +38,20 @@ from .schemas import (Candidate, CandidateReport, GateState, HarnessRef, Verdict
                       validate_gate_state, validate_harness_ref)
 
 __all__ = [
-    "LEDGER_NAME", "VERSION_FILE", "accept", "artifact_hash_of", "build_decision_sections",
-    "commit_harness_version", "copy_harness_tree", "current_version", "diff_trees",
-    "extract_version_file", "gate_state_for", "load_version", "next_version",
-    "read_ledger", "rollback", "snapshot_harness", "stage_candidate", "staging_dir_for",
-    "tree_digest", "unified_diff", "write_candidate_patch", "write_ledger",
-    "write_version_pointer",
+    "DEAD_ENDS_FILE", "LEDGER_NAME", "PLAY_CONFIG_FILE", "PLAY_PROMPT_FILE",
+    "PLAY_TOOLS_GLOB", "VERSION_FILE", "accept", "artifact_hash_of",
+    "build_decision_sections", "commit_harness_version", "copy_harness_tree",
+    "current_version", "diff_trees", "extract_version_file", "gate_state_for",
+    "load_version", "next_version", "play_hash", "play_plane_files", "read_ledger",
+    "record_rejection", "rollback", "snapshot_harness", "stage_candidate",
+    "staging_dir_for", "tree_digest", "unified_diff", "write_candidate_patch",
+    "write_dead_end", "write_ledger", "write_version_pointer",
 ]
 
 VERSION_FILE: Final[str] = "version.json"
 LEDGER_NAME: Final[str] = "version_ledger.json"
+#: 拒绝的**死路记录**（D1=A，2026-10-14 用户裁决）：只给**提案方**看，不进 play prompt。
+DEAD_ENDS_FILE: Final[str] = "dead_ends.md"
 
 #: ``version.json`` 的键全集（B-33：``base_model`` 预留给 MOD-10，M0–M3 恒为 null）。
 #: ``version.json`` 的键全集（B-33：``base_model`` 预留给 MOD-10，M0–M3 恒为 null）。
@@ -138,6 +142,62 @@ def tree_digest(root: Path, *, exclude: Sequence[str] = _EXCLUDED_FROM_SNAPSHOT)
 def artifact_hash_of(root: Path) -> str:
     """``harness/`` 的 artifact_hash（**不含** ``versions/``，Spec §5 的可演化层指纹）。"""
     return tree_digest(root, exclude=_EXCLUDED_FROM_SNAPSHOT)
+
+
+# =====================================================================
+# play 面指纹（D-M3-7 / D2=A：版本号不再是「起点是否相同」的判据）
+# =====================================================================
+
+#: play 面的三个来源（相对 ``harness/`` 根）。**决定「同一局面下怎么打」**。
+#:
+#: ``prompts/reflection.md`` **刻意不在其中**：它影响的是「反思 → 记忆 → 下一轮 prompt
+#: 的内容」，属于**学习侧输入**，不是「同一输入下的打法」。这也是 D1=A（死路提示词只给
+#: 提案方看）在代码上的落点——把 ``dead_ends.md`` 排除在 play 面之外，``v1 = v0 + 死路提示``
+#: 就必然与 ``v0`` 同 ``play_hash``（用户的步骤 3 因此**严格成立**）。
+PLAY_PROMPT_FILE: Final[str] = "prompts/decision.md"
+PLAY_CONFIG_FILE: Final[str] = "config.json"
+PLAY_TOOLS_GLOB: Final[str] = "tools/*.py"
+
+
+def play_plane_files(root: Path | str) -> tuple[str, ...]:
+    """play 面的文件清单（相对 ``harness/`` 根，字典序；**含**不存在的文件）。"""
+    base = Path(root)
+    names = [PLAY_PROMPT_FILE, PLAY_CONFIG_FILE]
+    tools = base / "tools"
+    if tools.is_dir():
+        names += [f"tools/{path.name}" for path in sorted(tools.glob("*.py"))]
+    return tuple(sorted(names))
+
+
+def play_hash(root: Path | str) -> str:
+    """play 面指纹：``sha256`` over ``[(相对路径, sha256(字节) 或 "<missing>")]``。
+
+    **为什么需要它**（2026-10-14，用户裁决 D2=A）：版本号在**拒绝**时也会推进
+    （``v_{N+1} = v_N + dead_ends``，play 工件逐字节不变），于是「版本号相同 ⇔ 起点相同」
+    这条判据**不再成立**。三处都要问这一份指纹：
+
+    1. 代际继承（``evolve/generation.py::_inherited_parent_heldout``）：可否直接复用
+       上一份**同 play 面**的 heldout 测量；
+    2. 判据 1 的「同起点豁免」（``evals/acceptance.py``）：相邻两代起点相同 ⇒ 单调性
+       在那两行之间恒真，判它没有信息量；
+    3. F66 的第二半：候选补丁是否**真的改变了打法**。
+
+    ``config.json``（``agent.policy.*`` 采样温度 / ``show_intent``、``memory.retrieve.*``）
+    与 ``tools/*.py`` 都在 play 面内——它们确实改变决策，必须计入。
+
+    缺失/不可读的文件用 ``"<missing>"`` 占位（而不是跳过）：删掉一个 play 文件必然
+    改变指纹，不会与「文件都在」的旧指纹撞车。
+    """
+    base = Path(root)
+    items: list[tuple[str, str]] = []
+    for name in play_plane_files(base):
+        try:
+            digest = hashlib.sha256((base / name).read_bytes()).hexdigest()
+        except OSError:
+            digest = "<missing>"
+        items.append((name, digest))
+    payload = json.dumps(items, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 # =====================================================================
@@ -519,6 +579,187 @@ def _commit_message(*, gen: int, version: int, kind: str, rationale: str) -> str
     """``harness(v{N}): gen-{G} {kind} {short_rationale}``（FR-07-9）。"""
     short = " ".join(str(rationale).split())[:72]
     return f"gen-{int(gen)} {kind} {short}".strip()
+
+
+# =====================================================================
+# 死路记录（D1=A，2026-10-14 用户裁决）
+# =====================================================================
+
+#: 单条死路记录里 ``rationale`` 的截断长度（进提案 prompt 的文本要有界）。
+_DEAD_END_RATIONALE_CHARS: Final[int] = 200
+
+
+def _dead_end_header(generation: int, candidate_id: str) -> str:
+    return f"## gen-{int(generation):03d} · {candidate_id}"
+
+
+def _dead_end_block(*, generation: int, candidate: Candidate, reason: str,
+                    error_code: str = "", metrics: Mapping[str, Any] | None = None) -> str:
+    """构造一条死路记录（纯函数；``validate_candidate`` 之外的失败也在内）。"""
+    bag = dict(metrics or {})
+    paired = dict(bag.get("paired") or {})
+    heldout = dict(bag.get("heldout") or {})
+    lines = [_dead_end_header(generation, str(candidate.candidate_id)),
+             f"- 类型：{candidate.kind}",
+             f"- 结局：reject（{str(reason or error_code or 'unknown')[:160]}）"]
+    touched = list(candidate.touched_files or ())
+    if touched:
+        lines.append("- 触及文件：" + "、".join(f"harness/{str(p)}" for p in touched)
+                     + f"（{int(candidate.diff_lines)} 行）")
+    facts: list[str] = []
+    if paired:
+        delta = paired.get("delta")
+        if delta is not None:
+            facts.append(f"Δ{paired.get('metric') or 'win_rate'}={_fmt(delta)}")
+        if paired.get("p") is not None:
+            facts.append(f"p={_fmt(paired.get('p'))}")
+    if heldout.get("win_rate") is not None:
+        facts.append(f"候选 win_rate={_fmt(heldout.get('win_rate'))}")
+    if heldout.get("mean_stages_cleared") is not None:
+        facts.append(f"stages={_fmt(heldout.get('mean_stages_cleared'))}")
+    if facts:
+        lines.append("- 指标：" + "；".join(facts))
+    rationale = " ".join(str(candidate.rationale or "").split())
+    if rationale:
+        lines.append(f"- 提案理由：{rationale[:_DEAD_END_RATIONALE_CHARS]}")
+    return "\n".join(lines) + "\n"
+
+
+def _fmt(value: Any) -> str:
+    try:
+        return f"{float(value):.4f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def write_dead_end(harness: Path | str | None, *, generation: int, candidate: Candidate,
+                   reason: str, error_code: str = "",
+                   metrics: Mapping[str, Any] | None = None, now: Any = None) -> Path:
+    """把一条「这条路走不通」写进 ``harness/dead_ends.md``（**只给提案方看**）。
+
+    **为什么需要它**（D1=A，2026-10-14 用户裁决）：M3 主体实测三次候选**近乎同一份补丁**
+    —— ``proposer`` 的证据束只有 memory + train 轨迹摘要 + 反思，**没有任何拒绝历史**。
+    于是模型在同一片信息上重复提出同一个已被否决的改动（三代的 diff 触及文件与意图高度重合）。
+
+    **纪律**：
+
+    1. 这个文件**不在 play 面**（``play_plane_files`` 不含它）⇒ 写它**不改变打法**，
+       因此 ``v_{N+1} = v_N + 死路记录`` 与 ``v_N`` 的 ``play_hash`` 逐字节相同，
+       继承上一份 heldout 测量是**成立**的（用户的步骤 3）；
+    2. 候选**不得修改**它（``proposer._is_forbidden_path`` 已把它列为禁止路径）——
+       否则模型可以抹掉自己的拒绝记录再提同一份补丁；
+    3. 同一个 ``(generation, candidate_id)`` **替换**而不是追加（``--resume`` 重跑幂等）。
+
+    返回文件路径。渲染进提案 prompt 时另有**脱敏**（``proposer._render_dead_ends``）：
+    INV-3/INV-5 的禁用词不得经这条通道进入 agent 可见文本。
+    """
+    root = default_harness_dir(harness)
+    path = Path(root) / DEAD_ENDS_FILE
+    block = _dead_end_block(generation=generation, candidate=candidate, reason=reason,
+                            error_code=error_code, metrics=metrics)
+    header = _dead_end_header(generation, candidate.candidate_id)
+    previous = ""
+    if path.is_file():
+        try:
+            previous = path.read_text(encoding="utf-8")
+        except OSError: # pragma: no cover - 读失败按「无历史」处理（不阻断本代）
+            previous = ""
+    kept = _dead_end_entries(previous)
+    kept = [chunk for chunk in kept if not chunk.startswith(header)]
+    body = "".join(kept) + block
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    events.emit("evolve.dead_end", generation=int(generation),
+                candidate_id=str(candidate.candidate_id),
+                reason=str(reason or error_code or "")[:200],
+                path=str(path))
+    return path
+
+
+def _dead_end_entries(text: str) -> list[str]:
+    """把 ``dead_ends.md`` 切成条目（每条以 ``## `` 开头；文件头注释不算条目）。"""
+    chunks: list[str] = []
+    current: list[str] = []
+    for line in str(text).splitlines(keepends=True):
+        if line.startswith("## "):
+            if current:
+                chunks.append("".join(current))
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        chunks.append("".join(current))
+    return chunks
+
+
+# =====================================================================
+# 拒绝的轻量版本推进（D2=A，2026-10-14 用户裁决）
+# =====================================================================
+
+def record_rejection(*, run_id: str, generation: int, reason: str, cfg: Any,
+                     harness: Path | str | None = None, now: Any = None) -> HarnessRef:
+    """**拒绝也推进版本号**，但**不建全量快照、不打 tag**（D2=A，2026-10-14 用户裁决）。
+
+    用户的架构（步骤 3/5/7）：``v1 = v0 + （仅 P1 不可行的提示词）``。补丁被拒时
+    play 工件**逐字节不变**（唯一变化是 ``dead_ends.md``），因此
+
+    - **不复制** ``versions/v{N}/``：那份快照会与 ``v_{N-1}`` 的内容完全相同，白白让
+      「版本 = 一份不同的 harness」这个不变量失真；
+    - **不打** tag：``harness-v{N}`` 是「可回滚的版本」的标记，而这里没有可回滚的内容；
+    - **仍然 commit + 推进指针**：让 ``harness/`` 里的死路记录进入版本血缘（下一代的
+      提案方读到的就是它），并让「演化前工作区必须干净」（F47-A）在代际边界上成立。
+
+    **幂等键** ``(run_id, generation)`` 与 ``accept()`` 同口径；账本条目**不带**
+    ``versions`` 键——``accept()`` 的幂等分支按 ``versions`` 判「这一代已产生过版本号」，
+    带上去会让它 ``load_version`` 一个**不存在快照**的版本号而抛错。
+
+    git 不可用 ⇒ 降级返回（``commit_harness_version`` 返回空 sha，不阻断演化）；
+    git 可用但失败 ⇒ ``E_EVOLVE_GIT_FAILED``，**指针回滚**（不留「幻影版本号」，PRD §10）。
+    """
+    root = default_harness_dir(harness)
+    gen = int(generation)
+    ledger_path = _ledger_path(cfg, run_id=run_id, generation=gen)
+    ledger = read_ledger(ledger_path)
+    prior = _ledger_entry(ledger, gen)
+    if prior and str(prior.get("action")) == "reject" and prior.get("ref"):
+        return HarnessRef.from_dict(prior["ref"])
+
+    parent = current_version(root)
+    new_version = next_version(root)
+    reason_text = " ".join(str(reason).split())[:300]
+    created_at = utc_now(now)
+    previous_version_file = _read_version_file(root / VERSION_FILE)
+    payload = _version_payload(version=new_version, parent=parent, git_commit="",
+                               artifact_hash=artifact_hash_of(root), created_at=created_at,
+                               reason=reason_text, accepted_by="auto", diff_path="")
+    write_version_pointer(root, payload)
+    try:
+        sha = commit_harness_version(
+            root, version=new_version,
+            message=_commit_message(gen=gen, version=new_version, kind="reject",
+                                    rationale=reason_text),
+            tag=False)
+    except GitFailedError:
+        # 失败保守：提交没成，指针就不得停在 v{new}（否则下一次 accept 会在
+        # 「历史里有一个不存在的版本」之上继续编号）。
+        if previous_version_file is not None:
+            write_json_atomic(Path(root) / VERSION_FILE, dict(previous_version_file))
+        events.emit("evolve.version", from_version=parent, to_version=new_version,
+                    git_commit="", action="failed")
+        raise
+    payload["git_commit"] = str(sha)
+    write_version_pointer(root, payload)
+
+    ref = _ref_of(root, version=new_version, parent=parent, git_commit=str(sha),
+                  created_at=created_at, reason=reason_text, accepted_by="auto",
+                  artifact_hash=payload["artifact_hash"], diff_path="")
+    events.emit("evolve.version", from_version=parent, to_version=new_version,
+                git_commit=str(sha), action="reject")
+    ledger[f"gen-{gen:03d}"] = {"action": "reject", "generation": gen,
+                                "bumped_version": new_version, "ref": ref.as_dict(),
+                                "at": created_at, "reason": reason_text}
+    write_ledger(ledger_path, ledger)
+    return ref
 
 
 def _rollback_files(root: Path, backup: Path) -> None:
