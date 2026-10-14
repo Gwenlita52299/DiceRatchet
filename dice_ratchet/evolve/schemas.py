@@ -52,7 +52,9 @@ __all__ = [
 
 CANDIDATE_KINDS: Final[tuple[str, ...]] = ("prompt_patch", "tool_patch", "config_patch")
 EFFECT_DIRECTIONS: Final[tuple[str, ...]] = ("up", "down")
-#: C2 的候选指标集（§8.2：方法归 MOD-08 ``compare_paired``）。
+#: 候选 ``expected_effect`` 允许申报的指标集（**提案侧**口径；统计方法归 MOD-08）。
+#: 注意（F62，2026-10-14）：这**不是** C2 的判据轴了——C2 已改判「play 面确实变了」，
+#: 统计量降级为 ``paired["by_metric"]`` 报告项。
 EFFECT_METRICS: Final[tuple[str, ...]] = ("win_rate", "mean_stages_cleared",
                                           "mean_hearts_left")
 #: 同 ``evals.metrics.MAIN_METRICS`` 的主指标面（本模块只引用，不定义统计）。

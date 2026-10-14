@@ -10,7 +10,16 @@
 
 ``judge()`` —— 判定表（§8.2 六项，短路求值）
     ``accept ⟺ C0∧C1∧C2∧C3∧C4∧C5``；否则 ``reject`` 且 ``reason`` 含**首个失败条件 id**
-    （如 ``C2:heldout_win_rate 0.28<0.32``）。逐条写 ``condition_trace``。
+    （如 ``C1:win_rate 0.20<0.25``、``C2:no_play_change``）。逐条写 ``condition_trace``。
+
+    **C2 自 2026-10-14（F62，用户裁决 B）起改判**：由「至少一指标**显著提升**」改为
+    「候选的 **play 面指纹确实变了**」（确定性、¥0）。统计量（显著/不显著/方向）**不再
+    阻断**，只落 ``condition_trace`` 与 ``paired``，供判据 2 复核。为什么改：M3 正式
+    实验实测三代全部止步 C2（``no_significant_gain``），而 n=40 上 C2 的等效门槛是
+    「净 +15 pp / 0.45 关」，实际效应只有 +2.5–7.5 pp / +0.05–0.325 关 ⇒ **门没有功效**
+    （不是候选不够好）。为什么必须补一道门而不是删掉 C2：零改动候选若被 accept，它在
+    判据 1 里因 ``play_hash`` 未变而落回 ``not_applicable`` ⇒「≥1 次 accept」第二次
+    变成**退化通过**（B-66/D-M3-4 立这条就是为了防这个）。
 
 纯函数边界：``judge`` / ``smoke_fast_reject`` / ``gap_of`` 不落盘、不调模型、不 import
 网络——它们是 G1 覆盖率 ≥80% 的主力（PRD §12）。
@@ -40,17 +49,30 @@ __all__ = [
 #: 判定表条件 id（§8.2；顺序即短路顺序）。
 CONDITION_IDS: tuple[str, ...] = ("C0", "C1", "C2", "C3", "C4", "C5")
 
-#: C2 允许的"显著提升"指标集（方法归 MOD-08 ``compare_paired``）。
-_PRIMARY_CANDIDATES: tuple[str, ...] = ("win_rate", "mean_stages_cleared",
-                                        "mean_hearts_left")
+#: **报告项**指标集（方法归 MOD-08 ``compare_paired``）。
+#:
+#: 2026-10-14（F62）：C2 取消统计门后，这组指标**不再参与裁决**，只作为判据 2 的证据
+#: 逐项落在 ``paired["by_metric"]`` 里（``compare_all_metrics`` 全跑一遍）。
+_REPORTED_METRICS: tuple[str, ...] = ("win_rate", "mean_stages_cleared",
+                                      "mean_hearts_left")
 PRIMARY_METRIC: str = "win_rate"
+#: 多候选排序的指标优先级（F62）：**连续轴优先**——D-3/B-39 把 4–5 pp 量级的信号
+#: 放在 ``mean_stages_cleared`` 上，而 ``win_rate`` 在 n=40 上只能判 ≥15 pp。
+RANKING_METRICS: tuple[str, ...] = ("mean_stages_cleared", "win_rate")
 
 #: heldout 篮子（Spec B-07：H1=代际裁判）。
 HOLDOUT_BASKET: str = "H1"
 DEFAULT_SMOKE_BASKET: str = "train"
 
 #: 冒烟快速淘汰阈值（FR-07-6）。
-_SMOKE_WIN_RATE_MARGIN: float = 0.2
+#:
+#: **F67（2026-10-14，用户裁决）**：原先还有一条 ``_SMOKE_WIN_RATE_MARGIN = 0.2`` 的
+#: 胜率轴，**已删除**。理由：冒烟 ``smoke_n=2`` ⇒ 胜率分辨率是 0.5，而 0.2 的 margin
+#: **结构上不可达**（差值只能是 0 / 0.5 / 1.0）——它实际等价于一条没写清楚的硬条件
+#: （「parent 全胜且候选至多赢 1 局」），并附带 2–3% 的等价候选误杀。冒烟的定位是
+#: **triage 而不是证据**（花 ≈¥1.7 换掉 ≈¥21 的 40 局），因此只保留**步级**统计的
+#: 安全硬门：非法率/fallback 的分母是上千次尝试，2 局也有诊断力；局级胜率的诊断力
+#: 归 C1（40 局）。
 _SMOKE_MAX_ILLEGAL_RATE: float = 0.30
 _SMOKE_MAX_FALLBACK_RATE: float = 0.30
 
@@ -143,10 +165,12 @@ def smoke_seeds_for(generation: int, *, smoke_n: int, protocol: Any = None) -> t
 def smoke_fast_reject(smoke: Any, *, baseline: Any, cfg: Any) -> str | None:
     """冒烟快速淘汰（FR-07-6）：任一命中即返回原因串（调用方写 ``E_EVOLVE_SMOKE_FAILED``）。
 
-    - 冒烟胜率 < ``parent_smoke`` 胜率 − 0.2；
+    - harness 运行期异常（``ArmResult.error_codes`` 非空）；
     - 非法率 > 0.30；
-    - fallback 率 > 0.30；
-    - harness 运行期异常（``ArmResult.error_codes`` 非空）。
+    - fallback 率 > 0.30。
+
+    **F67（2026-10-14）**：胜率轴已删除（n=2 分辨率 0.5 > margin 0.2，无诊断力）；
+    ``baseline`` 仍作为参数保留（契约不变，且未来若加回步级轴仍需要它）。
     """
     if smoke is None:
         return "smoke_missing"
@@ -155,11 +179,6 @@ def smoke_fast_reject(smoke: Any, *, baseline: Any, cfg: Any) -> str | None:
         errors = tuple(smoke.get("error_codes") or ())
     if errors:
         return f"smoke_error:{errors[0]}"
-
-    win = metric_of(smoke, "win_rate", 0.0) or 0.0
-    parent_win = metric_of(baseline, "win_rate", 0.0) or 0.0
-    if win < parent_win - _SMOKE_WIN_RATE_MARGIN:
-        return f"win_rate {win:.4f}<{parent_win:.4f}-{_SMOKE_WIN_RATE_MARGIN:.2f}"
 
     illegal = metric_of(smoke, "illegal_rate", 0.0) or 0.0
     if illegal > _SMOKE_MAX_ILLEGAL_RATE:
@@ -206,11 +225,16 @@ def _incomplete(value: Any) -> bool:
 
 
 def judge(cand_report: CandidateReport, parent_report: Any, *, cfg: Any,
-          generation: int = 0) -> Verdict:
+          generation: int = 0, play_hash: str = "", parent_play_hash: str = "") -> Verdict:
     """§8.2 判定表：短路求值，六项全 True → ``accept``，否则 ``reject``。
 
     ``parent_report`` 是 parent 的 heldout ``ArmResult``（含 ``metrics``）；
     ``cand_report.train`` 是候选在 train 侧的同口径指标（C3 用）。
+
+    ``play_hash`` / ``parent_play_hash``（F62，2026-10-14）：候选 staging 目录与起点
+    harness 的 **play 面指纹**（``versioning.play_hash``）。C2 的判据是「两者不同」。
+    **fail-closed**：任一为空 ⇒ C2 不通过（``C2:play_hash_unavailable``）——「算不出
+    指纹」绝不能静默变成「打法变了」。
     """
     cand = cand_report.candidate
     trace: list[dict[str, Any]] = []
@@ -274,19 +298,40 @@ def judge(cand_report: CandidateReport, parent_report: Any, *, cfg: Any,
                      code=str(E.E_EVOLVE_NO_GAIN), cand=cand_report,
                      generation=generation, trace=trace)
 
-    # ---- C2 至少一指标显著提升 ------------------------------------------------------
+    # ---- C2 play 面确实变了（F62，2026-10-14；取代「至少一指标显著提升」）--------------
+    # 统计量仍在算、仍在记（`paired` / `condition_trace`），但**不再阻断**：
+    # 「显著提升」这条门在 n=40 上没有功效（实测三代全灭，等效门槛 +15 pp / 0.45 关），
+    # 而「补丁是否真的改变了打法」是**确定性**的、不需要任何额外预算，且正是判据 1
+    # 能继续可判的前提（零改动的 accept 会让下一代落回 `not_applicable`）。
     paired = cand_report.paired or {}
     metric = str(paired.get("metric", PRIMARY_METRIC))
     significant = bool(paired.get("significant", False))
     direction = str(paired.get("direction", "flat"))
-    c2_ok = significant and direction == "up" and metric in _PRIMARY_CANDIDATES
+    stats = (f"{metric} significant={significant} direction={direction} "
+             f"delta={paired.get('delta')} p={paired.get('p')}")
+    ph = str(play_hash or "")
+    prev_ph = str(parent_play_hash or "")
+    if not ph or not prev_ph:
+        c2_ok = False
+        c2_reason = "play_hash_unavailable"
+        c2_detail = (f"play 面指纹不可用（候选={ph or '<missing>'} 起点={prev_ph or '<missing>'}）；"
+                     f"{stats}")
+    elif ph == prev_ph:
+        c2_ok = False
+        c2_reason = "no_play_change"
+        c2_detail = (f"play 面未变（{ph[:19]}）：补丁没有改变打法；{stats}")
+    else:
+        c2_ok = True
+        c2_reason = ""
+        c2_detail = f"play 面已变：{prev_ph[:19]} → {ph[:19]}；{stats}"
     trace.append(condition_trace_entry(
-        "C2", c2_ok,
-        f"{metric} significant={significant} direction={direction} "
-        f"delta={paired.get('delta')} p={paired.get('p')}",
-        value=paired.get("delta"), threshold=str(getattr(cfg, "alpha", 0.05))))
+        "C2", c2_ok, c2_detail,
+        value={"candidate_play_hash": ph, "parent_play_hash": prev_ph,
+               "metric": metric, "significant": significant, "direction": direction,
+               "delta": paired.get("delta"), "p": paired.get("p")},
+        threshold="play_hash != parent_play_hash"))
     if not c2_ok:
-        return _fail("C2", "no_significant_gain", code=str(E.E_EVOLVE_NO_GAIN),
+        return _fail("C2", c2_reason, code=str(E.E_EVOLVE_NO_GAIN),
                      cand=cand_report, generation=generation, trace=trace)
 
     # ---- C3 增益真实性 --------------------------------------------------------------
@@ -376,12 +421,36 @@ def judge(cand_report: CandidateReport, parent_report: Any, *, cfg: Any,
                    candidate_id=cand_report.candidate_id, generation=int(generation))
 
 
+def _delta_of(report: CandidateReport, metric: str) -> float:
+    """候选相对起点的某指标 delta（**优先** ``paired["by_metric"]``，回落主口径）。"""
+    paired = report.paired or {}
+    bag = paired.get("by_metric")
+    if isinstance(bag, Mapping):
+        item = bag.get(metric)
+        if isinstance(item, Mapping) and item.get("delta") is not None:
+            try:
+                return float(item["delta"])
+            except (TypeError, ValueError): # pragma: no cover - 形态异常按 0 处理
+                return 0.0
+    if str(paired.get("metric") or "") == metric and paired.get("delta") is not None:
+        try:
+            return float(paired["delta"])
+        except (TypeError, ValueError): # pragma: no cover
+            return 0.0
+    return 0.0
+
+
 def better(a: CandidateReport, b: CandidateReport) -> bool:
-    """§8.2：C2 ``delta`` 大者优先；并列时 ``candidate_id`` 小者优先（确定性）。"""
-    delta_a = float((a.paired or {}).get("delta", 0.0) or 0.0)
-    delta_b = float((b.paired or {}).get("delta", 0.0) or 0.0)
-    if delta_a != delta_b:
-        return delta_a > delta_b
+    """§8.2 的候选排序（**F62 改：连续轴优先**）。
+
+    原先按「C2 的 ``win_rate`` delta 最大者优先」。C2 取消统计门之后仍需要一个确定性
+    排序（多候选全部通过时选谁进 HITL/accept），主轴换成**分辨率更高的连续轴**：
+    ``mean_stages_cleared`` delta → ``win_rate`` delta → ``candidate_id`` 小者优先。
+    """
+    for metric in RANKING_METRICS:
+        delta_a, delta_b = _delta_of(a, metric), _delta_of(b, metric)
+        if delta_a != delta_b:
+            return delta_a > delta_b
     return a.candidate_id < b.candidate_id
 
 
@@ -597,11 +666,15 @@ def evaluate_candidate(candidate: Candidate, parent: Any, *, cfg: Any,
                        staging_dir: Any, evaluator: CandidateEvaluator | None = None,
                        parent_heldout: Any = None, parent_smoke: Any = None,
                        harness_version: int = 0, generation: int = 0,
-                       smoke_seeds: Sequence[int] = ()) -> CandidateReport:
+                       smoke_seeds: Sequence[int] = (),
+                       play_hash: str = "", parent_play_hash: str = "") -> CandidateReport:
     """冒烟 → 快速淘汰 → heldout → 配对检验（FR-07-6/7）。
 
     ``parent`` 是 parent 的 ``HarnessRef``（取 ``.version`` 与 ``.dir``）；
     ``parent_heldout`` / ``parent_smoke`` 由编排层**每代重算一次**并复用（NFR-07-5 成本）。
+
+    ``play_hash`` / ``parent_play_hash``（F62）：C2 的判据（见 ``judge``）；由编排层从
+    ``staging_dir`` 与起点 harness 各算一次传进来——本函数不碰文件系统，保持纯编排。
     """
     started = time.perf_counter()
     ev = evaluator or CandidateEvaluator(config=cfg, generation=int(generation))
@@ -656,12 +729,20 @@ def evaluate_candidate(candidate: Candidate, parent: Any, *, cfg: Any,
                                heldout=_metrics_dict(heldout),
                                error_code=str(exc.code), reason=str(exc.code),
                                elapsed_s=time.perf_counter() - started)
+    # F62（2026-10-14）：统计量降级为**报告项**（不再阻断），但必须**逐指标**留证据——
+    # 原先生产路径只算 win_rate/McNemar，而 D-3/B-39 要的 4–5 pp 量级在连续轴上。
+    by_metric = _paired_by_metric(heldout, parent_heldout,
+                                  alpha=float(getattr(cfg, "alpha", 0.05)))
+    if by_metric:
+        paired["by_metric"] = by_metric
     report = CandidateReport(candidate=candidate, smoke=smoke_dict,
                              heldout=_metrics_dict(heldout), paired=paired,
                              train=smoke_dict,
                              diversity=_diversity_dict(heldout),
                              elapsed_s=time.perf_counter() - started)
-    verdict = judge(report, parent_heldout, cfg=cfg, generation=int(generation))
+    verdict = judge(report, parent_heldout, cfg=cfg, generation=int(generation),
+                    play_hash=str(play_hash or ""),
+                    parent_play_hash=str(parent_play_hash or ""))
     report = CandidateReport(candidate=report.candidate, smoke=report.smoke,
                              heldout=report.heldout, paired=report.paired,
                              train=report.train, diversity=report.diversity,
@@ -690,6 +771,34 @@ def _compare_paired(candidate_arm: Any, parent_arm: Any) -> Any:
     from dice_ratchet.evals import compare_paired
 
     return compare_paired(candidate_arm, parent_arm)
+
+
+def _paired_by_metric(candidate_arm: Any, parent_arm: Any, *, alpha: float) -> dict[str, Any]:
+    """逐指标配对检验（F62 的**报告项**；方法仍全部归 MOD-08）。
+
+    ``compare_all_metrics`` 早就存在于 MOD-08（文档写着「MOD-07 C2 逐指标取用」），
+    但**没有任何生产调用点** ⇒ D-3/B-39 要求的连续轴检验在生产路径上从未执行过。
+    现在它每次候选评估都跑一遍（数据都在内存里，**0 局新成本**），结果落
+    ``paired["by_metric"]``，供判据 2 与人工复核。
+
+    异常一律吞掉并返回 ``{}``：这是**证据**不是门；门的完整性由 ``_compare_paired``
+    的 fail-closed 路径保证（两者在同一批内存数据上，前者失败通常意味着后者已抛）。
+    """
+    from dice_ratchet.evals import compare_all_metrics
+
+    try:
+        tests = compare_all_metrics(candidate_arm, parent_arm, alpha=float(alpha))
+    except Exception: # noqa: BLE001 - 报告项失败不阻断裁决
+        return {}
+    out: dict[str, Any] = {}
+    for name, test in dict(tests or {}).items():
+        if str(name) not in _REPORTED_METRICS:
+            # MOD-08 若将来扩了指标集，这里只收**文档登记过**的那几项：多出来的会
+            # 悄悄改变 `paired["by_metric"]` 的形态，而它是判据 2 的复核入口。
+            continue
+        as_dict = getattr(test, "as_dict", None)
+        out[str(name)] = dict(as_dict()) if callable(as_dict) else {"value": str(test)}
+    return out
 
 
 def _metrics_dict(result: Any) -> dict[str, Any]:

@@ -388,7 +388,9 @@ def test_build_decision_sections_accepts_winner(tmp_path):
     from evolve_support import FakeArm, make_config, make_report
 
     report = make_report()
-    verdict = judge(report, FakeArm(win_rate=0.30), cfg=make_config(), generation=1)
+    # F62（2026-10-14）：C2 改判「play 面确实变了」⇒ 必须把两个指纹传进判定器。
+    verdict = judge(report, FakeArm(win_rate=0.30), cfg=make_config(), generation=1,
+                    play_hash="sha256:cand", parent_play_hash="sha256:parent")
     report = make_report(verdict=verdict)
     sections = V.build_decision_sections(1, [report], report, None)
     assert sections["decision"] == "accept"

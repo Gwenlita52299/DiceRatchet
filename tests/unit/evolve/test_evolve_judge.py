@@ -3,7 +3,8 @@
 「给定-当-则」逐条对应 PRD §11-5（表驱动 12 例）：
 
 - C1 降 0.01 → 但 ``tol=0.05`` 故**通过**；降 0.06 → reject(``E_EVOLVE_NO_GAIN``)；
-- C2 ``significant=False`` → reject；
+- C2 **play 面未变** → reject（F62，2026-10-14：由「至少一指标显著提升」改判为
+  「补丁真的改变了打法」）；统计量（显著/不显著）**不再阻断**，只落 trace 与 ``paired``；
 - C3 ``gap=0.19>0.15`` → reject(``E_EVOLVE_OVERFIT_SUSPECT``)；
 - C4 ``collapse_flag=True`` → reject(``E_EVOLVE_COLLAPSE``)；
 - C5 ``illegal_rate=0.11`` → reject(``E_EVOLVE_ILLEGAL_RATE``)；
@@ -36,10 +37,11 @@ PARENT = FakeArm(arm="parent", win_rate=0.30, n=40)
 
 
 def _verdict(*, heldout=None, paired=None, train=None, diversity=None, parent=PARENT,
-             cfg=None, candidate=None):
+             cfg=None, candidate=None, play_hash="sha256:cand", parent_play_hash="sha256:parent"):
     report = make_report(candidate=candidate, heldout=heldout, paired=paired,
                          train=train, diversity=diversity)
-    return judge(report, parent, cfg=cfg or make_config(), generation=1)
+    return judge(report, parent, cfg=cfg or make_config(), generation=1,
+                 play_hash=play_hash, parent_play_hash=parent_play_hash)
 
 
 def _trace_of(verdict):
@@ -120,31 +122,67 @@ def test_c1_short_circuits_before_c2():
 
 
 # =====================================================================
-# C2 至少一指标显著提升
+# C2 play 面确实变了（F62，2026-10-14：取消统计显著性门）
+#
+# 为什么改判：M3 正式实验实测三代全部止步 C2（`no_significant_gain`），
+# 而 n=40 上 C2 的等效门槛是「净 +15 pp / 0.45 关」，实际效应 +2.5–7.5 pp /
+# +0.05–0.325 关 ⇒ **门本身没有功效**（不是候选不够好）。取消统计门之后必须补一道
+# **可判定**的门，否则「零改动候选」也会 accept，而那种 accept 在判据 1 里因为
+# play_hash 未变又落回 `not_applicable` ⇒「≥1 次 accept」第二次变成退化通过。
 # =====================================================================
 
-@pytest.mark.parametrize("paired,ok", [
-    ({"significant": True, "direction": "up", "metric": "win_rate"}, True),
-    ({"significant": True, "direction": "up", "metric": "mean_stages_cleared"}, True),
-    ({"significant": True, "direction": "up", "metric": "mean_hearts_left"}, True),
-    ({"significant": False, "direction": "up", "metric": "win_rate"}, False),
-    ({"significant": True, "direction": "down", "metric": "win_rate"}, False),
-    ({"significant": True, "direction": "flat", "metric": "win_rate"}, False),
-    ({"significant": True, "direction": "up", "metric": "mean_decisions"}, False),
+@pytest.mark.parametrize("cand_hash,parent_hash,ok", [
+    ("sha256:aaa", "sha256:bbb", True),    # 变了 ⇒ 过
+    ("sha256:aaa", "sha256:aaa", False),   # 没变（空转/未生效补丁）⇒ 拒
+    ("", "sha256:bbb", False),             # 候选指纹缺失 ⇒ fail-closed
+    ("sha256:aaa", "", False),             # 起点指纹缺失 ⇒ fail-closed
 ])
-def test_c2_significance_matrix(paired, ok):
-    verdict = _verdict(paired=paired_dict(**paired))
+def test_c2_requires_play_plane_change(cand_hash, parent_hash, ok):
+    verdict = _verdict(play_hash=cand_hash, parent_play_hash=parent_hash)
     assert _trace_of(verdict)["C2"]["passed"] is ok, verdict.reason
 
 
-def test_c2_failure_code():
-    verdict = _verdict(paired=paired_dict(significant=False))
+def test_c2_failure_reason_names_the_play_plane():
+    verdict = _verdict(play_hash="sha256:same", parent_play_hash="sha256:same")
+    assert verdict.decision == "reject"
     assert verdict.error_code == str(E.E_EVOLVE_NO_GAIN)
-    assert verdict.reason.startswith("C2:no_significant_gain")
+    assert verdict.reason.startswith("C2:no_play_change")
+
+
+def test_c2_missing_play_hash_reason_is_distinguishable():
+    """「指纹算不出来」与「指纹相同」必须可分辨（前者是工具问题，后者是补丁问题）。"""
+    verdict = _verdict(play_hash="", parent_play_hash="sha256:parent")
+    assert verdict.reason.startswith("C2:play_hash_unavailable")
+
+
+def test_c2_statistically_flat_candidate_is_not_blocked():
+    """**语义变更的核心**：统计不显著/方向为 flat 都不再阻断 —— 只要 play 面变了。
+
+    这就是 F62 要的行为：C2 从「**显著变强**」改成「**打法确实变了**」，
+    统计结果降级为**报告项**（仍写在 trace 的 detail 与 ``paired`` 里，供判据 2 复核）。
+    """
+    verdict = _verdict(paired=paired_dict(significant=False, direction="flat", delta=0.0),
+                       play_hash="sha256:cand", parent_play_hash="sha256:parent")
+    assert _trace_of(verdict)["C2"]["passed"] is True
+    assert verdict.decision == "accept", verdict.reason
+    detail = _trace_of(verdict)["C2"]["detail"]
+    assert "significant=False" in detail and "flat" in detail
+
+
+def test_c2_trace_carries_both_play_hashes_and_the_statistics():
+    """可复核性：C2 的 value 里必须同时有「两个 play 指纹」与「统计量」。"""
+    verdict = _verdict(paired=paired_dict(significant=True, direction="up", delta=0.075),
+                       play_hash="sha256:cand", parent_play_hash="sha256:parent")
+    entry = _trace_of(verdict)["C2"]
+    assert entry["value"]["candidate_play_hash"] == "sha256:cand"
+    assert entry["value"]["parent_play_hash"] == "sha256:parent"
+    assert entry["value"]["significant"] is True
+    assert abs(float(entry["value"]["delta"]) - 0.075) < 1e-9
+    assert "play_hash" in str(entry["threshold"])
 
 
 def test_c2_short_circuits_before_c3():
-    verdict = _verdict(paired=paired_dict(significant=False),
+    verdict = _verdict(play_hash="sha256:same", parent_play_hash="sha256:same",
                        train={"win_rate": 0.9})
     assert [e["condition"] for e in verdict.condition_trace] == ["C0", "C1", "C2"]
 
@@ -463,7 +501,7 @@ def test_short_circuit_order_is_exactly_the_documented_order():
 
 
 def test_first_failure_returns_first_false_entry():
-    verdict = _verdict(paired=paired_dict(significant=False))
+    verdict = _verdict(play_hash="sha256:same", parent_play_hash="sha256:same")
     first = first_failure(verdict.condition_trace)
     assert first is not None and first["condition"] == "C2"
 
@@ -480,9 +518,11 @@ def test_judge_records_candidate_id_and_generation():
 # =====================================================================
 
 @pytest.mark.parametrize("smoke,parent,reason", [
-    (dict(win_rate=0.10), dict(win_rate=0.50), "win_rate"),        # 0.10 < 0.50-0.2
-    (dict(win_rate=0.29), dict(win_rate=0.50), "win_rate"),        # 边界下方
-    (dict(win_rate=0.31), dict(win_rate=0.50), None),              # 边界上方：通过
+    # F67（2026-10-14）：**胜率轴已删除**。n=2 的胜率分辨率是 0.5，而原先的
+    # `_SMOKE_WIN_RATE_MARGIN=0.2` 结构上不可达（差值只能是 0/0.5/1.0）——
+    # 它实际等价于一条没写清楚的硬条件，并附带 2–3% 的等价候选误杀。
+    (dict(win_rate=0.0), dict(win_rate=0.5), None),   # 「parent 1/2、候选 0/2」不淘汰
+    (dict(win_rate=0.0), dict(win_rate=1.0), None),   # 极端差也不淘汰（那是 C1 的活）
     (dict(win_rate=0.50, illegal_rate=0.31), dict(win_rate=0.50), "illegal_rate"),
     (dict(win_rate=0.50, fallback_rate=0.31), dict(win_rate=0.50), "fallback_rate"),
 ])
@@ -493,6 +533,21 @@ def test_smoke_fast_reject(smoke, parent, reason):
         assert result is None
     else:
         assert result is not None and reason in result
+
+
+def test_f67_smoke_gate_drops_the_win_rate_axis():
+    """F67：冒烟只留**三条安全硬门**（异常/非法率/fallback）。
+
+    ``illegal``/``fallback`` 是**步级**统计（2 局里也有上千次尝试）⇒ 仍有诊断力；
+    胜率是**局级**统计（n=2 ⇒ 分辨率 0.5）⇒ 没有诊断力，留着只会误杀。
+    """
+    import importlib
+
+    judge_mod = importlib.import_module("dice_ratchet.evolve.judge")
+    assert not hasattr(judge_mod, "_SMOKE_WIN_RATE_MARGIN"), \
+        "n=2 上的胜率 margin 不可达（分辨率 0.5 > 0.2），不得当门用"
+    assert float(judge_mod._SMOKE_MAX_ILLEGAL_RATE) == 0.30
+    assert float(judge_mod._SMOKE_MAX_FALLBACK_RATE) == 0.30
 
 
 def test_smoke_fast_reject_on_runtime_error():
@@ -518,17 +573,35 @@ def test_smoke_seeds_are_last_of_the_generation_block():
 # winner 选择（§8.2）
 # =====================================================================
 
-def _judged(**kwargs):
+def _judged(*, play_hash="sha256:cand", parent_play_hash="sha256:parent", **kwargs):
     """先构造报告，再用判定表把 ``verdict`` 一起冻结进 ``CandidateReport``。"""
     report = make_report(**kwargs)
     return make_report(**kwargs,
-                       verdict=judge(report, PARENT, cfg=make_config(), generation=1))
+                       verdict=judge(report, PARENT, cfg=make_config(), generation=1,
+                                     play_hash=play_hash,
+                                     parent_play_hash=parent_play_hash))
 
 
 def test_pick_winner_takes_largest_delta():
     a = _judged(candidate=make_candidate(rationale="a"), paired=paired_dict(delta=0.10))
     b = _judged(candidate=make_candidate(rationale="b"), paired=paired_dict(delta=0.20))
     assert pick_winner([a, b]) is b
+
+
+def test_pick_winner_prefers_the_larger_stages_delta():
+    """F62（2026-10-14）：排序主轴从「C2 的 win_rate delta」改成 **连续轴优先**。
+
+    理由：D-3/B-39 把 4–5 pp 量级的信号放在 ``mean_stages_cleared`` 上，而
+    ``win_rate`` 在 n=40 上只能判 ≥15 pp；取消 C2 的显著性门之后，多候选之间
+    更该按**分辨率更高的那条轴**排序。
+    """
+    small = _judged(candidate=make_candidate(rationale="stages 小"),
+                    paired={**paired_dict(delta=0.20),
+                            "by_metric": {"mean_stages_cleared": {"delta": 0.10}}})
+    big = _judged(candidate=make_candidate(rationale="stages 大"),
+                  paired={**paired_dict(delta=0.01),
+                          "by_metric": {"mean_stages_cleared": {"delta": 0.40}}})
+    assert pick_winner([small, big]) is big
 
 
 def test_pick_winner_tie_breaks_on_smaller_candidate_id():
@@ -542,7 +615,7 @@ def test_pick_winner_tie_breaks_on_smaller_candidate_id():
 
 
 def test_pick_winner_returns_none_when_all_rejected():
-    report = _judged(paired=paired_dict(significant=False))
+    report = _judged(play_hash="sha256:same", parent_play_hash="sha256:same")
     assert pick_winner([report]) is None
 
 

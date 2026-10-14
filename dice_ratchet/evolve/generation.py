@@ -384,7 +384,8 @@ def _run_generation(*, state: Any, run_ctx: Any, runner: Any, cfg: Any, app_cfg:
     for cand in prop.candidates:
         report = _evaluate_one(cand=cand, cfg=cfg, ev=ev, parent=parent,
                                parent_heldout=parent_heldout, parent_smoke=parent_smoke,
-                               smoke_seeds=smoke_seeds, run_id=run_id, gen=gen, ctx=ctx)
+                               smoke_seeds=smoke_seeds, run_id=run_id, gen=gen, ctx=ctx,
+                               parent_play_hash=str(result.parent_play_hash or ""))
         result.reports.append(report)
         _write_candidate(result.reports[-1], run_root=run_root, gen=gen)
         if report.verdict is not None and report.verdict.decision == "accept":
@@ -611,7 +612,8 @@ def _heldout_archive_for(arms_dir: Path, generation: int, candidate_id: str) -> 
 
 def _evaluate_one(*, cand: Candidate, cfg: Any, ev: Any, parent: HarnessRef,
                   parent_heldout: Any, parent_smoke: Any, smoke_seeds: Sequence[int],
-                  run_id: str, gen: int, ctx: EvolveContext) -> CandidateReport:
+                  run_id: str, gen: int, ctx: EvolveContext,
+                  parent_play_hash: str = "") -> CandidateReport:
     """单候选的完整链路（FR-07-4 → FR-07-13 → FR-07-6 → FR-07-7 → FR-07-8）。"""
     run_root, harness = ctx.root, ctx.harness
     # ---- ① 改动面硬约束（纯函数，先于任何落盘）-------------------------------------
@@ -664,12 +666,26 @@ def _evaluate_one(*, cand: Candidate, cfg: Any, ev: Any, parent: HarnessRef,
         return CandidateReport(candidate=cand, error_code=str(E.E_EVOLVE_LOAD_FAILED),
                                reason=f"{E.E_EVOLVE_LOAD_FAILED}:{exc}")
 
+    # ---- ④.5 C2 的判据：候选 staging 的 play 面指纹（F62，2026-10-14）----------------
+    # 判据表 C2 由「至少一指标显著提升」改判为「**play 面确实变了**」。指纹必须取自
+    # **候选自己的 staging 目录**（那才是「打完补丁后 agent 会用的模板」），起点一侧取
+    # 本代开始时在役 harness 的指纹（步骤 3 已算）。算不出来 ⇒ 传空串，由 judge
+    # fail-closed 拒绝（`C2:play_hash_unavailable`）——绝不静默当作「变了」。
+    try:
+        candidate_play_hash = str(versioning_mod.play_hash(staging) or "")
+    except Exception as exc: # noqa: BLE001 - 指纹算不出只影响 C2 判据（fail-closed）
+        candidate_play_hash = ""
+        events.emit("evolve.play_hash", generation=int(gen), status="failed",
+                    candidate_id=cand.candidate_id,
+                    detail=f"{type(exc).__name__}: {exc}"[:200])
+
     # ---- ⑤ 冒烟 → heldout → 配对 → 判定表 -----------------------------------------
     report = judge_mod.evaluate_candidate(
         cand, parent, cfg=cfg, staging_dir=staging, evaluator=ev,
         parent_heldout=parent_heldout, parent_smoke=parent_smoke,
         harness_version=int(getattr(parent, "version", 0) or 0), generation=gen,
-        smoke_seeds=smoke_seeds)
+        smoke_seeds=smoke_seeds, play_hash=candidate_play_hash,
+        parent_play_hash=str(parent_play_hash or ""))
     if report.error_code == str(E.E_EVOLVE_LOAD_FAILED): # pragma: no cover - 防御
         return report
     return report

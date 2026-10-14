@@ -61,6 +61,21 @@ def set_inference_client_provider(provider: Callable[..., Any] | None) -> None:
     _INFERENCE_CLIENT_PROVIDER = provider
 
 
+#: 只有 **heldout** split 允许 `eval report` 写权威产物（report.json / 台账 / 绘图 / ext）。
+#:
+#: F71（2026-10-14）：`--split train` 走的是同一条代码路径，而它把 **train 的聚合**塞进
+#: `report["heldout"]` 再交给 `_write_report_preserving_verdict` + `ledger_and_plots`
+#: ⇒ 在 **gen-000（decision="baseline"）或 HITL pending 代**上（二者都不在
+#: ``VERDICT_DECISIONS`` 里）会**覆盖 report.json 的 heldout 段**，并写出一条
+#: `split="heldout"` 而数值来自 train 臂的台账行。修复前这条路径只是**碰巧**被 F61 的
+#: 臂解析错误（退出码 2）挡住了——一旦把臂解析修好，就会变成一个静默的跨 split 污染。
+#: 因此 `--split train` 现在是**只读**的（打印 + 落一份非权威 sidecar）。
+_WRITABLE_SPLITS: Final[tuple[str, ...]] = ("heldout",)
+#: train split 的臂名（F61）：F64 之后真训练局记 ``arm="train"``；旧 run 只有冒烟臂。
+_TRAIN_ARM: Final[str] = "train"
+_TRAIN_ARM_FALLBACKS: Final[tuple[str, ...]] = ("parent-smoke",)
+
+
 def build_inference_client(cfg: Any, *, run_id: str, runs_root: Path) -> Any:
     """按已登记的提供者建客户端；未接线时返回 ``None``（交由 ``run_baseline`` fail-closed）。"""
     if _INFERENCE_CLIENT_PROVIDER is None:
@@ -245,6 +260,10 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
       parent 的 `0.10`，被本命令按候选臂重算后变成 `0.35`，判据 1 的结论随之从
       「单调性不成立」翻成 `monotonic_ok=true`。候选自己的测量请显式
       ``--arm cand-<candidate_id>``（它落在**另一行**，见 ``arm`` 列）。
+    - ``--split train``（**F71，2026-10-14**）：本命令是**只读**的——打印 + 落
+      ``metrics/gen-NNN.<split>.readonly.json``，**不写** ``report.json`` / 代际台账 /
+      绘图 / ext。原因见 ``_WRITABLE_SPLITS``：train 的聚合一旦写进那个 ``heldout``
+      槽位，就会在 baseline/pending 代上覆盖权威报告的 heldout 段。
     """
     paths, cfg, run_id = _paths(args, read_existing=True)
     split = str(getattr(args, "split", "heldout") or "heldout")
@@ -255,7 +274,7 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
                                         exclude_arms=_BASELINE_ARMS)
     requested_arm = getattr(args, "arm", None)
     arm, mixed = _resolve_report_arm(paths.root, generation, pool_results,
-                                     requested=requested_arm)
+                                     requested=requested_arm, split=split)
     results = pool_results if mixed else [r for r in pool_results if r.arm == arm]
     if not results:
         print(f"[{E.E_EVAL_ARM_NOT_ALLOWED}] 第 {generation} 代在 {split} 上没有臂 "
@@ -340,6 +359,16 @@ def cmd_eval_report(args: argparse.Namespace) -> int:
         play_hash=str(versions["play_hash"] or ""),
         train_source=str(versions["train_source"] or "measured"),
         extra={"power_note": power_note(heldout.n)})
+    if split not in _WRITABLE_SPLITS:
+        # F71（2026-10-14）：非 heldout split **只读**。这条分支必须在任何
+        # `_write_report_preserving_verdict` / `_write_plots` / `write_ext_metrics` /
+        # `ledger_and_plots` 之前返回——见 `_WRITABLE_SPLITS` 的说明（修复前 `--split train`
+        # 会把 train 聚合写进 `report["heldout"]` 并落一条 split="heldout" 的台账行）。
+        return _write_readonly_split_recompute(
+            run_root=paths.root, generation=generation, split=split, arm=arm,
+            mixed=mixed, heldout=heldout, train=train, report=report,
+            arms_present=_arms_of(pool_results), requested_arm=requested_arm,
+            provenance=_provenance(cfg, run_id, generation, heldout.basket, proto))
     path, sha = _write_report_preserving_verdict(
         paths.root, generation, report, existing_decided=_verdict_of(paths.root, generation))
     _write_plots(paths.root, generation, heldout, diversity)
@@ -398,7 +427,7 @@ def _arms_of(results: Sequence[Any]) -> list[str]:
 
 
 def _resolve_report_arm(run_root: Path, generation: int, pool: Sequence[Any], *,
-                        requested: Any) -> tuple[str, bool]:
+                        requested: Any, split: str = "heldout") -> tuple[str, bool]:
     """``eval report`` 该按哪个臂重算（F46-A；**默认臂 F57 改为 parent**）。
 
     返回 ``(arm, mixed_pool)``。``requested`` 的取值：
@@ -412,15 +441,21 @@ def _resolve_report_arm(run_root: Path, generation: int, pool: Sequence[Any], *,
     - 其它字符串 → **必须真的在盘上**：不存在即抛 ``E_EVAL_ARM_NOT_ALLOWED``
       （修复前静默回落到 ``"parent"``，于是 ``--arm cand-typo`` 会安静地给出 parent 的数，
       调用方以为拿到的是候选的数）。
+
+    ``split``（F61，2026-10-14）：``train`` split 的臂命名是另一套（F64 之后真训练局记
+    ``arm="train"``，另有 ``parent-smoke`` / ``cand-*-smoke``）；不认这一套时
+    ``eval report --split train`` 必然抛 ``E_EVAL_ARM_NOT_ALLOWED``（现场退出码 2，
+    train 侧报告根本没产出）。**注意**：修好臂解析只是让这条命令能跑；
+    ``--split train`` 本身是**只读**的（见 ``_WRITABLE_SPLITS``）。
     """
     text = str(requested or "").strip()
     if text.lower() == "all":
         return "all", True
     present = set(_arms_of(pool))
     if not present:
-        # 一个臂都没有（该 split 的局缺失/为空）：退回起点臂名，让下游按它去报
-        # 「没有局」的具体数字与 `E_EVAL_ARM_NOT_ALLOWED` 消息——**不在这里猜**。
-        return "parent", False
+        # 一个臂都没有（该 split 的局缺失/为空）：退回**该 split 的**默认臂名，让下游按它
+        # 去报「没有局」的具体数字与 `E_EVAL_ARM_NOT_ALLOWED` 消息——**不在这里猜**。
+        return (_TRAIN_ARM if str(split) == "train" else "parent"), False
     if text:
         if text not in present:
             raise InfraError(
@@ -429,6 +464,13 @@ def _resolve_report_arm(run_root: Path, generation: int, pool: Sequence[Any], *,
                 f"（已出现：{sorted(present)}）",
                 hint="臂名必须与落盘的 arm 逐字一致（候选臂是 `cand-<candidate_id>`）")
         return text, False
+    if str(split) == "train":
+        # F61（2026-10-14）：train split 的臂命名是另一套（F64 之后真训练局记
+        # `arm="train"`，另有 `parent-smoke` / `cand-*-smoke`）。修复前解析器只认 heldout
+        # 口径 ⇒ `eval report --split train` 必然抛 `E_EVAL_ARM_NOT_ALLOWED`（现场退出码 2）。
+        for candidate_arm in (_TRAIN_ARM, *_TRAIN_ARM_FALLBACKS):
+            if candidate_arm in present:
+                return candidate_arm, False
     if "parent" in present:
         return "parent", False
     winner = _winner_arm_of(run_root, generation)
@@ -597,6 +639,46 @@ def _report_versions(run_root: Path | str, generation: int, *, arm_version: int,
     return {"harness_version": int(arm_version), "parent_version": int(arm_version),
             "play_hash": "", "heldout_source": "measured", "train_source": "measured",
             "source": "arm_archive"}
+
+
+def _write_readonly_split_recompute(*, run_root: Path | str, generation: int, split: str,
+                                    arm: str, mixed: bool, heldout: Any, train: Any,
+                                    report: Mapping[str, Any], arms_present: Sequence[str],
+                                    requested_arm: Any,
+                                    provenance: Mapping[str, Any]) -> int:
+    """非 heldout split 的**只读**复算（F71，2026-10-14）：打印 + 落非权威 sidecar。
+
+    为什么不写权威产物（**这条是本次修复的要害**）：`eval report` 的写入路径会把
+    ``heldout`` 这个槽位的聚合写进 ``report.json`` 的 ``heldout`` 段，并派生一条
+    ``split="heldout"`` 的台账行。`--split train` 复用同一条路径 ⇒ 一旦臂解析被修好
+    （F61），它在 **gen-000（``decision="baseline"``）或 HITL ``pending`` 代**上
+    （两者都不在 ``VERDICT_DECISIONS`` 里 ⇒ 不会被 sidecar 保护）会：
+    ① 用 train 的聚合**覆盖 report.json 的 heldout 段**；② 写一条数值来自 train 臂
+    的 heldout 台账行（只因它带 ``arm="train"`` 才恰好被判据 1 的
+    ``arm_of_row == "parent"`` 过滤躲过）；③ 用 train 的熵曲线覆盖 ``plots_data``。
+    修复前这条路径只是**碰巧**被 F61 的退出码 2 挡住。
+
+    产物落 ``metrics/gen-NNN.<split>.readonly.json``：名字里带 ``readonly``，且**没有任何
+    消费者**（台账/判据 1/绘图都不读它）——它只是把这次复算的输入口径留档。
+    """
+    payload = {
+        "generation": int(generation), "split": str(split), "arm": str(arm),
+        "mixed_pool": bool(mixed), "arms_present": list(arms_present),
+        "requested_arm": (str(requested_arm) if requested_arm else None),
+        "heldout": heldout.as_dict(), "train": train.as_dict(),
+        "report": dict(report),
+        "readonly": True,
+        "note": ("非 heldout split 的只读复算：不写 report.json / 不写代际台账 / 不画图。"
+                 "`--split heldout` 才是权威口径（F71，2026-10-14）"),
+    }
+    payload.update(dict(provenance or {}))
+    path = Path(run_root) / "metrics" / f"gen-{int(generation):03d}.{split}.readonly.json"
+    write_json_atomic(path, payload)
+    print(f"readonly: {path}")
+    print(f"arm: {arm}{'（混合池，--arm all）' if mixed else ''} n={heldout.n}")
+    print(f"[只读] split={split} 不写 report.json / 台账 / 绘图；权威口径是 --split heldout")
+    _print(payload)
+    return 0
 
 
 def _read_existing_report(run_root: Path | str, generation: int) -> dict[str, Any]:

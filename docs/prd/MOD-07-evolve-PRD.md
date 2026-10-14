@@ -1,6 +1,8 @@
 # MOD-07 evolve 技术 PRD
 
-> **版本**：v0.9（2026-10-11 **C5 收紧为三轴同构的「相对门 + 绝对 backstop」**——`illegal_tol`/`fallback_tol` 新增并取代绝对门、`truncation_backstop` 堵住 §8.2.2 的已知放宽、`condition_trace` 可审计；处置 D-M3-2 裁决 E；见 §8.2.1/§8.2/§9/§17）
+> **版本**：v0.11（2026-10-14 **C2 改判为「play 面确实变了」+ 冒烟门删除胜率轴**——处置 F62/F67，用户裁决「F62 直接取消 C2」；统计量（`compare_all_metrics`）降级为 `paired["by_metric"]` **报告项**，多候选排序改**连续轴优先**，`accept` 的语义明确为「打法变了且无判定出的退化」而非「显著变强」；见 §8.2/§9/§17）
+> **历史版本**：v0.10（2026-10-14 **D-M3-7 起点继承改按 `play_hash`**：继承资格 / 判据 1 的同起点豁免 / F66 第二半三处改问「play 面指纹」；`heldout` 段改定为「本代结束时在役那份 harness 的测量」；见 §8.1/§17）
+> **历史版本**：v0.9（2026-10-11 **C5 收紧为三轴同构的「相对门 + 绝对 backstop」**——`illegal_tol`/`fallback_tol` 新增并取代绝对门、`truncation_backstop` 堵住 §8.2.2 的已知放宽、`condition_trace` 可审计；处置 D-M3-2 裁决 E；见 §8.2.1/§8.2/§9/§17）
 > **历史版本**：v0.8（2026-10-11 **新增 §6.7：每代评估的检查点与复用**（臂归档 `metrics/arms/` + fail-closed 复用 + 提案检查点 + `n_workers`/`n_rep` 转发 + 中断穿透）——处置 F42-A+B+C；见 §17）
 > **历史版本**：v0.7（2026-10-10 **新增 §6.6：accept/rollback 的失败自清与失败口径**——处置 F47-C2/D：失败时删掉本次新建的快照（否则顶掉版本号并留下可被 load/rollback 取用的幻影版本）、版本冲突也失败保守、基础设施失败记 `decision="error_reject"` 且 `report.json` 不得写成 `accept`；见 §17）
 > **历史版本**：v0.6（2026-10-10 **新增 §6.5：提案输入与补丁应用的硬口径**——处置 F37（按调用方给输出预算）/F38（内联可改文件正文）/F39（容忍行偏移、不容忍 fuzz）/F40（prompt 必须列出校验器规则）/F41（冒烟臂 `-smoke` 的 `episode_key`）；见 §17）。
@@ -58,12 +60,16 @@ MOD-06 每 K 局（默认 30）触发演化周期，把「策略记忆 + 最近�
   - 冒烟 seed 取**本代训练块的末 5 个**（`evals.seeds.take("train", generation=g)[-5:]`），不再固定用 1000–1004（那是第 1 代的训练 seed）。
   - parent 在同一组 seed 上的冒烟结果 `parent_smoke` 与 parent heldout 一起计算。
   - 快速淘汰条件（任一命中即写 `E_EVOLVE_SMOKE_FAILED`）：
-    - 冒烟胜率 < `parent_smoke` 胜率 − 0.2；
     - 非法率 > 0.30；
     - fallback 率 > 0.30；
     - harness 运行期异常。
+  - **2026-10-14（F62/F67 同批，用户裁决）——冒烟胜率轴已删除**：`smoke_n=2` 的胜率分辨率是
+    0.5，而原 margin `0.2` **结构上不可达**（差值只能是 0/0.5/1.0）⇒ 它实际等价于一条没写
+    清楚的硬条件（「parent 全胜且候选至多赢 1 局」），并附带 2–3% 的等价候选误杀。冒烟的定位
+    是 **triage 而不是证据**（≈¥1.7 换掉 ≈¥21 的 40 局）：保留的三门中非法率/fallback 是
+    **步级**统计（2 局也有上千次尝试 ⇒ 有诊断力），局级胜率的诊断力归 **C1**（40 局）。
 - **FR-07-7 正式评估**：冒烟通过者在 `evolve.heldout_seeds`（默认 `heldout:2000-2039`，40 局）评估，**预算与当前版本完全相同**（同 seed 集合、同 `episode_config`、同采样参数，仅 `prompt_tokens` 允许差异并记录）；指标全部委托 MOD-08 `evaluate_arm()`；**parent 与候选必须使用同一个冻结的记忆快照** `memory_version`；parent 每代都要有**测量**，但它**未必每代都重测**——上一代被接受的候选已经作为新版本被完整测过一次，本代**继承**那批局（见 §8.1 的 F57 规则）。MOD-07 不做任何统计运算。
-- **FR-07-8 判定表**：按 §8.2 顺序短路求值，六项全 True → `accept`，否则 `reject` 且 `reason` 含首个失败条件 id（如 `C2:heldout_win_rate 0.28<0.32`）。
+- **FR-07-8 判定表**：按 §8.2 顺序短路求值，六项全 True → `accept`，否则 `reject` 且 `reason` 含首个失败条件 id（如 `C1:win_rate 0.20<0.25`、`C2:no_play_change`）。
 - **FR-07-9 版本化**：`accept()` 生成 `harness/versions/v{N}/`（全量拷贝 + `version.json` + `diff.patch`），更新 `harness/version.json` 指针，经 MOD-09 `commit_harness` 提交到当前分支，并打 tag `harness-v{N}`（不建同名分支，Spec B-22），message = `harness(v{N}): gen-{G} {kind} {short_rationale}`；`N` = 现有最大 +1，**不可复用、不可重写历史**。
 - **FR-07-10 回滚**：`rollback(to_version)` 用 `versions/v{to_version}/` 覆盖 `harness/`，写 `version.json`、生成 `revert.patch`、提交 `revert(harness): back to v{N}`，并写一条 `decision="rollback"` 的代际报告。
 - **FR-07-11 HITL 门**：`evolve.hitl=true` 时 `gate.await_human()` 把决策置 `pending`、写 `gen-{N}/gate.json`（`generation, harness_version, parent_version, diff_path, report_path, status, expires_at`），loop **优雅退出（exit 0，可续跑）**；`evolve approve|rollback --generation N` 读取 gate 文件后执行 accept/rollback，写 `decided_by="human"` 与可选 `reason`；超时（默认 24h）→ 保守回滚 `parent_version`，`reason="hitl_timeout"`（对齐 Spec §8.5）。
@@ -353,7 +359,7 @@ def run_generation(run_id, gen, cfg) -> dict:
         if cr.verdict.decision == "accept" and (winner is None or better(cr, winner)): winner = cr
     return finish(gen, parent_ho, reports, winner)
 
-def better(a: CandidateReport, b: CandidateReport) -> bool:   # §8.2：C2 delta 大者优先，并列时 candidate_id 小者优先
+def better(a: CandidateReport, b: CandidateReport) -> bool:   # §8.2（F62 改轴）：连续轴 delta 大者优先，其次 win_rate delta，并列时 candidate_id 小者优先
     return (a.paired.delta, -ord_id(a)) > (b.paired.delta, -ord_id(b))
 
 def finish(gen, parent_ho, reports, winner, error=None) -> dict:
@@ -372,12 +378,14 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
 |---|---|---|---|
 | C0 | 前置完备 | `report.heldout.n >= cfg.evolve.min_heldout_n` 且关键字段非 `null` | `C0:incomplete_report` / `E_EVOLVE_JUDGE_FAILED` |
 | C1 | 主指标不降 | `report.win_rate >= parent.win_rate - cfg.evolve.win_rate_tol`（**`tol=0.05`**，2026-10-06 D-3 由 0.0 上调；n=40 的 win_rate 粒度是 1/40=0.025，tol<0.025 等于"少赢 1 局即拒"，会拒掉约一半真正等价的候选） | `C1:win_rate {v}<{p}` / `E_EVOLVE_NO_GAIN` |
-| C2 | 至少一指标显著提升 | `paired.significant == True and paired.direction == "up"`，`metric ∈ {win_rate, mean_stages_cleared, mean_hearts_left}`，方法与口径全部由 MOD-08 `compare_paired` 决定（胜率用 McNemar，连续量用配对 bootstrap B=10000）。**2026-10-06 D-3：H=40 下 `win_rate` 只能判 ≥15pp（见 MOD-08 §8.2），M3 的 4–5pp 结论必须由 `mean_stages_cleared` 承担** | `C2:no_significant_gain` / `E_EVOLVE_NO_GAIN` |
+| C2 | **play 面确实变了**（2026-10-14 **F62 改判**，用户裁决 B） | `play_hash(candidate.staging) != play_hash(parent)`，指纹 = `versioning.play_hash`（`prompts/decision.md` + `config.json` + `tools/*.py` 的 sha256 复合，**不含** `reflection.md`/`dead_ends.md`）；**任一为空即 fail-closed 拒绝**。**修复前的口径是「至少一指标显著提升」**（`paired.significant and direction=="up"`）——M3 正式实验实测三代**全部**止步于此（`C2:no_significant_gain`，p=1.000/0.549/0.754），而 n=40 上它的**等效门槛**是「净 +15 pp / 0.45 关」，实际效应只有 +2.5–7.5 pp / +0.05–0.325 关 ⇒ **是门没有功效**（D-3/B-39 的判断被实测证实）。**为什么不能只删**：零改动的候选若被 accept，会因为 `play_hash` 未变而在判据 1 里落回 `not_applicable` ⇒「≥1 次 accept」会第二次变成退化通过。**统计量降级为报告项**：`compare_all_metrics` 每次候选评估全跑一遍（**0 局新成本**），落 `paired["by_metric"]`，同时写进 C2 的 `condition_trace`（两个指纹 + 显著/方向/delta/p）⇒ 判据 2 第一次拿到连续轴证据。**已知代价**：只改学习侧（`reflection.md`/`dead_ends.md`，不在 play_hash 里）的提案会被 C2 合法拒绝——D-M3-7 下演化的单位就是 play 面。 | `C2:no_play_change` / `C2:play_hash_unavailable` / `E_EVOLVE_NO_GAIN` |
 | C3 | 增益真实性 | `train.win_rate - heldout.win_rate <= cfg.evolve.gap_threshold`（0.15，对齐 Spec §4.5 `gap_threshold`） | `C3:gap {gap}>{thr}` / `E_EVOLVE_OVERFIT_SUSPECT` |
 | C4 | 无坍缩 | `diversity.collapse_flag == False and diversity.entropy_slope >= cfg.evolve.min_entropy_slope`（−0.01；Spec 示例 −0.004 属通过区间） | `C4:collapse` / `E_EVOLVE_COLLAPSE` |
 | C5 | 合法性与健壮性 | **三轴同构的相对门 + 绝对 backstop**（2026-10-11 D-M3-2 裁决 E，Spec v2.8 B-64）：`illegal_rate ≤ min(parent.illegal_rate + evolve.illegal_tol(0.05), evolve.max_illegal_rate(0.35))` 且 `fallback_rate ≤ min(parent.fallback_rate + evolve.fallback_tol(0.05), evolve.max_fallback_rate(0.25))` 且 `truncation_rate ≤ min(parent.truncation_rate + evolve.truncation_tol(0.05), evolve.truncation_backstop(0.60))`。修复前三轴中前两轴是绝对门，对 `C1` 实测值（0.0318 / 0.0017）松 11×/147× ⇒ **非约束门**（Spec v1.3 P-25 结案：不再用回合数，因为 GAME 的回合上限针对单场战斗而非整局。历史：2026-10-07 按 §3.1 实测把 illegal/fallback 由 0.05/0.10 重标定为 0.35/0.25；2026-10-09 truncation 由绝对门 0.15 改相对门 B-44；2026-10-11 illegal/fallback 也改相对门并给 truncation 补 backstop，见 §8.2.1/§8.2.2） | `C5:illegal/fallback/truncation` / `E_EVOLVE_ILLEGAL_RATE` |
 
-`accept ⟺ C0∧C1∧C2∧C3∧C4∧C5`。多候选全通过时取 `(C2 delta 最大, candidate_id 最小)` 为 winner，其余记 `reject/reason="superseded"`（不计失败、无错误码）。
+`accept ⟺ C0∧C1∧C2∧C3∧C4∧C5`。多候选全通过时取 **(连续轴优先：`mean_stages_cleared` delta → `win_rate` delta → `candidate_id` 最小)** 为 winner（2026-10-14 F62 改轴：C2 不再提供「显著性」这个排序量，而 D-3/B-39 把 4–5 pp 量级的信号放在连续轴上），其余记 `reject/reason="superseded"`（不计失败、无错误码）。
+
+> **accept 的语义（2026-10-14 起，不得含糊）**：`accept` = 「**打法确实变了**（C2）**且没有可判定的退化**（C1/C3/C4/C5）」，**不是**「显著变强」。需要「有没有变强」的结论时看 `paired["by_metric"]` 与判据 2（消融/test），不要拿 `accept` 当提升证据。
 
 ### 8.2.1 C5 的实测标定与 M3 收紧路径（2026-10-07）
 
@@ -474,7 +482,7 @@ parent 与候选在**同一 held-out 篮子、同一预算**下评估（§8.2 C0
   且 `win_rate` 有方差：80% vs 启发式 70%）。写法仍是 run 级 override：
   `DICERATCHET_EXPERIMENT__ARM=C1 DICERATCHET_ENV__EPISODE__DIFFICULTY=medium <cmd>`。默认局仍是 `hard × 6`（M3 主口径）。
 - **已知放宽（诚实边界）**：相对门是**对称放宽**——parent 自身截断率很高时，候选只要不比它差就能过。例如
-  parent = 0.90 时候选 0.60 也放行（见参数化用例的 `(0.60, 0.90, True)`）。兜底靠 C0–C4（尤其 C2 要求显著提升）
+  parent = 0.90 时候选 0.60 也放行（见参数化用例的 `(0.60, 0.90, True)`）。兜底靠 C0–C4（C1 的主指标不降 + C3 的增益真实性；**C2 自 2026-10-14 起只管「play 面变了」**，不再提供「显著提升」这个兜底）
   与 M3 的 tol 标定；本轮不引入绝对 backstop。已在测试里显式钉住这一行为，避免被误读为缺陷修复。
 
 ### 8.3 HITL 时序 / 8.4 回滚流程
@@ -496,7 +504,7 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | `evolve.smoke_n` | int | **2** | 冒烟局数，取本代训练块末尾（FR-07-6）。2026-10-06 D-1：5 → 2；**必须与 `loop.smoke_n` 同步改**（该处无自动校验）。v0.1 的 `train_eval_seeds` 已删除：`train.win_rate` 按 MOD-08 的滚动窗口口径，1030–1069 与第 2～3 代训练块重叠 |
 | `evolve.heldout_seeds` | str | 由 MOD-09 注册表注入 | heldout 评估组（40 局），**不得写入任何 prompt** |
 | `evolve.min_heldout_n` / `evolve.win_rate_tol` | int / float | 20 / **0.05** | C0 门槛 / C1 允许下降幅度（2026-10-06 D-3：0.0 → 0.05） |
-| `evolve.alpha` | float | 0.05 | C2 显著性水平（方法归 MOD-08） |
+| `evolve.alpha` | float | 0.05 | **报告项的显著性水平**（方法归 MOD-08）。**2026-10-14（F62）：它不再参与裁决**——C2 改判 play 面指纹后，`alpha` 只用于 `paired`/`paired["by_metric"]` 里「显著/不显著」的标注（判据 2 的证据面） |
 | `evolve.gap_threshold` / `evolve.min_entropy_slope` | float | 0.15 / −0.01 | C3 `win_rate_gap` 阈值 / C4 熵斜率下限 |
 | `evolve.max_illegal_rate` / `evolve.max_fallback_rate` | float | **0.35 / 0.25** | C5 的**绝对 backstop**（2026-10-07 §3.1 实测标定：0.05/0.10 → 本值，当时是绝对门；**2026-10-11 D-M3-2 起语义降为 backstop**——主门改为相对门，本值只用于堵「parent 自身很差时跟着烂」，键名保留 ⇒ 老配置仍可加载） |
 | `evolve.illegal_tol` / `evolve.fallback_tol` | float | **0.05 / 0.05** | C5 的 **illegal / fallback 相对门**容差：`candidate ≤ min(parent + tol, backstop)`。**2026-10-11 新增**（D-M3-2 裁决 E）。两轴的 `*_rate` 都是**步级**（illegal 分母 = 成功步+非法尝试 ≈12k ⇒ se≈0.0017；fallback 分母 = 决策点 ≈3.7k ⇒ se≈0.0030），故 0.05 远大于批内噪声 ⇒ 优先防「真·退化」，**不承担**「检微小漂移」。⚠️ **诚实边界**：0.05 是起点值，**不是 §3.2 的实测标定值**（标定未做） |
@@ -535,7 +543,7 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 2. 给定含 `import numpy` / `import requests` / `urllib.request` 的 `tool_patch`，或 `config_patch` 修改 `evolvable_keys` 外的键（如 `sampling.seed`），当校验，则拒绝。
 3. 给定证据束混入一条 `split="heldout"` 轨迹摘要，当 `build_evidence_bundle`，则抛 `E_EVAL_INV5_LEAK`；给定反思文本出现 heldout seed `2013` 字面量，当 `assert_no_holdout_leak`，则抛 `E_EVAL_INV5_LEAK`（出现 `20130`/`x2013y` **不**误报，正则 `(?<!\d)2013(?!\d)`；v0.1 示例用的 1042 属于 train 区间，已更正）。
 4. 给定 `render_proposer_prompt` 产出，当扫描，则占位符 ⊆ `{observation, memory, harness, task}` 且不含 `heldout`/`test` 子串（INV-3 回归）；给定同一 `(run_id, gen, seed)` 与固定 stub LLM，当两次 `propose`，则 `candidate_id` 列表逐字节相同（NFR-07-1）。
-5. 判定表表驱动 12 例：C1 降 0.01 → reject(`E_EVOLVE_NO_GAIN`)；C2 `significant=False` → reject；C3 `gap=0.19>0.15` → reject(`overfit_suspect`)；C4 `collapse_flag=True` → reject；C5 `illegal_rate=0.11` → reject；六项全真 → accept；并覆盖短路顺序。
+5. 判定表表驱动 12 例：C1 降 0.01 → 通过（`tol=0.05`）；降 0.06 → reject(`E_EVOLVE_NO_GAIN`)；**C2 判 play 面**（指纹相同/缺失 → reject；统计不显著但指纹变了 → 通过）；C3 `gap=0.19>0.15` → reject(`overfit_suspect`)；C4 `collapse_flag=True` → reject；C5 `illegal_rate=0.11` → reject；六项全真 → accept；并覆盖短路顺序。
 6. 给定已存在 `(run_id, gen)`，当重复 `accept`，则返回首次结果且 `harness/versions/` 无新增目录（幂等）；给定 current=5，当 `rollback(2)`，则 `harness/` 的 sha256 等于 `versions/v2/`，`version.json.parent==5`，产生 `revert.patch`；给定 `evolve.hitl=false`，当 accept，则不写 `gate.json` 且 `decided_by="auto"`；给定 `hitl=true` 且 gate 未响应至超时，则 `decision="rollback"`、`reason="hitl_timeout"`。
 
 **集成（`tests/integration/evolve/`）**：① 给定 stub LLM + 缩配（`smoke_seeds=train:1000-1001`、`heldout_seeds=heldout:2000-2005`），当跑 `run_generation`，则产出 `report.json` 且通过 §6.3 Schema（G5 round-trip）；② 给定 3 代 run（`--hitl`）且每代 `evolve approve`，则 `harness/version.json.version == 3` 且 `harness/v1..v3` 三个 commit 存在（G6）；③ 给定 MOD-08 抛 `E_EVAL_TIMEOUT`，当 `evaluate_candidate`，则候选 reject 且当前 harness 不变（NFR-07-7）；④ 给定 run 全目录，当 `audit leak --run-id <run_id>`，则在 MOD-07 产出物上 0 告警（G4）。
@@ -611,7 +619,7 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 
 ## 16. 开放问题
 
-1. `compare_paired` 的方法与最小样本量归 MOD-08：40 局能否检出 +5% 胜率提升？若不能，C2 是否退化为"CI 不重叠 + 效应量 ≥ 0.05"？
+1. ~~`compare_paired` 的方法与最小样本量归 MOD-08：40 局能否检出 +5% 胜率提升？若不能，C2 是否退化为"CI 不重叠 + 效应量 ≥ 0.05"？~~ **2026-10-14 已由实测回答（F62）**：n=40 上 C2 的等效门槛是「净 +15 pp / 0.45 关」而 M3 实测效应只有 +2.5–7.5 pp ⇒ **判不了**，因此 C2 不再承担显著性判定（改判 play 面），统计量降级为 `paired["by_metric"]` 报告项。**遗留**：若日后要让「有没有变强」也由机器判，需要先解决功效问题（§9.3 的 E≈180 局/臂，或 `n_rep` > 1）。
 2. ~~`versions/v{N}/` 全量拷贝 vs 只存 `diff.patch`~~：已裁决为全量拷贝 + `diff.patch`（B-29）；多候选同时通过时只接受 1 个（当前决策）是否低估单代增益，是否允许"1 个 canonical + 1 个 config_patch"？
 3. Tie 语义：`win_rate` 相同但 `mean_stages_cleared` 显著提升时，C1 当前按"不降"通过——是否应额外要求次级指标不得恶化？`E_EVAL_INV5_LEAK` 处置是否过重（替代：告警 + 该代作废 + 移交人工）？
 4. MOD-10 介入后 harness 与模型权重需联合版本化：`base_model` 字段已预留（B-33），启用后计入 `artifact_hash`；`harness/` 整体入 git（含 `versions/`）还是只提交生效工件 + `diff.patch`（影响 `rollback` 的 git 语义）？
@@ -630,5 +638,6 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | v0.6 | 2026-10-10 | **新增 §6.5：提案输入与补丁应用的硬口径（F37–F41，对齐 Spec v2.3 B-47..B-50）**。本轮是**闭环首次真正跑通提案→补丁→冒烟→裁判**，五个缺陷依次暴露（全部只在「测试不走的参数组合」里，被 1700+ 条全绿用例掩护）：① **F37** 提案沿用 `inference.max_tokens=256` ⇒ 响应一律截断 → 报成 `E_LLM_SCHEMA_INVALID` → **0 候选**；改为按调用方给预算（2048），**否掉**全局抬高路线。② **F38** prompt 只给 harness 文件的 sha256、不给正文 ⇒ 模型对没见过的文件写 diff ⇒ `E_EVOLVE_PATCH_INVALID`；改为内联可改文件正文（`HarnessSnapshot.contents`，schema 1.1.0）。③ **F39** `_apply_hunks` 只认声明行号 ⇒ 上下文逐字正确但偏 +9 的真实候选被判无效；改为 ±200 行逐字定位（容忍 offset、不做 fuzz、歧义即拒）。④ **F40** `evolvable_keys` 从未进 prompt（`config_patch` 盲猜即作废）、rationale 上限只在 schema 的 `maxLength`（API 不强制）⇒ 改为 prompt 明列 + 上限取自 schema（单一事实来源）。⑤ **F41** 冒烟臂 `parent-smoke`/`cand-{id}-smoke` 不在 `episode_key` 登记模式里 ⇒ 冒烟局 0 行轨迹 ⇒ `E_EVAL_INSUFFICIENT_N` ⇒ **每个候选在冒烟关即死**；已三处同步（MOD-09 §6.2 / `infra/logging.py` / `schemas/trajectory_line.schema.json`）。**修好后的首个真实候选**走到完整裁判链并**被合法拒绝**（`C2:no_significant_gain`、`delta=0.0,p=1.0`）⇒ 据此**改写 §3.2 验收判据**为「机制性失败为零」（Spec B-51，用户裁决）。 |
 | v0.11 | 2026-10-14 | **D-M3-7：起点的跨代继承改按 `play_hash`，并把代际测量改成「每代只测候选」；`heldout` 段的口径由「恒取 parent」改为「本代结束时在役那份 harness 的测量」（Spec v2.24 B-81；取代 F57 的资格判据与落盘口径）**。① **为什么换判据**：D2=A 让**拒绝也推进版本号**（`v_{N+1} = v_N + dead_ends`）⇒「版本相同 ⇔ 起点相同」不再成立；判据 1 的同起点豁免、继承资格、F66 的第二半（补丁是否真的改变打法）三处统一问 `play_hash`。② **为什么换落盘口径**：全拒的 run 里每一代都继承起点那份，若 `heldout` 恒取 parent 则台账永远只有一个数据点、`comparable_pairs` 恒 0 ⇒ 判据 1 **结构上不可满足**；接受一代必须留下新数字。③ **成本**：每 cycle 114 → 74 局（省 ≈40 局 / ≈¥21 / ≈1.7 h）。④ **D1=A/D2=A**：死路记录进提案 prompt（`HarnessSnapshot.context`，schema `1.2.0`；只读 + 禁止候选改动 + 渲染脱敏 + system prompt 第 11 条硬约束）；拒绝轻量推进版本号（无快照、无 tag、账本不带 `versions` 键、git 失败回滚指针）。⑤ **同批修 F64**（训练局标签 = 它服务的那一代；train 段取本代训练块并按 `arm="train"` 真过滤；不足即 `source="insufficient"`）与 **F69**（绘图 `yerr` 夹到 ≥0，辅助产物不得毁主产物）。⑥ **诚实边界**：被接受候选的测量成为下一代基线 ⇒ 含选择偏差（winner's curse），登记 **F70** 待裁决。**成本：¥0**。 |
 | v0.10 | 2026-10-12 | **新增 §8.1 的 F57 规则：parent 测量跨代继承（Spec v2.20 B-78）**。① `accept()` 之后 parent 就是上一代被接受的候选，而它已被完整测过 ⇒ `_inherited_parent_arms` **继承**那批局，heldout **0 次 `evaluate_arm`**（省 ≈20 局 / ≈¥17 每代）。② 资格四条 fail-closed（accept / 版本相同 / 能推出候选臂 / 归档可还原且 seed 覆盖本代篮子）；任一不满足即重测。③ **冒烟仍按本代 seed 重测**（同预算要求同批 seed）。④ 继承的代**不新增 heldout 台账行**，只在 `report.json` 记 `heldout.source="inherited:gen-00X"`。⑤ 动机不只是钱：API 臂同 harness 两次测量差 5pp（本 run 噪声底）⇒ 重测引入不可复现抖动。⑥ 隐性陷阱（实测踩到）：资格判断**不能**写 `or -1`——`harness_version == 0` 是合法且 falsy 的值，会静默跳过 v0 上的可继承来源。 |
+| v0.11 | 2026-10-14 | **C2 改判「play 面确实变了」+ 冒烟门删除胜率轴（F62/F67，对齐 Spec v2.26 B-83；用户裁决「F62 直接取消 C2」）**。① **为什么改**：M3 正式实验实测三代**全部**止步 C2（`C2:no_significant_gain`，p=1.000/0.549/0.754），而 n=40 上 C2 的**等效门槛**是「净 +15 pp / 0.45 关」，实际效应只有 +2.5–7.5 pp / +0.05–0.325 关 ⇒ **是门没有功效，不是候选不够好**。② **为什么不能只删**：零改动的候选若被 accept，会因为 `play_hash` 未变而在判据 1 里落回 `not_applicable` ⇒「≥1 次 accept」**第二次**变成退化通过。③ **判据**：`c2_ok = bool(play_hash) and bool(parent_play_hash) and play_hash != parent_play_hash`（候选 staging vs 起点在役 harness；任一为空即 fail-closed 拒绝）。④ **统计量降级为报告项**：`evals.harness.compare_all_metrics`（早已存在、此前**零生产调用点**）每次候选评估全跑一遍（0 局新成本）⇒ `paired["by_metric"]`；C2 的 `condition_trace` 同时带两个指纹与显著/方向/delta/p。⑤ **排序改轴**：`better()` 由「C2 的 `win_rate` delta」改为**连续轴优先**（`mean_stages_cleared` → `win_rate` → `candidate_id`）。⑥ **冒烟门**：删掉 `_SMOKE_WIN_RATE_MARGIN=0.2`（n=2 分辨率 0.5 ⇒ 结构上不可达 + 2–3% 等价候选误杀），保留 error/illegal/fallback 三条安全硬门；冒烟定位写明为 **triage 不是证据**。⑦ **归档 run 零成本反事实复核**：三代 staging 的 play 指纹**都变了**，按归档臂复算 C1/C5 ⇒ gen-001/002 可 accept、**gen-003 被 C5 拒**（truncation 0.175 > 0.150）⇒ 新门可达且 C5 有真诊断力（此前因短路从未求值）。⑧ **护栏**：判定器 9 条 + 生成链 3 条（含「统计不显著但 play 面变了 ⇒ accept」这条语义核心），`git stash` 后全部失败。⑨ **⚠️ 诚实边界**：`accept` 的语义改为「**打法确实变了且没有可判定的退化**」，**不是**「显著变强」；只改学习侧（`reflection.md`/`dead_ends.md`）的提案会被 C2 合法拒绝（D-M3-7 下演化的单位是 play 面）；`evolve.alpha` 只剩「报告项的显著性水平」这一职责。⑩ **成本**：¥0 |
 | v0.9 | 2026-10-11 | **C5 收紧为三轴同构的「相对门 + 绝对 backstop」（D-M3-2 裁决 E，对齐 Spec v2.8 B-64）**。① **现场（实测，不是推断）**：`illegal`/`fallback` 的绝对门（0.35 / 0.25）对 `C1` 实测值（0.0318 / 0.0017）松 **11× / 147×** ⇒ 实际是**非约束门**（与 M2 的「先松开」同一状态）。后果不是「少抓一个坏候选」，而是**判据 2 的归因结论不成立**——候选完全可以靠推高非法率换 `win_rate` 而照样过闸。② **门结构**：三轴统一为 `candidate ≤ min(parent + tol, backstop)`；新增 `evolve.illegal_tol=0.05` / `evolve.fallback_tol=0.05` / `evolve.truncation_backstop=0.60`，`max_illegal_rate`/`max_fallback_rate` **保留但语义降为 backstop**（键名不变 ⇒ 老配置仍可加载）。③ **堵住 §8.2.2 的已知放宽**：原设计（B-44）刻意不给 truncation 设绝对 backstop，代价是 parent=0.90 时候选 0.60 也能过；`truncation_backstop=0.60` 把它钉住（0.60 = C1 hard×6 实测 0.30 的 2× 余量）。④ **`tol` 语义按轴分列、不可互换**（最易写错处）：illegal 是**步级**（分母 = 成功步+非法尝试 ≈12k ⇒ se≈0.0017）、fallback 是**步级**（分母 = 决策点 ≈3.7k ⇒ se≈0.0030）、truncation 是**局级**（粒度 1/40 = 0.025）；故 0.05 对前两轴远大于批内噪声（防「真·退化」，不承担「检微小漂移」），对 truncation 恰好是 2 局噪声。⑤ **fail-closed 扩展**：三轴都是相对门 ⇒ parent 的 `illegal_rate`/`fallback_rate` 与 `truncation_rate` 一样进 **C0 前置完备性检查**，缺任一项记 `C0:incomplete_report` 并 reject，不静默跳门。⑥ **可审计性**：`condition_trace` 的 C5 条目带 `value`（候选值 + 三个 parent 值）与 `threshold`（三个**生效门限** + 三个 `tol` + 三个 backstop），随 `CandidateReport.as_dict()` → `candidates/{id}.json.verdict` 落盘。⑦ **护栏**：12 条新/改用例（相对门边界 ×6、illegal/fallback 相对性 ×2、backstop 封顶 ×2、truncation backstop ×2、C0 缺 parent 值 ×2、trace 序列化往返 ×1）；**全部先 `git stash` 掉源码证明修复前失败**（实测 **11 failed / 68 passed**，两处「修复前后同结论」的边界保留为对照），且都带反例自检（`0.30 ≤ 0.35` 必落在旧绝对门内、`0.601 ≤ 0.90+0.05` 必落在无 backstop 的相对门内）。⑧ **⚠️ 诚实边界**：`tol=0.05` 是「与既有 `win_rate_tol`/`truncation_tol` 同口径 + 远大于步级噪声」定的**起点值**，**不是 §3.2 的实测标定值**（标定需一批配对实测，未付费、未做）；标定后只改数值，不改门结构。⑨ **成本**：¥0 |
 | v0.8 | 2026-10-11 | **新增 §6.7：每代评估的检查点与复用（F42-A+B+C，对齐 Spec v2.6 B-60/B-61）**。① **现场**：MOD-06 的 resume 单元只有整代（`_cycle_artifacts_exist`），中断即重跑整代——一代 84 局实测 ≈3.75 h / ≈¥47；而引擎早有 `run_eval(resume_results/on_result)`，只是 `evaluate_arm` 不转发（修复前签名 `TypeError: evaluate_arm() got an unexpected keyword argument 'resume_results'`）。② **臂归档**：`metrics/arms/gen{gen:03d}-{split}-{basket}-{arm}.json` = `ArmResult.as_dict()` + provenance（13 字段）+ 逐局明细。③ **fail-closed 复用**：provenance 逐字段全等且覆盖完整 seed 列表 → 整臂复用（0 局 + `evals.arm_reused`）；部分覆盖 → 只跑缺的；任一不一致/损坏/无 run 目录 → 重算。④ **提案检查点**：评估前落 `generations/gen{gen:03d}/proposals/proposal.json` + 输入指纹（含 `prompt_digest`）；命中即同 candidate id、**0 次 proposer 调用**。理由：API 提案不可复现（`api_supports_seed=false`），不落检查点则 `cand-<id>` 归档必然 miss，只能省 parent 侧。⑤ **F42-C**：`CandidateEvaluator._evaluate_arm` 原先不传 `n_workers`（84 局串行，而 gen-000 基线传 2）⇒ 按 `cfg.evals` 对齐（不改配置 ⇒ `config_hash` 不变）。⑥ **中断语义**：`_parent_arms` 让 `KeyboardInterrupt`/`SystemExit` 穿透（折成保守 reject 会写出 report.json，让 loop 把该代记成已完成）。⑦ **顺带修**：`run_eval` 原先只把 `resume_results` 并进聚合字典、队列仍会重跑那些 seed；`str(None)=="None"` 让归档复用闸永远对不上。⑧ **端到端实测（0 成本替身）**：parent heldout 第 1 局后 Ctrl-C → resume → proposer 0 次调用、parent 已归档局一局未重跑、该代跑完。 |

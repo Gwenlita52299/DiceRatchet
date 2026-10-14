@@ -42,7 +42,9 @@ def test_verdict_schema_roundtrip():
     from evolve_it_support import FakeArm
 
     report = make_report()
-    verdict = judge(report, FakeArm(win_rate=0.30), cfg=make_config(), generation=1)
+    # F62（2026-10-14）：C2 改判「play 面确实变了」⇒ 判定器需要两个指纹。
+    verdict = judge(report, FakeArm(win_rate=0.30), cfg=make_config(), generation=1,
+                    play_hash="sha256:cand", parent_play_hash="sha256:parent")
     payload = verdict.as_dict()
     validate_verdict(payload)
     assert Verdict.from_dict(payload) == verdict

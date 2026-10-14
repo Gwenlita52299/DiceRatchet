@@ -228,7 +228,10 @@ EOF
     echo "=== M3 正式实验后置（免费）==="
     echo "--- 判据 1 判定器 ---"; "$PY" -m dice_ratchet eval acceptance --run-id "$RUN_ID" --sensitivity || true
     echo "--- 代际报告（heldout，parent 臂 / F57 口径）---"; "$PY" -m dice_ratchet eval report --run-id "$RUN_ID" --split heldout --baseline all || true
-    echo "--- 代际报告（train）---"; "$PY" -m dice_ratchet eval report --run-id "$RUN_ID" --split train || true
+    # F61/F71（2026-10-14）：`--split train` 现在能解析 `train` 臂且是**只读**的
+    # （打印 + `metrics/gen-NNN.train.readonly.json`，不写 report.json / 台账 / 绘图）。
+    # 因此这里**不再 `|| true`**（原先是「我的脚本吞掉了退出码」，见结果报告 §6 F61）。
+    echo "--- 代际报告（train，只读）---"; "$PY" -m dice_ratchet eval report --run-id "$RUN_ID" --split train
     echo "--- 多样性 / 坍缩 ---"; "$PY" -m dice_ratchet eval diversity --run-id "$RUN_ID" || true
     echo "--- test 只读预检 ---"; "$PY" -m dice_ratchet eval test --run-id "$RUN_ID" --check || true
     echo "--- leak 审计（train）---"; "$PY" -m dice_ratchet audit leak --run-id "$RUN_ID" --split train || true

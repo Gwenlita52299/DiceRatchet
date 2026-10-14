@@ -13,6 +13,7 @@ import json
 import subprocess
 import sys
 import threading
+import time
 import types
 import urllib.error
 from dataclasses import replace
@@ -314,22 +315,84 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def _wait_until_serving(url: str, *, timeout_s: float = 10.0) -> bool:
+    """轮询 ``/health`` 直到桩服务**真的能应答**（F68，2026-10-14）。
+
+    现场：``_get_ok`` 内部写死 ``urllib.request.urlopen(..., timeout=2.0)``，而这些用例
+    断言的是「**一次**探测必须为真」。满载时桩的应答会超过 2 s（GIL 争用 / 调度延迟），
+    于是一次探测返回 False ⇒ 用例随机失败，且与实现无关
+    （``git stash`` 掉 ``dice_ratchet/`` 同样失败 ⇒ 环境性噪声）。
+
+    正确口径：就绪是一个**有截止期的重试**（这里 10 s），不是一次 2 s 探测。
+    失败仍是失败——只是不再把「慢」判成「没起来」。
+    """
+    deadline = time.monotonic() + float(timeout_s)
+    while time.monotonic() < deadline:
+        if _get_ok(url + "/health"):
+            return True
+        time.sleep(0.01)
+    return False
+
+
 @pytest.fixture
 def http_stub():
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    url = f"http://127.0.0.1:{server.server_port}"
+    # F68：就绪（能应答）再由夹具交付，失败即大声报错，而不是让下游在断言上随机挂掉。
+    assert _wait_until_serving(url), f"桩服务未在 10 s 内开始应答：{url}"
     try:
-        yield f"http://127.0.0.1:{server.server_port}"
+        yield url
     finally:
         server.shutdown()
         server.server_close()
 
 
 def test_http_helpers_against_local_stub(http_stub):
-    assert _get_ok(http_stub + "/health") is True
-    assert _post_json(http_stub + "/v1/chat/completions", {"a": 1}, 5.0) == {"echo": {"a": 1}}
+    # F68：**不要**用「一次 2 s 探测」判就绪（满载下会误判）——用有截止期的轮询。
+    assert _wait_until_serving(http_stub) is True
+    # 同样地，桩调用不是延迟断言 ⇒ 给足超时余量（满载时 5.0 s 会因**环境**失败）。
+    assert _post_json(http_stub + "/v1/chat/completions", {"a": 1}, 30.0) == {"echo": {"a": 1}}
     assert _get_ok("http://127.0.0.1:1/nope") is False # 连接失败 → False，不抛
+
+
+class _WarmingHandler(http.server.BaseHTTPRequestHandler):
+    """头一次 GET 返回 500（尚未就绪），之后返回 200。
+
+    确定性复现「单次探测会失败、轮询会成功」的那个窗口——不需要真的等 2 s 超时，
+    也不依赖机器负载。
+    """
+
+    seen = 0
+
+    def log_message(self, *args): # pragma: no cover - 静音
+        pass
+
+    def do_GET(self):
+        type(self).seen += 1
+        ready = type(self).seen > 1
+        body = b'{"status": "ok"}' if ready else b'{"status": "warming"}'
+        self.send_response(200 if ready else 500)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def test_f68_readiness_poll_tolerates_a_not_yet_ready_server():
+    """**F68 的护栏**：就绪轮询必须真的重试——单次探测在同一个桩上必须失败。"""
+    _WarmingHandler.seen = 0
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _WarmingHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_port}"
+    try:
+        assert _get_ok(url + "/health") is False, "未就绪的那一次探测必须是 False"
+        assert _wait_until_serving(url) is True, "轮询必须在重试后判为就绪"
+        assert _WarmingHandler.seen >= 2, _WarmingHandler.seen
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def _dummy_proc() -> subprocess.Popen:

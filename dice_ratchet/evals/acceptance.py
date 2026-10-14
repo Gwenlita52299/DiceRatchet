@@ -88,6 +88,14 @@ class GenerationAcceptance:
     #: 计入失败会让「补丁被拒」被记成「单调性破坏」（现场 gen-001 正是如此：`0.10` 的
     #: 来源就是 gen-000 的 v0，两代起点同为 v0）；计入通过则成了「退化通过」。
     not_applicable: bool = False
+    #: **F70（2026-10-14，用户裁决「只做 ② 标注」）**：本对的**基线**是「选择后的」测量吗？
+    #: 是——当上一代 ``decision="accept"`` 时，本代的起点基线就是**那个被接受候选自己的
+    #: heldout 测量**。它是在 40 个 seed 上「通过了门禁」才被留下的，因此含**选择偏差**
+    #: （winner's curse）。这不是缺陷而是「不重跑起点」的统计代价，**必须显式标注**，
+    #: 否则读者会把这条基线当成无偏参考。
+    baseline_selected: bool = False
+    #: 该对基线的出处（``inherited:gen-00X`` / ``measured`` / ``""``）：F70 的取证字段。
+    baseline_source: str = ""
 
     @property
     def passed(self) -> bool:
@@ -116,6 +124,8 @@ class GenerationAcceptance:
             "pass_p_gap": self.pass_p_gap,
             "decision": self.decision,
             "not_applicable": bool(self.not_applicable),
+            "baseline_selected": bool(self.baseline_selected),
+            "baseline_source": self.baseline_source,
             "passed": self.passed,
         }
 
@@ -145,6 +155,29 @@ class AcceptanceReport:
     def not_applicable_pairs(self) -> tuple[GenerationAcceptance, ...]:
         """因起点未变而**跳过**判定的代（F57；产物里逐代列出，不许静默）。"""
         return tuple(g for g in self.generations if g.not_applicable)
+
+    @property
+    def selected_baseline_pairs(self) -> tuple[GenerationAcceptance, ...]:
+        """基线是「选择后的」那些**可比**对（F70；见 ``GenerationAcceptance.baseline_selected``）。"""
+        return tuple(g for g in self.comparable if g.baseline_selected)
+
+    @property
+    def baseline_selection_note(self) -> str:
+        """F70 的诚实边界（只有真的存在选择后的基线时才非空）。
+
+        **为什么必须写进产物**：这条基线是「下一代棘轮的门槛」，而它是被上一代的
+        accept 决策**选出来**的测量（n=40 下 winner's curse 约 +5–10 pp 量级）。
+        不标注的话，「held-out 单调不降」这句话的参考点就成了一个偏乐观的数。
+        """
+        selected = self.selected_baseline_pairs
+        if not selected:
+            return ""
+        gens = "、".join(f"gen-{g.generation:03d}←gen-{g.prev_generation:03d}"
+                        for g in selected)
+        return (f"F70：{len(selected)} 个可比对的基线是**选择后的**测量（{gens}）——"
+                "上一代被 accept ⇒ 本代起点基线就是那个候选自己的 heldout 测量，"
+                "含 winner's curse（n=40 下约 +5–10 pp 量级）。本 run 的「单调不降」"
+                "必须带上这条边界读；来源：用户裁决「只做 ② 标注」（2026-10-14）")
 
     @property
     def monotonic_ok(self) -> bool:
@@ -181,6 +214,11 @@ class AcceptanceReport:
             "monotonic_ok": self.monotonic_ok,
             "comparable_pairs": len(self.comparable),
             "not_applicable_pairs": len(self.not_applicable_pairs),
+            #: F70（2026-10-14）：基线的**选择偏差**标注（用户裁决「只做 ② 标注」）。
+            "baseline_selection": {
+                "selected_pairs": len(self.selected_baseline_pairs),
+                "note": self.baseline_selection_note,
+            },
             "accepts": int(self.accepts),
             "decisions": dict(self.decisions),
             "ok": self.ok,
@@ -255,6 +293,21 @@ def _decision_of(run_dir: Path, generation: int) -> str | None:
         return str(read_json(path).get("decision") or "") or None
     except InfraError: # pragma: no cover - 损坏报告按「无判决」处理
         return None
+
+
+def _heldout_source_of(run_dir: Path, generation: int) -> str:
+    """该代 ``report.json`` 里 ``heldout.source``（F70 的取证字段）。
+
+    取值形如 ``measured``（本代真测）/ ``inherited:gen-00X``（跨代继承，D-M3-7）。
+    缺失/损坏 → ``""``（**不猜**：标注里宁可空着）。
+    """
+    path = generation_report_path(run_dir, generation)
+    if not path.is_file():
+        return ""
+    try:
+        return str((read_json(path).get("heldout") or {}).get("source") or "")
+    except InfraError: # pragma: no cover - 损坏报告按「无出处」处理
+        return ""
 
 
 def _play_hash_of(run_dir: Path, generation: int) -> str:
@@ -409,6 +462,13 @@ def evaluate_acceptance(run_dir: Path | str, *, run_id: str = "",
         prev_win = float(prev.get("win_rate") or 0.0)
         prev_hver = _int_or_none(prev.get("harness_version"))
         prev_ph = _play_hash_of(run_path, prev_gen)
+        # F70（2026-10-14，用户裁决「只做 ② 标注」）：**基线的选择偏差**。
+        # 上一代被 accept ⇒ 本代的起点基线就是**那个候选自己的 heldout 测量**；它是在这
+        # 40 个 seed 上「通过了门禁」才留下的 ⇒ 含 winner's curse。不是缺陷，是「不重跑
+        # 起点」（D-M3-7）的统计代价——但必须标注，否则读者会把这条基线当成无偏参考。
+        prev_decision = _decision_of(run_path, prev_gen)
+        selected = str(prev_decision or "") == "accept"
+        baseline_source = _heldout_source_of(run_path, prev_gen)
         # D-M3-7（2026-10-14）：`not_applicable` 的判据从「版本号相同」换成
         # **「play 面指纹相同」**。原因：拒绝时版本号也会推进（D2=A），版本号相同
         # 不再是「起点逐字节相同」的充分条件；反过来版本号不同也不再意味着起点变了。
@@ -430,7 +490,8 @@ def evaluate_acceptance(run_dir: Path | str, *, run_id: str = "",
                 prev_generation=prev_gen, prev_win_rate=prev_win,
                 harness_version=hver, prev_harness_version=prev_hver,
                 play_hash=ph, prev_play_hash=prev_ph,
-                decision=decision, not_applicable=True))
+                decision=decision, not_applicable=True,
+                baseline_selected=selected, baseline_source=baseline_source))
             continue
 
         threshold = prev_win - CRITERION_TOL
@@ -451,7 +512,8 @@ def evaluate_acceptance(run_dir: Path | str, *, run_id: str = "",
             p_gap_n_pairs=n_pairs,
             pass_p_gap=(None if p_gap is None else bool(p_gap >= P_GAP_THRESHOLD)),
             decision=decision, harness_version=hver, prev_harness_version=prev_hver,
-            play_hash=ph, prev_play_hash=prev_ph)
+            play_hash=ph, prev_play_hash=prev_ph,
+            baseline_selected=selected, baseline_source=baseline_source)
         if not entry.passed:
             reasons.append(
                 f"gen-{generation:03d} 单调性不成立：ci_lo={ci_lo:.4f} < "

@@ -140,6 +140,48 @@ def test_three_generations_non_decreasing_passes(tmp_path):
     assert len(rep.comparable) == 2, "g1 相对 g0、g2 相对 g1，共两对"
 
 
+def test_f70_selected_baseline_is_annotated(tmp_path):
+    """**F70（2026-10-14，用户裁决「只做 ② 标注」）**：上一代 accept ⇒ 本代基线是
+    **选择后的**测量（winner's curse），判据 1 的产物必须显式标注。
+
+    现场口径：M3 正式实验 0 accept ⇒ 这条标注一直是空的；一旦棘轮真的转起来，
+    「held-out 单调不降」的参考点就是那个候选**自己**的测量，不标注会被当成无偏参考。
+    这里的期望值刻意写死为「只有 gen-002←gen-001 那一对被标注」（基线是 accept）
+    —— gen-001←gen-000 的基线是 `baseline`，不是选择后的。
+    """
+    _write_ledger(tmp_path, [
+        {"generation": 0, "win_rate": 0.50, "ci_lo": 0.40, "decision": "baseline"},
+        {"generation": 1, "win_rate": 0.55, "ci_lo": 0.53, "decision": "accept"},
+        {"generation": 2, "win_rate": 0.56, "ci_lo": 0.54, "decision": "reject"},
+    ])
+    for g, base in ((0, 2), (1, 4), (2, 6)):
+        _episodes(tmp_path, generation=g, stages=[base] * N)
+    rep = _eval(tmp_path)
+    selected = rep.selected_baseline_pairs
+    assert [g.generation for g in selected] == [2], [g.generation for g in rep.comparable]
+    assert selected[0].prev_generation == 1
+    assert selected[0].baseline_selected is True
+    assert rep.generations[1].baseline_selected is False, "基线是 baseline 代，不是选择后的"
+    payload = rep.as_dict()
+    assert payload["baseline_selection"]["selected_pairs"] == 1
+    note = payload["baseline_selection"]["note"]
+    assert "F70" in note and "gen-002←gen-001" in note and "winner's curse" in note
+
+
+def test_f70_note_is_empty_without_any_accept(tmp_path):
+    """没有 accept（正是 M3 正式实验的形态）时不得凭空写一条 F70 边界。"""
+    _write_ledger(tmp_path, [
+        {"generation": 0, "win_rate": 0.50, "ci_lo": 0.40, "decision": "baseline"},
+        {"generation": 1, "win_rate": 0.50, "ci_lo": 0.50, "decision": "reject"},
+    ])
+    for g in (0, 1):
+        _episodes(tmp_path, generation=g, stages=[3] * N)
+    rep = _eval(tmp_path)
+    assert rep.selected_baseline_pairs == ()
+    assert rep.baseline_selection_note == ""
+    assert rep.as_dict()["baseline_selection"] == {"selected_pairs": 0, "note": ""}
+
+
 def test_all_reject_is_a_degenerate_pass_and_must_fail(tmp_path):
     """**退化通过护栏**：每代都 reject 也能满足单调不降 ⇒ 判据 1 必须判失败。
 

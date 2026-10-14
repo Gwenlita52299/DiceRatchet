@@ -216,12 +216,21 @@ def test_propose_failure_still_writes_report(tmp_path):
 
 
 def test_rejected_candidate_is_recorded(tmp_path, stub_pairing):
-    """C2 不显著 → reject，候选明细仍落盘。"""
+    """**F62（2026-10-14）**：play 面未变（只改学习侧 ``reflection.md``）⇒ C2 拒绝，
+    候选明细仍落盘。
+
+    原先这条用例用「统计不显著」制造拒绝；改判之后那是**通过**条件（见下一条用例）。
+    换成「只改学习侧」的补丁：它是一条**合法**补丁（路径在白名单内、diff 可应用），
+    但没有改变 play 面 ⇒ C2 以 ``no_play_change`` 拒绝。这同时钉住了新语义的边界：
+    D-M3-7 的继承资格全靠 play 指纹，因此「只改学习侧」的补丁在本机制下无法成为棘轮的
+    一步（要改学习侧就必须连带一次 play 面改动）。
+    """
     harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
     stub_pairing(significant=False)
     ev = ScriptedEvaluator(heldout=FakeArm(win_rate=0.35),
                            paired=_paired(significant=False))
-    outcome = _run(run_ctx, state, evaluator=ev, client=_one_candidate_llm())
+    learn_only = prompt_diff(path="harness/prompts/reflection.md", added="只在反思里加一行")
+    outcome = _run(run_ctx, state, evaluator=ev, client=_one_candidate_llm(learn_only))
     assert outcome.decision == "reject"
     ids = GenPaths.of(run_root, 1).candidate_ids()
     assert len(ids) == 1
@@ -229,7 +238,62 @@ def test_rejected_candidate_is_recorded(tmp_path, stub_pairing):
         encoding="utf-8"))
     assert payload["decision"] == "reject"
     assert payload["error_code"] == str(E.E_EVOLVE_NO_GAIN)
-    assert payload["verdict"]["reason"].startswith("C2:")
+    assert payload["verdict"]["reason"].startswith("C2:no_play_change")
+    # 新语义下「统计不显著」**不再**是拒绝理由（它只落 trace 与 paired）
+    trace = {e["condition"]: e for e in payload["verdict"]["condition_trace"]}
+    assert trace["C2"]["value"]["significant"] is False
+    assert trace["C2"]["value"]["candidate_play_hash"] == \
+        trace["C2"]["value"]["parent_play_hash"]
+
+
+def test_f62_flat_but_changed_candidate_is_accepted(tmp_path, stub_pairing):
+    """**F62 的核心护栏**：统计完全不显著（delta=0、flat）但 play 面变了 ⇒ **accept**。
+
+    这就是「取消 C2 的统计门」在生成链路上的行为：M3 正式实验里三代候选的实测形态
+    （+2.5/+7.5/+5.0 pp，p=1.0/0.55/0.75）在这一版之后应当能过 C2，
+    再由 C1/C3/C4/C5 决定去留。
+    """
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing(delta=0.0, significant=False, direction="flat")
+    ev = ScriptedEvaluator(heldout=FakeArm(win_rate=0.30),
+                           paired=_paired(delta=0.0, significant=False, direction="flat"))
+    outcome = _run(run_ctx, state, evaluator=ev, client=_one_candidate_llm())
+    assert outcome.decision == "accept", (outcome.decision, outcome.reason)
+    ids = GenPaths.of(run_root, 1).candidate_ids()
+    payload = json.loads(GenPaths.of(run_root, 1).candidate(*ids).read_text(
+        encoding="utf-8"))
+    trace = {e["condition"]: e for e in payload["verdict"]["condition_trace"]}
+    assert trace["C2"]["passed"] is True
+    assert trace["C2"]["value"]["candidate_play_hash"] != \
+        trace["C2"]["value"]["parent_play_hash"]
+
+
+def test_f62_paired_by_metric_lands_in_the_candidate_file(tmp_path, stub_pairing,
+                                                          monkeypatch):
+    """F62 的第二半：逐指标统计（含连续轴）必须真的落进候选产物（判据 2 的证据）。
+
+    打桩 ``_paired_by_metric``（真实实现要真 ``ArmResult`` 的逐局结果）——这里钉的是
+    **接线**：它算出来的东西要出现在 ``candidates/{id}.json`` 的 ``report.paired`` 里。
+    """
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    stub_pairing()
+    # 注意：``dice_ratchet.evolve`` 把子模块名 ``judge`` 重绑到了同名函数上，
+    # ``import dice_ratchet.evolve.judge as m`` 拿到的是**函数**（与 test_evolve_judge
+    # 头部那条注记同一个坑）⇒ 必须走 importlib。
+    import importlib
+
+    judge_mod = importlib.import_module("dice_ratchet.evolve.judge")
+
+    monkeypatch.setattr(judge_mod, "_paired_by_metric", lambda *a, **k: {
+        "mean_stages_cleared": {"delta": 0.30, "method": "paired_bootstrap",
+                                "p": 0.0, "significant": True, "direction": "up"}})
+    _run(run_ctx, state, evaluator=ScriptedEvaluator(), client=_one_candidate_llm())
+    ids = GenPaths.of(run_root, 1).candidate_ids()
+    payload = json.loads(GenPaths.of(run_root, 1).candidate(*ids).read_text(
+        encoding="utf-8"))
+    by_metric = payload["report"]["paired"]["by_metric"]
+    assert by_metric["mean_stages_cleared"]["delta"] == 0.30
+    assert by_metric["mean_stages_cleared"]["method"] == "paired_bootstrap"
 
 
 def test_invalid_candidate_is_rejected_without_touching_harness(tmp_path, stub_pairing):
@@ -289,9 +353,11 @@ def test_scan_failure_is_rejected_before_smoke(tmp_path, monkeypatch, stub_pairi
 
 
 def test_smoke_failure_skips_heldout(tmp_path, stub_pairing):
+    # F67（2026-10-14）：胜率轴已从冒烟门删除（n=2 分辨率 0.5，无诊断力）⇒ 用**非法率**
+    # 制造冒烟淘汰（步级统计，2 局也有上千次尝试）。
     harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
     stub_pairing()
-    ev = ScriptedEvaluator(smoke=FakeArm(win_rate=0.0, n=2))
+    ev = ScriptedEvaluator(smoke=FakeArm(win_rate=0.0, illegal_rate=0.5, n=2))
     outcome = _run(run_ctx, state, evaluator=ev, client=_one_candidate_llm())
     assert outcome.decision == "reject"
     payload = json.loads(GenPaths.of(run_root, 1).candidate(
@@ -980,12 +1046,16 @@ def test_dm35_rejected_generation_keeps_start_measurement_and_bumps_lightweight(
         tmp_path, stub_pairing):
     """拒绝 ⇒ ① 台账数字仍是起点那份（``measured``/``inherited`` 如实标注）；
     ② 版本号**轻量推进**到 v1（无快照、无 tag）；③ 死路记录落盘（D1=A/D2=A）。
+
+    F62（2026-10-14）：拒绝理由换成 **C2 ``no_play_change``**（只改学习侧的补丁）——
+    「统计不显著」自本版起不再是拒绝理由。
     """
     harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
     stub_pairing(delta=0.01, significant=False)
     ev = ScriptedEvaluator(heldout=FakeArm(win_rate=0.31),
                            paired=_paired(delta=0.01, significant=False))
-    outcome = _run(run_ctx, state, evaluator=ev, client=_one_candidate_llm())
+    learn_only = prompt_diff(path="harness/prompts/reflection.md", added="只在反思里加一行")
+    outcome = _run(run_ctx, state, evaluator=ev, client=_one_candidate_llm(learn_only))
     assert outcome.decision == "reject"
     assert int(outcome.harness_version) == 1, "拒绝也推进版本号（D2=A）"
 
@@ -1002,6 +1072,7 @@ def test_dm35_rejected_generation_keeps_start_measurement_and_bumps_lightweight(
     cid = GenPaths.of(run_root, 1).candidate_ids()[0]
     assert cid in dead and "gen-001" in dead, dead
     assert "C2" in dead, "死路记录必须写明挂在哪个判定条件上"
+    assert "no_play_change" in dead, dead
 
 
 def test_dm35_play_plane_unchanged_after_rejection(tmp_path, stub_pairing):
@@ -1009,8 +1080,9 @@ def test_dm35_play_plane_unchanged_after_rejection(tmp_path, stub_pairing):
     harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
     before = GEN.versioning_mod.play_hash(harness)
     stub_pairing(delta=0.01, significant=False)
+    learn_only = prompt_diff(path="harness/prompts/reflection.md", added="只在反思里加一行")
     _run(run_ctx, state, evaluator=ScriptedEvaluator(paired=_paired(delta=0.01,
                                                                   significant=False)),
-         client=_one_candidate_llm())
+         client=_one_candidate_llm(learn_only))
     assert GEN.versioning_mod.play_hash(harness) == before
     assert _read_report(run_root, 1)["harness_play_hash"] == before

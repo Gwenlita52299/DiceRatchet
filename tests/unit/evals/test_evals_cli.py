@@ -507,34 +507,34 @@ def test_f60_eval_report_reads_versions_from_existing_report(wired, capsys):
     assert ext["play_hash"] == "sha256:" + "a" * 64
 
 
-def test_f64_eval_report_train_section_uses_the_served_block(wired):
-    """``eval report`` 的 train 段与 ``evaluate_generation`` **同一口径**（F64）。
+def _prepare_train_run(tmp_path: Path, *, generation: int = 1,
+                       served: int = 3) -> None:
+    """造一个「有真训练块 + 同代冒烟局」的 run（F61/F64/F71 共用）。
 
-    修复前这里用 ``train_window`` 且**不过滤臂** ⇒ 在 `m3-formal` 上拿到的是 4 局冒烟局
-    （``train.n=4``），还被写进台账当训练段。现在：取 ``take("train", generation)`` 的块 +
-    ``arm="train"`` 真过滤；不足则 ``source="insufficient"``。
+    - ``episodes/heldout/``：复制 golden 夹具并把 ``generation`` 改成 ``generation``；
+    - ``episodes/train/``：``take("train", generation)`` 的前 ``served`` 个 seed 记
+      ``arm="train"``（真训练局），末一个 seed 记 ``arm="parent-smoke"``（同代冒烟局）。
     """
-    tmp_path, _cfg = wired
     from dice_ratchet.evals.seeds import take
 
     heldout_dir = tmp_path / "episodes" / "heldout"
-    heldout_dir.mkdir(parents=True)
+    heldout_dir.mkdir(parents=True, exist_ok=True)
     for path in (_FIXTURES / "episodes" / "heldout").glob("*.jsonl"):
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
                 if line.strip()]
         for row in rows:
-            row["generation"] = 1
+            row["generation"] = generation
         (heldout_dir / path.name).write_text(
             "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
             encoding="utf-8")
 
-    block = take("train", generation=1, protocol=S.default_protocol())
+    block = take("train", generation=generation, protocol=S.default_protocol())
     train_dir = tmp_path / "episodes" / "train"
-    train_dir.mkdir(parents=True)
+    train_dir.mkdir(parents=True, exist_ok=True)
 
     def _write(seed: int, arm: str) -> None:
-        key = f"e-{seed:06d}-g001-{arm}"
-        row = {"type": "episode_end", "episode_key": key, "generation": 1,
+        key = f"e-{seed:06d}-g{generation:03d}-{arm}"
+        row = {"type": "episode_end", "episode_key": key, "generation": generation,
                "harness_version": 0, "arm": arm, "seed": seed, "split": "train",
                "outcome": "win", "stages_cleared": 5, "hearts_left": 1, "battles_won": 9,
                "decisions": 90, "steps": 200, "illegal_attempts": 0,
@@ -543,12 +543,96 @@ def test_f64_eval_report_train_section_uses_the_served_block(wired):
                "seq_hash": f"s{seed}", "decision_kinds": [0]}
         (train_dir / f"{key}.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
 
-    for seed in block[:3]:
+    for seed in block[:served]:
         _write(seed, "train")
     _write(block[-1], "parent-smoke")     # 同代冒烟局：用的是本代训练块末尾 seed
+
+
+def test_f64_eval_report_train_section_uses_the_served_block(wired):
+    """``eval report`` 的 train 段与 ``evaluate_generation`` **同一口径**（F64）。
+
+    修复前这里用 ``train_window`` 且**不过滤臂** ⇒ 在 `m3-formal` 上拿到的是 4 局冒烟局
+    （``train.n=4``），还被写进台账当训练段。现在：取 ``take("train", generation)`` 的块 +
+    ``arm="train"`` 真过滤；不足则 ``source="insufficient"``。
+    """
+    tmp_path, _cfg = wired
+    _prepare_train_run(tmp_path, generation=1)
 
     assert cli_mod.cmd_eval_report(_ns(generation=1)) == 0
     report = json.loads((tmp_path / "generations" / "gen-001" / "report.json")
                         .read_text(encoding="utf-8"))
     assert report["train"]["n"] == 3, report["train"]
     assert report["train"]["source"] == "measured"
+
+
+# =====================================================================
+# F61 / F71（2026-10-14）：`--split train` 能解析臂，且**只读**
+# =====================================================================
+
+def test_f61_train_split_default_arm_is_the_served_block(wired, capsys):
+    """F61：train split 的臂命名是另一套（``train`` / ``parent-smoke``）。
+
+    修复前解析器只认 heldout 口径（``parent`` / ``cand-<id>``）⇒ `eval report
+    --split train` 抛 `E_EVAL_ARM_NOT_ALLOWED`（现场退出码 2，train 侧报告没产出）。
+    """
+    tmp_path, _cfg = wired
+    _prepare_train_run(tmp_path, generation=1)
+    assert cli_mod.cmd_eval_report(_ns(generation=1, split="train")) == 0
+    out = capsys.readouterr().out
+    assert "arm: train" in out, out
+    payload = json.loads((tmp_path / "metrics" / "gen-001.train.readonly.json")
+                         .read_text(encoding="utf-8"))
+    assert payload["arm"] == "train" and payload["readonly"] is True
+    assert payload["heldout"]["n"] == 3, payload["heldout"]
+
+
+def test_f71_train_split_recompute_writes_nothing_authoritative(wired, capsys):
+    """**F71**：`--split train` **不得**写 report.json / 代际台账 / 绘图。
+
+    这里刻意**显式传** ``--arm train``（F61 修复前也能解析）⇒ 修复前这条命令会一路走到
+    写入路径：`report["heldout"]` 被塞进 train 的聚合、`generations/gen-001/report.json`
+    与 `metrics/generations.csv` / `metrics/plots_data/` 全部落地。这正是「修好 F61 反而
+    制造一个静默跨 split 污染」的现场。
+    """
+    tmp_path, _cfg = wired
+    _prepare_train_run(tmp_path, generation=1)
+    assert cli_mod.cmd_eval_report(_ns(generation=1, split="train", arm="train")) == 0
+    assert not (tmp_path / "generations" / "gen-001" / "report.json").exists(), \
+        "只读路径不得写权威报告"
+    assert not (tmp_path / "metrics" / "generations.csv").exists(), \
+        "只读路径不得写代际台账"
+    assert not (tmp_path / "metrics" / "plots_data").exists(), "只读路径不得画图"
+    assert not (tmp_path / "metrics" / "gen-001.ext.json").exists(), \
+        "只读路径不得写 ext（它属于 heldout 口径）"
+    assert (tmp_path / "metrics" / "gen-001.train.readonly.json").is_file(), \
+        "复算口径要留档（非权威 sidecar）"
+    out = capsys.readouterr().out
+    assert "只读" in out
+
+
+def test_f71_train_split_does_not_clobber_a_baseline_report(wired, capsys):
+    """**F71 的最坏形态**：gen-000（``decision="baseline"``）不在 ``VERDICT_DECISIONS``
+    里 ⇒ 不走 sidecar 保护，修复前 `--split train` 会**直接覆盖** ``report.json``
+    的 heldout 段（把 train 的数字写成 heldout）。
+    """
+    tmp_path, _cfg = wired
+    from dice_ratchet.evals.harness import generation_report_path
+
+    path = generation_report_path(tmp_path, 0)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    original = json.dumps({
+        "generation": 0, "harness_version": 0, "parent_version": 0,
+        "harness_play_hash": "sha256:" + "b" * 64,
+        "decision": "baseline", "decided_by": "auto", "reason": "gen-000 基线",
+        "heldout": {"basket": "H1", "n": 40, "win_rate": 0.175, "source": "measured"},
+        "train": {"window": 0, "win_rate": 0.0, "n": 0, "source": "unavailable"},
+        "gain_realism": {"win_rate_gap": 0.0, "gap_threshold": 0.15, "verdict": "null"},
+        "diversity": {"entropy_slope": 0.0, "collapse_flag": False},
+        "ablation": None, "candidates": [],
+    }, ensure_ascii=False)
+    path.write_text(original, encoding="utf-8")
+
+    assert cli_mod.cmd_eval_report(_ns(generation=0, split="train", arm="train")) == 0
+    assert path.read_text(encoding="utf-8") == original, \
+        "gen-000 的 report.json 必须逐字节不变（修复前会被 train 聚合覆盖）"
+    assert not (tmp_path / "metrics" / "generations.csv").exists()
