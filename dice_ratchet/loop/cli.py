@@ -295,8 +295,15 @@ def _policy_factory(cfg: Any, client: Any, agent_kind: str,
     else:
         base = replace(base, mode="play")
 
-    def factory(seed: int, _key: str) -> Any:
-        return PolicyAgent(base, llm=client, memory=None, harness_dir=harness_dir)
+    default_dir = Path(harness_dir)
+
+    def factory(seed: int, _key: str, harness_dir: Path | str | None = None) -> Any:
+        # F66（2026-10-14）：**按臂覆盖 harness 目录**。MOD-07 的候选臂跑在
+        # ``generations/gen-NNN/staging/<id>/`` 上，而本工厂原先闭包在 run 级
+        # ``harness/`` ⇒ 候选补丁从未进入决策 prompt（实测 40/40 个 seed 的
+        # ``prompt_hash`` 与 parent 逐字节相同）。缺省仍用 run 级目录。
+        target = default_dir if harness_dir is None else Path(harness_dir)
+        return PolicyAgent(base, llm=client, memory=None, harness_dir=target)
 
     return factory
 

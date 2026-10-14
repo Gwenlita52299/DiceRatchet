@@ -232,25 +232,49 @@ def load_task_text(path: str | Path | None = None) -> str:
         return "在骰子 roguelike 中做出合法且稳健的决策；只输出 JSON。"
 
 
+def _strip_harness_prefix(path: Path) -> Path | None:
+    """``harness/prompts/x`` → ``prompts/x``（**harness 根**级目录的探测用，F66）。"""
+    parts = path.parts
+    if len(parts) >= 2 and parts[0] == "harness":
+        return Path(*parts[1:])
+    return None
+
+
 def resolve_path(path: str | Path, *, harness_dir: Path | None = None) -> Path:
     """把配置里的相对路径解析为可读文件。
 
-    解析顺序：绝对路径原样 → ``harness_dir.parent / path``（配置默认值相对仓库根）→
-    相对 CWD。返回第一个存在的候选；都不存在时返回 CWD 相对路径（供报错信息使用）。
+    解析顺序（**F66，2026-10-14：调用方给的 harness 目录必须优先于 CWD**）：
+      1. 绝对路径原样返回；
+      2. ``harness_dir / path``（调用方给的是**仓库根**级目录）；
+      3. ``harness_dir / <去掉 ``harness/`` 前缀的 path>``（调用方给的是**harness 根**，
+         例如 MOD-07 的 ``generations/gen-NNN/staging/<id>/`` 拷贝）；
+      4. ``harness_dir.parent / path``（旧语义：``D=harness/``、path 相对仓库根 ——
+         ``fixed_prompt_path`` 这类**不在 harness/ 下**的随包冻结件靠这一条）；
+      5. ``CWD / path``。
+
+    **为什么第 3 条必须早于第 5 条**：候选补丁的 staging 目录布局是
+    ``<staging>/<id>/prompts/decision.md``。若只探测 ``D.parent/path`` 就探测不到，
+    于是回落到 CWD 的**未打补丁**模板 —— 实测（F66）三次候选评估因此全部测的是 parent
+    （候选臂与 parent 的首个决策点 ``prompt_hash`` 逐字节相同，40/40）。
+    返回第一个存在的候选；都不存在时返回**最后一个候选**（CWD 相对路径，供报错使用，
+    与修复前一致）。
     """
     candidate = Path(path)
     if candidate.is_absolute():
         return candidate
-    roots: list[Path] = []
+    probes: list[Path] = []
     if harness_dir is not None:
-        roots.append(Path(harness_dir).parent)
-    roots.append(Path.cwd())
-    fallback = roots[-1] / candidate
-    for root in roots:
-        probe = root / candidate
+        d = Path(harness_dir)
+        probes.append(d / candidate)
+        stripped = _strip_harness_prefix(candidate)
+        if stripped is not None:
+            probes.append(d / stripped)
+        probes.append(d.parent / candidate)
+    probes.append(Path.cwd() / candidate)
+    for probe in probes:
         if probe.exists():
             return probe
-    return fallback
+    return probes[-1]
 
 
 # ----------------------------------------------------------------------

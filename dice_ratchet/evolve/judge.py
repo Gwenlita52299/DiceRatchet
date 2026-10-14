@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import time
 from typing import Any, Callable, Mapping, Sequence
+from pathlib import Path
 
 from dice_ratchet.infra import events
 from dice_ratchet.infra.errors import E, InfraError
@@ -474,7 +475,19 @@ class CandidateEvaluator:
 
         kwargs: dict[str, Any] = {}
         if self.runner is not None:
-            kwargs["runner"] = _wrap_runner(self.runner)
+            # F66（2026-10-14）：**把本臂的 harness 目录绑到 runner 上**。
+            # 原先只传 ``runner``，而 ``evaluate_arm`` 的
+            # ``executor = runner or _default_runner(harness_dir=…)`` 会在注入 runner 时
+            # **完全忽略 harness_dir** ⇒ 候选臂跑的是 run 级 ``harness/``（未打补丁），
+            # 三次候选评估实测与 parent 的 ``prompt_hash`` 逐字节相同（40/40）。
+            # 只有**候选臂**需要显式绑目录：parent / parent-smoke 用的就是 run 级
+            # harness（组合根的策略工厂默认值），绑它只会给不支持该参数的 runner
+            # （测试替身等）添麻烦，语义上也多余。
+            if str(arm).startswith("cand-"):
+                kwargs["runner"] = _wrap_runner(self.runner, harness_dir=arm_dir)
+                self._assert_patch_reaches_prompt(arm=arm, arm_dir=Path(arm_dir))
+            else:
+                kwargs["runner"] = _wrap_runner(self.runner)
         # F42-C：原先**没传** ``n_workers``/``n_rep`` ⇒ 落到 ``evaluate_arm`` 的默认
         # ``n_workers=1``，即一代 84 局**串行**跑；而 gen-000 基线路径传的是
         # ``cfg.evals.n_workers=2``（``loop/generation.py``）⇒ 同一份配置下两条路径的
@@ -490,6 +503,41 @@ class CandidateEvaluator:
             arm=arm, run_id=self.run_id, protocol=self.protocol, config=self.config,
             generation=int(self.generation), harness_version=int(harness_version),
             episode_config=self.episode_config, **kwargs)
+
+    def _assert_patch_reaches_prompt(self, *, arm: str, arm_dir: Path) -> None:
+        """F66 护栏（候选臂专用）：**play 模板必须真的从本臂目录解析出来**。
+
+        判据（不满足即 fail-closed ``E_EVOLVE_PATCH_INVALID``，**不花钱**）：
+        ``resolve_path(cfg.agent.policy.template_path, harness_dir=arm_dir)`` 的落点
+        必须在 ``arm_dir`` 之内。修复前它会落到 CWD 的仓库模板（F66 现场：候选臂
+        与 parent 的首个决策点 ``prompt_hash`` 逐字节相同、40/40）。
+
+        **诚实边界**：本条只证明「加载器会读本臂的模板」，不能证明「模型真的看到了
+        补丁」——后者由两处覆盖：① ``tests/unit/evolve/test_f66_*`` 的回归用例（假
+        LLM 断言收到的 messages 含补丁行）；② 后续把 ``play_hash`` 作为继承判据时
+        的「候选 play_hash ≠ parent play_hash」断言（F63/F66 的第二半）。
+        """
+        from dice_ratchet.agent.prompts.assembler import resolve_path
+
+        policy_cfg = getattr(getattr(self.config, "agent", None), "policy", None)
+        template_path = str(getattr(policy_cfg, "template_path", "") or "")
+        if not template_path:
+            return
+        try:
+            resolved = resolve_path(template_path, harness_dir=arm_dir).resolve()
+            inside = resolved.is_relative_to(Path(arm_dir).resolve())
+        except Exception as exc: # noqa: BLE001 - 解析失败一律按「补丁没生效」处理
+            raise InfraError(E.E_EVOLVE_PATCH_INVALID,
+                             f"{arm}: 无法解析 play 模板（{template_path}）：{exc}",
+                             hint="检查 staging 布局（<staging>/<id>/prompts/decision.md）"
+                             ) from exc
+        if not inside:
+            raise InfraError(
+                E.E_EVOLVE_PATCH_INVALID,
+                f"{arm}: play 模板落点不在本臂目录内（{resolved} 不属于 {Path(arm_dir)}）"
+                " —— 候选会用 run 级模板，补丁不会生效（F66）",
+                hint="resolve_path 必须让 harness_dir 优先于 CWD；"
+                     "并确认 staging 布局镜像 harness 根")
 
     def parent_arms(self, parent_dir: Any, *, parent_version: int,
                     inherited: Any = None) -> tuple[Any, Any]:
@@ -533,11 +581,16 @@ class CandidateEvaluator:
         return smoke, heldout, {}
 
 
-def _wrap_runner(runner: Any) -> Any:
-    """MOD-06 ``EpisodeRunner`` → MOD-08 ``EpisodeRunner`` 协议适配器（懒惰 import）。"""
+def _wrap_runner(runner: Any, *, harness_dir: Any = None) -> Any:
+    """MOD-06 ``EpisodeRunner`` → MOD-08 ``EpisodeRunner`` 协议适配器（懒惰 import）。
+
+    ``harness_dir``（F66）：本臂要用的 harness 目录（候选臂 = staging 拷贝）。
+    适配器会在每局把它透传给 ``EpisodeRunner``，从而让 MOD-04 用**该臂自己的**模板
+    装配 prompt —— 不传就等于让候选臂用 run 级（未打补丁）模板。
+    """
     from dice_ratchet.loop.runner import EvalRunnerAdapter
 
-    return EvalRunnerAdapter(runner)
+    return EvalRunnerAdapter(runner, harness_dir=harness_dir)
 
 
 def evaluate_candidate(candidate: Candidate, parent: Any, *, cfg: Any,

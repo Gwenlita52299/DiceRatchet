@@ -213,17 +213,45 @@ class EpisodeRunner:
             else bool(close_env)
         self._harness_version_reader = harness_version_reader
         self._episode_id_support: dict[type, bool] = {}
+        #: F66：工厂是否支持按臂覆盖 harness 目录（首次调用时探测一次并缓存）
+        self._policy_factory_accepts_dir: bool | None = None
 
     # ---- 内部助手 ---------------------------------------------------------
     def _note_io_retry(self, exc: InfraError) -> None:
         self.run_ctx.state.counters.io_retries += 1
 
-    def _resolve_policy(self, seed: int, key: str) -> PolicyProto:
+    def _factory_accepts_harness_dir(self) -> bool:
+        """工厂是否接受 ``harness_dir=`` 关键字（探测一次并缓存，F66）。
+
+        显式探测而不是 ``try/except TypeError``：后者会把工厂**内部**的 TypeError
+        误读成「老签名」，从而悄悄退回 run 级模板 —— 正是 F66 的形态。
+        """
+        if self._policy_factory_accepts_dir is None:
+            factory = self.policy_factory
+            accepts = False
+            if factory is not None:
+                try:
+                    params = inspect.signature(factory).parameters
+                except (TypeError, ValueError): # pragma: no cover - 内建/不可反射
+                    params = {}
+                accepts = "harness_dir" in params or any(
+                    p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+            self._policy_factory_accepts_dir = bool(accepts)
+        return bool(self._policy_factory_accepts_dir)
+
+    def _resolve_policy(self, seed: int, key: str,
+                        harness_dir: Path | str | None = None) -> PolicyProto:
         """评估局并发时每个局必须拿到**自己的** ``PolicyAgent``（MOD-04 非线程安全）。
 
         共享的是 MOD-03 的推理队列与 MOD-05 的只读冻结视图（FR-06-14 / P-10）。
+
+        ``harness_dir``（F66）：本局要用的 harness 目录（MOD-07 的候选臂传 staging 拷贝）。
+        工厂不支持该参数时**回落到 run 级目录**，并已由 ``_factory_accepts_harness_dir``
+        显式判定（不是静默吞异常）。
         """
         if self.policy_factory is not None:
+            if harness_dir is not None and self._factory_accepts_harness_dir():
+                return self.policy_factory(int(seed), key, harness_dir=Path(harness_dir))
             return self.policy_factory(int(seed), key)
         if self.policy is None:
             raise InfraError(E.E_IO_CONFIG_INVALID, "EpisodeRunner 需要 policy",
@@ -297,7 +325,8 @@ class EpisodeRunner:
     def run_episode(self, seed: int, *, split: str, arm: str,
                     episode_config: Any = None, harness_version: int | None = None,
                     generation: int | None = None,
-                    timeout_s: float | None = None) -> RecordedEpisode:
+                    timeout_s: float | None = None,
+                    harness_dir: Path | str | None = None) -> RecordedEpisode:
         """FR-06-1 的严格时序：``policy.reset`` → ``env.reset`` → 决策循环 → 落盘。
 
         返回 ``RecordedEpisode``（协议上同时满足 MOD-08 的 ``EpisodeRunner``：它只按
@@ -314,7 +343,7 @@ class EpisodeRunner:
         mode = "train" if split == "train" else "eval"
         memory = self._memory_for(split)
         cfg = self._episode_config(episode_config)
-        policy = self._resolve_policy(int(seed), key)
+        policy = self._resolve_policy(int(seed), key, harness_dir)
 
         from ..agent.policy import EpisodeContext
 
@@ -497,19 +526,54 @@ class EvalRunnerAdapter:
     ``episode_result_from_rows`` 是唯一的口径来源。
     """
 
-    def __init__(self, runner: EpisodeRunner) -> None:
+    def __init__(self, runner: EpisodeRunner,
+                 harness_dir: Path | str | None = None) -> None:
         self.runner = runner
+        #: F66：本臂要用的 harness 目录（MOD-07 的候选臂传 staging 拷贝；
+        #: ``None`` = 沿用 run 级目录）。**必须透传到 ``run_episode``**，否则
+        #: ``evaluate_arm(harness_dir=…)`` 的参数会被注入的 runner 吃掉。
+        self.harness_dir = None if harness_dir is None else Path(harness_dir)
+        self._runner_accepts_dir: bool | None = None
+
+    def _runner_accepts_harness_dir(self) -> bool:
+        """被包裹的 runner 是否接受 ``harness_dir=``（探测一次并缓存）。
+
+        绑了目录却遇到不支持的 runner 时**不静默降级**：那正是 F66 的形态
+        （参数被吃掉、候选悄悄用 run 级模板）——宁可 fail-closed。
+        """
+        if self._runner_accepts_dir is None:
+            accepts = False
+            try:
+                params = inspect.signature(self.runner.run_episode).parameters
+            except (TypeError, ValueError): # pragma: no cover - 内建/不可反射
+                params = {}
+            accepts = "harness_dir" in params or any(
+                p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+            self._runner_accepts_dir = bool(accepts)
+        return bool(self._runner_accepts_dir)
 
     def run_episode(self, seed: int, *, split: str, arm: str, generation: int,
                     harness_version: int, episode_config: Any = None,
-                    timeout_s: float | None = None) -> Any:
+                    timeout_s: float | None = None,
+                    harness_dir: Path | str | None = None) -> Any:
         from ..evals.harness import episode_result_from_rows
         from ..infra.io import read_jsonl
 
+        target_dir = harness_dir if harness_dir is not None else self.harness_dir
+        extra: dict[str, Any] = {}
+        if target_dir is not None:
+            if not self._runner_accepts_harness_dir():
+                raise InfraError(
+                    E.E_IO_CONFIG_INVALID,
+                    "注入的 runner 不支持 harness_dir：候选臂的 staging 目录无法传递（F66）",
+                    hint="让 runner.run_episode 接受 harness_dir=…；"
+                         "或不要把该 runner 用于候选臂（否则补丁不会进入 prompt）")
+            extra["harness_dir"] = target_dir
         record = self.runner.run_episode(int(seed), split=split, arm=arm,
                                          episode_config=episode_config,
                                          harness_version=int(harness_version),
-                                         generation=int(generation), timeout_s=timeout_s)
+                                         generation=int(generation), timeout_s=timeout_s,
+                                         **extra)
         rows, _truncated = read_jsonl(Path(record.jsonl_path))
         result = episode_result_from_rows(rows, seed=int(seed), split=split,
                                           generation=int(generation),
