@@ -661,3 +661,123 @@ def test_b86_audit_leak_cli_consumes_the_pin(build_run, tmp_path):
         code2 = app_main(argv, reexec=False)
     assert code2 == 0, (f"pin 正确时该 run 应审计干净，实际 {code2}；"
                        f"out={out2.getvalue()} err={err2.getvalue()}")
+
+
+# ---- B-88（F77-a）：审计用 content_hash **反查**真实配表，不信任快照的声明 -------------
+
+def _mutated_content_dir(tmp_path: Path) -> Path:
+    """`src/game/content` 的副本，改一个无害字段 ⇒ **内容不同、hash 不同、仍可加载**。"""
+    import shutil
+    real = Path(__file__).resolve().parents[3] / "src/game/content"
+    out = tmp_path / "mutated-content"
+    shutil.copytree(real, out)
+    schools = out / "schools.json"
+    data = json.loads(schools.read_text(encoding="utf-8"))
+    data["__probe_marker__"] = [1, 2, 3]
+    schools.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return out
+
+
+def _write_snapshot(run_dir: Path, *, content_dir: Path | None, content_hash: str | None,
+                    episode: dict[str, Any] | None = None) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    config: dict[str, Any] = {"env": {"episode": episode or {"difficulty": "hard"}}}
+    if content_dir is not None:
+        config["env"]["content_dir"] = str(content_dir)
+    payload: dict[str, Any] = {"config": config, "config_hash": "sha256:test"}
+    if content_hash is not None:
+        payload["content_hash"] = content_hash
+    (run_dir / "config.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_b88_audit_identifies_tables_by_content_hash(tmp_path):
+    """**修复前失败**：快照声明的目录与 `content_hash` 不符时，`content_hash` 说了算。
+
+    修复前 `_content_dir()` 直接返回快照声明的目录 ⇒ 审计拿**这些局从未用过的配表**推隐藏
+    token（假阳性/假阴性的来源）。修复后按 digest 反查，返回**真实**那套配表。
+    """
+    from dice_ratchet.env import load_tables
+    from dice_ratchet.env.digest import content_hash
+    repo = Path(__file__).resolve().parents[3]
+    real = repo / "src/game/content"
+    expected = content_hash(load_tables(real))
+    mutated = _mutated_content_dir(tmp_path)
+    assert content_hash(load_tables(mutated)) != expected, "夹具必须真的改动了内容"
+    run = tmp_path / "run"
+    _write_snapshot(run, content_dir=mutated, content_hash=expected)
+    io: list[str] = []
+    warn: list[str] = []
+    got = A._resolve_content_dir(run, io_errors=io, warnings=warn)
+    assert got is not None and got != A._UNRESOLVED
+    assert content_hash(load_tables(got)) == expected, "返回的目录必须与快照 digest 相符"
+    assert got != mutated, "不得返回快照声明的那个错目录"
+    assert io == [] and warn == []
+
+
+def test_b88_unidentifiable_tables_fail_closed_critical(build_run, tmp_path):
+    """**修复前失败**：快照有 digest 但无人相符 ⇒ 记 `io_errors`（→ critical）+ 降级规则集。
+
+    修复前这条路径**静默**用默认配表跑完（verdict 由 findings 决定，可能是 clean）——
+    即「审计变瞎而报告看不出来」。本用例同时走**端到端**：`run_audit` 的 verdict 必须是
+    `critical`，且 report 的 `io_errors` 里能看到原因。
+    """
+    mutated = _mutated_content_dir(tmp_path)
+    run = tmp_path / "run"
+    _write_snapshot(run, content_dir=mutated, content_hash="sha256:" + "0" * 64)
+    io: list[str] = []
+    got = A._resolve_content_dir(run, io_errors=io, warnings=[])
+    assert got is A._UNRESOLVED
+    assert len(io) == 1 and "content_hash" in io[0] and "critical" in io[0]
+
+    # 端到端：把合成 run 的快照改成「声明一个错目录 + 一个对不上的 digest」
+    built = build_run(tmp_path, run_id="r-b88-unresolved")
+    snap = json.loads((built.root / "config.json").read_text(encoding="utf-8"))
+    snap.setdefault("config", {}).setdefault("env", {})["content_dir"] = str(mutated)
+    snap["content_hash"] = "sha256:" + "0" * 64
+    (built.root / "config.json").write_text(json.dumps(snap), encoding="utf-8")
+    result = A.run_audit(built.root, generated_at=FIXED)
+    assert result.verdict == A.VERDICT_CRITICAL, result.verdict
+    assert any("content_hash" in e for e in result.io_errors), result.io_errors
+    # 两类依赖重放的规则集必须**空**（降级），而不是拿默认配表凑出结论
+    replayed_classes = {A.LeakClass.FUTURE_ROOM_LEAK.value, A.LeakClass.SHOP_CONTENT_LEAK.value}
+    assert not (set(result.leak_counts) & replayed_classes)
+
+
+def test_b88_legacy_run_without_content_hash_is_unchanged(tmp_path):
+    """老 run（快照无 `content_hash`）：保持原行为，不因「无法自证」把 clean 掉成 warn。"""
+    run = tmp_path / "run"
+    _write_snapshot(run, content_dir=None, content_hash=None)
+    io: list[str] = []
+    warn: list[str] = []
+    got = A._resolve_content_dir(run, io_errors=io, warnings=warn)
+    assert got is not None and str(got).endswith("src/game/content")
+    assert io == [] and warn == [], "声明为默认目录时不得产生噪声告警"
+
+
+def test_b88_legacy_run_declaring_odd_dir_gets_a_warning(tmp_path):
+    """老 run + 声明了**非默认**目录 ⇒ 记一条 warn（唯一值得人看一眼的形态）。"""
+    mutated = _mutated_content_dir(tmp_path)
+    run = tmp_path / "run"
+    _write_snapshot(run, content_dir=mutated, content_hash=None)
+    warn: list[str] = []
+    A._resolve_content_dir(run, io_errors=[], warnings=warn)
+    assert len(warn) == 1 and "content_hash" in warn[0]
+
+
+def test_b88_real_archived_run_tables_are_identified(repo_root):
+    """**真实归档 run**：`content_hash` 能被反查命中（回归我们自己的证据链）。
+
+    修复前这里也会「成功」——但成功的原因是它**直接信任声明**；本用例的关键是它同时断言
+    反查结果与快照 digest 相符，且不产生 io_errors。
+    """
+    from dice_ratchet.env import load_tables
+    from dice_ratchet.env.digest import content_hash
+    run = repo_root / "runs/m3-formal"
+    if not (run / "config.json").is_file(): # pragma: no cover - 归档不在时跳过
+        pytest.skip("归档 run 不存在")
+    io: list[str] = []
+    got = A._resolve_content_dir(run, io_errors=io, warnings=[])
+    snapshot = json.loads((run / "config.json").read_text(encoding="utf-8"))["content_hash"]
+    assert io == [], f"真实归档必须能识别配表：{io}"
+    assert got is not None and got is not A._UNRESOLVED
+    assert content_hash(load_tables(got)) == snapshot

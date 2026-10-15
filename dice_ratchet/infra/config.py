@@ -173,18 +173,34 @@ class SandboxConfig:
 
 @dataclass(frozen=True)
 class EnvConfig:
-    """MOD-01 环境规则 + MOD-02 沙箱 + 局配置。"""
+    """MOD-01 环境规则 + MOD-02 沙箱 + 局配置。
 
-    content_dir: str = "src/game/content"
-    golden_dir: str = "src/game/tests/golden"
-    check_invariants: bool = True
+    **2026-10-14（Spec B-88；F77-a/b/c 裁决「一起做完」）**：原先这里还有三个键
+    ``content_dir`` / ``golden_dir`` / ``check_invariants``，**都没有消费者**，且各自有更
+    合适的权威——因此全部删除：
+
+    * ``content_dir``：真正的权威是 MOD-01 的 ``loader.GAME_CONTENT_DIR``（**import 时**由
+      ``DICERATCHET_ENV__CONTENT_DIR`` 或字面默认解析，**从不读 yaml**）。配置层却把
+      ``env.content_dir`` 写进 run 快照，而 ``audit leak`` 曾**信任快照的声明**去推隐藏
+      token ⇒ 一旦两者不一致（在 yaml 里指到另一个真实存在的配表目录），审计就会拿**这些局
+      从未用过的配表**做重放 ⇒ ``future_room_leak``/``shop_content_leak`` 假阳性或假阴性
+      （F58/F59 同族）。现在审计改为**用快照的 ``content_hash`` 反查**真实配表
+      （``sandbox/audit.py::_resolve_content_dir``）：候选目录逐个按 digest 比对，命中者才算；
+      一个都对不上就**判 critical 并降级这两类规则集**，绝不拿默认配表凑数。
+    * ``golden_dir``：对拍基准目录在测试里写死（``src/game/tests/golden``）；配一个没有人读的
+      路径只会让「改了键以为搬了目录」的人踩空。
+    * ``check_invariants``：MOD-01 PRD 原文说它「每次 reduce 后执行 ``assertInvariants``
+      （同 JS；默认 true）」，**但生产局从来没有执行**——``engine.step`` 里那次调用被**游戏侧
+      的** ``config.debug.showHiddenInfo`` 门着（本仓库没有任何调用方传 ``debug``），
+      真正的不变式覆盖来自 ``env selftest`` 与 G2/G3 golden 逐行对拍。想让真实对局也逐步校验，
+      是一条**内核契约/接线点**的新功能（需先量每步开销），已登记 **F78**，不能靠一个没人读的
+      布尔键假装已经有了。
+    """
+
     episode: EpisodeConfig = field(default_factory=EpisodeConfig)
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
 
     def validate(self) -> None:
-        _check("env.content_dir", self.content_dir, str)
-        _check("env.golden_dir", self.golden_dir, str)
-        _check("env.check_invariants", self.check_invariants, bool)
         self.episode.validate()
         self.sandbox.validate()
 

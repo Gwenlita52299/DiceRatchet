@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -67,7 +68,7 @@ def _resolve(args: argparse.Namespace, action: str) -> int:
     if state.status == "pending": # pragma: no cover - resolve_gate 保证不会
         raise InfraError(E.E_EVOLVE_JUDGE_FAILED, "gate 仍为 pending：裁决未生效")
     print(f"gate={state.status}；执行 accept/rollback："
-          f"python -m dice_ratchet loop run --run-id {run_id} --resume", file=__import__("sys").stderr)
+          f"python -m dice_ratchet loop run --run-id {run_id} --resume", file=sys.stderr)
     return 0
 
 

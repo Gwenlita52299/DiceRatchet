@@ -588,6 +588,7 @@ def scan_text(text: str, *, forbidden: Mapping[str, str], surface: str,
 
 def derive_hidden_tokens(run_dir: Path, *, split: str = "train",
                          warnings: list[str] | None = None,
+                         io_errors: list[str] | None = None,
                          splits: Sequence[str] | None = None) -> "HiddenTokenIndex":
     """重放 ``episodes/<split>/*.jsonl``，重建**逐局**的隐藏行节点 id 与未展示的商店条目。
 
@@ -614,6 +615,7 @@ def derive_hidden_tokens(run_dir: Path, *, split: str = "train",
     这正是 F58 的另一半。
     """
     warn = warnings if warnings is not None else []
+    errors = io_errors if io_errors is not None else []
     run_dir = Path(run_dir)
     wanted = tuple(splits) if splits is not None else (str(split),)
     by_episode: dict[str, dict[str, str]] = {}
@@ -653,9 +655,14 @@ def derive_hidden_tokens(run_dir: Path, *, split: str = "train",
                 return HiddenTokenIndex(no_trajectory=no_trajectory)
             current_stage_map = _stage_map
             episode_cfg = _episode_config_from_run(run_dir, warn)
-            content_dir = _content_dir(run_dir)
+            resolved = _resolve_content_dir(run_dir, io_errors=io_errors, warnings=warn)
+            if resolved is _UNRESOLVED:
+                # 快照声明了 content_hash，但没有任何候选目录与它相符 ⇒ 无法确认「这些局
+                # 到底用的是哪套配表」。**绝不能**拿默认配表凑数（那正是 F77-a 的假阳性/
+                # 假阴性来源）：fail-closed 降级这两类规则集，并已记 io_errors（→ critical）。
+                return HiddenTokenIndex(no_trajectory=no_trajectory)
             try:
-                tables = load_tables(content_dir) if content_dir else load_tables()
+                tables = load_tables(resolved) if resolved else load_tables()
             except Exception as exc: # noqa: BLE001
                 warn.append(f"配表加载失败（{exc}）：future_room/shop 规则集降级为空")
                 return HiddenTokenIndex(no_trajectory=no_trajectory)
@@ -787,25 +794,88 @@ def _collect_hidden(state: Mapping[str, Any], current_stage_map: Any,
     return hidden_nodes, hidden_groups, hidden_items, shown
 
 
-def _content_dir(run_dir: Path) -> Path | None:
-    """定位 GAME 配表目录：优先 run 快照里的 ``env.content_dir``，其次仓库内默认路径。
+#: 「快照声明了 content_hash，但没有任何候选配表与它相符」的哨兵（见 `_resolve_content_dir`）。
+_UNRESOLVED: Final[object] = object()
 
-    MOD-01 的 ``GAME_CONTENT_DIR`` 是 **cwd 相对**的，而 ``audit leak`` 允许从任意
-    目录执行；这里显式回退到仓库根，避免「从别处审计 → 重放降级 → 假告警」。
+
+def _resolve_content_dir(run_dir: Path, *, io_errors: list[str] | None = None,
+                         warnings: list[str] | None = None) -> Path | None | object:
+    """用**快照的 ``content_hash`` 反查**这些局真正用过的那套配表（Spec B-88 / F77-a）。
+
+    为什么不再信任快照里声明的目录：MOD-01 的 ``GAME_CONTENT_DIR`` 是 **import 时**解析的
+    常量（可由 ``DICERATCHET_ENV__CONTENT_DIR`` 覆盖），**从不读 yaml**；而配置层曾把
+    ``env.content_dir`` 写进快照。两者一旦不一致（例如在 yaml 里把该键指向另一个真实存在的
+    配表目录），审计会**拿这些局从未用过的配表**推隐藏 token ⇒ ``future_room_leak`` /
+    ``shop_content_leak`` 出现假阳性或假阴性（F58/F59 同族），而运行时的真相是
+    ``content_hash``（快照里已经有它，等于白拿一份校验和）。
+
+    返回值三态：
+
+    * ``Path``：**已按 digest 确认**的配表目录（这些局用过的那套）；
+    * ``None``：快照**没有** ``content_hash``（协议更早的 run）⇒ 退回「声明的目录 / 仓库默认」。
+      **只在声明了非默认目录时**记一条 ``warnings``（无法自证且指到了一个不寻常的位置，
+      值得人看一眼）；声明等于默认值时静默——否则每个旧 run 都会从 clean 掉到 warn，
+      把一条**无法行动**的信息变成长期噪声（我们的归档 run 都有 content_hash，此路主要服务
+      测试夹具与更早的协议）；
+    * ``_UNRESOLVED``：快照有 digest 但**没有任何候选与之相符** ⇒ 记 ``io_errors``
+      （缺证据 ≠ 无泄漏 ⇒ 由 `_verdict` 判 ``critical``），调用方必须**降级**这两类规则集，
+      **不得**拿默认配表凑数。
     """
+    errors = io_errors if io_errors is not None else []
+    warn = warnings if warnings is not None else []
+    run_dir = Path(run_dir)
     configured = "src/game/content"
+    expected: str | None = None
     try:
-        raw = json.loads((Path(run_dir) / "config.json").read_text(encoding="utf-8"))
-        value = ((raw.get("config") or {}).get("env") or {}).get("content_dir")
+        raw = json.loads((run_dir / "config.json").read_text(encoding="utf-8"))
+        env_block = ((raw.get("config") or {}).get("env") or {})
+        value = env_block.get("content_dir")
         if isinstance(value, str) and value:
             configured = value
+        digest = raw.get("content_hash")
+        if isinstance(digest, str) and digest:
+            expected = digest
     except (OSError, json.JSONDecodeError):
         pass
+
     repo_root = Path(__file__).resolve().parents[2]
-    for candidate in (Path(configured), repo_root / configured):
-        if candidate.is_dir():
-            return candidate
-    return None
+    import os as _os
+    env_dir = _os.environ.get("DICERATCHET_ENV__CONTENT_DIR") or configured
+    candidates: list[Path] = []
+    for cand in (Path(configured), repo_root / configured,
+                 Path("src/game/content"), repo_root / "src/game/content",
+                 Path(env_dir), repo_root / env_dir):
+        if cand not in candidates:
+            candidates.append(cand)
+    existing = [c for c in candidates if c.is_dir()]
+
+    if expected is None:
+        # 老 run（快照没有 content_hash）：保持原行为。**只有**「声明了一个非默认目录」时才
+        # 记告警——那是唯一值得人看一眼的形态；声明等于默认值时静默（否则每一个旧 run 都会
+        # 从 clean 掉到 warn，把一条无法行动的「无法自证」变成长期噪声）。
+        chosen = existing[0] if existing else None
+        if chosen is not None and configured != "src/game/content":
+            warn.append(f"快照缺 content_hash 且声明了非默认配表目录 {configured}：无法自证，"
+                        f"按 {chosen} 重放（F77-a）")
+        return chosen
+
+    from dice_ratchet.env import load_tables
+    from dice_ratchet.env.digest import content_hash
+    mismatched: list[str] = []
+    for cand in existing:
+        try:
+            got = content_hash(load_tables(cand))
+        except Exception as exc: # noqa: BLE001 - 该候选不可用：换下一个
+            mismatched.append(f"{cand}（配表加载失败：{exc}）")
+            continue
+        if got == expected:
+            return cand
+        mismatched.append(f"{cand}（content_hash={got}）")
+    errors.append(
+        f"配表无法按 content_hash 识别：快照声明 {expected}，候选都不相符 "
+        f"[{'; '.join(mismatched) or '无可用候选目录'}] ⇒ future_room/shop 规则集不可用，"
+        f"判 critical（缺证据 ≠ 无泄漏；F77-a）")
+    return _UNRESOLVED
 
 
 def _episode_config_from_run(run_dir: Path, warnings: list[str]) -> dict[str, Any]:
@@ -892,6 +962,7 @@ def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "tr
         # F58：**派生面必须与扫描面一致**——扫描遍历 ``episodes/**``，所以重放也要覆盖
         # ``episodes/`` 下全部有局文件的 split（只重放 train 而扫描 heldout 正是误报的温床）。
         hidden = derive_hidden_tokens(run_dir, split=split, warnings=warnings,
+                                      io_errors=io_errors,
                                       splits=_episode_splits(run_dir))
     seeds = load_forbidden_seeds(config_dir, split_filter=seed_splits)
     if not seeds:

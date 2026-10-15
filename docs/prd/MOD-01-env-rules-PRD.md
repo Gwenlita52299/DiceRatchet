@@ -1,7 +1,7 @@
 # MOD-01 env-rules 技术 PRD
 
-> 版本：v1.0（2026-09-30 17:21 按 Spec v1.3 整体重写，见 §17）· 状态：待评审 · 所属里程碑：M0
-> 上游：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md) v2.27（冲突以 Spec 为准）· 规则事实来源：[GAME-00](GAME-00-webgame-PRD.md) / [GAME-01](GAME-01-kernel-contract.md) / [GAME-02](GAME-02-content-tables.md) v1.2 与 `src/game/kernel`
+> 版本：v1.1（2026-10-14 **F77：§9 的三个配置键（`env.content_dir`/`env.golden_dir`/`env.check_invariants`）全部删除——三者都没有消费者，配表目录的权威是 `loader.GAME_CONTENT_DIR`，审计改用快照 `content_hash` 反查真实配表；「每次 reduce 后校验不变式」在生产局从未成立，已登记 F78。见 §9 与 §17**）· 历史版本：v1.0（2026-09-30 17:21 按 Spec v1.3 整体重写）· 状态：待评审 · 所属里程碑：M0
+> 上游：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md) v2.31（冲突以 Spec 为准）· 规则事实来源：[GAME-00](GAME-00-webgame-PRD.md) / [GAME-01](GAME-01-kernel-contract.md) / [GAME-02](GAME-02-content-tables.md) v1.2 与 `src/game/kernel`
 > 定位：**GAME 内核的纯 Python 等价移植**。本模块不定义任何游戏规则；规则、数值、配表都引用 GAME。v0.1 中基于旧《Dicey Dungeons》模型的内容（floors/HP/block/levelup/`configs/enemies.yaml`/shaped reward 表）已全部废弃。
 
 ## 1. 背景与目标
@@ -157,13 +157,16 @@ pytest tests/golden/test_random_walk.py
 
 ## 9. 配置项
 
-| 键 | 类型 | 默认 | 含义 |
-|---|---|---|---|
-| `env.content_dir` | str | `src/game/content` | 配表目录（与 JS 共用） |
-| `env.golden_dir` | str | `src/game/tests/golden` | 对拍基准目录 |
-| `env.check_invariants` | bool | `true` | 每次 reduce 后执行 `assertInvariants`（同 JS；性能测试时可关闭） |
+> **⚠️ 2026-10-14（Spec v2.31 B-88，F77-a/b/c 裁决「一起做完」）：本表原有的三个键全部删除**
+> ——它们**都没有消费者**，且各自的真实权威不在配置里：
 
-游戏参数（难度、开关、局长）不在本模块配置，由 `EpisodeConfig`（Spec §4.1）传入。
+| 原键 | 删除理由与现在的权威 |
+|---|---|
+| `env.content_dir` | 权威是 `loader.py::GAME_CONTENT_DIR`——**import 时**由 `DICERATCHET_ENV__CONTENT_DIR` 或字面默认解析，**从不读 yaml**。配置层却把它写进 run 快照，而 `audit leak` 曾**信任快照的声明**推隐藏 token ⇒ 一旦两者不一致，审计会拿**这些局从未用过的配表**做重放（`future_room_leak`/`shop_content_leak` 假阳性或假阴性，F58/F59 同族）。现在审计改用快照的 **`content_hash` 反查**（`sandbox/audit.py::_resolve_content_dir`）：候选目录逐个按 digest 比对，命中者才算；一个都对不上就**判 `critical` 并降级这两类规则集**，绝不拿默认配表凑数 |
+| `env.golden_dir` | 对拍基准目录在测试里写死（`src/game/tests/golden`）；配一个没人读的路径只会让「改了键以为搬了目录」的人踩空 |
+| `env.check_invariants` | 原文声称「每次 reduce 后执行 `assertInvariants`（同 JS；默认 true）」，**但生产局从来没有执行**：`engine.step` 里那次调用被**游戏侧的** `config.debug.showHiddenInfo` 门着，而本仓库**没有任何调用方传 `debug`** ⇒ 真实的不变式覆盖来自 `env selftest` 与 G2/G3 golden 逐行对拍。要让真实对局也逐步校验，是一条**内核契约/接线点**的新功能（需先量每步开销），已登记 **F78**——不能靠一个没人读的布尔键假装已经有了 |
+
+游戏参数（难度、开关、局长）不在本模块配置，由 `EpisodeConfig`（Spec §4.1）传入；`env.episode.*` 六个键有消费者（组合根 `loop/cli.py` 显式传 `cfg.env.episode`）。
 
 ## 10. 错误处理与降级
 
@@ -251,3 +254,4 @@ T-01～T-10 全部通过（T-08 于 2026-10-03 由验收补齐为 pytest 用例�
 |---|---|---|
 | v0.1 | 2026-09-30 | 首版（基于旧《Dicey Dungeons》规则模型） |
 | v1.0 | 2026-09-30 17:21 | 按 Spec v1.3（B-09）与 MOD PRD 评审整体重写：定位改为 GAME 内核的逐位移植；废弃 v0.1 的 D-01～D-05（规则相关）；随机派生改为 xmur3 + SplitMix64（原 blake2b 违反 GAME-01 §3.2）；对拍基准改为 `src/game/tests/golden`（新增 `stateDigest` 与 g5 默认局） |
+| v1.1 | 2026-10-14 | **F77-a/b/c：§9 的三个配置键全部删除（Spec v2.31 / B-88；依据用户裁决「一起做完」）**。① `env.content_dir`：权威是 `loader.py::GAME_CONTENT_DIR`（import 时解析 `DICERATCHET_ENV__CONTENT_DIR`，从不读 yaml）；配置层把它写进快照而审计曾**信任快照声明** ⇒ 两者不一致时审计拿错配表做重放（假阳性/假阴性）。现由审计**用快照的 `content_hash` 反查**真实配表，对不上即判 `critical` 并降级 `future_room`/`shop` 规则集（见 [MOD-02 PRD §9](MOD-02-env-sandbox-PRD.md)）。② `env.golden_dir`：对拍基准目录由测试写死，键 0 消费者。③ `env.check_invariants`：**原文声称的「每次 reduce 后执行 assertInvariants（默认 true）」在生产局从未成立**——`engine.step` 的调用被游戏侧 `config.debug.showHiddenInfo` 门着，而本仓库没有调用方传 `debug`；真实覆盖来自 `env selftest` 与 G2/G3 golden 逐行对拍。要在真实对局逐步校验，需先定**接线点**（`SandboxEnv.step` 外挂 vs 内核契约）并实测每步开销 ⇒ 登记 **F78**，不在本轮假装实现。④ 护栏：`test_b88_every_env_key_declares_a_consumer`（`env.*` 键集 == 已登记消费者表）+ `test_b88_dead_env_keys_are_gone`，修复前 7 项失败。 |

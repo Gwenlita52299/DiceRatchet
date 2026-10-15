@@ -103,9 +103,11 @@ def test_config_hash_excludes_volatile_fields():
 
 def test_config_hash_excludes_absolute_paths(tmp_path):
     # FR-09-3：绝对路径不参与 hash —— 两个不同的绝对路径 → hash 相同
-    a = load_config(cli_overrides={"env.content_dir": "/abs/one/content"},
+    # （2026-10-14 B-88：原来用的是 env.content_dir，该键已删除；改用仍在的
+    #  agent.policy.template_path —— 判据本身与具体键无关，这里只是换一个路径型键）
+    a = load_config(cli_overrides={"agent.policy.template_path": "/abs/one/decision.md"},
                     config_dir=CONFIGS)
-    b = load_config(cli_overrides={"env.content_dir": "/abs/two/content"},
+    b = load_config(cli_overrides={"agent.policy.template_path": "/abs/two/decision.md"},
                     config_dir=CONFIGS)
     assert config_hash(a) == config_hash(b)
 
@@ -113,7 +115,7 @@ def test_config_hash_excludes_absolute_paths(tmp_path):
 def test_config_hash_keeps_relative_paths():
     # 相对路径参与 hash（是可复现的仓库内路径）
     base = load_config(config_dir=CONFIGS)
-    other = load_config(cli_overrides={"env.content_dir": "other/content"},
+    other = load_config(cli_overrides={"agent.policy.template_path": "harness/prompts/other.md"},
                         config_dir=CONFIGS)
     assert config_hash(base) != config_hash(other)
 
@@ -646,35 +648,70 @@ def test_heldout_basket_rejects_unknown_names_fail_closed(bad):
     assert "heldout_basket" in str(exc.value)
 
 
-# ---- B-87（F75）：env.sandbox 只留真的会被读的键 -----------------------------------
+# ---- B-87/B-88（F75/F77）：env.* 只留真的会被读的键 ---------------------------------
 #
-# 病根（F73/F75 同一族）：配置表按 PRD 写全、接线按需 ⇒ 「配置声称 ≠ 代码执行」。
-# 本节的第一个用例是**系统性护栏**：任何新增的 env.sandbox 键都必须在这里登记消费者，
+# 病根（F73/F75/F77 同一族）：配置表按 PRD 写全、接线按需 ⇒ 「配置声称 ≠ 代码执行」。
+# 本节的第一个用例是**系统性护栏**：任何新增的 env.* 键都必须在这里登记消费者，
 # 否则 CI 红——把「写完配置就以为接上了」这条路的成本抬到与接线同高。
+# B-88 把范围从 `env.sandbox.*` 扩到**整个 `env.*`**（F77 正是漏在这个范围外被发现的）。
 
 #: 键 → 声明的消费者（模块相对仓库根）。新增键必须同时补这一行。
-SANDBOX_KEY_CONSUMERS = {
+ENV_KEY_CONSUMERS = {
+    # MOD-01 局配置：组合根显式传 cfg.env.episode（loop/cli.py），
+    # evals/harness.py 另有「配置回落」路径（F-M1 的漏传修复）。
+    "env.episode.difficulty": "dice_ratchet/loop/cli.py",
+    "env.episode.stage_count": "dice_ratchet/loop/cli.py",
+    "env.episode.character": "dice_ratchet/loop/cli.py",
+    "env.episode.toggles": "dice_ratchet/loop/cli.py",
+    "env.episode.max_env_steps": "dice_ratchet/loop/cli.py",
+    "env.episode.max_decisions": "dice_ratchet/loop/cli.py",
+    # MOD-02 沙箱：只有这两个键有消费者（见 B-87）。
     "env.sandbox.policy_failure_streak": "dice_ratchet/evals/baselines.py",
     "env.sandbox.audit.ruleset_pin": "dice_ratchet/app.py",
 }
 
 
-def test_b87_every_sandbox_key_declares_a_consumer():
-    """``env.sandbox.*`` 的键集必须与 ``SANDBOX_KEY_CONSUMERS`` **逐键相等**。
+def test_b88_every_env_key_declares_a_consumer():
+    """``env.*`` 的键集必须与 ``ENV_KEY_CONSUMERS`` **逐键相等**。
 
-    修复前（B-87 之前）本子树有 15 个键、只有 2 个有消费者 ⇒ 本用例列出的期望集与
-    实际合法键集不等 ⇒ 红。**诚实边界**：本用例证明「有人为这个键声明了消费者、且该文件
-    提到了这个键名」，不是数据流证明——真正的数据流证据由各键自己的用例承担
-    （如 ``test_b86_audit_leak_cli_consumes_the_pin``）。
+    修复前（B-88 之前）本前缀有 11 个键、3 个没有消费者（`content_dir`/`golden_dir`/
+    `check_invariants`）⇒ 期望集与实际键集不等 ⇒ 红。**诚实边界**：本用例证明「有人为这个键
+    声明了消费者、且该文件提到了这个键名」，不是数据流证明——真正的数据流证据由各键自己的
+    用例承担（如 `test_b86_audit_leak_cli_consumes_the_pin`、
+    `test_b88_audit_identifies_tables_by_content_hash`）。
     """
-    keys = {k for k in cfg_mod._legal_flat_keys() if k.startswith("env.sandbox.")}
-    assert keys == set(SANDBOX_KEY_CONSUMERS), (
-        f"未登记消费者的键：{sorted(keys - set(SANDBOX_KEY_CONSUMERS))}；"
-        f"已失效的登记：{sorted(set(SANDBOX_KEY_CONSUMERS) - keys)}")
-    for key, rel in SANDBOX_KEY_CONSUMERS.items():
+    keys = {k for k in cfg_mod._legal_flat_keys() if k.startswith("env.")}
+    assert keys == set(ENV_KEY_CONSUMERS), (
+        f"未登记消费者的键：{sorted(keys - set(ENV_KEY_CONSUMERS))}；"
+        f"已失效的登记：{sorted(set(ENV_KEY_CONSUMERS) - keys)}")
+    for key, rel in ENV_KEY_CONSUMERS.items():
         src = (REPO / rel).read_text(encoding="utf-8")
-        leaf = key.rsplit(".", 1)[-1]
-        assert leaf in src, f"{key} 声明的消费者 {rel} 里找不到 {leaf!r}"
+        # 允许两种交接方式：**逐键读**（文件里出现叶名）或 **整对象交接**
+        # （组合根把 `cfg.env.episode` 整体交给 EpisodeConfig.from_any ⇒ 只出现父段名）。
+        segments = key.split(".")
+        needles = {segments[-1], segments[-2]}
+        assert needles & {n for n in needles if n in src}, (
+            f"{key} 声明的消费者 {rel} 里既找不到叶名 {segments[-1]!r} 也找不到父段 "
+            f"{segments[-2]!r}")
+
+
+def test_b88_dead_env_keys_are_gone():
+    """**修复前失败**：`content_dir` / `golden_dir` / `check_invariants` 三键删除（F77）。
+
+    逐键理由见 `EnvConfig` 的类注释；要点：`content_dir` 的权威是 MOD-01 的
+    `loader.GAME_CONTENT_DIR`（import 时解析，**从不读 yaml**），配置与快照各说一套正是
+    「审计拿错配表」的来源；`check_invariants` 声称默认开启逐步校验，**实际生产局从不执行**
+    （被游戏侧 `debug.showHiddenInfo` 门着，本仓库无调用方传 debug）⇒ 已登记 F78。
+    """
+    env_cfg = cfg_mod.EnvConfig()
+    for gone in ("content_dir", "golden_dir", "check_invariants"):
+        assert not hasattr(env_cfg, gone), f"{gone} 是 0 消费者键，应已删除"
+    keys = cfg_mod._legal_flat_keys()
+    for dead in ("env.content_dir", "env.golden_dir", "env.check_invariants"):
+        assert dead not in keys, f"{dead} 不应再是合法键"
+    import yaml
+    raw = yaml.safe_load((CONFIGS / "default.yaml").read_text(encoding="utf-8"))
+    assert set(raw["env"]) == {"episode", "sandbox"}, sorted(raw["env"])
 
 
 def test_b87_dead_sandbox_subtrees_are_gone():

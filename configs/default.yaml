@@ -4,10 +4,12 @@
 # 浮点精度：report.json / metrics 一律 round(x,4)（Spec §4.5 B-34）。
 
 # ============ env（MOD-01 环境规则 + MOD-02 沙箱 + 局配置）============
+# 2026-10-14（Spec B-88，F77-a/b/c）：env.content_dir / env.golden_dir /
+# env.check_invariants 三个键已删除（全库 0 消费者）。配表目录的权威是 MOD-01 的
+# GAME_CONTENT_DIR（import 时解析 DICERATCHET_ENV__CONTENT_DIR，见 loader.py），
+# 不再由配置声明；`audit leak` 改用 run 快照的 content_hash **反查**真实配表，
+# 对不上就判 critical 并降级 future_room/shop 规则集（见 sandbox/audit.py）。
 env:
-  content_dir: src/game/content
-  golden_dir: src/game/tests/golden
-  check_invariants: true
   episode: # 默认局（Spec §8.6）：hard × 6 关，greedy_counter 通关率 45.5%（n=200，seed 1–200；复现命令见 Spec §8.6）
     # 2026-10-06（M2 开工 D-2 裁决）：默认局**保持 hard × 6**（M3 主口径），本值不动。
     # M2 的闭环联调与 §3.2 冒烟改用 run 级 override 的 medium × 6 bring-up 口径：

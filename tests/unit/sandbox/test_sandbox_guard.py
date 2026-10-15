@@ -543,3 +543,69 @@ def test_worker_module_respond_and_set_limits_are_safe(capsys):
 
     _worker._respond({"id": 1, "ok": True})
     assert json.loads(capsys.readouterr().out)["ok"] is True
+
+
+# ---- B-88（F76）：不可信源码**不得在父进程内执行** ------------------------------------
+
+#: 允许出现进程内 `exec`/`compile`/`__import__` 的**文件 → 允许的名字集合**。
+#: 这不是「禁令清单」而是「受审清单」：任何新增条目都必须写清为什么它不违反 INV-4，
+#: 且**逐名登记**（防止某个已允许文件里悄悄多出另一种执行）。
+_INPROCESS_EXEC_ALLOWLIST: dict[str, set[str]] = {
+    # 工具代码的**受限执行**就发生在本文件的子进程里（`ToolWorker` 以
+    # `[python, -I, -S, worker.py]` 启动它）；这是 INV-4 的落点，不是父进程内执行。
+    "dice_ratchet/sandbox/_worker.py": {"exec", "compile"},
+}
+
+_SCAN_LAYERS = ("agent", "memory", "loop", "evolve", "evals", "inference", "sandbox")
+
+
+def _untrusted_exec_hits(repo_root: Path) -> list[str]:
+    """AST 扫描各层，找出 `exec(...)` / `compile(...)` / `__import__(...)` 与 `import importlib`。"""
+    import ast as _ast
+    hits: list[str] = []
+    for layer in _SCAN_LAYERS:
+        for path in sorted((repo_root / "dice_ratchet" / layer).rglob("*.py")):
+            rel = path.relative_to(repo_root).as_posix()
+            tree = _ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.Call) and isinstance(node.func, _ast.Name) \
+                        and node.func.id in ("exec", "compile", "__import__"):
+                    hits.append(f"{rel}:{node.lineno}:{node.func.id}()")
+                elif isinstance(node, _ast.Import):
+                    for alias in node.names:
+                        if alias.name.split(".")[0] in ("importlib", "runpy"):
+                            hits.append(f"{rel}:{node.lineno}:import {alias.name}")
+    return hits
+
+
+def test_b88_no_inprocess_execution_of_untrusted_source(repo_root):
+    """**F76 的系统性护栏**：`dice_ratchet/**` 里不得有对不可信源码的进程内执行。
+
+    为什么这条护栏与 F76 有关：`run_agent_tick()` 是**为「不配合 import hook 的第三方代码」
+    准备的**一次性子进程边界，而它**没有生产调用点**（F76）。当前之所以不是洞，是因为全库
+    根本不存在「在父进程里执行不可信源码」的路径——工具走 `gate()`（AST）+ `tool_signatures()`
+    （纯 AST、不 import）+ `ToolWorker` 子进程；提案侧还有 denylist 直接拒绝含
+    `__import__`/`exec(`/`importlib` 的补丁。本用例把这条**默认事实**钉住：一旦有人新增进程内
+    执行路径，CI 会红，提醒他该走 `run_agent_tick()`（或在此登记理由）。
+
+    **诚实边界**：AST 扫描抓的是 `exec/compile/__import__` 的**名字调用**与 `importlib`/`runpy`
+    导入，抓不到「用 `getattr(builtins, 'ev'+'al')` 之类拼出来的调用」——它防的是**无心之失**，
+    不是刻意绕过（后者的防线是 MOD-07 的提案 denylist 与 INV-4 的受限执行器）。
+    """
+    hits = _untrusted_exec_hits(repo_root)
+    unexpected = []
+    for hit in hits:
+        rel = hit.split(":", 1)[0]
+        symbol = hit.rsplit(":", 1)[-1].removesuffix("()")
+        if symbol not in _INPROCESS_EXEC_ALLOWLIST.get(rel, set()):
+            unexpected.append(hit)
+    assert not unexpected, (
+        "发现进程内执行不可信源码的路径；应走 sandbox.guard.run_agent_tick() 子进程边界，"
+        f"或在 _INPROCESS_EXEC_ALLOWLIST 里逐名登记理由：{unexpected}")
+
+
+def test_b88_run_agent_tick_boundary_still_available():
+    """反向护墙：删的是配置键（F75），**能力**必须还在（F76 未裁决前保留）。"""
+    payload = {"code": "def tick(**kw):\n    return {'ok': True}\n", "entry": "tick"}
+    result = G.run_agent_tick(payload, timeout_s=30.0)
+    assert result.get("ok") is True
