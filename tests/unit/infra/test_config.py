@@ -644,3 +644,100 @@ def test_heldout_basket_rejects_unknown_names_fail_closed(bad):
         cfg_mod.EvolveConfig(heldout_basket=bad).validate()
     assert exc.value.code == E.E_IO_CONFIG_INVALID
     assert "heldout_basket" in str(exc.value)
+
+
+# ---- B-87（F75）：env.sandbox 只留真的会被读的键 -----------------------------------
+#
+# 病根（F73/F75 同一族）：配置表按 PRD 写全、接线按需 ⇒ 「配置声称 ≠ 代码执行」。
+# 本节的第一个用例是**系统性护栏**：任何新增的 env.sandbox 键都必须在这里登记消费者，
+# 否则 CI 红——把「写完配置就以为接上了」这条路的成本抬到与接线同高。
+
+#: 键 → 声明的消费者（模块相对仓库根）。新增键必须同时补这一行。
+SANDBOX_KEY_CONSUMERS = {
+    "env.sandbox.policy_failure_streak": "dice_ratchet/evals/baselines.py",
+    "env.sandbox.audit.ruleset_pin": "dice_ratchet/app.py",
+}
+
+
+def test_b87_every_sandbox_key_declares_a_consumer():
+    """``env.sandbox.*`` 的键集必须与 ``SANDBOX_KEY_CONSUMERS`` **逐键相等**。
+
+    修复前（B-87 之前）本子树有 15 个键、只有 2 个有消费者 ⇒ 本用例列出的期望集与
+    实际合法键集不等 ⇒ 红。**诚实边界**：本用例证明「有人为这个键声明了消费者、且该文件
+    提到了这个键名」，不是数据流证明——真正的数据流证据由各键自己的用例承担
+    （如 ``test_b86_audit_leak_cli_consumes_the_pin``）。
+    """
+    keys = {k for k in cfg_mod._legal_flat_keys() if k.startswith("env.sandbox.")}
+    assert keys == set(SANDBOX_KEY_CONSUMERS), (
+        f"未登记消费者的键：{sorted(keys - set(SANDBOX_KEY_CONSUMERS))}；"
+        f"已失效的登记：{sorted(set(SANDBOX_KEY_CONSUMERS) - keys)}")
+    for key, rel in SANDBOX_KEY_CONSUMERS.items():
+        src = (REPO / rel).read_text(encoding="utf-8")
+        leaf = key.rsplit(".", 1)[-1]
+        assert leaf in src, f"{key} 声明的消费者 {rel} 里找不到 {leaf!r}"
+
+
+def test_b87_dead_sandbox_subtrees_are_gone():
+    """**修复前失败**：guard / honeypot / projection / render / exec 五个子树整体删除。
+
+    逐键理由见 ``SandboxConfig`` 的类注释（四个是**不变式开关**——接线即削弱 INV-4/G4；
+    其余是无接线路径或权威另有其处的键）。
+    """
+    box = cfg_mod.SandboxConfig()
+    for gone in ("guard", "honeypot", "projection", "render", "exec"):
+        assert not hasattr(box, gone), f"{gone} 子树已删除（0 消费者），不应再存在"
+        assert not hasattr(cfg_mod.SandboxConfig, gone.capitalize())
+    assert box.policy_failure_streak == 3
+    assert box.audit.ruleset_pin
+    keys = cfg_mod._legal_flat_keys()
+    for dead in ("env.sandbox.guard.enforce", "env.sandbox.guard.scan_roots",
+                 "env.sandbox.guard.process_boundary", "env.sandbox.honeypot.enabled",
+                 "env.sandbox.honeypot.plan_path", "env.sandbox.honeypot.self_test",
+                 "env.sandbox.projection.mode", "env.sandbox.projection.schema_version",
+                 "env.sandbox.render.max_tokens_p95", "env.sandbox.exec.timeout_s",
+                 "env.sandbox.exec.mem_limit_mb", "env.sandbox.exec.cpu_limit_s",
+                 "env.sandbox.exec.max_tools"):
+        assert dead not in keys, f"{dead} 是 0 消费者键，不应再是合法键"
+
+
+def test_b87_yaml_sandbox_block_matches_dataclass():
+    """yaml 的 ``env.sandbox`` 段不得残留已删键（否则会走「未知键忽略」的静默路径）。"""
+    import yaml
+    raw = yaml.safe_load((CONFIGS / "default.yaml").read_text(encoding="utf-8"))
+    block = raw["env"]["sandbox"]
+    assert set(block) == {"policy_failure_streak", "audit"}, sorted(block)
+    assert set(block["audit"]) == {"ruleset_pin"}, sorted(block["audit"])
+
+
+def test_b87_tool_worker_limits_are_code_constants():
+    """``exec.*`` 的四个值现在是**代码常量**——必须与 PRD §9 的历史默认值一致。
+
+    containment 参数（RLIMIT_AS / RLIMIT_CPU / 墙钟 / 工具数）不做成配置：让配置或可演化的
+    harness 抬高自己的沙箱上限，正是 INV-4 要防的事。改这四个数必须有意识（本用例会提醒）。
+    """
+    import inspect
+
+    from dice_ratchet.sandbox.guard import ToolWorker
+    params = inspect.signature(ToolWorker.__init__).parameters
+    assert params["timeout_s"].default == 2.0
+    assert params["mem_limit_mb"].default == 256
+    assert params["cpu_limit_s"].default == 2
+    assert params["max_tools"].default == 32
+
+
+def test_b87_capabilities_behind_deleted_keys_still_exist():
+    """反向护墙：删的是**配置键**，不是能力——测试/golden 仍可直接传参。
+
+    * ``SandboxEnv(projection_mode="assert")``（golden 与 §11 用例用）
+    * ``SandboxEnv(honeypot=False)``（对照用例用）
+    * ``honeypot.load_plan(configs/honeypot.yaml)``（契约夹具校验，4 个注入点）
+    * ``guard.run_agent_tick()``（payload 子进程边界；保留为备用能力，见 F76）
+    """
+    from dice_ratchet.sandbox.api import SandboxEnv
+    from dice_ratchet.sandbox.guard import run_agent_tick
+    from dice_ratchet.sandbox.honeypot import INJECTION_POINTS, load_plan
+    names = SandboxEnv.__init__.__code__.co_varnames
+    assert "projection_mode" in names and "honeypot" in names
+    assert callable(run_agent_tick)
+    plan = load_plan(CONFIGS / "honeypot.yaml")
+    assert set(plan["points"]) == set(INJECTION_POINTS)

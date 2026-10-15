@@ -28,26 +28,18 @@ env:
     max_env_steps: 1000 # env 步硬上限（唯一键，各模块只读）
     max_decisions: 300 # 决策点上限
   sandbox: # MOD-02
-    projection:
-      mode: strict
-      schema_version: obs-agent-1.0.0
-    render:
-      max_tokens_p95: 1500
-    guard:
-      enforce: enforce
-      scan_roots:
-        - dice_ratchet/agent
-        - dice_ratchet/memory
-        - dice_ratchet/loop
-        - dice_ratchet/evolve
-        - dice_ratchet/evals
-        - dice_ratchet/inference
-      process_boundary: false
-    exec:
-      timeout_s: 2.0
-      mem_limit_mb: 256
-      cpu_limit_s: 2
-      max_tools: 32
+    # 2026-10-14（Spec B-86/B-87，F73/F75）：本子树原有 15 个键，实测只有 2 个有消费者。
+    # 清掉的 13 个 + 理由（逐键见 infra/config.py::SandboxConfig 的类注释）：
+    #  · guard.enforce / scan_roots / process_boundary —— warn 档会削弱 INV-4；
+    #    scan_roots 是 INV-1 的分层结构（权威 guard.py::ENV_ROOTS）；process_boundary
+    #    指向的 run_agent_tick() 无生产调用点（工具边界在 ToolWorker 上）。
+    #  · honeypot.enabled / plan_path / self_test —— 注入是检测不变式 G4；plan 文件
+    #    configs/honeypot.yaml 是测试用的契约夹具；self_test 的旋钮在 CLI。
+    #  · projection.mode / projection.schema_version —— assert 是测试档（golden 显式传）；
+    #    协议版本必须是代码常量（FR-02-5 的 CI 校验），不可被配置伪造。
+    #  · render.max_tokens_p95 —— render_compact() 不收预算参数、全库无断言读它。
+    #  · exec.timeout_s / mem_limit_mb / cpu_limit_s / max_tools —— ToolWorker 的
+    #    containment 参数（INV-4），权威在 guard.py 的默认参数，由用例钉住数值。
     policy_failure_streak: 3
     audit:
       # 规则集版本**钉扎**（Spec B-86，2026-10-14）：必须与代码常量
@@ -55,10 +47,6 @@ env:
       # （E_ENV_AUDIT_RULESET，退出码 4）。审计的触发方式是显式 CLI，不存在「每代自动审计」；
       # 旧的 enabled/surfaces/fail_on/evidence_chars 四键已删除（全库 0 消费者）。
       ruleset_pin: 1.1.0
-    honeypot:
-      enabled: true
-      plan_path: configs/honeypot.yaml
-      self_test: true
 
 # ============ agent（MOD-04 决策策略；policy.* 为 harness 可演化白名单）============
 agent:

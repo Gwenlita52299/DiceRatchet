@@ -102,32 +102,48 @@ class EpisodeConfig:
 
 @dataclass(frozen=True)
 class SandboxConfig:
-    """MOD-02 沙箱：投影、守卫、受限执行、审计、蜜罐。"""
+    """MOD-02 沙箱配置：**只留真的会被读的键**（2026-10-14，F73+F75；Spec B-86/B-87）。
 
-    @dataclass(frozen=True)
-    class Projection:
-        mode: str = "strict" # strict 记裁剪计数；assert 命中隐藏字段抛 E_ENV_SCHEMA
-        schema_version: str = "obs-agent-1.0.0"
+    v1.0 的这张表有 15 个键，实测**只有 2 个有消费者**。本轮按「F73 同一套规矩逐个核」清掉
+    13 个：**能变而没有接线路径的删掉，不变式开关更不该存在**。清完只剩：
 
-    @dataclass(frozen=True)
-    class Render:
-        max_tokens_p95: int = 1500
+    * ``policy_failure_streak`` —— 组合根 → ``SandboxEnv(policy_failure_streak=…)``
+      （``evals/baselines.py``），FR-02-8b 的「连续 N 次 reject(final) 判负」。
+    * ``audit.ruleset_pin`` —— ``app.py::_audit_leak`` → ``check_ruleset_pin()`` → fail-closed
+      （§Audit 的 docstring）。
 
-    @dataclass(frozen=True)
-    class Guard:
-        enforce: str = "enforce" # enforce | warn
-        scan_roots: tuple[str, ...] = (
-            "dice_ratchet/agent", "dice_ratchet/memory", "dice_ratchet/loop",
-            "dice_ratchet/evolve", "dice_ratchet/evals", "dice_ratchet/inference",
-        )
-        process_boundary: bool = False
+    **删除的 13 个键与理由**（按「为什么不该是可配项」分组）：
 
-    @dataclass(frozen=True)
-    class Exec:
-        timeout_s: float = 2.0
-        mem_limit_mb: int = 256
-        cpu_limit_s: int = 2
-        max_tools: int = 32
+    ① **守卫子树的三个键**（原 ``guard.enforce``/``scan_roots``/``process_boundary``）——
+    ``guard.py::gate()`` 是 **fail-closed** 静态门禁（INV-4：自编辑代码只在受限执行器内运行）。
+    `enforce`/`warn` 两档里的 `warn` = 让扫描失败的 harness 照样进冒烟/heldout，**直接削弱
+    不变式**；`scan_roots` 是 INV-1 的**分层结构**（权威是 ``guard.py::ENV_ROOTS`` 常量，改它
+    等于改架构）；`process_boundary` 指的是 payload 边界 ``run_agent_tick()``，**无生产调用点**
+    （工具路径的子进程边界在 ``ToolWorker`` 上）⇒ 键无法接线而不改设计，另登记 F76。
+
+    ② **蜜罐子树的三个键**（原 ``honeypot.enabled``/``plan_path``/``self_test``）——注入是
+    **检测不变式**（G4：canary/假字段一旦泄漏 100% 被抓到），做成配置开关 = 给不变式留静默
+    关闭点；需要关掉注入的只有测试，它们直接传 ``SandboxEnv(honeypot=False)``。注入计划
+    ``configs/honeypot.yaml`` 的实际消费者是**测试夹具**（校验 4 个注入点与实现一致），运行时
+    不读。``self_test`` 的旋钮在 **CLI**（``audit leak --no-self-test``）与 ``run_audit(self_test=)``。
+
+    ③ **投影/渲染/受限执行的七个键**（原 ``projection.mode``/``projection.schema_version``/
+    ``render.max_tokens_p95``/``exec.{timeout_s,mem_limit_mb,cpu_limit_s,max_tools}``）——
+    能力都在代码里，但**没有配置→调用的路径**，且各有更合适的权威：
+
+    * ``projection.mode``：``SandboxEnv(projection_mode=)`` 默认 ``MODE_STRICT``；``assert``
+      是**调试/测试档**，golden 与用例直接显式传（不经配置）。
+    * ``projection.schema_version``：投影协议的版本身份**必须是代码常量**
+      （``projection.py::OBSERVATION_SCHEMA_VERSION``，由 FR-02-5 的 CI 校验对 CHANGELOG 末行）
+      ——与 ``audit.ruleset_pin`` 同理：可追溯性要求它**不可被配置伪造**。
+    * ``render.max_tokens_p95``：``render_compact(obs)`` 不收预算参数，**全库没有任何断言**
+      读它 ⇒ 纯装饰。FR-02-3b 的「p95 ≤ 1500 token」是**设计目标**（需本地 8B 分词器，CI 无），
+      留在 PRD 里，不做成键。
+    * ``exec.*``：这四个是 ``ToolWorker`` 的 **containment 参数**（``RLIMIT_AS``/``RLIMIT_CPU``/
+      墙钟/工具数），是 INV-4 的一部分，**不是策略**——让配置（乃至可演化的 harness）抬高自己
+      的沙箱上限正是 INV-4 要防的事。权威落 ``guard.py::ToolWorker`` 的默认参数，由用例把数值
+      钉住（``test_b87_tool_worker_limits_are_code_constants``）。
+    """
 
     @dataclass(frozen=True)
     class Audit:
@@ -147,28 +163,10 @@ class SandboxConfig:
 
         ruleset_pin: str = "1.1.0"
 
-    @dataclass(frozen=True)
-    class Honeypot:
-        enabled: bool = True
-        plan_path: str = "configs/honeypot.yaml"
-        self_test: bool = True
-
-    projection: Projection = field(default_factory=Projection)
-    render: Render = field(default_factory=Render)
-    guard: Guard = field(default_factory=Guard)
-    exec: Exec = field(default_factory=Exec)
     policy_failure_streak: int = 3
     audit: Audit = field(default_factory=Audit)
-    honeypot: Honeypot = field(default_factory=Honeypot)
 
     def validate(self) -> None:
-        _check("sandbox.projection.mode", self.projection.mode, str,
-               choices={"strict", "assert"})
-        _check("sandbox.projection.schema_version", self.projection.schema_version, str)
-        _check("sandbox.render.max_tokens_p95", self.render.max_tokens_p95, int, minv=100)
-        _check("sandbox.guard.enforce", self.guard.enforce, str, choices={"enforce", "warn"})
-        _check("sandbox.exec.timeout_s", self.exec.timeout_s, float, minv=0.1)
-        _check("sandbox.exec.max_tools", self.exec.max_tools, int, minv=0, maxv=256)
         _check("sandbox.policy_failure_streak", self.policy_failure_streak, int, minv=1)
         _check("sandbox.audit.ruleset_pin", self.audit.ruleset_pin, str)
 

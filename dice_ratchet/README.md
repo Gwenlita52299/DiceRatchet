@@ -187,7 +187,9 @@ python -m dice_ratchet baseline --kind fixed_prompt --split heldout --seeds held
 
 配套：`schemas/{observation,audit_report,harness_gate}.schema.json`、
 `../../docs/prd/OBSERVATION_CHANGELOG.md`（字段变更必须主版本 +1 并追加行）、
-`../../configs/honeypot.yaml`（注入计划，与实现不一致即 `E_ENV_HONEYPOT`）、
+`../../configs/honeypot.yaml`（**注入计划契约夹具**：由 `tests/unit/sandbox/test_sandbox_honeypot.py`
+用 `load_plan()` 校验 4 个注入点与实现一致，不一致即 `E_ENV_HONEYPOT`；**运行时不读**，配置键
+`sandbox.honeypot.plan_path` 已于 2026-10-14 删除，见 Spec B-87）、
 `../../tests/golden/sandbox/`（G2 golden，由 `regen_sandbox_golden.py` 显式重生成）。
 
 ## MOD-02 约定

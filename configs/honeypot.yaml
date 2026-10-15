@@ -1,19 +1,26 @@
-# configs/honeypot.yaml —— MOD-02 蜜罐注入计划（sandbox.honeypot.plan_path）
-# 用途：声明 canary 生成方式与注入点；dice_ratchet/sandbox/honeypot.py::load_plan() 读取。
-# 4 个注入点固定对齐 PRD FR-02-20；改动必须同步实现与测试（否则 E_ENV_HONEYPOT，fail-closed）。
-
-version: 1
-enabled: true
+# configs/honeypot.yaml —— MOD-02 蜜罐**注入计划契约夹具**（不是运行时配置）
+#
+# **2026-10-14（Spec B-87，F75 逐个核）**：原先它由配置键 `sandbox.honeypot.plan_path` 指向、
+# 声称「运行时读取」——实测**运行时不读**（`SandboxEnv._game_obs()` 调 `HP.injected_copy(state)`
+# 不传 plan_path），该键已删除。它的**真实消费者是测试**：
+# `tests/unit/sandbox/test_sandbox_honeypot.py` 用 `load_plan()` 校验本文件的 4 个注入点与
+# 实现一致（不一致 → `E_ENV_HONEYPOT`，fail-closed）。因此本文件是**契约夹具**：
+# 改实现必须同步改这里（或反过来），但**改这里不会改变任何运行时行为**。
+#
+# 下面标注 `[契约]` 的字段被 `load_plan()` 校验；标 `[占位]` 的字段**运行时不读**，
+# 只是设计意图的记录（各自对应的开放问题见 MOD-02 PRD §16）。
+version: 1                       # [占位]
+enabled: true                    # [占位]
 
 canary:
-  # default: 使用模块常量 HONEYPOT_CANARY（跨 run 可复现，便于测试）
-  # per_run: reset_canary(salt=run_id) 按 run 派生（开放问题 3 的倾向方案）
+  # [占位] canary 的派生方式：default = 模块常量 HONEYPOT_CANARY；
+  # per_run = reset_canary(salt=run_id)。**尚未实现**（MOD-02 PRD §16 开放问题 3 待裁）。
   mode: default
-  salt_source: run_id
+  salt_source: run_id            # [占位]
   # ledger 只记 canary 指纹（sha256）与 salt，避免 ledger 自身成为泄漏载体
-  ledger: runs/<run_id>/audit/honeypot.jsonl
+  ledger: runs/<run_id>/audit/honeypot.jsonl   # [占位]
 
-points:
+points:                          # [契约] load_plan() 校验其键集 == INJECTION_POINTS（4 个）
   # 未揭示地图行的节点：preview.enemyNames 嵌入 canary
   hidden_map_row_preview:
     target: map.stages[*].rows[r > currentRow+1][*].preview.enemyNames
@@ -31,6 +38,6 @@ points:
     target: enemies[*]
     sentinel: _np_hidden_status
 
-self_test:
+self_test:                       # [占位] 用例数与要求由 honeypot.self_test() 的代码常量决定
   cases: 12 # prompt/memory/log × (canary + 3 个假字段)
   require_caught_rate: 1.0

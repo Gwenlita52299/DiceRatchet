@@ -50,7 +50,7 @@ L0 环境        MOD-01 env-rules    MOD-02 env-sandbox
 | ID | 模块 | 层 | 里程碑 | PRD（当前版本） |
 |---|---|---|---|---|
 | MOD-01 | env-rules（GAME 内核的 Python 逐位移植） | L0 | M0 | [PRD](prd/MOD-01-env-rules-PRD.md) v1.0 |
-| MOD-02 | env-sandbox（投影/隔离/审计/蜜罐） | L0 | M0 | [PRD](prd/MOD-02-env-sandbox-PRD.md) v1.2.3（审计的触发方式 = **显式 CLI**；`sandbox.audit.*` 收敛为**规则集版本钉扎** `ruleset_pin`，不符即 fail-closed `E_ENV_AUDIT_RULESET`/退出码 4——2026-10-14 F73/F74） |
+| MOD-02 | env-sandbox（投影/隔离/审计/蜜罐） | L0 | M0 | [PRD](prd/MOD-02-env-sandbox-PRD.md) v1.2.4（审计的触发方式 = **显式 CLI**；`sandbox.audit.*` 收敛为**规则集版本钉扎** `ruleset_pin`，不符即 fail-closed `E_ENV_AUDIT_RULESET`/退出码 4——2026-10-14 F73/F74；**`env.sandbox.*` 15 键砍到 2 键**，删掉的 13 个里四个是「不变式开关」，配置面只留真的会被读的键——同日 F75） |
 | MOD-03 | inference（模型推理：本地 MLX/llama.cpp + DeepSeek API，三角色装配） | L1 | M1 | [PRD](prd/MOD-03-inference-PRD.md) v1.7 |
 | MOD-04 | policy（prompt/解析/工具契约） | L1 | M1 | [PRD](prd/MOD-04-policy-PRD.md) v0.6 |
 | MOD-05 | memory（策略记忆与反思库） | L1 | M2 | [PRD](prd/MOD-05-memory-PRD.md) v1.2 |
