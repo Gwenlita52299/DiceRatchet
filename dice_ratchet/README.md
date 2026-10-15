@@ -8,7 +8,7 @@
 BM25 检索 / 快照回滚）与 **MOD-06 loop**（闭环编排：单局时序与逐步落盘 / 局末反思与降级 /
 周期幂等 / `--resume` 与计分幂等 / `E_gen` 成本闸门 / HITL 挂起）与 **MOD-08 evals**
 （seed 协议与 INV-5 护栏 / 三基线 / INV-7 主指标 / 坍缩监控 / 消融 / 报告与 test 存证），对齐
-[模块拆分 Spec v2.27](../../docs/模块拆分Spec-DiceRatchet.md)、
+[模块拆分 Spec v2.32](../docs/模块拆分Spec-DiceRatchet.md)、
 [MOD-01 PRD](../docs/prd/MOD-01-env-rules-PRD.md)、
 [MOD-02 PRD](../docs/prd/MOD-02-env-sandbox-PRD.md)、
 [MOD-03 PRD](../docs/prd/MOD-03-inference-PRD.md)、
@@ -51,6 +51,10 @@ uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python pyyaml j
 > 「覆盖集合完全相同」的命令**；跨族（带覆盖 ↔ 不带覆盖）或任一覆盖值不同（换 `--model`、
 > 换 `--seed`……）却复用同一目录时，`init_run_dir()` 报
 > `[E_IO_RUN_CONFLICT] run 目录已存在且 config_hash 不一致` 并以**退出码 2** 拒绝。
+> **⚠️ 2026-10-15（Spec v2.32 / B-90）**：该报错现在还会附一份**键级漂移摘要**
+> （`新增 N 键 / 删除 N 键 / 值变化 N 键` 并点名，口径与 `config_hash` 一致：易变键、绝对
+> 路径、harness 覆盖键不计）——用来分辨「某个值被改了」与「配置结构变了（升版本/改
+> `configs/`）」。摘要只是诊断，**判定仍然只看 `config_hash`**。
 > 因此下面拆成两族、两个 run-id——**族 A**（`inference probe/bench/robustness`，统一带
 > `--model mock --mode eval --seed 7`）用 `demo-inf-0001`；**族 B**（`play` / `audit leak` /
 > `baseline` / `eval *`，这些命令都不带上述三个覆盖）用 `demo-eval-0001`。fixed_prompt
@@ -160,7 +164,7 @@ python -m dice_ratchet baseline --kind fixed_prompt --split heldout --seeds held
 #       --model qwen3-8b-q4 --run-id real-0004 --resume
 ```
 
-实测（Apple Silicon；n=10 基线见 [M1 验收报告 §14.19](../../docs/reviews/2026-10-04-M1验收报告.md)，
+实测（Apple Silicon；n=10 基线见 [M1 验收报告 §14.19](../docs/reviews/2026-10-04-M1验收报告.md)，
 真实决策 prompt 的推理实测见 §12）：常驻显存 **4.6077 GB**；`t_d` p50 **7.46 s**（n=10 基线口径；
 §12 的 200 条快照口径为 5.687 s，实际局内 prompt 更长故更慢）；`tok_per_s` ≈12；
 当前快照上 `inference robustness --n 200` 首答通过率 **0.995**（`schema_fail_rate` **0.0**）。

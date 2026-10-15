@@ -18,13 +18,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .config import (AppConfig, config_hash, env_applied_keys, full_config,
+from .config import (AppConfig, config_drift, config_hash, env_applied_keys, full_config,
                      harness_overridden_keys)
 from .errors import E, InfraError
 from .io import read_json, write_json_atomic
 
 __all__ = ["RunPaths", "make_run_id", "init_run_dir", "write_state", "read_state",
-           "git_short_sha", "utc_timestamp", "resolve_run_dir", "snapshot_config"]
+           "git_short_sha", "utc_timestamp", "resolve_run_dir", "snapshot_config",
+           "describe_config_drift"]
+
+#: 冲突提示里每类最多列出的键数（其余折成「另 N 个」，避免提示刷屏）
+_MAX_DRIFT_LISTED: int = 8
 
 
 @dataclass(frozen=True)
@@ -132,6 +136,39 @@ def snapshot_config(cfg: AppConfig, run_id: str, git_sha: str,
     }
 
 
+def describe_config_drift(prev_snap: Any, cfg: AppConfig) -> str:
+    """把 ``config_hash`` 冲突的成因说清（B-90 / F79）；无 ``config`` 快照时返回空串。
+
+    现场：任何键的增删（升版本、改 ``configs/``、删死键）都会让历史 run 无法 ``--resume``
+    ——这是 FR-09-3 的既定 fail-closed 行为，**不打算放开**（放开即等于允许两套配置写同一个
+    run，见 F79 选项②被否）。此前的问题只是提示语不区分「值变了」与「结构变了」：前者是
+    误改配置，后者是正常的配置演进，排查方向相反却给出同一句话。
+    """
+    if not isinstance(prev_snap, dict):
+        return ""
+    prev = prev_snap.get("config")
+    if not isinstance(prev, dict):
+        return ""
+    keys = list(prev_snap.get("harness_overridden_keys") or ())
+    keys += list(harness_overridden_keys(cfg))
+    drift = config_drift(prev, cfg, harness_keys=keys)
+    added, removed, changed = drift["added"], drift["removed"], drift["changed"]
+    if not (added or removed or changed):
+        return ("配置差异不在扁平键层面（键集相同、值也相同）⇒ 成因是 harness 基线或键的嵌套"
+                "结构变化，不是「某个值被改坏」")
+    lines = [f"配置漂移（config_hash 口径）：新增 {len(added)} 键 / 删除 {len(removed)} 键 / "
+             f"值变化 {len(changed)} 键"]
+    for label, items in (("新增", added), ("删除", removed), ("值变化", changed)):
+        if items:
+            head = items[:_MAX_DRIFT_LISTED]
+            tail = f" …（另 {len(items) - len(head)} 个）" if len(items) > len(head) else ""
+            lines.append(f"  {label}：{', '.join(head)}{tail}")
+    if added or removed:
+        lines.append("  提示：键的增删属**配置结构**变化（改过 configs/ 或升过代码版本），"
+                     "不是把某个值改坏了；历史 run 不能 --resume 是 FR-09-3 的既定行为")
+    return "\n".join(lines)
+
+
 def _check_runs_ignored(runs_root: Path) -> None:
     """FR-09-19：``runs_root`` 必须被 ``.gitignore`` 覆盖，否则 ``worktree_clean_check`` 永远 dirty。
 
@@ -192,11 +229,14 @@ def init_run_dir(run_id: str, cfg: AppConfig,
     snap = snapshot_config(cfg, run_id, git_short_sha(runs_root.parent),
                            content_hash=content_hash)
     if existed and paths.config.is_file():
-        prev_hash = read_json(paths.config).get("config_hash")
+        prev_snap = read_json(paths.config)
+        prev_hash = prev_snap.get("config_hash")
         if prev_hash != snap["config_hash"]:
+            drift = describe_config_drift(prev_snap, cfg)
             raise InfraError(E.E_IO_RUN_CONFLICT,
                              f"run 目录 {root} 已存在且 config_hash 不一致："
-                             f"{prev_hash} != {snap['config_hash']}",
+                             f"{prev_hash} != {snap['config_hash']}"
+                             + (f"\n{drift}" if drift else ""),
                              hint="改用 --run-id 指定新目录，或删除旧 run 后重跑")
         return paths
     write_json_atomic(paths.config, snap)
@@ -224,11 +264,14 @@ def resolve_run_dir(run_id: str, cfg: AppConfig,
                          hint=f"检查 --run-id {run_id!r} 是否正确")
     paths = RunPaths(root)
     if strict_hash and paths.config.is_file():
-        prev_hash = read_json(paths.config).get("config_hash")
+        prev_snap = read_json(paths.config)
+        prev_hash = prev_snap.get("config_hash")
         want = config_hash(cfg)
         if prev_hash != want:
+            drift = describe_config_drift(prev_snap, cfg)
             raise InfraError(E.E_IO_RUN_CONFLICT,
-                             f"--resume 的 config_hash 不一致：{prev_hash} != {want}",
+                             f"--resume 的 config_hash 不一致：{prev_hash} != {want}"
+                             + (f"\n{drift}" if drift else ""),
                              hint="config_hash 不含 harness；若改过 configs/，请开新 run")
     if resume and not paths.state.is_file():
         raise InfraError(E.E_IO_STATE_MISSING,

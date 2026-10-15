@@ -47,7 +47,7 @@ __all__ = [
     "MODEL_ROLES", "EXPERIMENT_ARMS", "ARM_HARNESS_MODES",
     "load_config", "load_seeds", "load_models", "config_hash", "canonical_json",
     "derive_seed", "artifact_hash", "flatten_config", "apply_overrides",
-    "harness_overridden_keys", "env_applied_keys", "full_config",
+    "harness_overridden_keys", "env_applied_keys", "full_config", "config_drift",
 ]
 
 # harness/config.json 白名单前缀（FR-09-1 / Spec §5 B-26）
@@ -1371,6 +1371,53 @@ def config_hash(cfg: AppConfig) -> str:
     """
     return hashlib.sha256(_dumps(_canonical(cfg, harness_neutral=True)).encode("utf-8")
                           ).hexdigest()[:16]
+
+
+def _snapshot_hash_basis(prev_config: Mapping[str, Any]) -> dict[str, Any]:
+    """把**快照里的** ``config`` 折成与 ``config_hash`` 同一口径的扁平键视图（B-90）。
+
+    与 ``_canonical(cfg)`` 对齐：删易变键、删绝对路径值、再展平。快照侧**无法**回退 harness
+    覆盖（那需要当时的 ``configs/default.yaml`` 基线），因此调用方须把
+    ``harness_overridden_keys`` 一并传入 ``config_drift``，从两侧剔除。
+    """
+    data = json.loads(json.dumps(_deep_copy(dict(prev_config)), default=_json_default))
+    for key in _HASH_VOLATILE_KEYS:
+        _del_path(data, key)
+    _strip_absolute_paths(data)
+    return _flatten(data, "")
+
+
+def config_drift(prev_config: Mapping[str, Any], cfg: AppConfig, *,
+                 harness_keys: Sequence[str] = ()) -> dict[str, list[str]]:
+    """对比「快照时的配置」与「当前配置」在 **config_hash 口径**下的扁平键差异（B-90 / F79）。
+
+    返回 ``{"added": [...], "removed": [...], "changed": [...]}``（各自排序）——回答
+    ``E_IO_RUN_CONFLICT`` 场景里区分不开的那个问题：**是「某个值被改了」，还是「键被增删 /
+    升过版本」**（两者排查方向完全不同）。
+
+    - 两侧都在 hash 口径上比较：易变键（``_HASH_VOLATILE_KEYS``）与绝对路径值一律剔除，
+      否则会报出**不影响 config_hash** 的噪声；
+    - ``harness_keys``（快照的 ``harness_overridden_keys`` ∪ 当前
+      ``harness_overridden_keys(cfg)``）整棵子树从两侧剔除：这些键在 hash 里被回退到静态基线
+      （B-19），快照侧却存着当时的 harness 生效值，不剔除会假报「值变化」；
+    - 键集相同而值不同 → 落在 ``changed``；三类全空说明差异不在键层面（成因是 harness 基线
+      或嵌套结构变化），由调用方改写提示文案。
+
+    只描述差异，不参与判定：``config_hash`` 仍是唯一权威。
+    """
+    prev = _snapshot_hash_basis(prev_config)
+    cur = _flatten(_canonical(cfg, harness_neutral=True), "")
+    skip = tuple(str(k) for k in harness_keys)
+
+    if skip:
+        def _excluded(key: str) -> bool:
+            return any(key == k or key.startswith(f"{k}.") for k in skip)
+        prev = {k: v for k, v in prev.items() if not _excluded(k)}
+        cur = {k: v for k, v in cur.items() if not _excluded(k)}
+    added = sorted(k for k in cur if k not in prev)
+    removed = sorted(k for k in prev if k not in cur)
+    changed = sorted(k for k in cur if k in prev and cur[k] != prev[k])
+    return {"added": added, "removed": removed, "changed": changed}
 
 
 def artifact_hash(harness_dir: Path) -> str:

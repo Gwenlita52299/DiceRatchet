@@ -385,3 +385,42 @@ def test_unknown_keys_recorded_in_run_start_and_event(tmp_path, monkeypatch):
     assert set(start["unknown_keys"]) == {"loop.nope", "foo.bar", "DICERATCHET_FOO__BAR"}
     unknown_event = next(r for r in rows if r["event"] == "infra.config_unknown_key")
     assert E.E_IO_CONFIG_UNKNOWN == unknown_event["code"]
+
+
+# ---- B-90（F79）：config_hash 冲突提示区分「值变化」与「结构变化」-------------------------
+
+def test_b90_conflict_message_lists_changed_value_keys(runs, cfg):
+    """只改一个值 ⇒ 提示必须点名该键且「新增/删除」为 0（修复前提示里没有这些字样）。"""
+    _init(runs, cfg)
+    other = load_config(cli_overrides={"loop.k": 31}, config_dir=CONFIGS)
+    with pytest.raises(InfraError) as exc:
+        _init(runs, other)
+    text = str(exc.value)
+    assert exc.value.code == E.E_IO_RUN_CONFLICT
+    assert "新增 0 键 / 删除 0 键 / 值变化 1 键" in text
+    assert "值变化：loop.k" in text
+
+
+def test_b90_conflict_message_names_structurally_removed_keys(runs, cfg):
+    """快照来自「该键尚不存在」的旧代码 ⇒ 提示按**结构变化**报案并点名键。"""
+    paths = _init(runs, cfg)
+    snap = json.loads(paths.config.read_text(encoding="utf-8"))
+    # 模拟旧版本落盘的快照：配置里没有该键，config_hash 自然也不同
+    del snap["config"]["env"]["sandbox"]["audit"]["ruleset_pin"]
+    snap["config_hash"] = "0" * 16
+    paths.config.write_text(json.dumps(snap), encoding="utf-8")
+    with pytest.raises(InfraError) as exc:
+        _init(runs, cfg)
+    text = str(exc.value)
+    assert "新增 1 键 / 删除 0 键 / 值变化 0 键" in text
+    assert "新增：env.sandbox.audit.ruleset_pin" in text
+    assert "配置结构" in text
+
+
+def test_b90_resume_conflict_also_carries_the_drift(runs, cfg):
+    """写侧两条路径都要带漂移摘要：``--resume`` 走的是 ``resolve_run_dir``。"""
+    _init(runs, cfg)
+    other = load_config(cli_overrides={"loop.k": 31}, config_dir=CONFIGS)
+    with pytest.raises(InfraError) as exc:
+        resolve_run_dir("r-0001", other, runs_root=runs, resume=False)
+    assert "loop.k" in str(exc.value)

@@ -1,6 +1,6 @@
 # MOD-04 policy —— 决策收口（Observation → prompt → Action）
 
-对齐 [模块拆分 Spec v2.27](../../docs/模块拆分Spec-DiceRatchet.md) §4.3/§4.4/§4.7 与
+对齐 [模块拆分 Spec v2.32](../../docs/模块拆分Spec-DiceRatchet.md) §4.3/§4.4/§4.7 与
 [MOD-04 PRD](../../docs/prd/MOD-04-policy-PRD.md)。本模块是"LLM 输出非 JSON / 非法动作多"
 这条最大风险的唯一收口处：把 `Observation` 组装成 prompt，把 LLM 原始文本变成 `Action`，
 并保证模型再离谱也不污染环境与指标。

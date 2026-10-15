@@ -9,8 +9,9 @@ import pytest
 
 from dice_ratchet.infra import config as cfg_mod
 from dice_ratchet.infra.config import (AppConfig, artifact_hash, canonical_json,
-                                    config_hash, derive_seed, env_applied_keys,
-                                    harness_overridden_keys, load_config, load_seeds)
+                                    config_drift, config_hash, derive_seed, env_applied_keys,
+                                    full_config, harness_overridden_keys, load_config,
+                                    load_seeds)
 from dice_ratchet.infra.errors import E, InfraError
 
 REPO = Path(__file__).resolve().parents[3]
@@ -124,6 +125,45 @@ def test_config_hash_changes_on_real_change():
     base = load_config(config_dir=CONFIGS)
     changed = load_config(cli_overrides={"loop.k": 31}, config_dir=CONFIGS)
     assert config_hash(base) != config_hash(changed)
+
+
+# ---- B-90（F79）：config_hash 口径的键级差异（冲突提示的依据）---------------------------
+
+def test_b90_config_drift_ignores_noise_outside_the_hash_basis():
+    """易变键 / 绝对路径不进差异表——它们本来就不参与 config_hash，报出来只是噪声。"""
+    base = load_config(config_dir=CONFIGS)
+    snap = full_config(base)
+    other = load_config(cli_overrides={"infra.runs_root": "/tmp/other",
+                                       "infra.log_level": "DEBUG",
+                                       "loop.k": 31}, config_dir=CONFIGS)
+    drift = config_drift(snap, other, harness_keys=harness_overridden_keys(other))
+    assert drift["added"] == [] and drift["removed"] == []
+    assert drift["changed"] == ["loop.k"]
+
+
+def test_b90_config_drift_excludes_harness_subtree():
+    """harness 覆盖过的键整棵子树从两侧剔除（B-19：config_hash 对它 neutral）。"""
+    base = load_config(config_dir=CONFIGS)
+    snap = full_config(base)          # 快照存的是 harness 生效值
+    snap["agent"]["policy"]["temperature"] = 0.99
+    other = load_config(cli_overrides={"agent.policy.temperature": 0.11}, config_dir=CONFIGS)
+    # 不剔除 → 假报「值变化」
+    assert config_drift(snap, other)["changed"] == ["agent.policy.temperature"]
+    # 剔除（真实调用方的做法）→ 干净
+    drift = config_drift(snap, other, harness_keys=("agent.policy.temperature",))
+    assert drift == {"added": [], "removed": [], "changed": []}
+
+
+def test_b90_config_drift_reports_added_and_removed_keys():
+    """键增删（配置演进）必须与「值变化」分开报案。"""
+    base = load_config(config_dir=CONFIGS)
+    snap = full_config(base)
+    del snap["loop"]["k"]
+    snap["loop"]["retired_key"] = 1
+    drift = config_drift(snap, base)
+    assert drift["added"] == ["loop.k"]
+    assert drift["removed"] == ["loop.retired_key"]
+    assert drift["changed"] == []
 
 
 def test_config_hash_excludes_harness_version(tmp_path):

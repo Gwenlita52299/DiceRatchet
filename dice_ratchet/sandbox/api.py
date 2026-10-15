@@ -11,6 +11,11 @@
   ``truncation_reason="policy_failure"``，主指标计为 lose；另外 ``max_env_steps`` /
   ``max_decisions`` 超限 → ``step_limit`` / ``decision_limit``。MOD-04/06 不另行判负。
 - ``SandboxEnv`` 模块在安装 import hook **之前**预先 import 环境层（FR-02-10）。
+- **逐步内核不变式校验（B-89 / F78）**：合法动作提交前对**未提交的新状态**跑 MOD-01
+  ``assert_invariants``——内核自带的同名校验被游戏侧 ``debug.showHiddenInfo`` 门着，生产局
+  原本为零；违反 → 该步不提交 + ``E_ENV_INTERNAL``（与内核在 ``debug`` 下自报同码同通道），
+  此后按调用方既有的失败恢复矩阵处置（训练路径跳过该 seed、同类累计 ≥3 中止 run；
+  MOD-08 批量测量按 Spec §8.5 记 dropped）。
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Final, Mapping
 
 from dice_ratchet.env import GameEngine, KernelError, TOGGLE_KEYS, map_error_code, native_result, state_hash
+from dice_ratchet.env.state import assert_invariants
 from dice_ratchet.infra.errors import E, InfraError
 
 from . import honeypot as HP
@@ -141,6 +147,37 @@ class StepResult:
                 "info": dict(self.info)}
 
 
+def _check_step_invariants(state: Mapping[str, Any]) -> None:
+    """对**尚未提交**的新状态做逐步内核不变式校验（B-89 / F78）。
+
+    MOD-01 内核自带 ``assert_invariants``，但 ``env/engine.py::reduce_state`` 里那次调用被
+    **游戏侧**的 ``config.debug.showHiddenInfo`` 门着（与 JS 逐位一致：该开关只服务调试），
+    而本模块从不向 ``createGame`` 传 ``debug`` ⇒ 生产局的逐步校验原本**实际为零**。这里在
+    门面上对同一份状态跑同一份校验，**不碰内核契约**（PRD MOD-01 §9）。
+
+    失败语义：抛 ``E_ENV_INTERNAL``（``E_KERNEL_INVARIANT`` 的对外码），与「内核异常」走
+    **同一条通道**，也与内核在 ``debug`` 下自报不变式违反**同码**（未新造语义）⇒ 该步不提交
+    （``self._state`` 停在上一步）。此后由调用方**既有的失败恢复矩阵**处置：训练路径
+    （``loop/generation.py::_run_training_episode``）记 ``audit/env_error_<seed>.json`` 并跳过该
+    seed，同类累计 ≥3（``ENV_ERROR_LIMIT``）⇒ 中止 run（退出码 4）；MOD-08 批量测量
+    （``evals/harness.py``）按 Spec §8.5 记 **dropped**（计 n、按 lose 计、错误码入档）。
+    不变式被破坏意味着内核状态已不可信——要点是**不静默**（错误码一定进产物）且**不重试**。
+
+    开销（2026-10-15 实测，``scripts/bench_invariants.py`` 可复算）：``assert_invariants``
+    约 137.5 µs/步，而内核 ``reduce`` 约 276.3 µs/步；一局约 345 步 ⇒ **约 48 ms/局**，
+    相对以 LLM 决策为主的整局耗时（秒级）可忽略。归档 ``runs/m3-formal`` 的 40 局 / 13,802 步
+    真实对局重放亦为 102 µs/步 vs 202 µs/步且 **0 次违反**。
+    """
+    try:
+        assert_invariants(state)
+    except KernelError as exc:
+        code, _ = map_error_code(exc.code)
+        raise InfraError(code or E.E_ENV_INTERNAL,
+                         f"内核不变式被破坏（{exc.code}，该步未提交）：{exc}",
+                         hint="属 MOD-01 内核缺陷：保留该 run 的 episodes/ 与 state.json 现场并登记 issue"
+                         ) from exc
+
+
 class SandboxEnv:
     """agent 侧唯一环境门面（Spec §4.1；严禁任何返回 FullState 的公开成员）。"""
 
@@ -237,6 +274,9 @@ class SandboxEnv:
         - 非法动作**不抛异常**：``reward=illegal_penalty``、``info["illegal"]=True``、
           状态与观测不变（只更新 ``lastResult``，FR-02-8）。
         - 内核异常（MOD-01 ``error``）→ 抛携带 ``E_ENV_*`` 的 ``InfraError``（fail-closed）。
+        - 合法动作**提交前**跑 MOD-01 ``assert_invariants``（B-89 / F78：内核那次调用被
+          游戏侧 ``debug.showHiddenInfo`` 门着，生产局为零）；违反 → ``E_ENV_INTERNAL``
+          且该步不提交（后续处置见调用方失败恢复矩阵）。
         """
         self._ensure_state()
         previous = self._state
@@ -253,6 +293,8 @@ class SandboxEnv:
                                  "code": result.get("code"), "stage": "l3"}
             reward = self._illegal_penalty
         else:
+            # B-89（F78）：先校验、后提交；不变式被破坏时 self._state 保持上一步
+            _check_step_invariants(result["state"])
             self._state = result["state"]
             self._env_steps += 1
             self._final_streak = 0

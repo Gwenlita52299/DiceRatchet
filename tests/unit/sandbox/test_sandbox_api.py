@@ -5,7 +5,8 @@ from __future__ import annotations
 import pytest
 
 from dice_ratchet.env import TOGGLE_KEYS
-from dice_ratchet.infra.errors import E, InfraError
+from dice_ratchet.infra.errors import E, EXIT_SANDBOX, InfraError
+from dice_ratchet.sandbox import api as sandbox_api
 from dice_ratchet.sandbox.api import (ALL_ON_TOGGLES, EpisodeConfig, SandboxEnv, StepResult,
                                    make_default_env)
 from dice_ratchet.sandbox.projection import obs_digest, validate_observation
@@ -319,3 +320,94 @@ def test_make_default_env_runs():
     obs = env.reset(1, episode_id="e-000001-g000-train")
     assert obs["phase"] == "map"
     env.close()
+
+
+# ---- B-89（F78）：逐步内核不变式校验（生产局必须真跑）-------------------------------
+
+def test_b89_legal_step_checks_invariants_despite_kernel_gate(sandbox, monkeypatch):
+    """门面侧每步都校验——尽管内核那次的闸门（游戏侧 debug 开关）在生产局是关的。
+
+    修复前：``assert_invariants`` 只在 ``env/engine.py::reduce_state`` 内被
+    ``config.debug.showHiddenInfo`` 门着，而 ``SandboxEnv`` 从不传 ``debug`` ⇒ 调用数为 0。
+    """
+    calls: list[object] = []
+    real = sandbox_api.assert_invariants
+
+    def spy(state):
+        calls.append(state)
+        return real(state)
+
+    monkeypatch.setattr(sandbox_api, "assert_invariants", spy)
+    # 前提：内核那条通道确实是关的（否则本护栏测不出门面侧的行为）
+    assert sandbox._state["config"]["debug"]["showHiddenInfo"] is False
+    sandbox.step(sandbox.legal_actions()[0])
+    assert len(calls) == 1
+
+
+def test_b89_invariant_violation_fails_closed_and_does_not_commit(engine):
+    """真实内核 + 被篡改的状态 ⇒ ``E_ENV_INTERNAL``（退出码 4）且该步不提交（处置归调用方矩阵）。
+
+    修复前：生产路径无人校验 ⇒ 被破坏的状态被**静默接受**（本用例会「无异常通过」而失败）。
+    """
+
+    class _CorruptingEngine:
+        """包一层真实引擎：合法动作后在返回的 state 上制造 duplicate die（真实不变式违反）。"""
+
+        def __init__(self, inner):
+            self._inner = inner
+
+        def reduce(self, state, action):
+            result = self._inner.reduce(state, action)
+            if not result.get("illegal") and not result.get("error"):
+                p = result["state"]["player"]
+                p["hand"].append(p["deck"][0])
+            return result
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    env = SandboxEnv(engine=_CorruptingEngine(engine),
+                     episode_config=EpisodeConfig(difficulty="hard", stage_count=6))
+    env.reset(1000, episode_id="e-corrupt")
+    before_state = env._state
+    with pytest.raises(InfraError) as exc:
+        env.step(env.legal_actions()[0])
+    assert exc.value.code == E.E_ENV_INTERNAL
+    assert exc.value.exit_code == EXIT_SANDBOX
+    assert "E_KERNEL_INVARIANT" in str(exc.value)
+    # 新状态未提交：env 仍停在上一步，步数不前进
+    assert env._state is before_state
+    assert env._env_steps == 0
+
+
+def test_b89_illegal_action_is_not_re_checked(sandbox, monkeypatch):
+    """反向护栏：非法动作不改状态 ⇒ 不重复校验（防止把校验挪到 illegal 分支之前）。"""
+    calls: list[object] = []
+    real = sandbox_api.assert_invariants
+    monkeypatch.setattr(sandbox_api, "assert_invariants",
+                        lambda state: (calls.append(state), real(state))[1])
+    result = sandbox.step({"kind": "play_face", "dieId": "d-nope", "slotId": "slot_1"})
+    assert result.info["illegal"] is True
+    assert result.reward == pytest.approx(-0.05)
+    assert calls == []
+
+
+def test_b89_kernel_reported_invariant_error_uses_the_same_code(sandbox):
+    """一致性护墙：内核自报的不变式违反（``debug`` 路径的返回形状）与门面侧新校验**同码同通道**。
+
+    门面侧的检查只让同一个条件在**不开 debug** 时也能被发现；错误码必须与内核那条完全一致
+    （``E_ENV_INTERNAL`` / 退出码 4），否则同一缺陷会因「谁先发现」而给出两个码。
+    """
+    action = sandbox.legal_actions()[0]
+
+    class _ErrEngine:
+        def reduce(self, state, action):  # noqa: ARG002 - 复刻内核 reduce 的 error 返回形状
+            return {"state": state, "events": [], "illegal": False,
+                    "error": {"code": E.E_ENV_INTERNAL, "message": "hand > handMax",
+                              "detail": "E_KERNEL_INVARIANT"}}
+
+    sandbox._engine = _ErrEngine()
+    with pytest.raises(InfraError) as exc:
+        sandbox.step(action)
+    assert exc.value.code == E.E_ENV_INTERNAL
+    assert exc.value.exit_code == EXIT_SANDBOX
