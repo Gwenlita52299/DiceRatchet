@@ -131,11 +131,21 @@ class SandboxConfig:
 
     @dataclass(frozen=True)
     class Audit:
-        enabled: bool = True
-        surfaces: tuple[str, ...] = ("prompt", "memory", "log")
-        ruleset: str = "1.0.0"
-        fail_on: str = "critical"
-        evidence_chars: int = 12
+        """审计的**钉扎声明**（2026-10-14，F73/F74 裁决 ②；Spec B-86）。
+
+        v1.0 曾在这里放五个键（``enabled``/``surfaces``/``ruleset``/``fail_on``/
+        ``evidence_chars``），但实现侧只把它们做成了 ``run_audit()`` 的**参数 + 同名默认值**，
+        配置→调用的接线从未发生（全库 0 消费者，yaml 块自建立后从未被改过一次）⇒ 五个键
+        全是「配置声称 ≠ 代码执行」。现整块收拢成**一个 pin**：
+
+        * ``ruleset_pin`` **有消费者**（``app.py`` 的 ``audit leak`` → ``run_audit(ruleset=…)``
+          → ``check_ruleset_pin``）：与代码常量 ``sandbox.audit.RULESET_VERSION`` 不一致即
+          **fail-closed**（``E_ENV_AUDIT_RULESET``，守卫轴退出码 4）；
+        * 其余四键**删除**：审计的触发方式是**显式 CLI**（``audit leak --run-id``），不存在
+          「每代结束自动审计」——那句话是 v1.0 配置表的措辞，从未有 FR 支撑（F74）。
+        """
+
+        ruleset_pin: str = "1.1.0"
 
     @dataclass(frozen=True)
     class Honeypot:
@@ -160,8 +170,7 @@ class SandboxConfig:
         _check("sandbox.exec.timeout_s", self.exec.timeout_s, float, minv=0.1)
         _check("sandbox.exec.max_tools", self.exec.max_tools, int, minv=0, maxv=256)
         _check("sandbox.policy_failure_streak", self.policy_failure_streak, int, minv=1)
-        _check("sandbox.audit.fail_on", self.audit.fail_on, str,
-               choices={"critical", "warning", "info"})
+        _check("sandbox.audit.ruleset_pin", self.audit.ruleset_pin, str)
 
 
 @dataclass(frozen=True)

@@ -123,20 +123,23 @@ def _audit_leak(args: argparse.Namespace) -> int:
       `E_ENV_HONEYPOT`（蜜罐自测 <100% ⇒ 审计器自身失效，verdict 不可按原义采信）。
       4 优先于 2；报告仍记 `verdict=critical`。
     """
-    from .sandbox.audit import audit_to_console, run_audit, write_report
+    from .sandbox.audit import audit_to_console, check_ruleset_pin, run_audit, write_report
 
     run_id = getattr(args, "run_id", None)
     if not run_id:
         raise InfraError(E.E_IO_CONFIG_INVALID, "audit leak 必须指定 --run-id",
                          hint="用法：python -m dice_ratchet audit leak --run-id <run_id>")
     cfg = load_config(cli.config_overrides(args), config_dir=Path(args.config_dir))
+    # 规则集版本钉扎（Spec B-86）：配置只作声明，必须等于代码常量，否则 fail-closed。
+    # 放在扫盘之前——pin 不符时审计器自己的可采信性存疑，报任何 verdict 都不可按原义采信。
+    pin = check_ruleset_pin(cfg.env.sandbox.audit.ruleset_pin)
     root = Path(cfg.infra.runs_root) / str(run_id)
     if not root.is_dir():
         raise InfraError(E.E_ENV_AUDIT_IO, f"run 目录不存在：{root}",
                          hint="检查 --run-id；缺证据 ≠ 无泄漏，审计按 critical 处理")
     paths = RunPaths(root)
     result = run_audit(
-        root, split=args.split, config_dir=Path(args.config_dir),
+        root, split=args.split, config_dir=Path(args.config_dir), ruleset=pin,
         replay=not args.no_replay, self_test=not args.no_self_test)
     out = Path(args.out) if args.out else paths.audit / f"leak-{result.scope}.json"
     written = write_report(result, out)

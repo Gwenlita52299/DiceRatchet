@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from .api import ALL_ON_TOGGLES, EpisodeConfig, SandboxEnv, StepResult, make_default_env
 from .audit import (AuditResult, LeakClass, LeakFinding, RULESET_VERSION, VisibleSet,
-                    audit_to_console, rebuild_visible_set, register_sensitive, run_audit,
-                    scan_text, write_report)
+                    audit_to_console, check_ruleset_pin, rebuild_visible_set,
+                    register_sensitive, run_audit, scan_text, write_report)
 from .guard import (GuardFinding, GuardReport, GuardViolation, ToolWorker, analyze_code,
                     check_imports, gate, guarded_globals, install_agent_import_hook,
                     load_harness_tools, run_agent_tick)
@@ -42,7 +42,7 @@ __all__ = [
     # audit
     "RULESET_VERSION", "LeakClass", "LeakFinding", "AuditResult", "VisibleSet",
     "rebuild_visible_set", "scan_text", "register_sensitive", "run_audit",
-    "write_report", "audit_to_console",
+    "write_report", "audit_to_console", "check_ruleset_pin",
     # honeypot
     "HONEYPOT_CANARY", "FAKE_FIELD_NAMES", "HoneypotHit", "HoneypotSelfTestResult",
     "honeypot_inject", "injected_copy", "honeypot_scan", "reset_canary", "self_test",

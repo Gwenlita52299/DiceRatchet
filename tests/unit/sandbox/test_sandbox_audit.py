@@ -14,6 +14,7 @@ from dice_ratchet.sandbox import honeypot as HP
 from dice_ratchet.sandbox.projection import obs_field_paths
 
 FIXED = "2026-09-30T12:00:00Z"
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 # ---- FR-02-16 可见集合重建 ---------------------------------------------------------
@@ -536,3 +537,127 @@ def test_f58_replay_index_is_keyed_by_episode(build_run, tmp_path):
     assert index.replayed + index.failed + index.no_trajectory >= 1
     # 逐局集合与兜底集合都必须 ⊆ 该局出现过/未出现过的隐藏 token（形状自检）
     assert set(index.unscoped) <= set().union(*index.by_episode.values()) or not index.unscoped
+
+
+# ---- B-86（F73/F74）：规则集版本**钉扎** —— 配置声称必须等于代码常量 ------------------
+
+def test_b86_ruleset_pin_match_is_accepted(build_run, tmp_path):
+    """钉扎相符时一切照旧：报告的 ``ruleset_version`` == 代码常量。"""
+    built = build_run(tmp_path, run_id="r-b86-ok")
+    result = A.run_audit(built.root, ruleset=A.RULESET_VERSION, generated_at=FIXED)
+    assert result.ruleset_version == A.RULESET_VERSION
+    assert A.check_ruleset_pin(A.RULESET_VERSION) == A.RULESET_VERSION
+
+
+@pytest.mark.parametrize("stale", ["1.0.0", "0.9.0", "", "1.1.1"])
+def test_b86_ruleset_pin_mismatch_fails_closed(build_run, tmp_path, stale):
+    """**修复前失败**：pin 不符必须 fail-closed（``E_ENV_AUDIT_RULESET``）。
+
+    修复前的行为是**静默**：``run_audit(ruleset="1.0.0")`` 照跑完，报告里写代码常量
+    ``1.1.0``——配置里的 ``1.0.0`` 既不生效也无告警（F73 的原始形态）。
+    """
+    built = build_run(tmp_path, run_id="r-b86-bad")
+    with pytest.raises(InfraError) as ei:
+        A.run_audit(built.root, ruleset=stale, generated_at=FIXED)
+    assert ei.value.code == E.E_ENV_AUDIT_RULESET
+    # 两个版本号都必须在消息里（可操作：知道该把配置改成什么）
+    assert repr(stale) in ei.value.message and A.RULESET_VERSION in ei.value.message
+    assert ei.value.hint and "ruleset_pin" in ei.value.hint
+    # 守卫轴：退出码 4，**不占用**结论轴的 2（否则「有泄漏」与「配置不符」无法区分）
+    from dice_ratchet.infra.errors import EXIT_CODE
+    assert EXIT_CODE[E.E_ENV_AUDIT_RULESET] == 4
+
+
+def test_b86_pin_mismatch_writes_no_report(build_run, tmp_path):
+    """反向护墙：拒绝时**不得**留下任何报告（否则「拒绝」变成「写了一份不可信的 clean」）。"""
+    built = build_run(tmp_path, run_id="r-b86-nowrite")
+    with pytest.raises(InfraError):
+        A.run_audit(built.root, ruleset="1.0.0", generated_at=FIXED)
+    assert list((built.root / "audit").glob("leak-*.json")) == []
+
+
+def test_b86_check_ruleset_pin_names_the_source():
+    with pytest.raises(InfraError) as ei:
+        A.check_ruleset_pin("1.0.0", source="sandbox.audit.ruleset_pin")
+    assert "sandbox.audit.ruleset_pin" in ei.value.message
+
+
+def test_b86_config_default_pin_equals_code_constant():
+    """**修复前失败**：``AuditConfig.Audit()`` 默认值必须 == ``RULESET_VERSION``。
+
+    这是「两处版本号」的护栏：``infra`` 不能 import ``sandbox``（分层 + 循环），
+    所以默认值是字面量——由本用例把它钉在代码常量上。
+    """
+    from dice_ratchet.infra.config import SandboxConfig
+    assert SandboxConfig.Audit().ruleset_pin == A.RULESET_VERSION
+
+
+def test_b86_yaml_pin_equals_code_constant(repo_root):
+    """**修复前失败**：``configs/default.yaml`` 的 pin 必须 == ``RULESET_VERSION``。
+
+    本用例正是 B-82 漏掉的那一步——规则语义 1.0.0→1.1.0 时没人想起改配置，
+    因为当时那个键根本没有消费者；有钉扎之后，「忘了改」会在这里与运行期同时报出来。
+    """
+    from dice_ratchet.infra.config import load_config
+    cfg = load_config({}, config_dir=repo_root / "configs")
+    assert cfg.env.sandbox.audit.ruleset_pin == A.RULESET_VERSION
+
+
+def test_b86_dead_audit_keys_are_gone(repo_root):
+    """**修复前失败**：v1.0 的五个键整块收拢成一个 pin（0 消费者的键不留）。"""
+    from dice_ratchet.infra.config import SandboxConfig, _legal_flat_keys
+    audit = SandboxConfig.Audit()
+    for dead in ("enabled", "surfaces", "ruleset", "fail_on", "evidence_chars"):
+        assert not hasattr(audit, dead), f"{dead} 是 0 消费者的死键，应已删除"
+    assert hasattr(audit, "ruleset_pin")
+    keys = _legal_flat_keys()
+    for dead in ("env.sandbox.audit.enabled", "env.sandbox.audit.surfaces",
+                 "env.sandbox.audit.ruleset", "env.sandbox.audit.fail_on",
+                 "env.sandbox.audit.evidence_chars"):
+        assert dead not in keys, f"{dead} 不应再是合法键"
+    assert "env.sandbox.audit.ruleset_pin" in keys
+    # 别名形式（`sandbox.* -> env.sandbox.*`）必须仍可用：CLI 覆盖走这条路径
+    from dice_ratchet.infra.config import load_config
+    cfg = load_config({"sandbox.audit.ruleset_pin": "1.1.0"}, config_dir=repo_root / "configs")
+    assert cfg.env.sandbox.audit.ruleset_pin == "1.1.0"
+
+
+def test_b86_audit_leak_cli_consumes_the_pin(build_run, tmp_path):
+    """**修复前失败**：``audit leak`` 的配置键必须**真的被读**（F73 的核心指控）。
+
+    同一份 run、同一份 configs 目录，只改 ``ruleset_pin`` 一个字：
+    * 写成过时版本 ⇒ 退出码 **4** + ``E_ENV_AUDIT_RULESET``（不产出报告）；
+    * 写成当前版本 ⇒ 正常审计（退出码由 verdict 决定，0/1/2）。
+    """
+    import shutil
+    from dice_ratchet.app import main as app_main  # 走真实入口：先 wire() 再进 cli.main
+
+    built = build_run(tmp_path, run_id="r-b86-cli")
+    cfgdir = tmp_path / "configs"
+    shutil.copytree(REPO_ROOT / "configs", cfgdir)
+    default = cfgdir / "default.yaml"
+    text = default.read_text(encoding="utf-8")
+    text = text.replace(f"ruleset_pin: {A.RULESET_VERSION}", "ruleset_pin: 1.0.0")
+    text = text.replace("runs_root: runs", f"runs_root: {built.root.parent}")
+    default.write_text(text, encoding="utf-8")
+
+    argv = ["audit", "leak", "--run-id", built.run_id, "--config-dir", str(cfgdir),
+            "--no-replay", "--no-self-test"]
+    import contextlib
+    import io
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = app_main(argv, reexec=False)
+    assert code == 4, (f"pin 不符必须退出码 4（守卫轴），实际 {code}；"
+                      f"out={out.getvalue()} err={err.getvalue()}")
+    assert E.E_ENV_AUDIT_RULESET in (out.getvalue() + err.getvalue())
+    assert not (built.root / "audit" / "leak-leak.json").exists()
+
+    # 反向：把 pin 改回当前版本 ⇒ 不再被守卫拦下（本 run 干净 ⇒ 0）
+    default.write_text(text.replace("ruleset_pin: 1.0.0", f"ruleset_pin: {A.RULESET_VERSION}"),
+                       encoding="utf-8")
+    out2, err2 = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out2), contextlib.redirect_stderr(err2):
+        code2 = app_main(argv, reexec=False)
+    assert code2 == 0, (f"pin 正确时该 run 应审计干净，实际 {code2}；"
+                       f"out={out2.getvalue()} err={err2.getvalue()}")

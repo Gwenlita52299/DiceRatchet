@@ -50,14 +50,14 @@ L0 环境        MOD-01 env-rules    MOD-02 env-sandbox
 | ID | 模块 | 层 | 里程碑 | PRD（当前版本） |
 |---|---|---|---|---|
 | MOD-01 | env-rules（GAME 内核的 Python 逐位移植） | L0 | M0 | [PRD](prd/MOD-01-env-rules-PRD.md) v1.0 |
-| MOD-02 | env-sandbox（投影/隔离/审计/蜜罐） | L0 | M0 | [PRD](prd/MOD-02-env-sandbox-PRD.md) v1.2.2 |
+| MOD-02 | env-sandbox（投影/隔离/审计/蜜罐） | L0 | M0 | [PRD](prd/MOD-02-env-sandbox-PRD.md) v1.2.3（审计的触发方式 = **显式 CLI**；`sandbox.audit.*` 收敛为**规则集版本钉扎** `ruleset_pin`，不符即 fail-closed `E_ENV_AUDIT_RULESET`/退出码 4——2026-10-14 F73/F74） |
 | MOD-03 | inference（模型推理：本地 MLX/llama.cpp + DeepSeek API，三角色装配） | L1 | M1 | [PRD](prd/MOD-03-inference-PRD.md) v1.7 |
 | MOD-04 | policy（prompt/解析/工具契约） | L1 | M1 | [PRD](prd/MOD-04-policy-PRD.md) v0.6 |
 | MOD-05 | memory（策略记忆与反思库） | L1 | M2 | [PRD](prd/MOD-05-memory-PRD.md) v1.2 |
 | MOD-06 | loop（闭环编排） | L2 | M2 | [PRD](prd/MOD-06-loop-PRD.md) v1.6 |
 | MOD-07 | evolve（harness 自进化） | L2 | M2–M3 | [PRD](prd/MOD-07-evolve-PRD.md) v0.12 ✅ 代码落地（[README](../dice_ratchet/evolve/README.md)）；**C2 = 「候选 `play_hash` ≠ 起点 `play_hash`」**（2026-10-14 F62 取消统计显著性门，统计量降级为 `paired["by_metric"]` 报告项）；冒烟门只留 error/illegal/fallback 三条（F67）；C5 = **三轴相对门 + 绝对 backstop**（`tol=0.05`，backstop 0.35/0.25/0.60；F28→B-44→B-64，原标定依据见 [2026-10-07 §3.1 实测](reviews/2026-10-07-M2-S31-full-agent基线实测.md)） |
 | MOD-08 | evals（评估与测量） | L3 | M1–M3 | [PRD](prd/MOD-08-evals-PRD.md) v0.15 |
-| MOD-09 | infra（配置/日志/CLI/守卫） | L3 | M0–M3 | [PRD](prd/MOD-09-infra-PRD.md) v0.5 |
+| MOD-09 | infra（配置/日志/CLI/守卫） | L3 | M0–M3 | [PRD](prd/MOD-09-infra-PRD.md) v0.7 |
 
 ## 关键路径（开工顺序）
 

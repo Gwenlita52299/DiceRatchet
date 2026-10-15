@@ -32,6 +32,7 @@ __all__ = [
     "SEVERITY", "HIDDEN_FIELD_NAMES", "FULL_STATE_FIELD_NAMES",
     "rebuild_visible_set", "scan_text", "build_forbidden", "register_sensitive",
     "run_audit", "write_report", "audit_to_console", "load_forbidden_seeds",
+    "check_ruleset_pin",
     "derive_hidden_tokens", "HiddenTokenIndex",
     "VERDICT_CLEAN", "VERDICT_WARN", "VERDICT_CRITICAL",
 ]
@@ -835,6 +836,30 @@ def _episode_config_from_run(run_dir: Path, warnings: list[str]) -> dict[str, An
 # run_audit（FR-02-19）
 # ----------------------------------------------------------------------
 
+def check_ruleset_pin(pin: str, *, source: str = "sandbox.audit.ruleset_pin") -> str:
+    """**fail-closed 的规则集版本钉扎**（2026-10-14，F73/F74 裁决 ②；Spec B-86）。
+
+    报告里的 ``ruleset_version`` 必须**只可能**等于代码常量 :data:`RULESET_VERSION`——
+    它是「这份 clean 是按哪版规则判的」的唯一凭据（MOD-02 NFR-02-3 可复现），
+    **不能让配置（或任何调用方）声明一个代码并未实现的版本**，否则证据链里就多出一个
+    可伪造字段。因此配置只作为**钉扎声明**存在（``sandbox.audit.ruleset_pin``）：与代码
+    常量不一致时**拒绝审计**（``E_ENV_AUDIT_RULESET`` → 守卫轴退出码 4），而不是静默地
+    按代码常量跑完、把配置里的旧版本号留在文件里误导读者。
+
+    为什么不是「直接接线让配置说了算」：那样一次 ``audit leak`` 经 CLI（读配置）与经
+    测试/golden（直连 ``run_audit`` 默认值）会写出**不同**的 ``ruleset_version``，
+    字段失去唯一含义——见 B-86 的诚实边界。
+    """
+    if pin != RULESET_VERSION:
+        raise InfraError(
+            E.E_ENV_AUDIT_RULESET,
+            f"规则集版本钉扎不符：{source}={pin!r}，而代码常量 RULESET_VERSION={RULESET_VERSION!r}",
+            hint=("两份版本必须一致：把配置里的 ruleset_pin 改成当前代码常量，"
+                  "或先确认规则语义变更是否需要同步 golden（tests/golden/sandbox/）；"
+                  "不一致时审计拒绝运行——缺可信规则集版本 ≠ 无泄漏"))
+    return RULESET_VERSION
+
+
 def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "train",
               config_dir: Path | None = None, surfaces: Sequence[str] = SURFACES,
               evidence_chars: int = 12, self_test: bool = True,
@@ -845,7 +870,11 @@ def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "tr
 
     ``self_test=True`` 时先跑 ``honeypot.self_test()``（FR-02-23），命中率 <100% 直接判
     ``critical``；``replay=True`` 时用轨迹重放补齐 future_room/shop 规则集。
+
+    ``ruleset`` 是**钉扎声明**而非自由参数：必须等于 :data:`RULESET_VERSION`，否则
+    fail-closed（``E_ENV_AUDIT_RULESET``，见 :func:`check_ruleset_pin`）。
     """
+    ruleset = check_ruleset_pin(ruleset, source="run_audit(ruleset=)")
     run_dir = Path(run_dir)
     if not run_dir.is_dir():
         raise InfraError(E.E_ENV_AUDIT_IO, f"run 目录不存在：{run_dir}",

@@ -181,7 +181,7 @@ python -m dice_ratchet baseline --kind fixed_prompt --split heldout --seeds held
 | `projection.py` | `OBSERVATION_SCHEMA`（34 字段，INV-2 唯一登记表）、`project_state`、`obs_digest`、`validate_observation`、`render_compact`、CHANGELOG 版本校验 | FR-02-1..6/3a/3b/24 |
 | `api.py` | `SandboxEnv`（agent 侧唯一入口；私有 `_engine`，无任何返回 `FullState` 的成员）、`EpisodeConfig`/`StepResult`、`reject(final)` 与 `policy_failure` 唯一判负 | FR-02-7/8/8a/8b/8c |
 | `guard.py` | AST 门禁（`check_imports`/`analyze_code`/`gate`）、import hook、`guarded_globals`、`run_agent_tick`、常驻 `ToolWorker` | FR-02-9..15 |
-| `audit.py` | 可见集合重建、6 类泄漏规则、轨迹重放补齐隐藏 token、`run_audit`/`write_report`/`audit_to_console` | FR-02-16..19 |
+| `audit.py` | 可见集合重建、6 类泄漏规则、轨迹重放补齐隐藏 token、`check_ruleset_pin`（规则集版本钉扎，不符即 `E_ENV_AUDIT_RULESET`）、`run_audit`/`write_report`/`audit_to_console` | FR-02-16..19 |
 | `honeypot.py` | 4 个隐藏位置注入 canary/假字段、字节级 `scan`、12 用例 `self_test`、`reset_canary` ledger | FR-02-20..23 |
 | `_worker.py` | 私有：常驻工具执行子进程（子进程内设 rlimit + `exec` 进 `guarded_globals`） | FR-02-14 |
 

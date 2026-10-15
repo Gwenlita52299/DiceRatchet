@@ -52,6 +52,7 @@ class E(StrEnum):
     E_ENV_RESOURCE = "E_ENV_RESOURCE"
     E_ENV_ESCAPE = "E_ENV_ESCAPE"
     E_ENV_AUDIT_IO = "E_ENV_AUDIT_IO"
+    E_ENV_AUDIT_RULESET = "E_ENV_AUDIT_RULESET"
     E_ENV_HONEYPOT = "E_ENV_HONEYPOT"
 
     # ---- E_ACTION_*（MOD-04，决策与动作）------------------------------------------
@@ -174,6 +175,8 @@ EXIT_CODE: Final[Mapping[E, int]] = {
     E.E_ENV_IMPORT_DENIED: EXIT_SANDBOX,
     E.E_ENV_AST_DENIED: EXIT_SANDBOX,
     E.E_ENV_ESCAPE: EXIT_SANDBOX,
+    # MOD-02 §18.2：ruleset pin 不符 = 审计器自己的可采信性存疑 → 守卫轴 4（不占用结论轴 2）
+    E.E_ENV_AUDIT_RULESET: EXIT_SANDBOX,
     E.E_ENV_HONEYPOT: EXIT_SANDBOX,
     # MOD-06 PRD §10：环境内核错误（不变式违反/分派异常）是 fail-closed 违例 → 4
     E.E_ENV_INTERNAL: EXIT_SANDBOX,

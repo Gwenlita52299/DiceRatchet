@@ -1,6 +1,7 @@
 # MOD-09 infra 技术 PRD
 
-> 版本：v0.5（2026-10-10 新增 FR-09-20 起跑前门禁 + `commit_harness` 失败自清，并改写 FR-09-14；处置 F47-A/C1，见 §17）
+> 版本：v0.7（2026-10-14 `audit leak` 守卫轴新增 `E_ENV_AUDIT_RULESET`（`sandbox.audit.ruleset_pin` 钉扎不符即 fail-closed、退出码 4；配置面由五个 0 消费者键收成一个 pin）——对齐 Spec v2.29 B-86 / F73，见 §6 注与 §17）
+> **历史版本**：v0.5（2026-10-10 新增 FR-09-20 起跑前门禁 + `commit_harness` 失败自清，并改写 FR-09-14；处置 F47-A/C1，见 §17）
 > **历史版本**：v0.4（2026-10-10 `episode_key` 的 `arm` 位允许 `-smoke`）· v0.3.1（2026-10-03 修复 `bootstrap_process()` 早发 `infra.run_start`，见 §17；此前误留在 v0.3）· 状态：待评审 · 所属里程碑：M0–M3（L3 工程层，横切全模块）
 > 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源；与本文件冲突时以 Spec 为准）
 > 作者：主代理（MOD-09 owner）· 日期：2026-09-30
@@ -242,6 +243,12 @@ def scan_all(root: Path) -> list[GuardFinding]: ...          # 供 CI 与 CLI �
 > 与本模块 `EXIT_CODE[E_ENV_HONEYPOT] = 4` 的登记一致），优先级 `4 > 2 > 1 > 0`。
 > 详见 MOD-02 PRD §18.2。本模块只负责命令面与报告落盘出口
 > （`resolve_run_dir`/`RunPaths`/`infra.io.validate`）。
+>
+> **⚠️ 2026-10-14 补记（Spec v2.29 / B-86，F73）**：守卫轴新增一条 **`E_ENV_AUDIT_RULESET`**
+> （`EXIT_CODE` 映射 4）——`sandbox.audit.ruleset_pin` 与代码常量 `sandbox.audit.RULESET_VERSION`
+> 不符时 **fail-closed、不产出报告**。它刻意落在守卫轴而非结论轴 2：`2` 表示「含 critical
+> 泄漏」，与「配置声称的规则集版本 ≠ 代码执行的版本」要做的事正好相反（前者查泄漏、后者改配置）。
+> `app.py::_audit_leak` 是本键的**唯一消费者**（`check_ruleset_pin` → `run_audit(ruleset=…)`）。
 
 `--seeds SPEC` 语法：`train:1000-1004`、`heldout:731000-731099`（**⚠️ 2026-10-14 修订：六位端口空间；旧写法 `heldout:2000-2099` 是已失效的四位协议**）、`9000,9001`、`file:seeds.txt`。`guards check` 已回填 Spec v1.3 §4.6（P-20）。
 
@@ -455,6 +462,7 @@ T-09-1～T-09-16 全部落地（`bbdc02e` 起）；证据见 [M0 验收报告](.
 
 | 版本 | 时间 | 变更 |
 |---|---|---|
+| v0.7 | 2026-10-14 | **`audit leak` 的守卫轴新增 `E_ENV_AUDIT_RULESET`（对齐 Spec v2.29 B-86；F73 裁决 ②）**。① **新增错误码**（`infra/errors.py`）：`sandbox.audit.ruleset_pin` ≠ 代码常量 `sandbox/audit.py::RULESET_VERSION` 时 fail-closed，`EXIT_CODE` 映射 **4 = 守卫轴**，**刻意不占结论轴 2**（`2` = 含 critical 泄漏；两者处置相反）。② **本模块是唯一消费者**：`app.py::_audit_leak` 先 `check_ruleset_pin(cfg.env.sandbox.audit.ruleset_pin)` 再把结果喂给 `run_audit(ruleset=…)`（**放在扫盘之前**——pin 不符时审计器自己声称的规则集版本不可采信，报任何 verdict 都不该按原义读），**拒绝时不产出报告**。③ **配置面同步收拢**：`env.sandbox.audit` 由 v1.0 的五个 0 消费者键（`enabled`/`surfaces`/`ruleset`/`fail_on`/`evidence_chars`）收成一个 **`ruleset_pin`**（详见 MOD-02 PRD §9/§10/§18.2）。④ §6 CLI 表下方那条「退出码由 MOD-02 决定」的注已补上本码。⑤ 测试：`tests/unit/sandbox/test_sandbox_audit.py::test_b86_audit_leak_cli_consumes_the_pin` 端到端跑真实入口（pin 坏 ⇒ 4 且无报告 / pin 好 ⇒ 干净 0）。 |
 | v0.1 | 2026-09-30 | 首版 |
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：`config_hash` 不再包含 harness_version，新增 `artifact_hash`（P0-7）；redaction 只作用于 prompt/memory/reflection（P0-7）；事件改为 `<module>.<event>` 注册表并统一落到 `events.jsonl`（P1-11）；轨迹 schema 对齐 §4.5 新字段与 `episode_key` 路径（P1-10）；退出码新增 5（P1-13）；CLI 对齐 §4.6，统一使用 `--run-id`（P1-14）；git tag 改为 `harness-v{N}`（P1-15）；新增 FR-09-18 schema 与原子写、FR-09-19 `runs/` 忽略检查 |
 | v0.3 | 2026-09-30 17:49 | FR-09-1 按 Spec B-26 插入 harness/config.json 层及白名单校验 |

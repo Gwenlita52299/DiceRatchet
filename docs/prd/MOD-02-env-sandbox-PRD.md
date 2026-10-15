@@ -1,6 +1,6 @@
 # MOD-02 env-sandbox 技术 PRD
 
-> 版本：v1.2.2（2026-10-11 **F45-2：删两张人工死名单、改成全字段扫描**；seed 端口空间换六位，见 §17 与 §18.1 item 7）· 历史版本：v1.2.1（2026-10-03 追加 §18 实现落地记录）· 状态：草案（待复核）· 所属里程碑：M0（`SandboxEnv` + 投影 + 审计器 + 蜜罐自测全部交付）
+> 版本：v1.2.3（2026-10-14 **F73/F74：`sandbox.audit.*` 整块收拢为一个**规则集版本钉扎** `ruleset_pin`（四个 0 消费者的键删除）、钉扎不符 **fail-closed**（新增 `E_ENV_AUDIT_RULESET`，守卫轴退出码 4）、并删掉「每代结束自动审计」这句从未有 FR 支撑的措辞**；见 §9/§10/§16/§18.2 与 §17）· 历史版本：v1.2.2（2026-10-11 F45-2：删两张人工死名单、改成全字段扫描；seed 端口空间换六位，见 §17 与 §18.1 item 7）· v1.2.1（2026-10-03 追加 §18 实现落地记录）· 状态：草案（待复核）· 所属里程碑：M0（`SandboxEnv` + 投影 + 审计器 + 蜜罐自测全部交付）
 > 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突以 Spec 为准）· 上游计划：[../../项目计划-DiceRatchet.md](../../项目计划-DiceRatchet.md) §3/§8
 > 作者：DiceRatchet 技术文档（MOD-02 负责模块）
 
@@ -162,7 +162,13 @@ class AuditResult: run_id: str; ruleset_version: str; scope: str = "leak"; scann
 
 def rebuild_visible_set(run_dir: Path, *, split: str) -> VisibleSet: ...
 def scan_text(text: str, *, forbidden: Mapping[str, str], surface: str, episode_id: str, step: int) -> list[LeakFinding]: ...
-def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION) -> AuditResult: ...
+def check_ruleset_pin(pin: str, *, source: str = "sandbox.audit.ruleset_pin") -> str: ...   # 不符 → E_ENV_AUDIT_RULESET
+def run_audit(run_dir: Path, *, ruleset: str = RULESET_VERSION, split: str = "train",
+              config_dir: Path | None = None, surfaces: Sequence[str] = SURFACES,
+              evidence_chars: int = 12, self_test: bool = True, replay: bool = True,
+              generated_at: str | None = None,
+              forbidden_extra: Mapping[str, str] | None = None,
+              seed_splits: Sequence[str] = DEFAULT_SEED_SPLITS) -> AuditResult: ...
 def write_report(result: AuditResult, out: Path) -> Path: ...     # 0600
 def audit_to_console(result: AuditResult) -> int: ...             # 0/1/2
 
@@ -225,9 +231,12 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 | `sandbox.guard.process_boundary` | bool | `false` | 是否对不可信 agent 代码启用子进程边界 |
 | `sandbox.exec.timeout_s` / `mem_limit_mb` / `cpu_limit_s` / `max_tools` | float/int/int/int | `2.0` / `256` / `2` / `32` | 工具调用墙钟上限；**worker 子进程**的 `RLIMIT_AS`；`RLIMIT_CPU`；单 harness 工具数上限 |
 | `sandbox.policy_failure_streak` | int | `3` | 连续 `reject(final=True)` 的次数，达到即判 `policy_failure`（FR-02-8b） |
-| `sandbox.audit.enabled` / `surfaces` | bool / list[str] | `true` / `prompt,memory,log` | 每代结束自动审计；扫描出口 |
-| `sandbox.audit.ruleset` / `fail_on` / `evidence_chars` | str/enum/int | `1.1.0` / `critical` / `12` | 规则集版本（入报告）；非零退出门槛；证据前后保留字符数 |
+| `sandbox.audit.ruleset_pin` | str | `1.1.0` | **规则集版本钉扎**（Spec B-86，2026-10-14）：必须 == 代码常量 `sandbox/audit.py::RULESET_VERSION`，否则 `audit leak` **fail-closed**（`E_ENV_AUDIT_RULESET`，守卫轴退出码 4）。它**入报告**（`ruleset_version` = 该常量），是「这份 clean 按哪版规则判的」的唯一凭据（NFR-02-3）⇒ **不可被配置伪造**：配置只作声明，代码常量说了算 |
 | `sandbox.honeypot.enabled` / `plan_path` / `self_test` | bool / str / bool | `true` / `configs/honeypot.yaml` / `true` | 是否注入；注入计划（canary 生成方式、注入点）；审计前是否强制跑 `self_test()` |
+
+**审计的触发方式是显式 CLI**（`python -m dice_ratchet audit leak --run-id <id>`），**不存在「每代结束自动审计」**：`loop/`、`evolve/`、`evals/` 里没有任何 `run_audit` 调用点，正式实验也是跑完之后手工补一刀（`scripts/run_m3_formal.sh`）。v1.0 的配置表在这里写过 `sandbox.audit.enabled` =「每代结束自动审计」，但**从来没有 FR 支撑**（FR-02-16..19 全是「给定 run 目录 → 扫描」）；该键于 2026-10-14 **删除**（F74 裁决：认定为文档错误）。
+
+**⚠️ 2026-10-14 整块收拢（Spec v2.29 / B-86，F73 裁决 ②）**：上表原有的 `sandbox.audit.{enabled, surfaces, fail_on, evidence_chars, ruleset}` **五个键一并删除**——实现侧只把它们做成了 `run_audit()` 的**参数 + 同名默认值**，配置→调用的接线从未发生（全库 0 消费者；该 yaml 块自 M0 骨架 `5d3574c` 建立后**从未被改过一次**，B-82 把规则集 1.0.0→1.1.0 时也没人想起改它）。其中 `fail_on` 的分级诉求（§16 开放问题 3）已裁决为「退出码按 §18.2 的两根正交轴恒定，不做配置化」。
 
 环境变量前缀 `DICERATCHET_SANDBOX_*`；优先级 CLI > 环境变量 > `configs/default.yaml`（Spec §5）。
 
@@ -244,6 +253,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 | `E_ENV_RESOURCE` | 内存/CPU 超限 | 同上；连续 3 次则该 harness 版本标 `degraded` |
 | `E_ENV_ESCAPE` | 受限执行触及蜜罐 sentinel | P0 事件 + 立即卸载该 harness 版本，人工确认 |
 | `E_ENV_AUDIT_IO` | 轨迹缺失/JSONL 损坏/权限不足 | 判 `critical`（缺证据 ≠ 无泄漏），输出可读原因 |
+| `E_ENV_AUDIT_RULESET` | **规则集版本钉扎不符**（`sandbox.audit.ruleset_pin` ≠ `RULESET_VERSION`，或 `run_audit(ruleset=…)` 收了别的值） | **fail-closed 拒绝审计**（不产出报告）：守卫轴退出码 **4**；消息同时打印两个版本与修法（Spec B-86） |
 | `E_ENV_HONEYPOT` | 自测命中率 <100%，或注册表含蜜罐字段 | CI 红；`audit leak` 恒判 `critical` |
 
 原则：隔离类错误 **fail-closed**（拒绝执行）；能力类错误 **fail-soft**（退回 fallback，该局标注降级且不计入评估样本，遵循 Spec §8.5）。
@@ -334,8 +344,9 @@ M0.6 的「CI 门禁接线」在 2026-10-03 验收时缺失（验收报告 F2）
 
 1. **已裁决（Spec v1.4 B-24）**：全状态只由 `SandboxEnv._engine` 私有持有，`dice_ratchet.env` 列入 `BLOCKED_MODULES`，对 L1+ 不可导入。由于 MOD-01 v1.0 改为移植 GAME 内核，原 `build_full_state()` 方案已不再适用，改用这种等价封装；适配层归 MOD-02（`sandbox/api.py`）。`OBSERVATION_SCHEMA` 与 `FullState` 字段清单的契约测试落在 `tests/integration/test_env_sandbox_contract.py`，双方 PRD 各引用一次。
 2. **已裁决（Spec v1.4 B-25）**：审计器只做黑名单扫描 + canary 探针，不做「prompt 中每个数值都必须归因到 `VisibleSet`」的正向校验（噪声大）；若 M1 后仍出现未知泄漏再升级。
-3. **待定**：canary 是否按 `run_id` 派生（`reset_canary(salt=run_id)`）？跨 run 复用便于测试，但可能被 harness 长期记住；倾向按 run 派生。`sandbox.audit.fail_on` 是否允许 `warn`（本地调试）需 MOD-09 确认，CI 建议恒为 `critical`。
+3. **待定**：canary 是否按 `run_id` 派生（`reset_canary(salt=run_id)`）？跨 run 复用便于测试，但可能被 harness 长期记住；倾向按 run 派生。（原文此处的另一半——「`sandbox.audit.fail_on` 是否允许 `warn`（本地调试）需 MOD-09 确认，CI 建议恒为 `critical`」——**已于 2026-10-14 裁决并结案**，见下方第 5 条。）
 4. **已结案（Spec v1.3 P-08 → B-10）**：`phase="shop"` 时，陈列随 `obs-agent-1.0.0` 的 `shop` 字段给出，`legal_actions()` 直接带 `itemId`，不再需要单独的 `shop_items` 扩展。
+5. **已裁决（2026-10-14，Spec v2.29 B-86；F73/F74）**：`sandbox.audit.fail_on` 的「是否允许 `warn`（本地调试）」**不再是一个配置问题**——`audit leak` 的退出码按 §18.2 的两根正交轴**恒定**（结论轴 0/1/2、守卫轴 4），配置文件不得让它漂移；该键与 `enabled`/`surfaces`/`evidence_chars`/`ruleset` 一并删除，整块收拢为一个**钉扎** `sandbox.audit.ruleset_pin`（与代码常量不符即 fail-closed，见 §9/§10）。若将来真需要本地放宽，落点应是**CLI flag**（例如 `audit leak --fail-on warn`）而不是配置项。
 
 ---
 
@@ -451,8 +462,10 @@ G2 golden：`tests/golden/sandbox/{g5_obs_agent.txt,g5_render.txt,leak-report-cl
 | 蜜罐自测 <100%、注册表含哨兵（`E_ENV_HONEYPOT`） | 守卫 | 4 |
 | 审计路径上触发 import hook / AST 门禁 / 逃逸（`E_ENV_*`，当前审计本身不执行工具，理论路径） | 守卫 | 4（由 CLI 通用 `except InfraError` 给出，无需 `run_audit` 参与） |
 | `E_ENV_AUDIT_IO`（轨迹缺失 / JSONL 损坏 / 权限不足） | 结论 | 2（§10「判 critical」：缺证据 ≠ 无泄漏，处理方式与 critical 相同；码本身在 stdout/报告中显式打印，便于分类。**2026-10-03 评审确认：保留在结论轴，不抬到 4**） |
+| `E_ENV_AUDIT_RULESET`（`ruleset_pin` ≠ 代码常量；Spec B-86，2026-10-14） | **守卫** | **4**（审计器**自己声称的规则集版本**不可采信 ⇒ 它写出的任何 verdict 都不能按原义读；在扫盘之前就拒绝，不产出报告。**刻意不占 2**：若与「含 critical 泄漏」同码，运维无法区分「有泄漏」与「配置与代码不一致」——两者要做的处置完全相反） |
 
 `run_audit`/`write_report` 不抛异常表达上面任何一条（只读文件、结论入报告）；`AuditResult.exit_code`
 与 `AuditResult.exit_reason` 是 CLI 的唯一出口。
 | v?-2026-10-10 | 2026-10-10 | **`audit leak` 按文件形状解析 + 遥测键豁免（F44/F45，对齐 Spec v2.4 B-53/B-54）**。① **F44**：`reflections/<episode_key>.json` 是 MOD-06 写的**多行 pretty JSON**（实测 51 行），而审计对 `*.jsonl` 与 `*.json` 都走 `_read_jsonl` ⇒ 第 2 行起 `Extra data` ⇒ `E_ENV_AUDIT_IO` ⇒ **退出码 2** ⇒ 任何含反思的 `loop run` 都无法让 `audit leak` clean。改为 `.jsonl` 逐行、`.json` 整文档（并下探 `entry` 取正文——反思正文才是泄漏面）。② **F45a**：同一形状问题在**扫描循环**里还有第二处：逐行 `json.loads` 必失败 ⇒ `row=None` ⇒ 既有的 `MEMORY_NON_CONTENT_KEYS` 豁免被**绕过** ⇒ `created_at` 的年份 `2026` 撞 heldout 区间刷 3 条 critical 假阳性；改为文档整份投影后只扫内容字段。③ **F45b**：`LOG_NON_CONTENT_KEYS` 补入 `llm.*` 纯遥测键（`max_tokens`/`temperature`/`top_p`/`cost_estimate`/`request_hash`/`response_hash`/`prompt_digest`）——触发点正是 Spec B-47 刚加的按调用方输出预算 `max_tokens: 2048`（合法配置值落进 2000–2099 即被判成 seed 泄漏）。该死名单此前已被扩过三次 |
 | v1.2.2 | 2026-10-11 | **F45-2：删两张人工死名单、改成全字段扫描（对齐 Spec v2.6 B-62）**。① **为什么现在能删**：两张名单（`LOG_NON_CONTENT_KEYS` / `MEMORY_NON_CONTENT_KEYS`）四次扩容（M1 F3 的 136 条、`episode_s`/`cpu_s`/`elapsed_s`、F35 的年份 `2026`、F45b 的 `max_tokens: 2048`）本质上都在绕同一件事：旧 heldout/test 的四位区间（2000–2099 / 9000–9099）与耗时、token 预算、ISO 年份共用一个数字空间。F45-2 把 heldout/test 移到六位端口（731000–731099 / 947000–947099）后，这些字面量**不再可能与 seed 相等**，名单因此变成纯粹的盲区。② **实测（删除的依据）**：去掉全部豁免重扫 → 旧区间在 1311 个归档工件 / 188.0 MB 上命中 **799,868** 次（`ts` 699,305 占 87%、`seed` 44,173、`prompt_tokens` 28…），新区间 **0** 命中。③ **保留的唯一豁免**：`LOG_STRUCTURAL_KEYS = {seed, episode_key, spec}`（框架播种计划）。④ **顺带更正错误论据**：名单注释里「64 位 hex 约 3.7% 概率撞 20XX」**实测为假**（20000 个随机 sha256 命中 0/20000；真实 run 的 `request_hash`/`response_hash`/`prompt_digest` 各 9200 样本命中 0，正则的前后环视已把 hex 内部数字段排除）——这三键正是按该错误论据进名单的。⑤ **副产品**：`evals/seeds.py::_NUM4_RE` 写死 4 位（`\d{4}`）⇒ 六位 seed 根本扫不到，`guard_prompt_context`/`scan_forbidden_tokens` 会静默失效；改为 3–7 位（同 SPEC B-62）。⑥ 门禁：`scripts/ci_gate.sh` 全绿（1925 passed）。 |
+| v1.2.3 | 2026-10-14 | **F73/F74：`sandbox.audit.*` 整块收拢为一个**规则集版本钉扎**（Spec v2.29 / B-86；依据用户裁决 F73 = ②、F74 = 认定为文档错误）**。① **F73 的实况比登记更宽**：原登记只指认 `ruleset` 一个死键，回查初版 PRD 设计初衷后确认——`enabled`/`surfaces`/`ruleset`/`fail_on`/`evidence_chars` **五个键全部 0 消费者**（实现侧只把它们做成 `run_audit()` 的参数 + 同名默认值 ⇒「参数已存在」被误当成「配置已接线」）；最硬的证据是 `configs/default.yaml` 的该块自 M0 骨架 `5d3574c` 建立后**从未被改过一次**，B-82 把 `RULESET_VERSION` 1.0.0→1.1.0 并同步 golden 时也没人想起改它。② **为何不能直接接线**：报告里的 `ruleset_version` 是「这份 clean 按哪版规则判的」的唯一凭据（NFR-02-3 可复现）⇒ 它**必须不可被配置伪造**；若让配置说了算，一次 `audit leak` 经 CLI（读配置）与经测试/golden（直连默认值）会写出**不同**的版本号，字段失去唯一含义。③ **落法（用户选 ②）**：五键删除，只留 **`sandbox.audit.ruleset_pin`**（str，默认 `1.1.0`），CLI 把它喂给 `run_audit(ruleset=…)`，由新增的 **`check_ruleset_pin()`** 断言「== 代码常量 `RULESET_VERSION`」，不符 **fail-closed**（新增 **`E_ENV_AUDIT_RULESET`**，§18.2 归**守卫轴 = 退出码 4**，刻意不占结论轴 2——「有泄漏」与「配置不符」要做的处置相反）。④ **F74**：删掉 `sandbox.audit.enabled` 的「**每代结束自动审计**」措辞——`loop/`/`evolve/`/`evals/` 里没有任何 `run_audit` 调用点，正式实验也是跑完手工补刀（`scripts/run_m3_formal.sh`）；FR-02-16..19 全是「给定 run 目录 → 扫描」，**从来没有自动触发的 FR**，故认定为文档错误而非未实现 FR。⑤ **§16 开放问题 3** 随之结案（`fail_on` 不做配置化；真需要本地放宽应落 CLI flag）。⑥ **护栏 11 条**（`tests/unit/sandbox/test_sandbox_audit.py::test_b86_*`，含「yaml 的 pin == 代码常量」「死键不再是合法扁平键」「CLI 真的读了这个键，且拒绝时不产出报告」）——`git stash push -- dice_ratchet/ configs/` 实测**修复前 11/11 全红**。**诚实边界**：钉扎是「两处版本号 + 一条断言」，代码默认值仍是字面量（`infra` 不能 import `sandbox`，分层 + 循环）⇒ 由用例 `test_b86_config_default_pin_equals_code_constant` 把它钉住；`guard.scan_roots`/`process_boundary`、`honeypot.enabled`/`plan_path`/`self_test` 同为 0 消费者（**未在本轮处理**，另登记）。 |

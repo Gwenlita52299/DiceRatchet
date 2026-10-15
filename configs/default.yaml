@@ -50,11 +50,11 @@ env:
       max_tools: 32
     policy_failure_streak: 3
     audit:
-      enabled: true
-      surfaces: [prompt, memory, log]
-      ruleset: 1.0.0
-      fail_on: critical
-      evidence_chars: 12
+      # 规则集版本**钉扎**（Spec B-86，2026-10-14）：必须与代码常量
+      # dice_ratchet/sandbox/audit.py::RULESET_VERSION 一致，否则 `audit leak` fail-closed
+      # （E_ENV_AUDIT_RULESET，退出码 4）。审计的触发方式是显式 CLI，不存在「每代自动审计」；
+      # 旧的 enabled/surfaces/fail_on/evidence_chars 四键已删除（全库 0 消费者）。
+      ruleset_pin: 1.1.0
     honeypot:
       enabled: true
       plan_path: configs/honeypot.yaml
