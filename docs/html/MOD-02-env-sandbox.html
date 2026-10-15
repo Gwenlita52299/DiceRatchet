@@ -96,11 +96,12 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
   <h2>环境沙箱：投影 · 隔离 · 审计 · 蜜罐</h2>
   <p>它是 L0 游戏引擎与 L1+ agent 之间<b>唯一合法的数据通道</b>——把「agent 只能看到它该看到的」这条项目最硬的纪律落到代码层，用三条独立防线守住：投影裁剪防泄漏、代码/进程隔离防越权、审计与蜜罐防「泄漏没被发现」。</p>
   <div class="badges">
-    <span class="badge">版本 v1.2.1</span>
+    <span class="badge">版本 v1.2.2</span>
     <span class="badge">状态：草案（待复核）</span>
     <span class="badge">里程碑：M0（SandboxEnv + 投影 + 审计器 + 蜜罐自测全部交付）</span>
     <span class="badge">2026-10-03 追加 §18 实现落地记录</span>
   </div>
+  <p><b>⚠️ 本页为手工镜像，不随 PRD 自动生成；本次按 2026-10-14 现状增量修订。</b></p>
 </header>
 
 <div class="grid">
@@ -216,7 +217,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
   <ul>
     <li><span class="tag">FR-02-16</span><code>rebuild_visible_set()</code> 从 episodes JSONL + prompt/memory 文本重建 <code>VisibleSet</code>：<code>obs_paths</code>、<code>obs_digests</code>、<code>memory_texts</code>、<code>harness_version</code>、<code>seeds_seen</code>。</li>
     <li><span class="tag">FR-02-17</span>扫描 6 类：<code>seed_leak</code>、<code>future_room_leak</code>、<code>shop_content_leak</code>、<code>full_state_field_leak</code>、<code>hidden_field_name_leak</code>、<code>canary_leak</code>，每类输出 finding 明细。</li>
-    <li><span class="tag">FR-02-18</span>扫描面覆盖 <code>prompt</code>（LLM 真实入参）、<code>memory</code>（记忆写入）、<code>log</code>（JSONL 全字段）；任一出口命中即 P0。</li>
+    <li><span class="tag">FR-02-18</span>扫描面覆盖 <code>prompt</code>（LLM 真实入参）、<code>memory</code>（记忆写入）、<code>log</code>（JSONL 全字段）；任一出口命中即 P0。<code>future_room_leak</code>／隐藏 token 的判定是<b>逐局作用域</b>：某局只用<b>本局</b>的 <code>hidden − shown</code>；<code>memory/</code> 全局库与 <code>events.jsonl</code> 用 <code>unscoped</code>（= 任何一局都从未合法展示过）。</li>
     <li><span class="tag">FR-02-19</span><code>run_audit()</code> 输出严格符合 <code>audit/report.schema.json</code>；退出码 <code>0</code> 无 finding / <code>1</code> 仅 medium / <code>2</code> 含 critical；<code>evidence</code> 仅保留命中 token 前后各 <code>evidence_chars</code>（默认 12）字符，报告权限 <code>0600</code>，避免报告自身成为泄漏载体。</li>
     <li><span class="tag">FR-02-20</span><code>honeypot.inject()</code> 的注入点改为 GAME 状态中真实存在的隐藏位置：未揭示地图行节点 <code>preview.enemyNames</code> 中嵌入 <code>HONEYPOT_CANARY</code>；<code>state.node.shop</code> 未展示库存加 <code>_np_secret_price</code>；抽骰堆 <code>player.drawPile</code> 末尾的虚构骰 <code>_np_future_die</code>；<code>enemies[]._np_hidden_status</code>。注入只作用于投影前 state 的<b>副本</b>，不影响 <code>stateDigest</code> 对拍。</li>
     <li><span class="tag">FR-02-21</span>canary 与 3 个假字段名不得出现在 <code>OBSERVATION_SCHEMA</code> 任何 <code>source_path</code> 中；注册表导入时断言，违反抛 <code>E_ENV_HONEYPOT</code>。</li>
@@ -306,7 +307,7 @@ def load_harness_tools(harness_dir: Path) -> ToolWorker: ...   # Spec §4.7</cod
 
   <h4>audit.py —— 可见性重建与 6 类泄漏扫描</h4>
 <pre><code># dice_ratchet/sandbox/audit.py
-RULESET_VERSION: str = "1.0.0"
+RULESET_VERSION: str = "1.1.0"   # 1.0.0 是历史版本；1.1.0 的语义变化：逐局作用域 + 数字边界修正
 class LeakClass(str, Enum):   # 6 类泄漏 = FR-02-17
     SEED_LEAK="seed_leak"; FUTURE_ROOM_LEAK="future_room_leak"; SHOP_CONTENT_LEAK="shop_content_leak"; FULL_STATE_FIELD_LEAK="full_state_field_leak"; HIDDEN_FIELD_NAME_LEAK="hidden_field_name_leak"; CANARY_LEAK="canary_leak"
 @dataclass(frozen=True)
@@ -339,7 +340,7 @@ def reset_canary(*, salt: str) -> str:       # 按 run_id 派生 canary，写 ho
 
   <h4>leak-report 顶层字段与示例</h4>
   <p><code>runs/&lt;run_id&gt;/audit/leak-&lt;scope&gt;.json</code> 的顶层字段：<code>run_id</code> / <code>generated_at</code>(iso) / <code>ruleset_version</code> / <code>scope="leak"</code> / <code>verdict∈{clean,warn,critical}</code>（critical 优先级：canary 泄漏或蜜罐失效 &gt; 其余）/ <code>scanned{episodes,steps,memory_entries}</code> / <code>visible_set{obs_paths[],obs_digests[],harness_version}</code> / <code>findings[]{leak_class,surface,episode_id,step,token_class,evidence,line_ref}</code> / <code>leak_counts{}</code> / <code>honeypot{injected,triggered,caught_rate}</code>。示例：</p>
-<pre><code>{"run_id":"4f2a1c9e-9d1c4e77","generated_at":"2026-09-30T12:00:00Z","ruleset_version":"1.0.0","scope":"leak","verdict":"critical","scanned":{"episodes":60,"steps":1840,"memory_entries":42},"visible_set":{"obs_paths":["schema_version","turn","phase"],"obs_digests":["sha256:..."],"harness_version":7},"findings":[{"leak_class":"seed_leak","surface":"prompt","episode_id":"e-000123","step":14,"token_class":"seed","evidence":"...2013...","line_ref":"prompts/e-001042-g003-train.txt:37"}],"leak_counts":{"seed_leak":1},"honeypot":{"injected":4,"triggered":0,"caught_rate":1.0}}</code></pre>
+<pre><code>{"run_id":"4f2a1c9e-9d1c4e77","generated_at":"2026-09-30T12:00:00Z","ruleset_version":"1.1.0","scope":"leak","verdict":"critical","scanned":{"episodes":60,"steps":1840,"memory_entries":42},"visible_set":{"obs_paths":["schema_version","turn","phase"],"obs_digests":["sha256:..."],"harness_version":7},"findings":[{"leak_class":"seed_leak","surface":"prompt","episode_id":"e-000123","step":14,"token_class":"seed","evidence":"...2013...","line_ref":"prompts/e-001042-g003-train.txt:37"}],"leak_counts":{"seed_leak":1},"honeypot":{"injected":4,"triggered":0,"caught_rate":1.0}}</code></pre>
 </section>
 
 <section id="sec-7">
@@ -403,7 +404,7 @@ def reset_canary(*, salt: str) -> str:       # 按 run_id 派生 canary，写 ho
       <tr><td><code>sandbox.exec.timeout_s</code> / <code>mem_limit_mb</code> / <code>cpu_limit_s</code> / <code>max_tools</code></td><td>float/int/int/int</td><td><code>2.0</code> / <code>256</code> / <code>2</code> / <code>32</code></td><td>工具调用墙钟上限；<b>worker 子进程</b>的 <code>RLIMIT_AS</code>；<code>RLIMIT_CPU</code>；单 harness 工具数上限</td></tr>
       <tr><td><code>sandbox.policy_failure_streak</code></td><td>int</td><td><code>3</code></td><td>连续 <code>reject(final=True)</code> 的次数，达到即判 <code>policy_failure</code>（FR-02-8b）</td></tr>
       <tr><td><code>sandbox.audit.enabled</code> / <code>surfaces</code></td><td>bool / list[str]</td><td><code>true</code> / <code>prompt,memory,log</code></td><td>每代结束自动审计；扫描出口</td></tr>
-      <tr><td><code>sandbox.audit.ruleset</code> / <code>fail_on</code> / <code>evidence_chars</code></td><td>str/enum/int</td><td><code>1.0.0</code> / <code>critical</code> / <code>12</code></td><td>规则集版本（入报告）；非零退出门槛；证据前后保留字符数</td></tr>
+      <tr><td><code>sandbox.audit.ruleset</code> / <code>fail_on</code> / <code>evidence_chars</code></td><td>str/enum/int</td><td><code>1.1.0</code> / <code>critical</code> / <code>12</code></td><td>规则集版本（入报告；<code>1.0.0</code> 是历史版本）；非零退出门槛；证据前后保留字符数</td></tr>
       <tr><td><code>sandbox.honeypot.enabled</code> / <code>plan_path</code> / <code>self_test</code></td><td>bool / str / bool</td><td><code>true</code> / <code>configs/honeypot.yaml</code> / <code>true</code></td><td>是否注入；注入计划（canary 生成方式、注入点）；审计前是否强制跑 <code>self_test()</code></td></tr>
     </tbody>
   </table>
@@ -597,7 +598,7 @@ pytest tests/unit/sandbox tests/golden/sandbox tests/integration -q</code></pre>
     <li><b><code>legalActionKinds</code> 的 <code>abandon_run</code> 改写</b>落在 <code>projection._REWRITES</code> 表（§6 的 <code>ObsFieldSpec</code> 没有 <code>transform</code> 字段，故不外扩数据类）。</li>
     <li><b>注册表字段集 = §4.2「保留」表的严格实现</b>：额外排除 <code>chapterName</code>/<code>piles</code>/<code>deck</code>/<code>battleHints</code>/<code>battleKind</code>/<code>outcome</code>（token 预算 + §4.2「删除」的语义；终局结果经 <code>StepResult.info.outcome</code> 提供，不进 prompt）。<code>piles</code> 被排除还使蜜罐向 <code>drawPile</code> 注入虚构骰时<b>不改变</b> <code>piles.draw</code> 计数。</li>
     <li><b>schema 落 <code>schemas/</code> 而不是 §6 示例的 <code>dice_ratchet/sandbox/audit/report.schema.json</code></b>：<code>sandbox/audit.py</code> 已是模块，同名包目录会与模块解析冲突；<code>schemas/</code> 是 MOD-09 登记的跨模块 schema 根（<code>infra.io.validate</code> 默认搜索路径）。</li>
-    <li><b>seed 规则集默认只扫 heldout/test</b>：依 <code>configs/seeds.yaml::exposure_guard.numeric_scan</code>（「4 位数字落 2000-2099 / 9000-9099 即告警」）与 INV-5 的 <code>expose_to</code>；需要更严时 <code>run_audit(seed_splits=("train","heldout","test"))</code>。数值 token 要求两侧非字母数字，且轨迹扫描跳过 <code>obs_digest/prompt_hash/ts/seed/token 计数</code> 等机器元数据——否则 sha256 片段、年份、token 数会刷出假阳性（假阳性同样是 P0 失效）。</li>
+    <li><b>seed 规则集默认只扫 heldout/test</b>：依 <code>configs/seeds.yaml::exposure_guard.numeric_scan</code>（<b>F45-2 起</b>：「3–6 位数字 token 落 <b>731000-731099 / 947000-947099</b> 即告警」；此前是「4 位落 2000-2099 / 9000-9099」）与 INV-5 的 <code>expose_to</code>；需要更严时 <code>run_audit(seed_splits=("train","heldout","test"))</code>。数值 token 的<b>前导边界含 <code>.</code></b>：浮点小数部分不再被当 seed（<code>0.731042</code> 不命中 H2），而 <code>"reason": 731042</code>、<code>947042.5</code>、<code>-947042</code>、文本里的 <code>seed 947042</code> 仍命中；数值 token 要求两侧非字母数字。<b>⚠️ 2026-10-14 修订</b>：F45-2 起两张人工死名单（<code>LOG_NON_CONTENT_KEYS</code> / <code>MEMORY_NON_CONTENT_KEYS</code>）<b>已整删</b>——seed 规则现在扫<b>整行字段</b>，仅豁免框架自身的播种计划 <code>LOG_STRUCTURAL_KEYS = {seed, episode_key, spec}</code> ⇒ 扫描面比带名单时更严（不再有字段被跳过）。</li>
     <li><b>import hook 双层</b>：<code>MetaPathFinder</code>（加载期，§4.10 的字面要求）+ <code>builtins.__import__</code> 包装（缓存命中期）。因为 <code>SandboxEnv</code> 按 FR-02-10 预先 import 了环境层，agent 侧 <code>import dice_ratchet.env.rng</code> 会命中 <code>sys.modules</code>、绕过 finder；只装 finder 会让 FR-02-10 与 §11 的「import dice_ratchet.env.rng → 抛 E_ENV_IMPORT_DENIED」无法成立。</li>
     <li><b><code>GuardViolation</code> 继承 <code>InfraError</code></b>（仍是 <code>Exception</code> 子类，符合 §6 签名），从而 CLI 直接拿到 Spec §8.3 的退出码 4，无需第二套错误通道。</li>
     <li><b><code>_worker.py</code> 是第 6 个（私有）文件</b>：常驻工具子进程的入口必须能被 <code>[sys.executable, "-I", "-S", &lt;file&gt;]</code> 直接执行；5 个公开模块仍只用 stdlib + <code>infra.errors</code>（<code>pyyaml</code> 只在读注入计划时惰性导入）。</li>

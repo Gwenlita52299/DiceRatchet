@@ -220,7 +220,7 @@ models:
     weights_path: models/Qwen3-8B-4bit
     tokenizer_path: models/Qwen3-8B-4bit
     quantization: 4bit
-    context_length: 8192; kv_cache_bits: 8; resident_gb_est: 5.6      # 首次实测后回填
+    context_length: 8192; kv_cache_bits: 8; resident_gb_est: 4.6077   # ⚠️ 2026-10-14 修订：M1 实测回填（NFR-03-03）；原估 5.6 偏保守
     kv_gb_per_1k_tokens: 0.15
     max_inflight: 1; supports_grammar: false; supports_json_mode: true; fallback_backend: llama_cpp
     default_sampling: {temperature: 0.7, top_p: 0.95, top_k: 0, repetition_penalty: 1.05}
@@ -333,7 +333,7 @@ async def _attempt_loop(spec, messages, schema, grammar, sampling, deadline) -> 
 | `context_overflow_policy` | enum | `reject` | `reject` → `E_LLM_CONTEXT_OVERFLOW`；`truncate` → 截断最早的 user 消息 |
 | `eval_temperature` / `train_temperature_min` | float | `0.0`（固定）/ `0.7` | 评估温度（B-14，不可配置为其他值）/ 训练温度下限（计划 §3.3） |
 | `seed` | int\|null | `null` | 采样 seed；评估模式必须非空（由 MOD-09 seed 注册表传入） |
-| `cache_prompt` | bool | `true` | 复用前缀 KV（system + few-shot 不变时显著降延迟） |
+| `cache_prompt` | bool | `true` | 复用前缀 KV（system + few-shot 不变时显著降延迟）。**⚠️ 2026-10-14 修订（F62 批次的实测）**：该键**只被本地 `llama_backend` 消费**（`llama-server` 请求体）⇒ 对 **API 臂（`C1`）无收益**（无本地 prefill）；且注册表只有 `cost_per_1k_input/output`、`llm_api/*.json` 的 `usage` **没有 cache 字段** ⇒ **API 侧命中率不可直接测**（`cost_estimate` 一律按未命中计价，会系统性高估） |
 | `kv_cache_bits` / `max_inflight` | int | 注册表值 | 覆盖注册表；`kv_cache_bits=4` 可救 30B 预算（Q-4）；评估模式强制 `max_inflight=1` |
 | `debug_dump_raw` | bool | `false` | 落 `runs/<run_id>/raw/llm/<call_id>.txt`；默认只存 digest |
 | `skip_hash_check` | bool | `false` | 对应 `DICERATCHET_INFERENCE_SKIP_HASH=1`；CI 必须为 false（Q-6） |

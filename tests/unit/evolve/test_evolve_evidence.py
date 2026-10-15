@@ -4,9 +4,9 @@
 
 - 给定证据束混入一条 ``split="heldout"`` 轨迹摘要，当 ``build_evidence_bundle``，
   则抛 ``E_EVAL_INV5_LEAK``；
-- 给定反思文本出现 heldout seed ``2013`` 字面量，当 ``assert_no_holdout_leak``，
-  则抛 ``E_EVAL_INV5_LEAK``（出现 ``20130`` / ``x2013y`` **不**误报，
-  正则 ``(?<!\\d)2013(?!\\d)``）。
+- 给定反思文本出现 heldout seed ``731013`` 字面量（= 现行 H1 篮子 ``731000–731039`` 的
+  第 14 个 seed，代码取 ``H1.start + 13``，不写死数字），当 ``assert_no_holdout_leak``，
+  则抛 ``E_EVAL_INV5_LEAK``（出现 ``7310130`` / ``x731013y`` **不**误报）。
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ def test_non_train_split_in_memory_and_reflection_raises():
 
 
 # =====================================================================
-# seed 字面量扫描（正则 (?<!\d)2013(?!\d)）
+# seed 字面量扫描（H1 六位端口空间：731000 + 13 = 731013；前导边界含 . ⇒ 浮点小数不误判）
 # =====================================================================
 
 @pytest.mark.parametrize("text", [

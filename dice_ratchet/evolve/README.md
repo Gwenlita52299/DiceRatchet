@@ -1,7 +1,7 @@
 # MOD-07 evolve —— harness 自进化
 
-> 上游：[MOD-07 evolve 技术 PRD](../../docs/prd/MOD-07-evolve-PRD.md)（v0.3）·
-> [模块拆分 Spec](../../docs/模块拆分Spec-DiceRatchet.md)（v1.4，唯一事实来源）
+> 上游：[MOD-07 evolve 技术 PRD](../../docs/prd/MOD-07-evolve-PRD.md)（v0.12）·
+> [模块拆分 Spec](../../docs/模块拆分Spec-DiceRatchet.md)（v2.27，唯一事实来源）
 > 交付里程碑：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）
 > 代码路径：`dice_ratchet/evolve/`
 
@@ -46,12 +46,13 @@ outcome = run_one_generation(state=state, run_ctx=run_ctx, runner=runner)   # Ev
 bundle = build_evidence_bundle(run_id=..., n_traj=20, cfg=evolve_cfg, memory=store)
 prop = propose(bundle, cfg=evolve_cfg, rng_seed=derive_seed(run_id, gen, "propose"))
 report = evaluate_candidate(cand, parent_ref, cfg=evolve_cfg, staging_dir=staging, ...)
-verdict = judge(report, parent_heldout, cfg=evolve_cfg, generation=gen)
+verdict = judge(report, parent_heldout, cfg=evolve_cfg, generation=gen,
+                play_hash=cand_play_hash, parent_play_hash=parent_play_hash)   # F62：C2
 ```
 
-- `evaluate_candidate` **只编排**：冒烟 → 快速淘汰 → heldout → `compare_paired`；
+- `evaluate_candidate` **只编排**：冒烟 → 快速淘汰 → heldout → `compare_paired` + `compare_all_metrics`（逐指标**报告项**，F62）；
   所有统计口径归 MOD-08，MOD-07 不做任何统计运算（FR-07-7）。
-- `judge` 是纯函数（G1 覆盖率主力）：§8.2 六项短路求值，逐条写 `condition_trace`。
+- `judge` 是纯函数（G1 覆盖率主力）：签名 `judge(cand_report, parent_report, *, cfg, generation=0, play_hash="", parent_play_hash="")`；§8.2 六项短路求值，逐条写 `condition_trace`（C2 用后两个 play 面指纹，任一为空即 fail-closed，F62）。
 - `accept` / `rollback` 以 `(run_id, generation)` 为幂等键，账本落在
   `runs/<run_id>/generations/gen-{N}/version_ledger.json`（NFR-07-6）。
 
@@ -96,12 +97,12 @@ python -m dice_ratchet loop run --run-id <run_id> --resume
 |---|---|---|---|
 | C0 | 前置完备 | `heldout.n >= min_heldout_n` 且关键字段非 null | `E_EVOLVE_JUDGE_FAILED` |
 | C1 | 主指标不降 | `win_rate >= parent.win_rate - win_rate_tol`（0.05） | `E_EVOLVE_NO_GAIN` |
-| C2 | 至少一指标显著提升 | `paired.significant and direction == "up"` | `E_EVOLVE_NO_GAIN` |
+| C2 | **play 面确实变了**（F62） | `play_hash(candidate.staging) != play_hash(parent)`；**任一指纹为空即 fail-closed 拒绝** | `C2:no_play_change` / `C2:play_hash_unavailable`（错误码仍 `E_EVOLVE_NO_GAIN`） |
 | C3 | 增益真实性 | `train.win_rate - heldout.win_rate <= gap_threshold`（0.15） | `E_EVOLVE_OVERFIT_SUSPECT` |
 | C4 | 无坍缩 | `collapse_flag == False and entropy_slope >= -0.01` | `E_EVOLVE_COLLAPSE` |
-| C5 | 合法性与健壮性 | `illegal ≤ 0.05 且 fallback ≤ 0.10 且 truncation ≤ 0.05` | `E_EVOLVE_ILLEGAL_RATE` |
+| C5 | 合法性与健壮性 | **三轴同构的相对门 + 绝对 backstop**（D-M3-2 裁决 E）：`illegal ≤ min(parent + 0.05, 0.35)` 且 `fallback ≤ min(parent + 0.05, 0.25)` 且 `truncation ≤ min(parent + 0.05, 0.60)` | `E_EVOLVE_ILLEGAL_RATE` |
 
-`accept ⟺ C0∧C1∧C2∧C3∧C4∧C5`；多候选全通过时取 `(C2 delta 最大, candidate_id 最小)`，
+`accept ⟺ C0∧C1∧C2∧C3∧C4∧C5`；多候选全通过时取 `(mean_stages_cleared delta → win_rate delta → candidate_id 最小)`（F62 改轴：连续轴优先），
 其余写 `reject/reason="superseded"`（不计失败、无错误码）。
 
 ## 6. 测试
@@ -113,7 +114,7 @@ python -m pytest tests/unit/evolve tests/integration/evolve -q
 | 文件 | 覆盖 |
 |---|---|
 | `tests/unit/evolve/test_evolve_proposer_validation.py` | FR-07-4/5：改动面、白名单、签名、依赖、去重排序、diff 应用 |
-| `tests/unit/evolve/test_evolve_evidence.py` | FR-07-2/3：证据束白名单、INV-5 seed 字面量扫描（含 `20130` 不误报） |
+| `tests/unit/evolve/test_evolve_evidence.py` | FR-07-2/3：证据束白名单、INV-5 seed 字面量扫描（H1 现为六位：取 `H1.start+13` = `731013`；含 `7310130`/`x731013y` **不**误报） |
 | `tests/unit/evolve/test_evolve_proposer_prompt.py` | FR-07-1/3 + NFR-07-1：prompt INV-3 回归、propose 显式失败、确定性 |
 | `tests/unit/evolve/test_evolve_judge.py` | §8.2 判定表 12 例 + 短路顺序 + 冒烟快速淘汰 + winner 选择 |
 | `tests/unit/evolve/test_evolve_versioning.py` | FR-07-9/10 + NFR-07-6：快照、幂等 accept、回滚、决策段、git 失败恢复 |
@@ -129,8 +130,11 @@ python -m pytest tests/unit/evolve tests/integration/evolve -q
   报告里的耗时**不进** `report.json` 的 schema（只在 `candidates/*.json` 明细里）。
 - **C5 的 `fallback_rate`/`truncation_rate` 取 aggregate 口径**：`aggregate()` 已经
   按"合法步"分母算好，MOD-07 直接读，不再自己算。
-- **parent 每代重算**（FR-07-7）虽然贵，但这是 parent 与候选**共用同一冻结记忆快照**
-  的必要代价；成本由 MOD-06 的 `loop.max_episodes_per_generation` 统一约束。
+- **parent 的 heldout 优先「继承」而不是每代重算**（D-M3-7，2026-10-14，FR-07-7）：本代起点优先
+  复用更早那份「同 play 面（`versioning.play_hash`）且真有测量」的 held-out 测量，命中即 **0 局**，
+  找不到可复用测量才退回实测；parent 的**冒烟**仍每代重测（用本代训练块末尾 seed）。
+  parent 与候选仍**共用同一冻结记忆快照**（`memory_version`），成本由 MOD-06 的
+  `loop.max_episodes_per_generation` 统一约束。
 - **HITL 挂起时也会写 `report.json`（`decision="pending"`）**，`gate.json` 同时存在；
   MOD-06 的周期幂等检查会因此放行该 cycle（见 `loop/generation.py::_cycle_artifacts_exist`），
   否则 `--resume` 会空转。

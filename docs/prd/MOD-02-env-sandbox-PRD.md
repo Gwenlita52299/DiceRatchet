@@ -65,7 +65,7 @@ M0 目标：① 交给 L1+ 的环境数据只可能来自 `dice_ratchet/sandbox/
 | FR-02-14 | **常驻子进程 worker**（Spec B-20）：`load_harness_tools(harness_dir) -> ToolWorker` 启动 `[sys.executable, "-I", "-S", worker.py]`：<br>• `RLIMIT_AS/RLIMIT_CPU/RLIMIT_NOFILE` 只设在**子进程**上。<br>• 工具代码 exec 进 `guarded_globals()`。<br>• 父子进程之间按行传 JSON，请求为 `{tool, obs, candidates, memory}`。<br>• 每次调用有墙钟 `timeout_s`，超时就 `SIGKILL` 并重启 worker，抛 `E_ENV_TIMEOUT`；超出资源限制时 worker 退出并报 `E_ENV_RESOURCE`。调用方都降级为 MOD-04 fallback。<br>主进程持有模型，**绝不**设置 rlimit（v1.0 在进程内设 `RLIMIT_AS=256MB`，会直接杀掉持有 5～19 GB 权重的主进程）；Python 线程无法强杀，所以不使用线程超时。 |
 | FR-02-15 | 受限执行期监测逃逸：代码触碰 `_HONEYPOT_*` 命名或 honeypot ledger 即产生 `E_ENV_ESCAPE` P0 事件（sentinel 属性触发）。 |
 | FR-02-16 | `rebuild_visible_set()` 从 episodes JSONL + prompt/memory 文本重建 `VisibleSet`：`obs_paths`、`obs_digests`、`memory_texts`、`harness_version`、`seeds_seen`。 |
-| FR-02-17 | 扫描 6 类：`seed_leak`、`future_room_leak`、`shop_content_leak`、`full_state_field_leak`、`hidden_field_name_leak`、`canary_leak`，每类输出 finding 明细。 |
+| FR-02-17 | 扫描 6 类：`seed_leak`、`future_room_leak`、`shop_content_leak`、`full_state_field_leak`、`hidden_field_name_leak`、`canary_leak`，每类输出 finding 明细。**⚠️ 2026-10-14 修订（RULESET_VERSION 1.1.0 / F58）**：`future_room_leak` 与隐藏 token 是**逐局作用域**——某局只用**本局**的 `hidden − shown`；`memory/` 全局库与 `events.jsonl` 这类跨局出口用 `unscoped`（= 任何一局都从未合法展示过）。 |
 | FR-02-18 | 扫描面覆盖 `prompt`（LLM 真实入参）、`memory`（记忆写入）、`log`（JSONL 全字段）；任一出口命中即 P0。 |
 | FR-02-19 | `run_audit()` 输出严格符合 `audit/report.schema.json`；退出码 `0` 无 finding / `1` 仅 medium / `2` 含 critical，供 CLI 透传；`evidence` 仅保留命中 token 前后各 `evidence_chars`（默认 12）字符，报告权限 `0600`，避免报告自身成为泄漏载体。 |
 | FR-02-20 | `honeypot.inject()` 的注入点改为 GAME 状态中真实存在的隐藏位置：<br>• 未揭示地图行的节点 `preview.enemyNames` 中嵌入 `HONEYPOT_CANARY`<br>• `state.node.shop` 未展示的库存加 `_np_secret_price`<br>• 抽骰堆 `player.drawPile` 末尾的虚构骰 `_np_future_die`<br>• `enemies[]._np_hidden_status`<br>注入只作用于投影前 state 的**副本**，不影响 `stateDigest` 对拍。 |
@@ -150,7 +150,7 @@ def run_agent_tick(payload: dict, *, timeout_s: float = 10.0) -> dict: ...
 def load_harness_tools(harness_dir: Path) -> ToolWorker: ...   # Spec §4.7
 
 # dice_ratchet/sandbox/audit.py
-RULESET_VERSION: str = "1.0.0"
+RULESET_VERSION: str = "1.1.0"   # ⚠️ 2026-10-14 修订：1.0.0 为历史版本；1.1.0 起 future_room/隐藏 token 逐局作用域 + 数字前导边界含 "."（F58/F59）
 class LeakClass(str, Enum):   # 6 类泄漏 = FR-02-17
     SEED_LEAK="seed_leak"; FUTURE_ROOM_LEAK="future_room_leak"; SHOP_CONTENT_LEAK="shop_content_leak"; FULL_STATE_FIELD_LEAK="full_state_field_leak"; HIDDEN_FIELD_NAME_LEAK="hidden_field_name_leak"; CANARY_LEAK="canary_leak"
 @dataclass(frozen=True)
@@ -182,7 +182,7 @@ def reset_canary(*, salt: str) -> str:       # 按 run_id 派生 canary，写 ho
 
 `runs/<run_id>/audit/leak-<scope>.json` → `dice_ratchet/sandbox/audit/report.schema.json` 顶层字段：
 `run_id` / `generated_at`(iso) / `ruleset_version` / `scope="leak"` / `verdict∈{clean,warn,critical}`（critical 优先级：canary 泄漏或蜜罐失效 > 其余）/ `scanned{episodes,steps,memory_entries}` / `visible_set{obs_paths[],obs_digests[],harness_version}` / `findings[]{leak_class,surface,episode_id,step,token_class,evidence,line_ref}` / `leak_counts{}` / `honeypot{injected,triggered,caught_rate}`。示例：
-`{"run_id":"4f2a1c9e-9d1c4e77","generated_at":"2026-09-30T12:00:00Z","ruleset_version":"1.0.0","scope":"leak","verdict":"critical","scanned":{"episodes":60,"steps":1840,"memory_entries":42},"visible_set":{"obs_paths":["schema_version","turn","phase"],"obs_digests":["sha256:..."],"harness_version":7},"findings":[{"leak_class":"seed_leak","surface":"prompt","episode_id":"e-000123","step":14,"token_class":"seed","evidence":"...2013...","line_ref":"prompts/e-001042-g003-train.txt:37"}],"leak_counts":{"seed_leak":1},"honeypot":{"injected":4,"triggered":0,"caught_rate":1.0}}`
+`{"run_id":"4f2a1c9e-9d1c4e77","generated_at":"2026-09-30T12:00:00Z","ruleset_version":"1.1.0","scope":"leak","verdict":"critical","scanned":{"episodes":60,"steps":1840,"memory_entries":42},"visible_set":{"obs_paths":["schema_version","turn","phase"],"obs_digests":["sha256:..."],"harness_version":7},"findings":[{"leak_class":"seed_leak","surface":"prompt","episode_id":"e-000123","step":14,"token_class":"seed","evidence":"...2013...","line_ref":"prompts/e-001042-g003-train.txt:37"}],"leak_counts":{"seed_leak":1},"honeypot":{"injected":4,"triggered":0,"caught_rate":1.0}}`（**⚠️ 2026-10-14 修订：示例中的 `ruleset_version` 同步为当前的 `1.1.0`**）
 
 ## 7. 数据模型与存储
 
@@ -208,6 +208,8 @@ gate(harness/tools) → 全通过? 否 → 整批拒绝(E_ENV_AST_DENIED)，保�
 # 审计 + 蜜罐
 rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
   scan_text(forbidden = seeds ∪ future_room_ids ∪ shop_items ∪ hidden_field_names ∪ canary)
+  # ⚠️ 2026-10-14 修订（RULESET_VERSION 1.1.0 / F58）：future_room/hidden token 按**出口所属的局**
+  #   取该局的 hidden − shown；跨局出口（memory/ 全局库、events.jsonl）用 unscoped（任何一局都从未合法展示过）
   honeypot.scan(text)                      # 字节级匹配，无正则
 → findings → verdict；canary 漏判或蜜罐自测失败 ⇒ "critical"
 ```
@@ -224,7 +226,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 | `sandbox.exec.timeout_s` / `mem_limit_mb` / `cpu_limit_s` / `max_tools` | float/int/int/int | `2.0` / `256` / `2` / `32` | 工具调用墙钟上限；**worker 子进程**的 `RLIMIT_AS`；`RLIMIT_CPU`；单 harness 工具数上限 |
 | `sandbox.policy_failure_streak` | int | `3` | 连续 `reject(final=True)` 的次数，达到即判 `policy_failure`（FR-02-8b） |
 | `sandbox.audit.enabled` / `surfaces` | bool / list[str] | `true` / `prompt,memory,log` | 每代结束自动审计；扫描出口 |
-| `sandbox.audit.ruleset` / `fail_on` / `evidence_chars` | str/enum/int | `1.0.0` / `critical` / `12` | 规则集版本（入报告）；非零退出门槛；证据前后保留字符数 |
+| `sandbox.audit.ruleset` / `fail_on` / `evidence_chars` | str/enum/int | `1.1.0` / `critical` / `12` | 规则集版本（入报告）；非零退出门槛；证据前后保留字符数 |
 | `sandbox.honeypot.enabled` / `plan_path` / `self_test` | bool / str / bool | `true` / `configs/honeypot.yaml` / `true` | 是否注入；注入计划（canary 生成方式、注入点）；审计前是否强制跑 `self_test()` |
 
 环境变量前缀 `DICERATCHET_SANDBOX_*`；优先级 CLI > 环境变量 > `configs/default.yaml`（Spec §5）。
@@ -403,7 +405,7 @@ G2 golden：`tests/golden/sandbox/{g5_obs_agent.txt,g5_render.txt,leak-report-cl
 7. **seed 规则集默认只扫 heldout/test**：依 `configs/seeds.yaml::exposure_guard.numeric_scan`
    （**F45-2 起**：「3–6 位数字落 **731000-731099 / 947000-947099** 即告警」；此前是
    「4 位落 2000-2099 / 9000-9099」）与 INV-5 的 `expose_to`；需要更严时
-   `run_audit(seed_splits=("train","heldout","test"))`。数值 token 要求两侧非字母数字。
+   `run_audit(seed_splits=("train","heldout","test"))`。数值 token 要求两侧非字母数字（**⚠️ 2026-10-14 修订（F59，RULESET_VERSION 1.1.0）：前导边界另含 `.`** ⇒ 浮点小数部分 `0.731042` 不再被当 seed；`"reason": 731042`、`947042.5`、`-947042` 仍命中——整数部分相等即 fail-closed 报出）。
    **扫描面（F45-2）**：原先有两张人工死名单（`LOG_NON_CONTENT_KEYS` /
    `MEMORY_NON_CONTENT_KEYS`，扩过四次，用来跳过 `obs_digest`/`ts`/耗时/token 计数/哈希…），
    现已**整删**：六位端口空间不再与耗时（`duration_us=2072.8`）、token 预算

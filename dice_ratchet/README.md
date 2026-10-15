@@ -8,7 +8,7 @@
 BM25 检索 / 快照回滚）与 **MOD-06 loop**（闭环编排：单局时序与逐步落盘 / 局末反思与降级 /
 周期幂等 / `--resume` 与计分幂等 / `E_gen` 成本闸门 / HITL 挂起）与 **MOD-08 evals**
 （seed 协议与 INV-5 护栏 / 三基线 / INV-7 主指标 / 坍缩监控 / 消融 / 报告与 test 存证），对齐
-[模块拆分 Spec v1.4](../../docs/模块拆分Spec-DiceRatchet.md)、
+[模块拆分 Spec v2.27](../../docs/模块拆分Spec-DiceRatchet.md)、
 [MOD-01 PRD](../docs/prd/MOD-01-env-rules-PRD.md)、
 [MOD-02 PRD](../docs/prd/MOD-02-env-sandbox-PRD.md)、
 [MOD-03 PRD](../docs/prd/MOD-03-inference-PRD.md)、
@@ -111,8 +111,10 @@ python -m dice_ratchet baseline --kind fixed_prompt --split heldout --basket H1 
 
 # MOD-08：代际报告 / 多样性 / 消融 / test 终检（均不带覆盖，继续用族 B 的 demo-eval-0001）
 # F46-A：--generation 现在是真过滤（修复前只做标签覆盖，会把跨代/跨臂的局混成一个池）；
-#   --arm <name|all> 选臂——缺省 = 该代胜出/候选臂（无候选或候选全被拒时回落 parent），
-#   all = 显式申报的混合池（禁止当默认口径）；diversity 的 --arm 缺省 = 该代整池
+#   --arm <name|all> 选臂——缺省 = parent（该代起点臂；F57 起不再默认取候选臂，无 parent 局
+#   才回落胜出候选/唯一候选），盘上不存在的臂名报 E_EVAL_ARM_NOT_ALLOWED（退出码 2），
+#   all = 显式申报的混合池（禁止当默认口径，且不写台账）；diversity 的 --arm 缺省 = 该代整池
+#   eval report --split train 只读（F61/F71）：只打印 + 落 metrics/gen-NNN.train.readonly.json
 python -m dice_ratchet eval report --split heldout --baseline all --run-id demo-eval-0001            # 期望退出码 0
 python -m dice_ratchet eval report --split heldout --generation 1 --arm parent --run-id demo-eval-0001  # 只重算 parent 臂
 python -m dice_ratchet eval diversity --run-id demo-eval-0001 --generation 0                        # 期望退出码 0
@@ -269,7 +271,7 @@ python -m dice_ratchet baseline --kind fixed_prompt --split heldout --seeds held
 | `baselines.py` | `random`（`seed ^ 0x5EED` 显式 rng）/ `heuristic`（委托 MOD-04 `heuristic_policy`，默认局参考 45.5%）/ `fixed_prompt`（harness v0 冻结）；不可覆盖归档 + `registry.csv` | FR-08-11…14 |
 | `ablation.py` | H2 三臂配对消融 + Holm–Bonferroni（两臂时首个阈值 0.025）+ `attribution ∈ {reflection, self_edit, both, none}` | FR-08-21 |
 | `reward.py` | shaped reward（**仅学习/调试**，不进判定路径；`metrics.py` 不 import 它） | Spec §3 |
-| `cli.py` | `baseline` / `eval report|diversity|ablation|test`（经 `app.py::wire()` 注册；`report`/`diversity` 支持 `--arm <name|all>`，F46-A） | G6 |
+| `cli.py` | `baseline` / `eval report|diversity|ablation|test|acceptance`（经 `app.py::wire()` 注册；`report`/`diversity` 支持 `--arm <name|all>`，F46-A；`acceptance` 恒返回 0，产物 `metrics/acceptance.json`） | G6 |
 
 细节与命令见 [`evals/README.md`](evals/README.md)。
 

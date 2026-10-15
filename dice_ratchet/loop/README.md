@@ -1,6 +1,6 @@
 # MOD-06 loop —— 闭环编排器
 
-> 上游：[MOD-06 loop 技术 PRD](../../docs/prd/MOD-06-loop-PRD.md)（v1.2）·
+> 上游：[MOD-06 loop 技术 PRD](../../docs/prd/MOD-06-loop-PRD.md)（v1.6）·
 > [模块拆分 Spec](../../docs/模块拆分Spec-DiceRatchet.md)（唯一事实来源）
 > 交付里程碑：M2 · 代码路径：`dice_ratchet/loop/`
 
@@ -57,6 +57,11 @@ state = orch.status()                        # RunState
 ```
 E_gen = K + (H + S) + C·(S + H)           # 默认 30 + 42 + 1×42 = 114 ≤ max_episodes_per_generation(120)
 ```
+
+**⚠️ 2026-10-14 修订（D-M3-7）**：上式与默认值未变，`E_gen=114` 仍是与
+`max_episodes_per_generation`(120) 比较的**保守上限**；但 parent 的 heldout 改为**按 play 面
+指纹继承**（同 play 面已有测量命中即 0 局、不重测）⇒ 继承命中时**实际每 cycle = 74 局**
+（`K 30 + parent 冒烟 2 + 候选(冒烟 2 + heldout 40)`），只有继承未命中时才退回 114。
 
 配置优先级：CLI 参数 > `DICERATCHET_LOOP__*` 环境变量 > `configs/default.yaml`。
 `loop.retry_reflections_on_resume`（或 `loop run --resume --retry-reflections`）**默认关闭**：

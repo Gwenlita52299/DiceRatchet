@@ -75,8 +75,8 @@ python -m dice_ratchet loop smoke --seeds train:1000-1002 --k 3 --no-reflect   #
 - **FR-06-11（HITL 挂起）**：`loop.hitl=true` 时 MOD-07 产出候选与决策记录后不直接生效；MOD-06 写 `state.hitl_pending={"cycle","generation","candidate_dir","report"}`、置 `phase="hitl_wait"`、退出码 `0`（正常挂起非错误）。人工执行 `evolve approve|rollback --generation g`（MOD-07 命令，MOD-06 只消费结果状态）后，`loop run --run-id <id> --resume` 读 `harness/version.json` 与 `hitl_pending`，清空标记并继续。
 - **FR-06-12（评估执行器）**：MOD-08 `evaluate_arm()` 通过注入的 `EpisodeRunner.run_episode(split="heldout", arm=...)` 执行评估局。本模块只负责执行与落盘，**不做任何聚合指标**（聚合归 MOD-08）。v1.0 的 `run_evaluation_batch()` 已并入 MOD-08 门面。
 - **FR-06-13（成本闸门，Spec v1.3 §8.6）**：
-  - 每代启动前按 `E_gen = K + (H + S) + C·(S + H)` 计算本代局数：训练 K、parent 的 heldout H 与冒烟 S、C 个候选各自的冒烟与 heldout。默认 30 + 45 + 2×45 = 165。
-  - `E_gen > loop.max_episodes_per_generation`（**默认 120**，2026-10-06 M2 开工 D-1 由 170 下调；D-1 下 `E_gen = K + (1+C)(S+H) = 30 + 2×42 = 114`）时拒绝启动该代，记 `loop.budget_exhausted`，退出码 1，并提示下调 C 或 S。这是全系统**唯一**的成本上限，MOD-07 不另设。
+  - 每代启动前按 `E_gen = K + (H + S) + C·(S + H)` 计算本代局数：训练 K、parent 的 heldout H 与冒烟 S、C 个候选各自的冒烟与 heldout。默认 30 + 45 + 2×45 = 165。**⚠️ 2026-10-14 修订（D-M3-7）**：公式与默认值未变（`E_gen` 仍是与上限比较的保守值）；但 parent 的 heldout 改为**按 play 面指纹继承**（同 play 面已有测量命中即 0 局、不重测）⇒ 继承命中时**实际每 cycle = 74 局** = `K 30 + parent 冒烟 2 + 候选(冒烟 2 + heldout 40)`，只有继承未命中时才退回上式实测。
+  - `E_gen > loop.max_episodes_per_generation`（**默认 120**，2026-10-06 M2 开工 D-1 由 170 下调；D-1 下 `E_gen = K + (1+C)(S+H) = 30 + 2×42 = 114`，**⚠️ 114 是公式上限；D-M3-7 起继承命中时实际每 cycle = 74 局**）时拒绝启动该代，记 `loop.budget_exhausted`，退出码 1，并提示下调 C 或 S。这是全系统**唯一**的成本上限，MOD-07 不另设。
   - 每代开始写一条 `loop.cycle_start{e_gen, est_hours}` 事件，其中 `est_hours = E_gen × D × t_d`，`t_d` 取 MOD-03 实测 p50。
 - **FR-06-13a（gen-000 基线）**：run 启动时（`generation=0`），先对 harness v0 在 H1 上调 MOD-08 `evaluate_arm` 与 `evaluate_generation`，生成 `generations/gen-000/report.json`（`decision="baseline"`），后续各代与它对比。
 - **FR-06-14（并发纪律）**：
@@ -285,8 +285,9 @@ def run(self, seeds=None, *, resume=False):
 MOD-06 **不自己装配模型**：`loop run --agent llm` 的客户端由**组合根**经 `RoleModelProvider` 注入（`set_inference_client_provider(_role_provider)`），因此 `experiment.arm` 对闭环同样生效——`policy` / `reflection` / `proposer` 三个角色各自按 Spec §4.7 的四级优先级解析（`experiment.roles.<role>` > `experiment.arms[arm].<role>` > `models.<role>` > `inference.model_id`），**fail-closed**。角色装配与 provenance 归 MOD-03（Spec §4.7、MOD-03 §7.1），MOD-06 只做鸭子类型解析（`coerce_client`），不 import 提供者类型。
 
 - **M2 闭环主力臂 = `C1`**（三角色全 `deepseek-flash` + `harness: evolve`；Spec §8.6 B-43）。**成本口径随臂变化**：本地 8B 单局 19.6 min ⇒ `E_gen=114` ≈ 37 h/代；API 臂单局 2.09–2.52 min ⇒ **≈4.0–4.8 h/代、≈¥84–100/代**。`loop.max_episodes_per_generation=120` 与 `E_gen=114` 的**局数**约束不变，但 API 臂下的实际瓶颈是**花费/限流**而非墙钟。
+- **⚠️ 2026-10-14 修订（D-M3-7）——成本口径的现状**：上一条的 114 局/代是**公式值（保守上限）**，公式与默认值未变；但 parent 的 heldout 改为**按 play 面指纹继承、不重测**后，继承命中时**实际每 cycle = 74 局**（`K 30 + parent 冒烟 2 + 候选(冒烟 2 + heldout 40)`）。因此上一条的历史定价（4.0–4.8 h/代、¥84–100/代）已不反映现状：按本 run（`m3-formal`，`C1`·hard×6）实测账户口径 ≈**¥0.52/局 ⇒ ≈¥38/代**；官方高峰价 ¥0.833–0.879/局 ⇒ ≈**¥62–65/代**。`max_episodes_per_generation=120` 仍与 `E_gen`（公式值）比较。
 - **⚠️ F29：臂的 `harness: fixed/evolve` 字段本模块不消费**（Spec v2.0 §8.6）。演化开关由本模块的 `--no-evolve` / 组合根注入的 `_EVOLVE_PROVIDER` 决定，与臂无关 ⇒ **`C0`（fixed）与 `C1`（evolve）当前行为等价**：选 `C0` 跑闭环照样演化。强制「fixed 臂不演化」属 Issue #1 任务 6（未做）。
-- **⚠️ 全拒是「静默」的（缺陷 F28 的教训，2026-10-09 已处置门本身，但本模块的语义不变）**：`hard × 6` 上原 C5 绝对门会因 `truncation_rate=0.30 > 0.15` 全拒每个候选（已按 Spec v2.1 B-45 改为相对门，见 MOD-07 §8.2.2）。**但「全拒不报错」这一条永远成立**——本模块按 FR-06-7 对接受与拒绝**同样** `generation += 1` 并回到 `playing`（退出码 0），`loop.budget_exhausted` 之类的信号**不会**触发。因此「跑完 N 代、退出码 0」**不等于**闭环有产出：判定 M2 验收必须查 `harness/versions/` 是否出现新版本与逐代 `decision` 记录。
+- **⚠️ 全拒是「静默」的（缺陷 F28 的教训，2026-10-09 已处置门本身，但本模块的语义不变）**：`hard × 6` 上原 C5 绝对门会因 `truncation_rate=0.30 > 0.15` 全拒每个候选（已按 Spec v2.1 B-45 改为相对门，**并自 Spec v2.8 B-64 / D-M3-2 起收紧为三轴同构的「相对门 + 绝对 backstop」**：`illegal`/`fallback`/`truncation` 均为 `candidate ≤ min(parent + tol(0.05), backstop 0.35/0.25/0.60)`，见 MOD-07 §8.2.2）。**但「全拒不报错」这一条永远成立**——本模块按 FR-06-7 对接受与拒绝**同样** `generation += 1` 并回到 `playing`（退出码 0），`loop.budget_exhausted` 之类的信号**不会**触发。因此「跑完 N 代、退出码 0」**不等于**闭环有产出：判定 M2 验收必须查 `harness/versions/` 是否出现新版本与逐代 `decision` 记录。
 - **bring-up 口径（②，2026-10-09）**：M2 的联调/冒烟用 `DICERATCHET_EXPERIMENT__ARM=C1 DICERATCHET_ENV__EPISODE__DIFFICULTY=medium`（该局型上 API 臂实测 `truncation_rate = 0.00`、`win_rate` 有方差）；默认局仍 `hard × 6`。
 
 | 键 | 类型 | 默认值 | 含义 |
@@ -303,7 +304,7 @@ MOD-06 **不自己装配模型**：`loop run --agent llm` 的客户端由**组�
 | `loop.eval_concurrency` | int | 2 | 评估局的局级并发数（共享推理队列） |
 | `loop.max_candidates_per_generation` | int | 3 | 每代候选数上限，硬上限 3（Spec §8.6） |
 | `loop.eval_seeds_per_candidate` | int | 40 | 单候选评估局数；`× candidates` 不得超下一条 |
-| `loop.max_episodes_per_generation` | int | **120** | 每代总局数上限，与 `E_gen` 比较（FR-06-13，全系统唯一成本上限）；2026-10-06 D-1：170 → 120，与 `C=1/S=2/H=40` 一起定（`E_gen=114`） |
+| `loop.max_episodes_per_generation` | int | **120** | 每代总局数上限，与 `E_gen` 比较（FR-06-13，全系统唯一成本上限）；2026-10-06 D-1：170 → 120，与 `C=1/S=2/H=40` 一起定（`E_gen=114` 是**公式上限**；⚠️ D-M3-7 起继承命中时实际每 cycle = 74 局） |
 | `loop.n_candidates` / `loop.smoke_n` / `loop.heldout_n` | int | **1 / 2 / 40** | 参与 `E_gen` 计算；`n_candidates` 与 MOD-07 `evolve.n_candidates`、`heldout_n` 与 MOD-08 `n_heldout` 由 `load_config()` 校验一致（`config.py:558/562`）；**`smoke_n` 与 `evolve.smoke_n` 无自动校验，改 S 必须两处同步**（2026-10-06 D-1） |
 | `loop.io_retry` / `loop.io_backoff_ms` | int / int | 3 / 200 | 磁盘写失败重试次数与指数退避基数（200/400/800 ms） |
 | `loop.llm_timeout_s` | float | 90.0 | 单次决策生成超时（透传 MOD-03） |
@@ -428,7 +429,7 @@ gen-000 基线之前**通过 MOD-09 的工作区干净性判据；脏 → `E_IO_
 - **T-06-7 断点续跑不重复计分**：给定 `k=3` 跑到第 4 局后中断（状态已落盘）；当 `--resume`；则 `completed_train_seeds` 无重复、`scoreboard.episodes` 的 `episode_key` 全局唯一、总局数等于期望值。
 - **T-06-8 中断粒度**：给定第 7 局第 3 步后抛 `KeyboardInterrupt`；当 恢复；则前 2 步已在 JSONL、该 seed 从 `pending_queue` 头部重跑且不产生重复 `episode_key`。
 - **T-06-9 HITL 挂起/恢复**：给定 `hitl=true`、假 `evolve_fn` 返回 `pending_human=True`；当 `run()`；则 `phase=="hitl_wait"`、`hitl_pending.cycle` 正确、退出码 0；当 写好新 harness 后 `--resume`；则 `hitl_pending is None` 且 `harness_version` 为新值。
-- **T-06-10 成本闸门**：给定 `K=30, H=40, S=5, C=3`（E_gen=210）与 `max_episodes_per_generation=170`；当 到达周期边界；则不调用 MOD-07，发 `loop.budget_exhausted{e_gen:210,cap:170}`，退出码 1；把 C 改为 2（E_gen=165）后正常触发。**另加 D-1 默认档用例**：给定默认 `K=30, H=40, S=2, C=1`（E_gen=114）与 `max_episodes_per_generation=120`；当 到达周期边界；则**不**触发预算闸门（114 ≤ 120），正常调用 MOD-07；把 `H` 改为 50（E_gen=134）后则发 `loop.budget_exhausted{e_gen:134,cap:120}`（这条用例同时锁住「`H` 每 +10 在 C=1 下是 +20 局」的算式）。
+- **T-06-10 成本闸门**：给定 `K=30, H=40, S=5, C=3`（E_gen=210）与 `max_episodes_per_generation=170`；当 到达周期边界；则不调用 MOD-07，发 `loop.budget_exhausted{e_gen:210,cap:170}`，退出码 1；把 C 改为 2（E_gen=165）后正常触发。**另加 D-1 默认档用例**：给定默认 `K=30, H=40, S=2, C=1`（E_gen=114）与 `max_episodes_per_generation=120`；当 到达周期边界；则**不**触发预算闸门（114 ≤ 120），正常调用 MOD-07；把 `H` 改为 50（E_gen=134）后则发 `loop.budget_exhausted{e_gen:134,cap:120}`（这条用例同时锁住「`H` 每 +10 在 C=1 下是 +20 局」的算式）。**⚠️ 注（2026-10-14）**：本用例的 `E_gen=114` 期望值是与**代码公式**一致的闸门比较对象，**不改**；114 是**公式上限**，D-M3-7 起 parent heldout 继承命中时实际每 cycle = 74 局，闸门仍按公式值比较。
 - **T-06-11 训练并发守卫**：给定 `train_concurrency=2`；当 启动；则 立即以 `E_IO_CONCURRENCY` 拒绝（退出码 2）。
 - **T-06-12 split 越权**：给定 seed 标 `heldout` 却被当训练局传入；当 run；则 抛 `E_EVAL_SPLIT_VIOLATION`（INV-5 回归）。
 - **T-06-13 Schema round-trip（G5）**：`RunState → JSON → RunState` 完全相等，且 `state.json` 通过 §6 JSON Schema 校验。

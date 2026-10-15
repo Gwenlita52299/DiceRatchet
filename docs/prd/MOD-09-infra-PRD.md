@@ -227,7 +227,8 @@ def scan_all(root: Path) -> list[GuardFinding]: ...          # 供 CI 与 CLI �
 | `loop run` | `--generations N` `--k N` `--hitl/--no-hitl` `--run-id ID` `--resume` | 0/1/2/3/4/5 |
 | `loop status\|smoke` | `--run-id ID` | 0/1/2 |
 | `evolve approve\|rollback` | `--run-id ID` `--generation N` `--reason STR` | 0/2/4 |
-| `eval report` | `--run-id ID` `--split {train,heldout,test}` `--baseline {none,all,...}` | 0/1/2 |
+| `eval report` | `--run-id ID` `--split {train,heldout,test}`（**`train` 只读**，F71：只打印 + 落 `metrics/gen-NNN.train.readonly.json`，不写 `report.json`/代际台账/`plots_data/`/ext）`--arm {<臂名>,all}`（**缺省 `parent`**；臂名在盘上不存在报 `E_EVAL_ARM_NOT_ALLOWED`＝退出码 2；`all`＝混合池且不写台账）`--baseline {none,all,...}` | 0/1/2 |
+| `eval acceptance` | `--run-id ID` `--sensitivity` | 0（判定器不是守卫，**恒返回 0**；结论看 `metrics/acceptance.json` 的 `ok`） |
 | `eval ablation\|test` | `--run-id ID` `--basket {H1,H2,H3}` | 0/1/2/3 |
 | `inference probe\|bench\|robustness` | `--model ID` | 0/1/3 |
 | `memory stats\|snapshot\|rollback\|verify\|retrieve` | `--run-id ID` | 0/1/2 |
@@ -242,7 +243,7 @@ def scan_all(root: Path) -> list[GuardFinding]: ...          # 供 CI 与 CLI �
 > 详见 MOD-02 PRD §18.2。本模块只负责命令面与报告落盘出口
 > （`resolve_run_dir`/`RunPaths`/`infra.io.validate`）。
 
-`--seeds SPEC` 语法：`train:1000-1004`、`heldout:2000-2099`、`9000,9001`、`file:seeds.txt`。`guards check` 已回填 Spec v1.3 §4.6（P-20）。
+`--seeds SPEC` 语法：`train:1000-1004`、`heldout:731000-731099`（**⚠️ 2026-10-14 修订：六位端口空间；旧写法 `heldout:2000-2099` 是已失效的四位协议**）、`9000,9001`、`file:seeds.txt`。`guards check` 已回填 Spec v1.3 §4.6（P-20）。
 
 `--resume` 的两类语义（2026-10-05，M1 验收 F18）：`loop run` 走 `resolve_run_dir(resume=True)`，
 要求 `state.json` 存在（缺失即 `E_IO_STATE_MISSING`），语义归 MOD-06；`baseline` 走

@@ -95,11 +95,12 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
   <h2>基础设施（工程横切层）</h2>
   <p>把配置、日志、CLI 与确定性守卫从领域逻辑里彻底剥离——它是依赖矩阵里唯一不被任何人阻塞、却阻塞所有人的模块：M0 第一天就要到位，否则可复现性与不变量全盘失效。</p>
   <div class="badges">
-    <span class="badge">版本 v0.3.1（同步 docs/prd/MOD-09-infra-PRD.md）</span>
+    <span class="badge">版本 v0.5（同步 docs/prd/MOD-09-infra-PRD.md）</span>
     <span class="badge">状态：待评审</span>
     <span class="badge">里程碑 M0–M3 · L3 工程层，横切全模块</span>
     <span class="badge">作者：主代理（MOD-09 owner）</span>
   </div>
+  <p><b>⚠️ 本页为手工镜像，不随 PRD 自动生成；本次按 2026-10-14 现状增量修订。</b></p>
 </header>
 
 <div class="grid">
@@ -348,7 +349,7 @@ def scan_all(root: Path) -> list[GuardFinding]: ...          # 供 CI 与 CLI �
     <tr><td><code>guards check</code></td><td><code>--root PATH</code> <code>--fix-hints</code></td><td>0/4</td></tr>
   </table>
   <blockquote>注（2026-10-03，按评审修订）：<code>audit leak</code> 的退出码由<strong>归属模块</strong> MOD-02 决定，是<strong>两根正交轴</strong>——泄漏结论 <code>0</code> 无 finding / <code>1</code> 仅 medium / <code>2</code> 含 critical（FR-02-19、§11 集成用例），以及沙箱守卫违例 <code>4</code>（Spec §8.3；蜜罐自测失败等 <code>E_ENV_HONEYPOT</code>，与本模块 <code>EXIT_CODE[E_ENV_HONEYPOT] = 4</code> 的登记一致），优先级 <code>4 &gt; 2 &gt; 1 &gt; 0</code>。详见 MOD-02 PRD §18.2。本模块只负责命令面与报告落盘出口（<code>resolve_run_dir</code>/<code>RunPaths</code>/<code>infra.io.validate</code>）。</blockquote>
-  <p><code>--seeds SPEC</code> 语法：<code>train:1000-1004</code>、<code>heldout:2000-2099</code>、<code>9000,9001</code>、<code>file:seeds.txt</code>。<code>guards check</code> 已回填 Spec v1.3 §4.6（P-20）。</p>
+  <p><code>--seeds SPEC</code> 语法：<code>train:1000-1004</code>、<code>heldout:731000-731099</code>（<b>⚠️ 2026-10-14 修订：六位端口空间；旧写法 <code>heldout:2000-2099</code> 是已失效的四位协议</b>）、<code>9000,9001</code>、<code>file:seeds.txt</code>。<code>guards check</code> 已回填 Spec v1.3 §4.6（P-20）。</p>
   <p><code>--resume</code> 的两类语义（2026-10-05，M1 验收 F18）：<code>loop run</code> 走 <code>resolve_run_dir(resume=True)</code>，要求 <code>state.json</code> 存在（缺失即 <code>E_IO_STATE_MISSING</code>），语义归 MOD-06；<code>baseline</code> 走 <code>cli_init_run(require_state=False)</code>，只按 <code>episodes/&lt;split&gt;/</code> 已完成的局跳过重复 seed、只跑缺的（基线从不写 <code>state.json</code>）。另：<code>--model</code>/<code>--mode</code>/<code>--seed</code>/<code>--timeout-ms</code> 等覆盖会并入 <code>config_hash</code>（<code>config_overrides()</code>），因此<b>同一 <code>--run-id</code> 只能承载覆盖集合完全相同的命令</b>，否则 <code>E_IO_RUN_CONFLICT</code>（退出码 2）——这是 M1 验收 F10 的成因。</p>
 
   <h4>6.5 事件与错误码注册表（Spec v1.3 §8.2/§8.3 的落地）</h4>

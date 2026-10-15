@@ -1,7 +1,7 @@
 # MOD-01 env-rules 技术 PRD
 
 > 版本：v1.0（2026-09-30 17:21 按 Spec v1.3 整体重写，见 §17）· 状态：待评审 · 所属里程碑：M0
-> 上游：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md) v1.3（冲突以 Spec 为准）· 规则事实来源：[GAME-00](GAME-00-webgame-PRD.md) / [GAME-01](GAME-01-kernel-contract.md) / [GAME-02](GAME-02-content-tables.md) v1.2 与 `src/game/kernel`
+> 上游：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md) v2.27（冲突以 Spec 为准）· 规则事实来源：[GAME-00](GAME-00-webgame-PRD.md) / [GAME-01](GAME-01-kernel-contract.md) / [GAME-02](GAME-02-content-tables.md) v1.2 与 `src/game/kernel`
 > 定位：**GAME 内核的纯 Python 等价移植**。本模块不定义任何游戏规则；规则、数值、配表都引用 GAME。v0.1 中基于旧《Dicey Dungeons》模型的内容（floors/HP/block/levelup/`configs/enemies.yaml`/shaped reward 表）已全部废弃。
 
 ## 1. 背景与目标

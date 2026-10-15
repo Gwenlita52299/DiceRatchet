@@ -96,12 +96,13 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
   <h2>闭环编排器（Loop Orchestrator）</h2>
   <p>DiceRatchet L2 进化层的"节拍器"：它自己不产策略、不训练模型、不判改进好坏，只让 <code>play → evaluate → reflect → evolve</code> 这条闭环在一局、K 局、一代三个时间尺度上正确、可复现、可中断、可恢复地转起来。</p>
   <div class="badges">
-    <span class="badge">版本 v1.2</span>
+    <span class="badge">版本 v1.6</span>
     <span class="badge">状态：草案（待评审）</span>
     <span class="badge">所属里程碑：M2</span>
     <span class="badge">代码路径：dice_ratchet/loop/{runner.py, reflect.py, generation.py}</span>
     <span class="badge">产物路径：runs/&lt;run_id&gt;/</span>
   </div>
+  <p><b>⚠️ 本页为手工镜像，不随 PRD 自动生成；本次按 2026-10-14 现状增量修订。</b></p>
 </header>
 
 <div class="grid">
@@ -225,8 +226,8 @@ python -m dice_ratchet loop smoke --seeds train:1000-1002 --k 3 --no-reflect   #
 
   <h4><span class="tag">FR-06-13</span> 成本闸门（Spec v1.3 §8.6）</h4>
   <ul>
-    <li>每代启动前按 <code>E_gen = K + (H + S) + C·(S + H)</code> 计算本代局数：训练 K、parent 的 heldout H 与冒烟 S、C 个候选各自的冒烟与 heldout。<b>默认 30 + 45 + 2×45 = 165</b>。</li>
-    <li><code>E_gen &gt; loop.max_episodes_per_generation</code>（默认 170）时拒绝启动该代，记 <code>loop.budget_exhausted</code>，退出码 1，并提示下调 C 或 S。这是全系统<b>唯一</b>的成本上限，MOD-07 不另设。</li>
+    <li>每代启动前按 <code>E_gen = K + (H + S) + C·(S + H)</code> 计算本代局数：训练 K、parent 的 heldout H 与冒烟 S、C 个候选各自的冒烟与 heldout。D-1 默认 <b>K=30、C=1、S=2、H=40</b> ⇒ <b>E_gen = 30 + 2×42 = 114</b>（公式口径，是<b>保守上限</b>）。D-M3-7 起 parent heldout 按 <code>play_hash</code> 继承同 play 面的更早测量（命中即 0 局）⇒ <b>实际每 cycle 74 局</b>（K 30 + 冒烟 2+2 + 候选 heldout 40；实测账户口径 ≈¥0.52/局 ⇒ ≈¥38/代，官方高峰价口径 ≈¥62–65/代）。</li>
+    <li><code>E_gen &gt; loop.max_episodes_per_generation</code>（默认 <b>120</b>，2026-10-06 D-1 由 170 下调）时拒绝启动该代，记 <code>loop.budget_exhausted</code>，退出码 1，并提示下调 C 或 S。这是全系统<b>唯一</b>的成本上限，MOD-07 不另设。</li>
     <li>每代开始写一条 <code>loop.cycle_start{e_gen, est_hours}</code> 事件，其中 <code>est_hours = E_gen × D × t_d</code>，<code>t_d</code> 取 MOD-03 实测 p50。</li>
   </ul>
 
@@ -501,8 +502,8 @@ def run(self, seeds=None, *, resume=False):
     <tr><td><code>loop.eval_concurrency</code></td><td>int</td><td>2</td><td>评估局的局级并发数（共享推理队列）</td></tr>
     <tr><td><code>loop.max_candidates_per_generation</code></td><td>int</td><td>3</td><td>每代候选数上限，硬上限 3（Spec §8.6）</td></tr>
     <tr><td><code>loop.eval_seeds_per_candidate</code></td><td>int</td><td>40</td><td>单候选评估局数；<code>× candidates</code> 不得超下一条</td></tr>
-    <tr><td><code>loop.max_episodes_per_generation</code></td><td>int</td><td>170</td><td>每代总局数上限，与 <code>E_gen</code> 比较（FR-06-13，全系统唯一成本上限）</td></tr>
-    <tr><td><code>loop.n_candidates</code> / <code>loop.smoke_n</code> / <code>loop.heldout_n</code></td><td>int</td><td>2 / 5 / 40</td><td>参与 <code>E_gen</code> 计算；与 MOD-07 <code>evolve.n_candidates</code>、MOD-08 <code>n_heldout</code> 取同一值（由 MOD-09 配置合并时校验一致）</td></tr>
+    <tr><td><code>loop.max_episodes_per_generation</code></td><td>int</td><td><b>120</b></td><td>每代总局数上限，与 <code>E_gen</code> 比较（FR-06-13，全系统唯一成本上限）；2026-10-06 D-1：170 → 120，与 <code>C=1/S=2/H=40</code> 一起定（<code>E_gen=114</code>）</td></tr>
+    <tr><td><code>loop.n_candidates</code> / <code>loop.smoke_n</code> / <code>loop.heldout_n</code></td><td>int</td><td><b>1 / 2 / 40</b></td><td>参与 <code>E_gen</code> 计算；<code>n_candidates</code> 与 MOD-07 <code>evolve.n_candidates</code>、<code>heldout_n</code> 与 MOD-08 <code>n_heldout</code> 由 <code>load_config()</code> 校验一致；<b><code>smoke_n</code> 与 <code>evolve.smoke_n</code> 无自动校验，改 S 必须两处同步</b>（2026-10-06 D-1）</td></tr>
     <tr><td><code>loop.io_retry</code> / <code>loop.io_backoff_ms</code></td><td>int / int</td><td>3 / 200</td><td>磁盘写失败重试次数与指数退避基数（200/400/800 ms）</td></tr>
     <tr><td><code>loop.llm_timeout_s</code></td><td>float</td><td>90.0</td><td>单次决策生成超时（透传 MOD-03）</td></tr>
     <tr><td><code>loop.fallback_on_llm_failure</code></td><td>bool</td><td>true</td><td>模型连续失败降级 heuristic，该局标 <code>not_for_eval</code></td></tr>
@@ -550,7 +551,7 @@ def run(self, seeds=None, *, resume=False):
     <tr><td><b>T-06-7</b> 续跑不重复计分</td><td><code>k=3</code> 跑到第 4 局后中断（状态已落盘）</td><td><code>--resume</code></td><td><code>completed_train_seeds</code> 无重复、scoreboard 的 <code>episode_key</code> 全局唯一、总局数等于期望值</td></tr>
     <tr><td><b>T-06-8</b> 中断粒度</td><td>第 7 局第 3 步后抛 <code>KeyboardInterrupt</code></td><td>恢复</td><td>前 2 步已在 JSONL、该 seed 从 <code>pending_queue</code> 头部重跑且不产生重复 <code>episode_key</code></td></tr>
     <tr><td><b>T-06-9</b> HITL 挂起/恢复</td><td><code>hitl=true</code>、假 <code>evolve_fn</code> 返回 <code>pending_human=True</code></td><td><code>run()</code>；写好新 harness 后 <code>--resume</code></td><td><code>phase=="hitl_wait"</code>、<code>hitl_pending.cycle</code> 正确、退出码 0；恢复后 <code>hitl_pending is None</code> 且 <code>harness_version</code> 为新值</td></tr>
-    <tr><td><b>T-06-10</b> 成本闸门</td><td><code>K=30, H=40, S=5, C=3</code>（E_gen=210）与 <code>max_episodes_per_generation=170</code></td><td>到达周期边界；把 C 改为 2（E_gen=165）</td><td>不调 MOD-07，发 <code>loop.budget_exhausted{e_gen:210,cap:170}</code>，退出码 1；改后正常触发</td></tr>
+    <tr><td><b>T-06-10</b> 成本闸门</td><td><code>K=30, H=40, S=5, C=3</code>（E_gen=210）与 <code>max_episodes_per_generation=170</code></td><td>到达周期边界；把 C 改为 2（E_gen=165）</td><td>不调 MOD-07，发 <code>loop.budget_exhausted{e_gen:210,cap:170}</code>，退出码 1；改后正常触发。另加 D-1 默认档用例：<code>K=30, H=40, S=2, C=1</code>（E_gen=114）与 <code>cap=120</code> ⇒ <b>不</b>触发（114 ≤ 120）；把 H 改为 50（E_gen=134）⇒ 发 <code>loop.budget_exhausted{e_gen:134,cap:120}</code></td></tr>
     <tr><td><b>T-06-11</b> 训练并发守卫</td><td><code>train_concurrency=2</code></td><td>启动</td><td>立即以 <code>E_IO_CONCURRENCY</code> 拒绝（退出码 2）</td></tr>
     <tr><td><b>T-06-12</b> split 越权</td><td>seed 标 <code>heldout</code> 却被当训练局传入</td><td>run</td><td>抛 <code>E_EVAL_SPLIT_VIOLATION</code>（INV-5 回归）</td></tr>
     <tr><td><b>T-06-13</b> Schema round-trip（G5）</td><td>—</td><td><code>RunState → JSON → RunState</code></td><td>完全相等，且 <code>state.json</code> 通过 §6 JSON Schema 校验</td></tr>

@@ -96,12 +96,13 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
   <h2>演化引擎 —— 让 agent 改写自己的 harness，由环境 ground-truth 决定去留</h2>
   <p>RSI 闭环中最危险的一段：MOD-06 每 K 局（默认 30）触发一次演化周期，MOD-07 负责生成候选改动、在 train 上冒烟、在 heldout 上正式评估，再用一张六项判定表决定 accept 还是 reject。设计重心不是"生成更聪明的改动"，而是在结构上掐死自我确认环路。</p>
   <div class="badges">
-    <span class="badge">版本 v0.5</span>
+    <span class="badge">版本 v0.12</span>
     <span class="badge">状态：待评审</span>
     <span class="badge">里程碑：M2 → M3</span>
     <span class="badge">作者：DiceRatchet 技术文档</span>
     <span class="badge">日期：2026-10-09</span>
   </div>
+  <p><b>⚠️ 本页为手工镜像，不随 PRD 自动生成；本次按 2026-10-14 现状增量修订。</b></p>
 </header>
 
 <div class="grid">
@@ -186,9 +187,9 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
     <li><span class="tag">FR-07-3</span><b>防自我确认（生成侧）</b>：证据束条目 <code>split</code> 必须全为 <code>train</code>；<code>assert_no_holdout_leak()</code> ① 拒绝任何 <code>split != "train"</code> 条目，② 对全部文本字段做 seed 字面量扫描——命中 heldout 注册表任一 seed 的整值 token（正则 <code>(?&lt;!\d){seed}(?!\d)</code>）即抛 <code>E_EVAL_INV5_LEAK</code>，③ 拒绝出现 <code>heldout</code>/<code>test</code> 标签或 <code>seeds.yaml</code> 片段。<code>render_proposer_prompt()</code> 模板化产出，<b>不允许</b>插入证据束之外的上下文（INV-3）。</li>
     <li><span class="tag">FR-07-4</span><b>修改面硬约束（单候选）</b>：改动行数 ≤ <code>evolve.max_diff_lines</code>（40）且字符数 ≤ <code>evolve.max_diff_chars</code>（4000）；文件数 ≤ 2 且必须 ∈ 白名单 <code>harness/prompts/decision.md</code>、<code>harness/prompts/reflection.md</code>、<code>harness/tools/*.py</code>、<code>harness/config.json</code>；<b>禁止</b>改 <code>rank_actions</code> 签名与 <code>@harness_tool</code> 语义；<b>禁止</b>新增第三方依赖；<b>禁止</b>网络/文件写/subprocess/env 内部访问（INV-4）；<code>config_patch</code> 只能改 <code>evolve.evolvable_keys</code> 声明的键。</li>
     <li><span class="tag">FR-07-5</span><b>去重与排序</b>：按归一化 <code>diff</code> 的 sha256 去重；按 <code>expected_effect.priority</code> 降序、同优先级 <code>candidate_id</code> 升序（保证确定性）。</li>
-    <li><span class="tag">FR-07-6</span><b>训练冒烟</b>：冒烟 seed 取<b>本代训练块的末 5 个</b>（<code>evals.seeds.take("train", generation=g)[-5:]</code>），不再固定用 1000–1004。parent 在同一组 seed 上的冒烟结果 <code>parent_smoke</code> 与 parent heldout 一起计算。快速淘汰条件（任一命中即写 <code>E_EVOLVE_SMOKE_FAILED</code>）：冒烟胜率 &lt; <code>parent_smoke</code> 胜率 − 0.2；非法率 &gt; 0.30；fallback 率 &gt; 0.30；harness 运行期异常。</li>
-    <li><span class="tag">FR-07-7</span><b>正式评估</b>：冒烟通过者在 <code>evolve.heldout_seeds</code>（默认 <code>heldout:2000-2039</code>，40 局）评估，<b>预算与当前版本完全相同</b>（同 seed 集合、同 <code>episode_config</code>、同采样参数，仅 <code>prompt_tokens</code> 允许差异并记录）；指标全部委托 MOD-08 <code>evaluate_arm()</code>；<b>parent 与候选必须使用同一个冻结的记忆快照</b> <code>memory_version</code>，所以 parent 每代都要重新评估。MOD-07 不做任何统计运算。</li>
-    <li><span class="tag">FR-07-8</span><b>判定表</b>：按 §8.2 顺序短路求值，六项全 True → <code>accept</code>，否则 <code>reject</code> 且 <code>reason</code> 含首个失败条件 id（如 <code>C2:heldout_win_rate 0.28&lt;0.32</code>）。</li>
+    <li><span class="tag">FR-07-6</span><b>训练冒烟</b>：冒烟 seed 取<b>本代训练块的末 2 个</b>（<code>smoke_n=2</code>，<code>evals.seeds.take("train", generation=g)[-2:]</code>），不再固定用 1000–1004。parent 在同一组 seed 上的冒烟结果 <code>parent_smoke</code> 与 parent heldout 一起计算。快速淘汰条件（任一命中即写 <code>E_EVOLVE_SMOKE_FAILED</code>）：非法率 &gt; 0.30；fallback 率 &gt; 0.30；harness 运行期异常。<b>冒烟胜率轴已于 2026-10-14 删除</b>（<code>_SMOKE_WIN_RATE_MARGIN=0.2</code> 不再存在）：<code>smoke_n=2</code> 的胜率分辨率是 0.5，原 margin 0.2 结构上不可达；冒烟定位是 <b>triage 而非统计证据</b>，局级胜率的诊断力归 C1（40 局）。</li>
+    <li><span class="tag">FR-07-7</span><b>正式评估</b>：冒烟通过者在 <code>evolve.heldout_basket</code>（默认 <code>H1</code> = 731000–731039，40 局；<code>evolve.heldout_seeds</code> 键已不存在）评估，<b>预算与当前版本完全相同</b>（同 seed 集合、同 <code>episode_config</code>、同采样参数，仅 <code>prompt_tokens</code> 允许差异并记录）；指标全部委托 MOD-08 <code>evaluate_arm()</code>；<b>parent 与候选必须使用同一个冻结的记忆快照</b> <code>memory_version</code>。parent 每代都要有<b>测量</b>，但未必每代都重测：D-M3-7 起按 <code>play_hash</code> 继承同 play 面的更早测量（命中即 <b>0 局</b>，找不到才实测）⇒ 实际每 cycle <b>74 局</b>（公式 <code>E_gen=114</code>）。MOD-07 不做任何统计运算。</li>
+    <li><span class="tag">FR-07-8</span><b>判定表</b>：按 §8.2 顺序短路求值，六项全 True → <code>accept</code>，否则 <code>reject</code> 且 <code>reason</code> 含首个失败条件 id（如 <code>C1:win_rate 0.20&lt;0.25</code>、<code>C2:no_play_change</code>）。</li>
     <li><span class="tag">FR-07-9</span><b>版本化</b>：<code>accept()</code> 生成 <code>harness/versions/v{N}/</code>（全量拷贝 + <code>version.json</code> + <code>diff.patch</code>），更新 <code>harness/version.json</code> 指针，经 MOD-09 <code>commit_harness</code> 提交到当前分支并打 tag <code>harness-v{N}</code>（不建同名分支，Spec B-22），message = <code>harness(v{N}): gen-{G} {kind} {short_rationale}</code>；<code>N</code> = 现有最大 +1，<b>不可复用、不可重写历史</b>。</li>
     <li><span class="tag">FR-07-10</span><b>回滚</b>：<code>rollback(to_version)</code> 用 <code>versions/v{to_version}/</code> 覆盖 <code>harness/</code>，写 <code>version.json</code>、生成 <code>revert.patch</code>、提交 <code>revert(harness): back to v{N}</code>，并写一条 <code>decision="rollback"</code> 的代际报告。</li>
     <li><span class="tag">FR-07-11</span><b>HITL 门</b>：<code>evolve.hitl=true</code> 时 <code>gate.await_human()</code> 把决策置 <code>pending</code>、写 <code>gen-{N}/gate.json</code>（<code>generation, harness_version, parent_version, diff_path, report_path, status, expires_at</code>），loop <b>优雅退出（exit 0，可续跑）</b>；<code>evolve approve|rollback --generation N</code> 读取 gate 文件后执行 accept/rollback，写 <code>decided_by="human"</code> 与可选 <code>reason</code>；超时（默认 24h）→ 保守回滚 <code>parent_version</code>，<code>reason="hitl_timeout"</code>（对齐 Spec §8.5）。</li>
@@ -206,7 +207,7 @@ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:10px 0 30px
     <li><span class="tag nfr">NFR-07-2</span><b>安全（INV-4/INV-5）</b>：候选代码永不 <code>exec</code> 于主进程；受限加载由 MOD-02 提供；proposer 上下文白名单由 FR-07-3 代码级强制；heldout seed 值出现在 <code>harness/</code>、<code>runs/*/reflections/</code> 或 memory 库中即为 P0。</li>
     <li><span class="tag nfr">NFR-07-3</span><b>可复现</b>：每次决策可由 <code>report.json</code> + <code>candidates/*.json</code> + <code>diff.patch</code> + <code>version.json</code> 离线重建；<code>config_hash</code> 覆盖 evolve 配置（Spec §5）。</li>
     <li><span class="tag nfr">NFR-07-4</span><b>可观测</b>：只用 MOD-09 结构化事件（<code>evolve.propose|validate|scan|smoke|evaluate|decision|version|gate|cost</code>），一次调用 = 一行 JSONL，不自建日志格式。</li>
-    <li><span class="tag nfr">NFR-07-5</span><b>成本</b>：候选共享同一 seed 集合只是<b>配对设计</b>，并不减少局数：单代评估局数 = <code>H + S + C·(S + H)</code>。现行默认 <b>C=1、S=2、H=40</b>（2026-10-06 D-1）时为 84 局评估；再加训练 K=30，每代 <b>114 局</b> <code>E_gen</code>（≈37 h/代），与 Spec §8.6 一致。历史口径 C=2、S=5 时的 135 局 / 165 局已失效。本模块<b>不再单独设成本上限</b>，超出 <code>loop.max_episodes_per_generation</code> 时由 MOD-06 拒绝启动。</li>
+    <li><span class="tag nfr">NFR-07-5</span><b>成本</b>：候选共享同一 seed 集合只是<b>配对设计</b>，并不减少局数：单代评估局数 = <code>H + S + C·(S + H)</code>。现行默认 <b>C=1、S=2、H=40</b>（2026-10-06 D-1）时为 84 局评估；再加训练 K=30，公式口径每代 <b>114 局</b> <code>E_gen</code>（<code>= 30 + 2×42</code>，是<b>保守上限</b>，也是 <code>loop.max_episodes_per_generation=120</code> 的比较对象）。D-M3-7 起 parent heldout 按 play 面继承（0 局）⇒ <b>实际每 cycle 74 局</b>（K 30 + parent 冒烟 2 + 候选冒烟 2 + 候选 heldout 40；实测账户口径 ≈¥38/代，官方高峰价口径 ≈¥62–65/代）。历史口径 C=2、S=5 时的 135 局 / 165 局已失效。本模块<b>不再单独设成本上限</b>，超出 <code>loop.max_episodes_per_generation</code> 时由 MOD-06 拒绝启动。</li>
     <li><span class="tag nfr">NFR-07-6</span><b>幂等可续跑</b>：<code>accept()</code>/<code>rollback()</code> 以 <code>(run_id, generation)</code> 为幂等键，重复调用返回首次结果，不产生第二个版本号。</li>
     <li><span class="tag nfr">NFR-07-7</span><b>失败保守</b>：裁判链路任何异常（MOD-08 抛错/报告缺字段/超时）→ 一律 reject 并保留 <code>parent_version</code>，记 <code>E_EVOLVE_JUDGE_FAILED</code>；演化失败不得中断 <code>play</code>。</li>
   </ul>
@@ -298,9 +299,9 @@ runs/&lt;run_id&gt;/generations/gen-{N}/    # report.json  gate.json  decision.j
     <div class="step">④ propose 生成候选<br><small>FR-07-2/3</small></div><span class="arrow">→</span>
     <div class="step">⑤ validate 校验改动面<br><small>FR-07-4</small></div><span class="arrow">→</span>
     <div class="step">⑥ guard.gate 静态扫描<br><small>FR-07-13</small></div><span class="arrow">→</span>
-    <div class="step">⑦ train 冒烟评估<br><small>末 5 个训练 seed</small></div><span class="arrow">→</span>
+    <div class="step">⑦ train 冒烟评估<br><small>末 2 个训练 seed</small></div><span class="arrow">→</span>
     <div class="step">⑧ heldout 正式评估<br><small>40 局，同预算</small></div><span class="arrow">→</span>
-    <div class="step">⑨ compare_paired<br><small>配对显著性检验</small></div><span class="arrow">→</span>
+    <div class="step">⑨ compare_paired<br><small>配对指标报告（不阻断）</small></div><span class="arrow">→</span>
     <div class="step">⑩ judge 判定表<br><small>C0∧…∧C5</small></div><span class="arrow">→</span>
     <div class="step">⑪ HITL 挂起<br><small>gate.await_human</small></div><span class="arrow">→</span>
     <div class="step">⑫ accept 落版本 / rollback<br><small>git commit + tag</small></div>
@@ -313,7 +314,7 @@ runs/&lt;run_id&gt;/generations/gen-{N}/    # report.json  gate.json  decision.j
     prop = propose(bundle, cfg=cfg, rng_seed=derive_seed(run_id, gen, "propose"))
     if not prop.candidates:
         return finish(gen, parent_ho=None, reports=[], winner=None, error=prop.error_code)
-    smoke_seeds = evals.seeds.take("train", generation=gen)[-5:]
+    smoke_seeds = evals.seeds.take("train", generation=gen)[-2:]
     parent_ho = evals.evaluate_arm(parent.dir, split="heldout", basket="H1", memory_version=mem_v, arm="parent", run_id=run_id)
     parent_smoke = evals.evaluate_arm(parent.dir, split="train", basket=smoke_seeds, memory_version=mem_v, arm="parent", run_id=run_id)
     reports, winner = [], None
@@ -334,7 +335,7 @@ runs/&lt;run_id&gt;/generations/gen-{N}/    # report.json  gate.json  decision.j
         if cr.verdict.decision == "accept" and (winner is None or better(cr, winner)): winner = cr
     return finish(gen, parent_ho, reports, winner)
 
-def better(a: CandidateReport, b: CandidateReport) -> bool:   # §8.2：C2 delta 大者优先，并列时 candidate_id 小者优先
+def better(a: CandidateReport, b: CandidateReport) -> bool:   # §8.2（F62 改轴）：连续轴 delta 大者优先，其次 win_rate delta，并列时 candidate_id 小者优先
     return (a.paired.delta, -ord_id(a)) > (b.paired.delta, -ord_id(b))
 
 def finish(gen, parent_ho, reports, winner, error=None) -> dict:
@@ -350,13 +351,13 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
   <table>
     <tr><th>#</th><th>条件</th><th>表达式</th><th>不满足时 reason / 错误码</th></tr>
     <tr><td>C0</td><td>前置完备</td><td><code>report.heldout.n &gt;= cfg.evolve.min_heldout_n</code> 且关键字段非 <code>null</code></td><td><code>C0:incomplete_report</code> / <span class="tag err">E_EVOLVE_JUDGE_FAILED</span></td></tr>
-    <tr><td>C1</td><td>主指标不降</td><td><code>report.win_rate &gt;= parent.win_rate - cfg.evolve.win_rate_tol</code>（<code>tol=0.0</code>，不允许下降）</td><td><code>C1:win_rate {v}&lt;{p}</code> / <span class="tag err">E_EVOLVE_NO_GAIN</span></td></tr>
-    <tr><td>C2</td><td>至少一指标显著提升</td><td><code>paired.significant == True and paired.direction == "up"</code>，<code>metric ∈ {win_rate, mean_stages_cleared, mean_hearts_left}</code>，方法与口径全部由 MOD-08 <code>compare_paired</code> 决定（胜率用 McNemar，连续量用配对 bootstrap B=10000）</td><td><code>C2:no_significant_gain</code> / <span class="tag err">E_EVOLVE_NO_GAIN</span></td></tr>
+    <tr><td>C1</td><td>主指标不降</td><td><code>report.win_rate &gt;= parent.win_rate - cfg.evolve.win_rate_tol</code>（<b><code>tol=0.05</code></b>；2026-10-06 D-3 由 0.0 上调——n=40 的 win_rate 粒度是 1/40=0.025，tol&lt;0.025 等于「少赢 1 局即拒」，会拒掉约一半真正等价的候选）</td><td><code>C1:win_rate {v}&lt;{p}</code> / <span class="tag err">E_EVOLVE_NO_GAIN</span></td></tr>
+    <tr><td>C2</td><td><b>play 面确实变了</b>（2026-10-14 F62 改判）</td><td><code>play_hash(candidate.staging) != play_hash(parent)</code>，指纹 = <code>versioning.play_hash</code>（<code>prompts/decision.md</code> + <code>config.json</code> + <code>tools/*.py</code> 的 sha256 复合，<b>不含</b> <code>reflection.md</code>/<code>dead_ends.md</code>）；<b>任一为空即 fail-closed 拒绝</b>。改判前的口径是「至少一指标显著提升」（<code>paired.significant and direction=="up"</code>）：M3 正式实验三代<b>全部</b>止步于此（<code>C2:no_significant_gain</code>，p=1.000/0.549/0.754），而 n=40 上它的等效门槛是「净 +15 pp / 0.45 关」、实测效应只有 +2.5–7.5 pp ⇒ 门没有功效。统计量降级为<b>报告项</b>：<code>compare_all_metrics</code> 每次候选评估全跑（<b>0 局新成本</b>），落 <code>paired["by_metric"]</code> 并写进 C2 的 <code>condition_trace</code>（两个指纹 + 显著/方向/delta/p）。已知代价：只改学习侧（<code>reflection.md</code>/<code>dead_ends.md</code>）的提案会被 C2 合法拒绝。</td><td><code>C2:no_play_change</code> / <code>C2:play_hash_unavailable</code> / <span class="tag err">E_EVOLVE_NO_GAIN</span></td></tr>
     <tr><td>C3</td><td>增益真实性</td><td><code>train.win_rate - heldout.win_rate &lt;= cfg.evolve.gap_threshold</code>（0.15，对齐 Spec §4.5 <code>gap_threshold</code>）</td><td><code>C3:gap {gap}&gt;{thr}</code> / <span class="tag err">E_EVOLVE_OVERFIT_SUSPECT</span></td></tr>
     <tr><td>C4</td><td>无坍缩</td><td><code>diversity.collapse_flag == False and diversity.entropy_slope &gt;= cfg.evolve.min_entropy_slope</code>（−0.01；Spec 示例 −0.004 属通过区间）</td><td><code>C4:collapse</code> / <span class="tag err">E_EVOLVE_COLLAPSE</span></td></tr>
-    <tr><td>C5</td><td>合法性与健壮性</td><td><code>illegal_rate ≤ 0.35</code> 且 <code>fallback_rate ≤ 0.25</code>（<b>绝对门</b>，2026-10-07 按 Spec §3.1 实测标定，原 0.05/0.10 会 reject 每个候选）且 <code>truncation_rate ≤ parent.truncation_rate + truncation_tol</code>（<b>相对门</b>，<code>tol=0.05</code>；<b>2026-10-09 Spec v2.0 B-44 用户裁决 ②+③</b>——原绝对门 0.15 按本地 8B 标定，换 DeepSeek 臂后 <code>hard×6</code> 实测 0.30 &gt; 0.15 会全拒候选、把闭环静默锁死，缺陷 F28，见 MOD-07 §8.2.2）</td><td><code>C5:illegal/fallback/truncation</code> / <span class="tag err">E_EVOLVE_ILLEGAL_RATE</span></td></tr>
+    <tr><td>C5</td><td>合法性与健壮性</td><td><b>三轴同构的「相对门 + 绝对 backstop」</b>（2026-10-11 D-M3-2 裁决 E，Spec v2.8 B-64）：<code>illegal_rate ≤ min(parent.illegal_rate + 0.05, 0.35)</code> 且 <code>fallback_rate ≤ min(parent.fallback_rate + 0.05, 0.25)</code> 且 <code>truncation_rate ≤ min(parent.truncation_rate + 0.05, 0.60)</code>（<code>truncation_backstop=0.60</code> 堵住「parent 已很烂 ⇒ 跟着烂」的已知放宽）。历史：2026-10-07 按 Spec §3.1 实测先把 illegal/fallback 松到 0.35/0.25；2026-10-09 Spec v2.0 B-44 把 truncation 改相对门（原绝对门 0.15 会全拒候选，缺陷 F28）；2026-10-11 前两轴也改相对门并给 truncation 补 backstop，见 MOD-07 §8.2.1/§8.2.2</td><td><code>C5:illegal/fallback/truncation</code> / <span class="tag err">E_EVOLVE_ILLEGAL_RATE</span></td></tr>
   </table>
-  <p><code>accept ⟺ C0∧C1∧C2∧C3∧C4∧C5</code>。多候选全通过时取 <code>(C2 delta 最大, candidate_id 最小)</code> 为 winner，其余记 <code>reject/reason="superseded"</code>（不计失败、无错误码）。</p>
+  <p><code>accept ⟺ C0∧C1∧C2∧C3∧C4∧C5</code>。多候选全通过时取 <b>连续轴优先</b>（<code>mean_stages_cleared</code> delta → <code>win_rate</code> delta → <code>candidate_id</code> 最小）为 winner（2026-10-14 F62 改轴：C2 不再提供「显著性」这个排序量），其余记 <code>reject/reason="superseded"</code>（不计失败、无错误码）。</p>
   <h4>8.3 HITL 时序</h4>
   <div class="flow">
     <div class="step">loop(MOD-06) 有 winner<br><small>hitl 开关判断</small></div><span class="arrow">→</span>
@@ -386,11 +387,12 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
     <tr><td><code>evolve.n_traj</code> / <code>evolve.memory_top_k</code></td><td>int</td><td>20 / 12</td><td>证据束最近 train 轨迹摘要条数 / MOD-05 检索条数</td></tr>
     <tr><td><code>evolve.max_diff_lines</code> / <code>evolve.max_diff_chars</code></td><td>int</td><td>40 / 4000</td><td>单候选改动面硬上限</td></tr>
     <tr><td><code>evolve.smoke_n</code></td><td>int</td><td><b>2</b></td><td>冒烟局数，取本代训练块末尾（FR-07-6）。2026-10-06 D-1：5 → 2；必须与 <code>loop.smoke_n</code> 同步改（无自动校验）</td></tr>
-    <tr><td><code>evolve.heldout_seeds</code></td><td>str</td><td>由 MOD-09 注册表注入</td><td>heldout 评估组（40 局），<b>不得写入任何 prompt</b></td></tr>
-    <tr><td><code>evolve.min_heldout_n</code> / <code>evolve.win_rate_tol</code></td><td>int / float</td><td>20 / 0.0</td><td>C0 门槛 / C1 允许下降幅度</td></tr>
-    <tr><td><code>evolve.alpha</code></td><td>float</td><td>0.05</td><td>C2 显著性水平（方法归 MOD-08）</td></tr>
+    <tr><td><code>evolve.heldout_basket</code></td><td>str</td><td><b>H1</b></td><td>held-out 篮子（40 局，731000–731039）；<b>同时决定</b> gen-000 基线与候选臂的篮子，<b>不得写入任何 prompt</b>；<code>evolve.heldout_seeds</code> 键已不存在</td></tr>
+    <tr><td><code>evolve.min_heldout_n</code> / <code>evolve.win_rate_tol</code></td><td>int / float</td><td>20 / <b>0.05</b></td><td>C0 门槛 / C1 允许下降幅度（2026-10-06 D-3：0.0 → 0.05）</td></tr>
+    <tr><td><code>evolve.alpha</code></td><td>float</td><td>0.05</td><td><b>报告项的显著性水平</b>（方法归 MOD-08）；2026-10-14 F62 起<b>不再参与裁决</b>，只用于 <code>paired</code>/<code>paired["by_metric"]</code> 的「显著/不显著」标注</td></tr>
     <tr><td><code>evolve.gap_threshold</code> / <code>evolve.min_entropy_slope</code></td><td>float</td><td>0.15 / −0.01</td><td>C3 <code>win_rate_gap</code> 阈值 / C4 熵斜率下限</td></tr>
-    <tr><td><code>evolve.max_illegal_rate</code> / <code>evolve.max_fallback_rate</code></td><td>float</td><td><b>0.35 / 0.25</b></td><td>C5 的<b>绝对门</b>（2026-10-07 实测标定，先松开）</td></tr>
+    <tr><td><code>evolve.max_illegal_rate</code> / <code>evolve.max_fallback_rate</code></td><td>float</td><td><b>0.35 / 0.25</b></td><td>C5 的<b>绝对 backstop</b>（2026-10-07 实测标定；2026-10-11 起语义由「主门」降为 backstop）</td></tr>
+    <tr><td><code>evolve.illegal_tol</code> / <code>evolve.fallback_tol</code> / <code>evolve.truncation_tol</code> / <code>evolve.truncation_backstop</code></td><td>float</td><td><b>0.05 / 0.05 / 0.05 / 0.60</b></td><td>C5 的<b>相对门</b>容差与 truncation backstop（2026-10-11 D-M3-2 裁决 E，Spec v2.8 B-64）</td></tr>
     <tr><td><code>evolve.truncation_tol</code></td><td>float</td><td><b>0.05</b></td><td>C5 的 <b>truncation 相对门</b>容差：<code>candidate.truncation_rate ≤ parent.truncation_rate + tol</code>（0.05 = n=40 的 2 局；2026-10-09 Spec v2.0 B-44 裁决 ②+③，原绝对门 <code>max_truncation_rate</code> 已删除 —— 缺陷 F28）</td></tr>
     <tr><td><code>evolve.hitl</code> / <code>evolve.gate_timeout_hours</code></td><td>bool / int</td><td>true / 24</td><td>人在环门开关 / 超时 → 保守回滚</td></tr>
     <tr><td><code>evolve.propose_max_retries</code></td><td>int</td><td>2</td><td>JSON-schema 失败重试（在 MOD-03 <code>generate_json</code> 之上再包一层）；成本上限改由 MOD-06 <code>loop.max_episodes_per_generation</code> 统一控制</td></tr>
@@ -409,7 +411,7 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
     <tr><td><span class="tag err">E_EVOLVE_PATCH_INVALID</span></td><td><code>validate_candidate</code> 失败（行数/文件/签名/依赖/白名单）</td><td>该候选 reject，继续下一候选</td><td>否</td></tr>
     <tr><td><span class="tag err">E_EVOLVE_SCAN_FAILED</span></td><td>MOD-02 <code>guard.gate</code> 返回 <code>fail</code></td><td>该候选 reject，<code>violations</code> 落 <code>candidates/{id}.json</code></td><td>否</td></tr>
     <tr><td><span class="tag err">E_EVOLVE_LOAD_FAILED</span></td><td><code>guard.load_harness_tools</code> 抛错（worker 启动或加载失败）</td><td>已 accept 则立即回滚 <code>parent_version</code>，否则 reject</td><td>是（已发生）</td></tr>
-    <tr><td><span class="tag err">E_EVOLVE_SMOKE_FAILED</span></td><td>冒烟快速淘汰命中 / 冒烟异常</td><td>reject，不进 heldout</td><td>否（仅 5 局 train）</td></tr>
+    <tr><td><span class="tag err">E_EVOLVE_SMOKE_FAILED</span></td><td>冒烟快速淘汰命中 / 冒烟异常</td><td>reject，不进 heldout</td><td>否（仅 2 局 train）</td></tr>
     <tr><td><span class="tag err">E_EVOLVE_EVAL_FAILED</span></td><td>MOD-08 超时/异常</td><td>reject（保守），保留当前 harness</td><td>是</td></tr>
     <tr><td><span class="tag err">E_EVOLVE_NO_GAIN</span> <span class="tag err">E_EVOLVE_ILLEGAL_RATE</span></td><td>C1、C2 或 C5 失败</td><td>reject（C5 记 <code>illegal_rate</code>/<code>fallback_rate</code>/<code>truncation_rate</code> 明细）</td><td>是</td></tr>
     <tr><td><span class="tag err">E_EVOLVE_OVERFIT_SUSPECT</span> <span class="tag err">E_EVOLVE_COLLAPSE</span></td><td>C3 失败 / C4 失败</td><td>reject + <code>gain_realism.verdict="overfit_suspect"</code> / reject + <code>diversity</code> 明细与告警</td><td>是</td></tr>
@@ -427,14 +429,14 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
   <ol>
     <li>给定 3 个候选 diff，当 <code>validate_candidate</code>，则超过 <code>max_diff_lines=40</code> 者 <code>status="fail"</code> 且 <code>reason</code> 含 <code>diff_lines</code>；给定 <code>tool_patch</code> 把签名改为 <code>def rank_actions(obs, candidates, memory, extra)</code>，则拒绝 <code>E_EVOLVE_PATCH_INVALID</code>（FR-07-4）。</li>
     <li>给定含 <code>import numpy</code> / <code>import requests</code> / <code>urllib.request</code> 的 <code>tool_patch</code>，或 <code>config_patch</code> 修改 <code>evolvable_keys</code> 外的键（如 <code>sampling.seed</code>），当校验，则拒绝。</li>
-    <li>给定证据束混入一条 <code>split="heldout"</code> 轨迹摘要，当 <code>build_evidence_bundle</code>，则抛 <code>E_EVAL_INV5_LEAK</code>；给定反思文本出现 heldout seed <code>2013</code> 字面量，当 <code>assert_no_holdout_leak</code>，则抛 <code>E_EVAL_INV5_LEAK</code>（出现 <code>20130</code>/<code>x2013y</code> <b>不</b>误报，正则 <code>(?&lt;!\d)2013(?!\d)</code>；v0.1 示例用的 1042 属于 train 区间，已更正）。</li>
+    <li>给定证据束混入一条 <code>split="heldout"</code> 轨迹摘要，当 <code>build_evidence_bundle</code>，则抛 <code>E_EVAL_INV5_LEAK</code>；给定反思文本出现 heldout seed <code>731013</code> 字面量（现行 H1 篮子 731000–731039 的第 14 个 seed，代码取 <code>H1.start+13</code>），当 <code>assert_no_holdout_leak</code>，则抛 <code>E_EVAL_INV5_LEAK</code>（出现 <code>7310130</code>/<code>x731013y</code> <b>不</b>误报，正则 <code>(?&lt;!\d)2013(?!\d)</code>；v0.1 示例用的 1042 属于 train 区间，已更正）。</li>
     <li>给定 <code>render_proposer_prompt</code> 产出，当扫描，则占位符 ⊆ <code>{observation, memory, harness, task}</code> 且不含 <code>heldout</code>/<code>test</code> 子串（INV-3 回归）；给定同一 <code>(run_id, gen, seed)</code> 与固定 stub LLM，当两次 <code>propose</code>，则 <code>candidate_id</code> 列表逐字节相同（NFR-07-1）。</li>
-    <li>判定表表驱动 12 例：C1 降 0.01 → reject(<code>E_EVOLVE_NO_GAIN</code>)；C2 <code>significant=False</code> → reject；C3 <code>gap=0.19&gt;0.15</code> → reject(<code>overfit_suspect</code>)；C4 <code>collapse_flag=True</code> → reject；C5 <code>illegal_rate=0.11</code> → reject；六项全真 → accept；并覆盖短路顺序。</li>
+    <li>判定表表驱动 12 例：C1 降 0.01 → <b>通过</b>（<code>tol=0.05</code>）、降 0.06 → reject(<code>E_EVOLVE_NO_GAIN</code>)；<b>C2 判 play 面</b>（指纹相同/缺失 → reject；统计不显著但指纹变了 → 通过）；C3 <code>gap=0.19&gt;0.15</code> → reject(<code>overfit_suspect</code>)；C4 <code>collapse_flag=True</code> → reject；C5 <code>illegal_rate=0.11</code> → reject；六项全真 → accept；并覆盖短路顺序。</li>
     <li>给定已存在 <code>(run_id, gen)</code>，当重复 <code>accept</code>，则返回首次结果且 <code>harness/versions/</code> 无新增目录（幂等）；给定 current=5，当 <code>rollback(2)</code>，则 <code>harness/</code> 的 sha256 等于 <code>versions/v2/</code>，<code>version.json.parent==5</code>，产生 <code>revert.patch</code>；给定 <code>evolve.hitl=false</code>，当 accept，则不写 <code>gate.json</code> 且 <code>decided_by="auto"</code>；给定 <code>hitl=true</code> 且 gate 未响应至超时，则 <code>decision="rollback"</code>、<code>reason="hitl_timeout"</code>。</li>
   </ol>
   <h4>集成（<code>tests/integration/evolve/</code>）</h4>
   <ol>
-    <li>给定 stub LLM + 缩配（<code>smoke_seeds=train:1000-1001</code>、<code>heldout_seeds=heldout:2000-2005</code>），当跑 <code>run_generation</code>，则产出 <code>report.json</code> 且通过 §6.3 Schema（G5 round-trip）；</li>
+    <li>给定 stub LLM + 缩配（<code>smoke_seeds=train:1000-1001</code>、<code>evolve.heldout_basket=H3</code>（旧写法 <code>heldout_seeds=heldout:2000-2005</code> 的键与协议均已失效）），当跑 <code>run_generation</code>，则产出 <code>report.json</code> 且通过 §6.3 Schema（G5 round-trip）；</li>
     <li>给定 3 代 run（<code>--hitl</code>）且每代 <code>evolve approve</code>，则 <code>harness/version.json.version == 3</code> 且 <code>harness/v1..v3</code> 三个 commit 存在（G6）；</li>
     <li>给定 MOD-08 抛 <code>E_EVAL_TIMEOUT</code>，当 <code>evaluate_candidate</code>，则候选 reject 且当前 harness 不变（NFR-07-7）；</li>
     <li>给定 run 全目录，当 <code>audit leak --run-id &lt;run_id&gt;</code>，则在 MOD-07 产出物上 0 告警（G4）。</li>
@@ -482,14 +484,14 @@ def finish(gen, parent_ho, reports, winner, error=None) -> dict:
   <table>
     <tr><th>依赖</th><th>内容</th><th>缺失影响</th></tr>
     <tr><td>MOD-06 loop</td><td>触发周期、传入 <code>run_id</code>/<code>gen</code>、断点续跑</td><td>无法端到端跑，单测用 stub 驱动</td></tr>
-    <tr><td>MOD-08 evals</td><td><code>evaluate_arm</code>、<code>compare_paired</code>、<code>evaluate_generation</code>（含 <code>collapse_flag</code>、<code>entropy_slope</code>）</td><td>C2/C3/C4 不可判 → 全部保守 reject</td></tr>
+    <tr><td>MOD-08 evals</td><td><code>evaluate_arm</code>、<code>compare_paired</code>、<code>compare_all_metrics</code>、<code>evaluate_generation</code>（含 <code>collapse_flag</code>、<code>entropy_slope</code>）</td><td>C3/C4 不可判 → 保守 reject；<b>C2 自 F62（2026-10-14）起是确定性 play 面指纹</b>，不依赖 MOD-08 统计（统计只作 <code>paired["by_metric"]</code> 报告项）</td></tr>
     <tr><td>MOD-09 infra</td><td>config/events/git_ops/run_id/guards</td><td>accept 与报告落盘不可用</td></tr>
     <tr><td>MOD-02 sandbox</td><td><code>guard.gate</code> + <code>guard.load_harness_tools</code></td><td><b>阻塞上线</b>：无扫描即违反 INV-4（M0 已交付）</td></tr>
     <tr><td>MOD-03 inference / MOD-04 policy</td><td><code>generate_json()</code> 结构化输出 / <code>harness_tool</code> 注册表与 prompt 渲染契约</td><td><code>propose</code> 不可用 → <code>E_EVOLVE_PROPOSE_FAILED</code>；新 harness 无法被加载验证</td></tr>
   </table>
   <h4>风险</h4>
   <ol>
-    <li>8B 牌力弱导致判定表全拒 → M2 先用宽松档（<code>alpha=0.10</code>、<code>win_rate_tol=0.02</code>）跑通管线，M3 收紧到默认值并给出收紧前后对比；</li>
+    <li>8B 牌力弱导致判定表全拒 → M2 先用宽松档（<code>alpha=0.10</code>、<code>win_rate_tol=0.02</code>）跑通管线，M3 收紧到默认值并给出收紧前后对比（<b>⚠️ 2026-10-14 修订：<code>evolve.alpha</code> 现只是报告项的显著性水平、<code>win_rate_tol</code> 默认已是 0.05</b>，故「放宽 alpha 跑通判定表」已不再是有效手段）；</li>
     <li>heldout 预算被候选数放大 → 冒烟前置 + <code>cost_cap</code> 硬截断；</li>
     <li>diff 质量低 → <code>propose_max_retries=2</code> + 去重，<code>propose</code> 失败率 &gt;50% 时回看 MOD-04 prompt 契约；</li>
     <li>HITL 拖慢实验节奏 → <code>--hitl=false</code> 跑批量实验（标 <code>decided_by="auto"</code>，不计入 M3 验收样本）；</li>
