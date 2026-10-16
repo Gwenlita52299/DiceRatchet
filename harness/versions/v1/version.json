@@ -1,0 +1,11 @@
+{
+  "accepted_by": "auto",
+  "artifact_hash": "sha256:a937d8edd466b3a5942b3617811151662d773f24db67288f5b178f1594eb63ca",
+  "base_model": null,
+  "created_at": "2026-10-16T21:34:31Z",
+  "diff_path": "harness/versions/v1/diff.patch",
+  "git_commit": "",
+  "parent": 0,
+  "reason": "证据 traj:train#0/#3/#12/#16/#19 均因 E_KERNEL_TURN_LIMIT 被截断判负，reflect:train#0/#3/#16 明确指出战斗节奏过慢、输出不足。在观测后插入回合预算提示，让 agent 先判断能否斩杀再决定防守，与 dead_ends 无冲突（无记录）。",
+  "version": 1
+}
