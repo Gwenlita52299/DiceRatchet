@@ -307,7 +307,7 @@ LLM 的渲染**共用同一句**，避免「检查点按另一份参数算指纹
 （`inherited:gen-00X`，**不新增 heldout 台账行**，同 F48 的 `train.n == 0` 不写行）；**被接受 ⇒ 那个候选自己的臂**
 （`source="measured"`，**写**台账行）。F57 的「恒取 parent」已废止：它让「接受了一代」在台账里永远不可见，
 判据 1 的「held-out 单调不降」会退化成拿起点与起点比的恒真命题。
-`evolve.parent_inherit` 事件记录**命中（`ok`）/ 还原失败（`failed`，异常）/ 有归档但按测量身份还原不了而退回实测（`declined`，2026-10-15 / B-92 新增——修复前这条分支静默无事件）**；被拒时另写 `harness/dead_ends.md`（D1=A：只给提案方看，
+`evolve.parent_inherit` 事件记录**命中（`ok`）/ 还原失败（`failed`，异常）/ 有归档但按测量身份还原不了而退回实测（`declined`，2026-10-15 / B-92 新增——修复前这条分支静默无事件）**；**⚠️ 2026-10-15（Spec v2.34 / B-93、B-94）**：`evaluate_arm` 的 provenance 又多了两个身份键（`resolved_seeds_hash` = 解析后 seed 列表的指纹；`model_hash`/`model_backend` = 本臂的模型身份，调用方不给时按 policy 角色从配置推导）⇒ **修复前落盘的臂归档（缺键/身份为空）不再被继承或复用**，一律重测（刻意 fail-closed；详见 MOD-08 §13）；被拒时另写 `harness/dead_ends.md`（D1=A：只给提案方看，
 **禁止候选改动**、渲染处脱敏）并**轻量推进版本号**（D2=A：`v_{N+1} = v_N + 死路记录`，有指针/commit、
 无快照/无 tag）。
 **为什么值得做**：不只是省 ≈20 局 / ≈¥17/代——`C1` 是 API 臂（`api_supports_seed=false`），同一份 harness 同一批 seed

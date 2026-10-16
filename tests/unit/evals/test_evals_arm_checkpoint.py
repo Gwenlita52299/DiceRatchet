@@ -151,6 +151,10 @@ def test_second_identical_call_reuses_the_whole_arm_without_running_anything(tmp
     # B-92 / F63：测量身份（play 面指纹）必须参与对拍——否则「打过补丁的候选臂」与
     # 「裸 v0 臂」在版本号相同（都是 accept 之前的号）时无法区分。
     ("harness_play_hash", "sha256:another-play-face"),
+    # B-93 / F80、B-94 / F81：种子身份与模型身份同样要参与对拍
+    ("resolved_seeds_hash", "sha256:another-seed-list"),
+    ("model_hash", "another-model"),
+    ("model_backend", "another-backend"),
 ])
 def test_any_provenance_mismatch_disables_reuse(tmp_path, field, value):
     """**fail-closed**：provenance 任一字段不同 ⇒ 不复用，照常重算。"""

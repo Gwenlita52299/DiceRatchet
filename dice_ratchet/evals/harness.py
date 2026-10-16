@@ -772,7 +772,8 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
                  on_result: Callable[[EpisodeResult], None] | None = None,
                  run_dir: Path | str | None = None,
                  archive: bool = True,
-                 play_hash: str = "") -> ArmResult:
+                 play_hash: str = "",
+                 model_backend: str = "") -> ArmResult:
     """单臂评估（Spec §4.7；FR-08-25）。
 
     ``runner`` 未注入时用 MOD-04/02 的默认执行器（MOD-06 会显式注入自己的 runner）。
@@ -801,6 +802,13 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
 
     proto = seeds_mod.validate_protocol(seeds_mod.coerce_protocol(protocol))
     seed_list = tuple(seeds_mod.resolve_basket(basket, generation=generation, protocol=proto))
+    # B-93 / F80：**解析后** seed 列表的指纹——`seeds_hash`（协议摘要）区分不了显式列表
+    # （它们的 basket_id 全是 "explicit"、协议同一份）。
+    resolved_seeds_hash = seeds_mod.seeds_digest(seed_list)
+    # B-94 / F81：模型身份。调用方优先，否则按 **policy 角色**（跑本臂的就是它）从配置推导；
+    # 推导不出来就留空（= 未知），**不阻断测量**。
+    model_hash, model_backend = _model_identity(config, model_hash=model_hash,
+                                                model_backend=model_backend)
     eval_cfg = getattr(config, "evals", config)
     spec = EvalSpec(
         run_id=run_id, generation=int(generation), harness_version=int(harness_version),
@@ -816,7 +824,9 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
     archive_dir = _arm_archive_dir(run_dir=run_dir, config=config, run_id=run_id) \
         if archive else None
     wanted = _arm_provenance_for(spec=spec, proto=proto, config=config, run_id=run_id,
-                                play_hash=play_hash)
+                                play_hash=play_hash,
+                                resolved_seeds_hash=resolved_seeds_hash,
+                                model_hash=model_hash, model_backend=model_backend)
     cached = load_arm_archive(arm_archive_path(
         archive_dir, generation=spec.generation, split=spec.split, basket=spec.basket_id,
         arm=arm)) if archive_dir is not None else None
@@ -841,6 +851,7 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
                              harness_version=int(harness_version),
                              memory_version=int(memory_version or 0), run_id=run_id,
                              results=ordered, metrics=metrics, model_hash=model_hash,
+                             model_backend=model_backend,
                              dur_s=0.0, resumed_n=len(ordered),
                              pending_seeds=(), archive_path=str(arm_archive_path(
                                  archive_dir, generation=spec.generation, split=split,
@@ -855,7 +866,9 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
     if archive_dir is not None:
         persist = _archive_on_result(on_result, run_root=archive_dir, spec=spec, proto=proto,
                                      config=config, run_id=run_id, model_hash=model_hash,
-                                     already=already, play_hash=play_hash)
+                                     already=already, play_hash=play_hash,
+                                     resolved_seeds_hash=resolved_seeds_hash,
+                                     model_backend=model_backend)
     executor = runner or _default_runner(harness_dir=harness_dir, arm=arm,
                                          memory_version=memory_version, config=config,
                                          model_hash=model_hash, run_id=run_id,
@@ -867,7 +880,8 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
                         harness_version=int(harness_version),
                         memory_version=int(memory_version or 0), run_id=run_id,
                         results=result.results, metrics=result.metrics,
-                        model_hash=model_hash, error_codes=result.error_codes,
+                        model_hash=model_hash, model_backend=model_backend,
+                        error_codes=result.error_codes,
                         dur_s=result.dur_s, resumed_n=len(already),
                         pending_seeds=tuple(s for s in spec.seeds
                                             if int(s) not in completed))
@@ -879,7 +893,9 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
             config_hash=wanted.get("config_hash"), seeds_hash=_seed_hash(proto),
             protocol_id=str(getattr(proto, "version", "") or ""),
             episode_config_hash=spec.episode_config_hash,
-            harness_play_hash=str(play_hash or ""))
+            harness_play_hash=str(play_hash or ""),
+            resolved_seeds_hash=resolved_seeds_hash,
+            model_hash=model_hash, model_backend=model_backend)
         path = write_arm_archive(archive_dir, generation=spec.generation, split=split,
                                  basket=spec.basket_id, arm=arm, result=outcome,
                                  provenance=provenance)
@@ -905,16 +921,19 @@ def _arm_archive_dir(*, run_dir: Path | str | None, config: Any, run_id: str) ->
 
 
 def _arm_provenance_for(*, spec: EvalSpec, proto: Any, config: Any, run_id: str,
-                        play_hash: str = "") -> dict[str, Any]:
+                        play_hash: str = "", resolved_seeds_hash: str = "",
+                        model_hash: str = "", model_backend: str = "") -> dict[str, Any]:
     """本次评估的 provenance（**不含** ``created_at``，用于与归档逐字段对拍）。"""
     from dice_ratchet.infra.config import config_hash
 
     return {"generation": spec.generation, "split": spec.split, "basket": spec.basket_id,
             "arm": spec.arm, "harness_version": spec.harness_version,
             "harness_play_hash": str(play_hash or ""),
+            "resolved_seeds_hash": str(resolved_seeds_hash or ""),
+            "model_hash": str(model_hash or ""), "model_backend": str(model_backend or ""),
             "memory_version": int(spec.memory_version or 0),
             "config_hash": (config_hash(config) if config is not None else None),
-            "seeds_hash": str(getattr(proto, "seeds_hash", "") or ""),
+            "seeds_hash": _seed_hash(proto),
             "episode_config_hash": spec.episode_config_hash}
 
 
@@ -923,6 +942,8 @@ def _archive_on_result(on_result: Callable[[EpisodeResult], None] | None, *,
                        run_id: str, model_hash: str,
                        already: Mapping[int, EpisodeResult],
                        play_hash: str = "",
+                       resolved_seeds_hash: str = "",
+                       model_backend: str = "",
                        ) -> Callable[[EpisodeResult], None]:
     """把「每完成一局」接到**臂归档**上（F42-A）。
 
@@ -951,7 +972,9 @@ def _archive_on_result(on_result: Callable[[EpisodeResult], None] | None, *,
             seeds_hash=_seed_hash(proto),
             protocol_id=str(getattr(proto, "version", "") or ""),
             episode_config_hash=spec.episode_config_hash,
-            harness_play_hash=str(play_hash or ""))
+            harness_play_hash=str(play_hash or ""),
+            resolved_seeds_hash=str(resolved_seeds_hash or ""),
+            model_hash=str(model_hash or ""), model_backend=str(model_backend or ""))
         write_arm_archive(run_root, generation=spec.generation, split=spec.split,
                           basket=spec.basket_id, arm=spec.arm, result=partial,
                           provenance=provenance)
@@ -960,13 +983,64 @@ def _archive_on_result(on_result: Callable[[EpisodeResult], None] | None, *,
 
 
 def _seed_hash(proto: Any) -> str:
-    """种子协议的 ``seeds_hash``（缺失/``None`` → ``""``）。
+    """种子**协议**摘要：``proto.seeds_hash``，缺失时**算出来**（B-93 / F80）。
 
-    注意 ``getattr(proto, "seeds_hash", "") or ""`` 对 ``None`` **无效**（``str(None)`` → ``"None"``），
-    这正是 F42-A 复用闸第一次写完就永远对不上的原因（归档写 ``"None"``、对拍算 ``""``）。
+    - ``getattr(proto, "seeds_hash", "") or ""`` 对 ``None`` **无效**（``str(None)`` → ``"None"``）：
+      这正是 F42-A 复用闸第一次写完就永远对不上的原因（归档写 ``"None"``、对拍算 ``""``）——
+      所以这里显式判 ``None``。
+    - **fallback 是 F80 的修复**：默认协议（``coerce_protocol(None)``）的 ``seeds_hash`` 恒为
+      ``None``，而训练/演化/基线路径拿到的就是它 ⇒ 修复前归档里这个键**永远是空串**，和谁比都
+      相等。``evals/baselines.py::_seeds_protocol_tag`` 一直用的是
+      ``proto.seeds_hash or protocol_hash(proto)``，本函数此前漏了后半句。
+    - 注意它描述的是**协议**（区间/篮子/护栏），不是**这批局的 seed 列表**——后者归
+      ``resolved_seeds_hash``（``seeds.seeds_digest``）。
     """
     value = getattr(proto, "seeds_hash", None)
-    return "" if value is None else str(value)
+    if value is None:
+        try:
+            return str(seeds_mod.protocol_hash(proto))
+        except Exception: # noqa: BLE001 - 协议异常时不阻断测量，如实留空
+            return ""
+    return str(value)
+
+
+def _model_identity(config: Any, *, model_hash: str = "",
+                    model_backend: str = "") -> tuple[str, str]:
+    """本臂的**模型身份** ``(model_id, backend)``：调用方优先，否则按配置推导（B-94 / F81）。
+
+    - **角色 = policy**：跑这一臂的是 MOD-04 的 ``PolicyAgent``，所以取 policy 角色的绑定
+      （``inference.roles.role_model_ids``，只读配置、不碰注册表）。
+    - ``backend`` 需要注册表（``configs/models.yaml``），best-effort：读不到记 ``""``
+      （= 未知），**绝不阻断测量**。
+    - 两者都推导不出来时返回 ``("", "")``：provenance 里就是「未知」，与调用方显式传空同义。
+
+    **为什么要在 MOD-08 里推导**：修复前这两个字段只有 ``evals/cli.py`` 的 baseline 路径会传，
+    训练/演化/`eval test` 全都不传 ⇒ 实测 **18/18 归档的 ``model_hash``/``model_backend``
+    都是空串**，而它们**又不在对拍键里** ⇒ 「换了模型/权重」在复用决策里完全不可见。
+    靠「记得传」的机制已经在 F56（台账/绘图各写一半）上失败过一次，所以这里给默认值兜底，
+    调用方仍可显式覆盖。
+    """
+    resolved_id = str(model_hash or "").strip()
+    resolved_backend = str(model_backend or "").strip()
+    if config is None:
+        return resolved_id, resolved_backend
+    if not resolved_id:
+        try:
+            from dice_ratchet.inference.roles import role_model_ids
+
+            resolved_id = str(role_model_ids(config).get("policy") or "").strip()
+        except Exception: # noqa: BLE001 - 配置形状异常 ⇒ 身份未知，不阻断测量
+            resolved_id = ""
+    if resolved_id and not resolved_backend:
+        try:
+            from dice_ratchet.inference.registry import load_registry
+
+            path = str(getattr(getattr(config, "inference", None), "registry_path",
+                               "configs/models.yaml"))
+            resolved_backend = str(load_registry(path).spec(resolved_id).backend or "")
+        except Exception: # noqa: BLE001 - 注册表不可用 ⇒ 后端未知，不阻断测量
+            resolved_backend = ""
+    return resolved_id, resolved_backend
 
 
 def _safe_config_hash(config: Any) -> str | None:
@@ -1015,6 +1089,10 @@ def _config_digest(obj: Any) -> str | None:
 #: 不再复用，不这么做就会拿「身份未知的测量」冒充已知测量）。
 ARM_PROVENANCE_KEYS: Final[tuple[str, ...]] = (
     "generation", "split", "basket", "arm", "harness_version", "harness_play_hash",
+    # B-93 / F80：**解析后** seed 列表（协议摘要 ``seeds_hash`` 区分不了显式列表）
+    "resolved_seeds_hash",
+    # B-94 / F81：模型身份（同一个 run 里换臂/换权重不该复用归档）
+    "model_hash", "model_backend",
     "memory_version", "config_hash", "seeds_hash", "episode_config_hash",
 )
 
@@ -1079,7 +1157,9 @@ def arm_provenance(*, generation: int, split: str, basket: str, arm: str,
                    n_dropped: int = 0, config_hash: str | None = None,
                    seeds_hash: str = "", protocol_id: str = "",
                    episode_config_hash: str | None = None,
-                   harness_play_hash: str = "") -> dict[str, Any]:
+                   harness_play_hash: str = "",
+                   resolved_seeds_hash: str = "",
+                   model_hash: str = "", model_backend: str = "") -> dict[str, Any]:
     """臂归档的 provenance（F42-A；``evaluate_arm`` 与调用方共用同一构造）。
 
     ``harness_play_hash``（B-92 / F63）：本臂**实际测的那份 harness** 的 play 面指纹。
@@ -1088,6 +1168,8 @@ def arm_provenance(*, generation: int, split: str, basket: str, arm: str,
     return {"generation": int(generation), "split": str(split), "basket": str(basket),
             "arm": str(arm), "harness_version": int(harness_version),
             "harness_play_hash": str(harness_play_hash or ""),
+            "resolved_seeds_hash": str(resolved_seeds_hash or ""),
+            "model_hash": str(model_hash or ""), "model_backend": str(model_backend or ""),
             "memory_version": int(memory_version), "n_seeds": int(n_seeds),
             "n_dropped": int(n_dropped), "config_hash": config_hash,
             "seeds_hash": str(seeds_hash), "protocol_id": str(protocol_id),

@@ -40,7 +40,8 @@ from dice_ratchet.infra.errors import E, InfraError
 __all__ = [
     "Split", "BasketId", "Destination", "DESTINATIONS_FORBIDDEN", "SplitRange", "Basket",
     "ExposureGuard", "SeedProtocol", "default_protocol", "load_protocol", "coerce_protocol",
-    "validate_protocol", "protocol_hash", "resolve_basket", "take", "train_window",
+    "validate_protocol", "protocol_hash", "seeds_digest", "resolve_basket", "take",
+    "train_window",
     "assert_split_isolation", "guard_prompt_context", "guard_memory_write",
     "assert_train_only_write", "test_attestation_path", "test_unlock", "is_test_unlocked",
     "scan_forbidden_tokens", "split_of_seed", "basket_seeds", "DEFAULT_TRAIN_WINDOW",
@@ -301,6 +302,21 @@ def protocol_hash(protocol: SeedProtocol | Any) -> str:
     }
     text = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def seeds_digest(seeds: Sequence[int]) -> str:
+    """**解析后** seed 列表的指纹（``sha256:`` 前缀）——臂归档的「测量身份」（B-93 / F80）。
+
+    与 ``protocol_hash`` 的区别就是它存在的理由：``protocol_hash`` 描述**协议**，而同一个
+    协议可以解析出**不同的列表**——最典型的是显式列表调用方（MOD-07 的 ``smoke_seeds``、
+    ``--seeds`` 覆盖）：它们的 ``EvalSpec.basket_id`` 全是 ``"explicit"``、协议又是同一份
+    ⇒ 协议摘要**完全相等**，只有「这批局到底是哪批 seed」的指纹能把它们分开。
+
+    归一化：排序 + 去重（同一集合的不同书写顺序 = 同一批测量），逗号分隔后取 sha256。
+    空列表允许（``gen-000`` 的 train 窗口就是空）——归档要继续写得下去，「没有 seed」也是事实。
+    """
+    normalized = ",".join(str(int(s)) for s in sorted({int(s) for s in seeds}))
+    return "sha256:" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 # =====================================================================
