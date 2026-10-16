@@ -865,7 +865,9 @@ def cmd_eval_acceptance(args: argparse.Namespace) -> int:
     payload["acceptance_path"] = str(path)
     if bool(getattr(args, "sensitivity", False)):
         # §3.3 的**零成本**落地：把「tol=0.05 意味着多大漂移」变成实测数字。
-        # 分母优先用本 run 的**实测**值；读不到才回落到 `C1` hard×6 的一代口径。
+        # 分母与比例都取**同一次 C5 比较**（同一代两臂）的实测值（B-91 / F52 修正：原先把
+        # 整 run 两个 split 的全部局逐局累加，分母随 run 长度漂移、se 被低估 ≈2.2×，且
+        # truncation 的比例被写死 0.30、另两轴干脆没有 se）；读不到臂归档才回落缺省口径。
         from .tol_sensitivity import denominators_from_run, tolerance_sensitivity
 
         measured = denominators_from_run(paths.root)
@@ -873,11 +875,14 @@ def cmd_eval_acceptance(args: argparse.Namespace) -> int:
             illegal_tol=float(getattr(cfg.evolve, "illegal_tol", 0.05)),
             fallback_tol=float(getattr(cfg.evolve, "fallback_tol", 0.05)),
             truncation_tol=float(getattr(cfg.evolve, "truncation_tol", 0.05)),
-            denominators=(measured or None),
-            rates={"truncation": 0.30})
+            denominators=(measured.denominators if measured else None),
+            rates=(measured.rates if measured else None))
         payload["tol_sensitivity"] = sens.as_dict()
         payload["tol_sensitivity"]["denominators_source"] = (
-            "本 run 实测" if measured else "缺省估算（C1 hard×6 一代口径）")
+            measured.source if measured
+            else "缺省估算（无可用臂归档：C1 hard×6 一代两臂口径）")
+        payload["tol_sensitivity"]["measured_comparison"] = (
+            measured.as_dict() if measured else None)
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     if not report.ok:
         print(f"判据 1 **不通过**：{'; '.join(report.reasons)}", file=sys.stderr)

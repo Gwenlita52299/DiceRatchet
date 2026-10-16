@@ -47,11 +47,11 @@ class ExplodingEvaluator:
     def __init__(self) -> None:
         self.calls: list[str] = []
 
-    def parent_arms(self, parent_dir, *, parent_version):
+    def parent_arms(self, parent_dir, *, parent_version, **kwargs):
         self.calls.append("parent")
         return FakeArm(arm="parent", win_rate=0.30), FakeArm(arm="parent-smoke", n=2)
 
-    def candidate_arms(self, staging_dir, *, candidate, harness_version):
+    def candidate_arms(self, staging_dir, *, candidate, harness_version, **kwargs):
         self.calls.append(f"cand-{candidate.candidate_id}")
         raise AssertionError(
             f"恶意候选 {candidate.candidate_id} 进入了评估链（应被静态扫描/校验挡住）")

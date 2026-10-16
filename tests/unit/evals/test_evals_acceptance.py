@@ -446,26 +446,127 @@ def test_unknown_axis_is_rejected():
         axis_sensitivity("made_up_axis", tol=0.05)
 
 
-def test_denominators_from_run_reads_real_episodes(tmp_path):
-    """实测分母：步级 = 成功步 + 非法尝试；局级 = 局数。"""
+# ---- B-91（F52）：实测分母必须取「同一代两臂」，不是整 run 的累加 --------------------
+
+def _write_arm(root, *, generation, split, basket, arm, episodes):
+    """落一份最小臂归档（只带 denominators_from_run 需要的字段）。"""
+    adir = root / "metrics" / "arms"
+    adir.mkdir(parents=True, exist_ok=True)
+    payload = {"run_id": "r", "arm": arm, "split": split, "basket": basket,
+               "harness_version": 0, "episodes": episodes,
+               "provenance": {"generation": generation, "split": split, "basket": basket,
+                              "arm": arm}}
+    (adir / f"gen{generation:03d}-{split}-{basket}-{arm}.json").write_text(
+        json.dumps(payload), encoding="utf-8")
+
+
+def _ep(seed, *, steps=100, illegal=4, decisions=10, fallback=1,
+        truncation_reason=None, degraded=False):
+    return {"seed": seed, "steps": steps, "illegal_attempts": illegal,
+            "decisions": decisions, "fallback_decisions": fallback,
+            "truncation_reason": truncation_reason, "degraded": degraded}
+
+
+def test_b91_denominators_come_from_one_comparison(tmp_path):
+    """修复前：把 heldout + train、全部代与臂逐局累加（分母随 run 长度漂移、含基线臂）。"""
     from dice_ratchet.evals.tol_sensitivity import denominators_from_run
 
-    d = tmp_path / "r"
-    ep = d / "episodes" / "heldout"
-    ep.mkdir(parents=True)
-    for i in range(3):
-        (ep / f"e-{731000+i}-g000-parent.jsonl").write_text(json.dumps({
-            "type": "episode_end", "seed": 731000 + i, "split": "heldout",
-            "generation": 0, "arm": "parent", "outcome": "win", "stages_cleared": 3,
-            "hearts_left": 1, "battles_won": 5, "decisions": 10, "steps": 100,
-            "illegal_attempts": 4, "fallback_decisions": 1, "kind_counts": [0] * 16,
-            "decision_kinds": [0], "slot_counts": {}, "seq_hash": "s",
-        }) + "\n", encoding="utf-8")
-    got = denominators_from_run(d)
-    assert got["illegal"] == 3 * (100 + 4), "步级分母 = 成功步 + 非法尝试"
-    assert got["fallback"] == 3 * 10, "fallback 分母 = 决策点"
-    assert got["truncation"] == 3.0, "局级分母 = 局数"
-    assert denominators_from_run(tmp_path / "nope") == {}
+    r = tmp_path / "r"
+    # gen-000：两个免费基线臂（各 40 局，C5 从不比较它们）+ 基线 parent
+    for arm in ("baseline-random", "baseline-heuristic"):
+        _write_arm(r, generation=0, split="heldout", basket="H1", arm=arm,
+                   episodes=[_ep(700000 + i) for i in range(40)])
+    _write_arm(r, generation=0, split="heldout", basket="H1", arm="parent",
+               episodes=[_ep(731000 + i) for i in range(40)])
+    # gen-001：parent + 候选（**这一次比较**）
+    _write_arm(r, generation=1, split="heldout", basket="H1", arm="parent",
+               episodes=[_ep(731000 + i, steps=120, illegal=6, decisions=12)
+                         for i in range(40)])
+    _write_arm(r, generation=1, split="heldout", basket="H1", arm="cand-abc",
+               episodes=[_ep(731000 + i, steps=110, illegal=6, decisions=11)
+                         for i in range(40)])
+    # 本代的冒烟与训练局（不属于 C5 的比较）
+    _write_arm(r, generation=1, split="train", basket="explicit", arm="parent-smoke",
+               episodes=[_ep(1088), _ep(1089)])
+
+    got = denominators_from_run(r)
+    assert got is not None
+    assert got.generation == 1, "默认取有非基线臂的**最大**代"
+    assert got.arms == ("cand-abc", "parent"), "只含一次比较的两臂（不含 baseline-*）"
+    assert got.episodes_per_arm == 40
+    assert got.denominators["illegal"] == 40 * (120 + 6) + 40 * (110 + 6), \
+        "步级分母 = 两臂成功步 + 非法尝试"
+    assert got.denominators["fallback"] == 40 * (12 + 11), "fallback 分母 = 两臂决策点"
+    assert got.denominators["truncation"] == 40.0, "局级分母 = **每臂**局数（单臂分辨率）"
+    assert "gen-001" in got.source and "cand-abc" in got.source
+
+
+def test_b91_denominators_exclude_baselines_and_degraded(tmp_path):
+    """基线臂不参与（C5 只比候选 vs 起点）；degraded 局按 `evals.metrics` 口径剔除。"""
+    from dice_ratchet.evals.tol_sensitivity import denominators_from_run
+
+    r = tmp_path / "r"
+    _write_arm(r, generation=2, split="heldout", basket="H1", arm="parent",
+               episodes=[_ep(1), _ep(2), _ep(3, degraded=True)])
+    _write_arm(r, generation=2, split="heldout", basket="H1", arm="cand-x",
+               episodes=[_ep(1, truncation_reason="step_limit"), _ep(2)])
+    got = denominators_from_run(r, generation=2)
+    assert got.episodes_per_arm == 2, "degraded 局剔除后每臂 2 局"
+    assert got.denominators["truncation"] == 2.0
+    assert got.rates["truncation"] == pytest.approx(0.25), "两臂 4 局里 1 局 truncated"
+
+
+def test_b91_denominators_none_without_arm_archives(tmp_path):
+    """读不到臂归档 ⇒ None（调用方回落缺省值并**写明**来源，不再给一个漂移的数）。"""
+    from dice_ratchet.evals.tol_sensitivity import denominators_from_run
+
+    assert denominators_from_run(tmp_path / "nope") is None
+    empty = tmp_path / "empty"
+    (empty / "metrics" / "arms").mkdir(parents=True)
+    assert denominators_from_run(empty) is None
+
+
+def test_b91_sensitivity_payload_carries_the_comparison(monkeypatch, tmp_path, capsys):
+    """`eval acceptance --sensitivity` 的 payload 必须写明「这些分母属于哪一代哪几臂」。"""
+    from dice_ratchet.evals import cli as evals_cli
+
+    r = tmp_path / "r"
+    (r / "metrics").mkdir(parents=True)
+    _write_arm(r, generation=3, split="heldout", basket="H1", arm="parent",
+               episodes=[_ep(1, truncation_reason="step_limit")] * 40)
+    _write_arm(r, generation=3, split="heldout", basket="H1", arm="cand-y",
+               episodes=[_ep(1)] * 40)
+
+    class _Cfg:
+        evolve = type("E", (), {"illegal_tol": 0.05, "fallback_tol": 0.05,
+                                "truncation_tol": 0.05, "min_heldout_n": 20})()
+        evals = type("V", (), {"bootstrap_B": 100})()
+
+    class _Report:
+        ok = True
+        reasons: tuple[str, ...] = ()
+
+        def as_dict(self):
+            return {"version": "acceptance-v1"}
+
+    monkeypatch.setattr(evals_cli, "_paths", lambda args, **kw: (type("P", (), {"root": r})(),
+                                                                 _Cfg(), "r"))
+    monkeypatch.setattr(evals_cli, "cmd_eval_acceptance", evals_cli.cmd_eval_acceptance)
+    import dice_ratchet.evals.acceptance as acc_mod
+
+    monkeypatch.setattr(acc_mod, "evaluate_acceptance", lambda *a, **k: _Report())
+    monkeypatch.setattr(acc_mod, "write_acceptance", lambda root, report: r / "acc.json")
+
+    code = evals_cli.cmd_eval_acceptance(
+        type("A", (), {"sensitivity": True, "run_id": "r", "config_dir": None,
+                       "generation": None, "bootstrap_B": 100})())
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    sens = payload["tol_sensitivity"]
+    assert sens["measured_comparison"]["generation"] == 3
+    assert sens["measured_comparison"]["arms"] == ["cand-y", "parent"]
+    assert sens["denominators_source"].startswith("本 run 实测")
+    assert sens["axes"][2]["denominator"] == 40.0, "局级分母 = 每臂局数"
 
 
 # =====================================================================

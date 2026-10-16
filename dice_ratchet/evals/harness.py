@@ -771,10 +771,19 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
                  resume_results: Sequence[EpisodeResult] = (),
                  on_result: Callable[[EpisodeResult], None] | None = None,
                  run_dir: Path | str | None = None,
-                 archive: bool = True) -> ArmResult:
+                 archive: bool = True,
+                 play_hash: str = "") -> ArmResult:
     """单臂评估（Spec §4.7；FR-08-25）。
 
     ``runner`` 未注入时用 MOD-04/02 的默认执行器（MOD-06 会显式注入自己的 runner）。
+
+    ``play_hash``（B-92 / F63）：本臂**实际测的那份 harness** 的 play 面指纹，由调用方
+    （MOD-07 的编排层，它本来就要算这个指纹喂 C2）传入，写进归档 provenance 并参与复用
+    对拍。**为什么不能靠 `harness_version`**：候选臂测的是 staging 拷贝（= accept 之后
+    的 play 面），而版本号记的是**accept 之前**在役的号 ⇒ 打过补丁的候选臂与裸 v0 在版本
+    维上不可区分（F63 现场：gen-001 的 parent 与 cand 归档 provenance 除 `arm` 外逐字段
+    相同）。空串 = 调用方不提供身份（`eval test` / 消融等不涉及候选补丁的路径），此时该键
+    按 `""` 对拍——与修复前的行为一致。
 
     F42-A/B（长跑检查点）：
 
@@ -806,7 +815,8 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
         episode_config_hash=_config_digest(episode_config))
     archive_dir = _arm_archive_dir(run_dir=run_dir, config=config, run_id=run_id) \
         if archive else None
-    wanted = _arm_provenance_for(spec=spec, proto=proto, config=config, run_id=run_id)
+    wanted = _arm_provenance_for(spec=spec, proto=proto, config=config, run_id=run_id,
+                                play_hash=play_hash)
     cached = load_arm_archive(arm_archive_path(
         archive_dir, generation=spec.generation, split=spec.split, basket=spec.basket_id,
         arm=arm)) if archive_dir is not None else None
@@ -845,7 +855,7 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
     if archive_dir is not None:
         persist = _archive_on_result(on_result, run_root=archive_dir, spec=spec, proto=proto,
                                      config=config, run_id=run_id, model_hash=model_hash,
-                                     already=already)
+                                     already=already, play_hash=play_hash)
     executor = runner or _default_runner(harness_dir=harness_dir, arm=arm,
                                          memory_version=memory_version, config=config,
                                          model_hash=model_hash, run_id=run_id,
@@ -868,7 +878,8 @@ def evaluate_arm(harness_dir: Path | str, *, split: Split, basket: BasketId | Se
             n_seeds=len(spec.seeds), n_dropped=int(result.metrics.n_dropped),
             config_hash=wanted.get("config_hash"), seeds_hash=_seed_hash(proto),
             protocol_id=str(getattr(proto, "version", "") or ""),
-            episode_config_hash=spec.episode_config_hash)
+            episode_config_hash=spec.episode_config_hash,
+            harness_play_hash=str(play_hash or ""))
         path = write_arm_archive(archive_dir, generation=spec.generation, split=split,
                                  basket=spec.basket_id, arm=arm, result=outcome,
                                  provenance=provenance)
@@ -893,13 +904,14 @@ def _arm_archive_dir(*, run_dir: Path | str | None, config: Any, run_id: str) ->
     return root if root.is_dir() else None
 
 
-def _arm_provenance_for(*, spec: EvalSpec, proto: Any, config: Any, run_id: str
-                        ) -> dict[str, Any]:
+def _arm_provenance_for(*, spec: EvalSpec, proto: Any, config: Any, run_id: str,
+                        play_hash: str = "") -> dict[str, Any]:
     """本次评估的 provenance（**不含** ``created_at``，用于与归档逐字段对拍）。"""
     from dice_ratchet.infra.config import config_hash
 
     return {"generation": spec.generation, "split": spec.split, "basket": spec.basket_id,
             "arm": spec.arm, "harness_version": spec.harness_version,
+            "harness_play_hash": str(play_hash or ""),
             "memory_version": int(spec.memory_version or 0),
             "config_hash": (config_hash(config) if config is not None else None),
             "seeds_hash": str(getattr(proto, "seeds_hash", "") or ""),
@@ -910,6 +922,7 @@ def _archive_on_result(on_result: Callable[[EpisodeResult], None] | None, *,
                        run_root: Path, spec: EvalSpec, proto: Any, config: Any,
                        run_id: str, model_hash: str,
                        already: Mapping[int, EpisodeResult],
+                       play_hash: str = "",
                        ) -> Callable[[EpisodeResult], None]:
     """把「每完成一局」接到**臂归档**上（F42-A）。
 
@@ -937,7 +950,8 @@ def _archive_on_result(on_result: Callable[[EpisodeResult], None] | None, *,
             n_dropped=int(metrics.n_dropped), config_hash=_safe_config_hash(config),
             seeds_hash=_seed_hash(proto),
             protocol_id=str(getattr(proto, "version", "") or ""),
-            episode_config_hash=spec.episode_config_hash)
+            episode_config_hash=spec.episode_config_hash,
+            harness_play_hash=str(play_hash or ""))
         write_arm_archive(run_root, generation=spec.generation, split=spec.split,
                           basket=spec.basket_id, arm=spec.arm, result=partial,
                           provenance=provenance)
@@ -991,9 +1005,17 @@ def _config_digest(obj: Any) -> str | None:
 # 「中间那层」：`evaluate_arm` 不转发它们。本段补上「按臂落盘 + fail-closed 复用」。
 
 #: provenance 里必须**逐字段相等**才允许复用的键（fail-closed：任一不同就重算）。
+#:
+#: ``harness_play_hash``（B-92 / F63）：**测量身份**必须是 play 面指纹，不能只靠版本号——
+#: 候选臂测的是 staging 拷贝（= accept 之后的 play 面），而 ``harness_version`` 记的是
+#: accept **之前**在役的号（``evolve/generation.py`` 传 ``parent.version``）⇒ 打过补丁的
+#: 候选臂与裸 v0 在版本维上不可区分（F63 现场：gen-001 的 parent 与 cand 归档 provenance
+#: 除 ``arm``/``created_at`` 外逐字段相同）。加入本键后，**修复前落盘的归档**（无该键 →
+#: ``None``）与任何带真实指纹的请求都对不上 ⇒ 一律重算（fail-closed；代价是升级后旧归档
+#: 不再复用，不这么做就会拿「身份未知的测量」冒充已知测量）。
 ARM_PROVENANCE_KEYS: Final[tuple[str, ...]] = (
-    "generation", "split", "basket", "arm", "harness_version", "memory_version",
-    "config_hash", "seeds_hash", "episode_config_hash",
+    "generation", "split", "basket", "arm", "harness_version", "harness_play_hash",
+    "memory_version", "config_hash", "seeds_hash", "episode_config_hash",
 )
 
 #: 臂归档里逐局需要还原的字段（``win`` / ``degraded_flag`` 是 property，见 ``EpisodeResult``）。
@@ -1056,10 +1078,16 @@ def arm_provenance(*, generation: int, split: str, basket: str, arm: str,
                    harness_version: int, memory_version: int, n_seeds: int,
                    n_dropped: int = 0, config_hash: str | None = None,
                    seeds_hash: str = "", protocol_id: str = "",
-                   episode_config_hash: str | None = None) -> dict[str, Any]:
-    """臂归档的 provenance（F42-A；``evaluate_arm`` 与调用方共用同一构造）。"""
+                   episode_config_hash: str | None = None,
+                   harness_play_hash: str = "") -> dict[str, Any]:
+    """臂归档的 provenance（F42-A；``evaluate_arm`` 与调用方共用同一构造）。
+
+    ``harness_play_hash``（B-92 / F63）：本臂**实际测的那份 harness** 的 play 面指纹。
+    空串 = 调用方未提供身份（不参与候选补丁的路径），与修复前行为一致。
+    """
     return {"generation": int(generation), "split": str(split), "basket": str(basket),
             "arm": str(arm), "harness_version": int(harness_version),
+            "harness_play_hash": str(harness_play_hash or ""),
             "memory_version": int(memory_version), "n_seeds": int(n_seeds),
             "n_dropped": int(n_dropped), "config_hash": config_hash,
             "seeds_hash": str(seeds_hash), "protocol_id": str(protocol_id),
@@ -1087,18 +1115,26 @@ def restore_arm_from_archive(archive: Mapping[str, Any] | None, *,
                              generation: int, harness_version: int, arm: str,
                              required_seeds: Sequence[int] = (),
                              t_max: int = 120, min_support: int = 3,
-                             drop_rate_max: float = 0.10) -> ArmResult | None:
+                             drop_rate_max: float = 0.10,
+                             play_hash: str = "") -> ArmResult | None:
     """把臂归档**还原**成 ``ArmResult``（**不跑任何局**；F57 跨代继承用）。
 
     与 ``evaluate_arm`` 的**复用**分支（``evals.arm_reused``）的区别在于**代际**：
     复用分支要求 provenance 里的 ``generation`` 与本次相同（同代重跑），而跨代继承要的
-    正是**另一代**的同一臂测量——它的 ``harness_version`` 与当前 parent 逐字节相同，
-    只是当年写在 ``gen-00X`` 的归档里。
+    正是**另一代**的同一臂测量——它的 play 面与当前起点逐字节相同，只是当年写在
+    ``gen-00X`` 的归档里。
 
     因此这里**只**校验「测量身份」而与代际无关的三件事，任一不满足返回 ``None``
     （fail-closed，调用方据此**重测**）：
 
-    - ``archive["harness_version"] == harness_version``（同一个 harness 才有资格当起点）；
+    - **测量身份**（B-92 / F63）：调用方给了 ``play_hash`` 且归档也记了 ``harness_play_hash``
+      时**只比 play 面**（play 面相同才是同一份起点）；否则退回
+      ``archive["harness_version"] == harness_version``（旧归档没有该键时的**兼容回落**
+      ——注意这**不是**放宽：拿不到身份的旧归档仍按老口径卡版本号）。
+      **为什么必须换成 play 面**：候选臂归档记的是 accept **之前**在役的版本号，而它的
+      play 面是 accept **之后**那一版 ⇒ 只用版本号会把「被接受的那代测量」判成不可继承，
+      让 D-M3-7 的省钱路径在最该生效的场景静默失效（F63 实测：
+      `restore(harness_version=0)` 成功、`restore(harness_version=1)` 返回 ``None``）。
     - ``archive["basket"] == archive["provenance"]["basket"]``（自洽；外部 basket 由调用方在
       **选文件时**比对——``required_seeds`` 也覆盖了它）；
     - ``required_seeds ⊆ 归档的 seed 集合``（**不少于**要用的局；篮子是子集时可裁剪）。
@@ -1108,10 +1144,15 @@ def restore_arm_from_archive(archive: Mapping[str, Any] | None, *,
     """
     if not archive:
         return None
-    if _int_or_none_field(archive.get("harness_version")) != int(harness_version):
-        return None
     provenance = archive.get("provenance") or {}
     if not isinstance(provenance, Mapping):
+        return None
+    archived_play = str(provenance.get("harness_play_hash") or "")
+    wanted_play = str(play_hash or "")
+    if wanted_play and archived_play:
+        if archived_play != wanted_play:
+            return None
+    elif _int_or_none_field(archive.get("harness_version")) != int(harness_version):
         return None
     if str(archive.get("basket") or "") != str(provenance.get("basket") or ""):
         return None

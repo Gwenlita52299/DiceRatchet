@@ -67,7 +67,7 @@ class ScriptedEvaluator:
             return inherited, self.parent_smoke
         return self.parent_heldout, self.parent_smoke
 
-    def candidate_arms(self, staging_dir, *, candidate, harness_version):
+    def candidate_arms(self, staging_dir, *, candidate, harness_version, **kwargs):
         self.calls.append(f"cand-{candidate.candidate_id}")
         if self.error is not None:
             raise self.error
@@ -682,11 +682,11 @@ def test_resume_reuses_the_proposal_with_zero_proposer_calls(tmp_path, stub_pair
             super().__init__(**kw)
             self.boom = True
 
-        def parent_arms(self, parent_dir, *, parent_version):
+        def parent_arms(self, parent_dir, *, parent_version, **kwargs):
             if self.boom:
                 self.boom = False
                 raise KeyboardInterrupt("模拟：一代评估中途被 Ctrl-C")
-            return super().parent_arms(parent_dir, parent_version=parent_version)
+            return super().parent_arms(parent_dir, parent_version=parent_version, **kwargs)
 
     first_client = _one_candidate_llm()
     with pytest.raises(KeyboardInterrupt):

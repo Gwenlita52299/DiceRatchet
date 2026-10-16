@@ -148,6 +148,9 @@ def test_second_identical_call_reuses_the_whole_arm_without_running_anything(tmp
     ("basket", "H1"),
     ("arm", "cand-xyz"),
     ("episode_config_hash", "sha256:abc"),
+    # B-92 / F63：测量身份（play 面指纹）必须参与对拍——否则「打过补丁的候选臂」与
+    # 「裸 v0 臂」在版本号相同（都是 accept 之前的号）时无法区分。
+    ("harness_play_hash", "sha256:another-play-face"),
 ])
 def test_any_provenance_mismatch_disables_reuse(tmp_path, field, value):
     """**fail-closed**：provenance 任一字段不同 ⇒ 不复用，照常重算。"""
@@ -351,3 +354,79 @@ def test_generation_resume_does_not_re_evaluate_the_parent_arm(tmp_path, monkeyp
         f"resume 时 parent heldout 没有复用已完成的局：resumed_n={data['resumed_n']}")
     assert data["metrics"]["n"] == len(data["episodes"]) == 40, \
         "resume 后 parent heldout 必须完整（40 局 H1）"
+
+
+# =====================================================================
+# B-92（F63）：臂归档必须记「测量身份」（play 面指纹），跨代继承按它还原
+# =====================================================================
+
+def test_b92_archive_records_the_measured_play_hash(tmp_path):
+    """`evaluate_arm(play_hash=…)` 把本臂实际测的 play 面写进 provenance，并参与复用对拍。"""
+    first = FakeRunner()
+    arm = _run(tmp_path, first, play_hash="sha256:play-v0")
+    data = json.loads(Path(arm.archive_path).read_text(encoding="utf-8"))
+    assert data["provenance"]["harness_play_hash"] == "sha256:play-v0"
+    assert "harness_play_hash" in ARM_PROVENANCE_KEYS
+
+    # 同一个 play 面 ⇒ 整臂复用（0 局）
+    same = FakeRunner()
+    _run(tmp_path, same, play_hash="sha256:play-v0")
+    assert same.calls == [], "同一 play 面的第二次评估又跑了局"
+
+    # 换了 play 面 ⇒ 不复用（修复前版本号相同就复用，F63 现场）
+    other = FakeRunner()
+    _run(tmp_path, other, play_hash="sha256:play-v1")
+    assert sorted(other.calls) == sorted(_TRAIN_SEEDS), "play 面不同却复用了归档"
+
+
+def _archive_with_play(tmp_path, *, play_hash, harness_version=0, seeds=_TRAIN_SEEDS):
+    arm = _run(tmp_path, FakeRunner(), harness_version=harness_version,
+               play_hash=play_hash)
+    return load_arm_archive(arm.archive_path)
+
+
+def test_b92_restore_matches_by_play_face_across_versions(tmp_path):
+    """跨代继承的**核心回归**：被接受的那代候选归档记的是 accept 之前的版本号。
+
+    实测现场（`runs/m3-formal/metrics/arms/gen001-heldout-H1-cand-98119a8a4a90.json`）：
+    归档 `harness_version=0`，而下一代 `parent.version=1` ⇒ 修复前
+    `restore_arm_from_archive(harness_version=1)` 返回 `None`，D-M3-7 的省钱路径在**唯一
+    它想优化的场景**（accept 之后）静默退化成重测 40 局 ≈¥21。
+    """
+    from dice_ratchet.evals.harness import restore_arm_from_archive
+
+    archive = _archive_with_play(tmp_path, play_hash="sha256:playP")
+    # 版本号对不上（0 vs 1），但 play 面相同 ⇒ 必须能还原
+    restored = restore_arm_from_archive(archive, generation=2, harness_version=1,
+                                       arm="parent", required_seeds=_TRAIN_SEEDS,
+                                       play_hash="sha256:playP")
+    assert restored is not None, "play 面相同却按版本号误杀（F63 的隐形税）"
+    assert [int(r.seed) for r in restored.results] == list(_TRAIN_SEEDS)
+    assert all(int(r.harness_version) == 1 for r in restored.results), \
+        "还原时版本号应取请求值（它扮演的是本代 parent）"
+
+
+def test_b92_restore_rejects_a_different_play_face(tmp_path):
+    """play 面不同 ⇒ fail-closed 返回 ``None``（调用方重测）。"""
+    from dice_ratchet.evals.harness import restore_arm_from_archive
+
+    archive = _archive_with_play(tmp_path, play_hash="sha256:playP")
+    assert restore_arm_from_archive(archive, generation=2, harness_version=0,
+                                    arm="parent", required_seeds=_TRAIN_SEEDS,
+                                    play_hash="sha256:playQ") is None
+
+
+def test_b92_restore_legacy_archive_falls_back_to_version(tmp_path):
+    """**旧归档**（没有 play 面指纹）仍按版本号判，行为与修复前一致。"""
+    from dice_ratchet.evals.harness import restore_arm_from_archive
+
+    archive = _archive_with_play(tmp_path, play_hash="")
+    # 修复前的归档里根本没有这个键（不是空串）——按「键缺失」模拟
+    archive["provenance"].pop("harness_play_hash", None)
+    assert "harness_play_hash" not in archive["provenance"]
+    assert restore_arm_from_archive(archive, generation=2, harness_version=0,
+                                    arm="parent", required_seeds=_TRAIN_SEEDS,
+                                    play_hash="sha256:whatever") is not None
+    assert restore_arm_from_archive(archive, generation=2, harness_version=1,
+                                    arm="parent", required_seeds=_TRAIN_SEEDS,
+                                    play_hash="sha256:whatever") is None

@@ -440,7 +440,8 @@ def _parent_arms(ev: Any, result: GenerationResult, *, parent: HarnessRef,
     parent_dir = getattr(parent, "dir", None) or harness
     try:
         return ev.parent_arms(parent_dir, parent_version=int(parent.version),
-                              inherited=inherited)
+                              inherited=inherited,
+                              play_hash=str(getattr(result, "parent_play_hash", "") or ""))
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception as exc: # noqa: BLE001 - 评审链路整体不可用 → 空报告
@@ -514,13 +515,19 @@ def _inherited_parent_heldout(ev: Any, *, run_root: Path, gen: int, parent: Harn
             restored = eval_harness.restore_arm_from_archive(
                 eval_harness.load_arm_archive(archive_path),
                 generation=int(gen), harness_version=parent_version, arm="parent",
-                required_seeds=required_seeds, **limits)
+                required_seeds=required_seeds, play_hash=current, **limits)
         except Exception as exc: # noqa: BLE001 - 继承失败必须重测，不得中断本代
             events.emit("evolve.parent_inherit", generation=int(gen), status="failed",
                         source=f"gen-{prev:03d}",
                         detail=f"{type(exc).__name__}: {exc}"[:200])
             continue
         if restored is None:
+            # B-92（F63）：还原失败是「要花钱」的那条分支，必须留痕——修复前这条 continue
+            # 不发任何事件，D-M3-7 的继承在这条路径上静默退化成重测（40 局 ≈¥21）。
+            events.emit("evolve.parent_inherit", generation=int(gen), status="declined",
+                        source=f"gen-{prev:03d}",
+                        detail="归档无法按测量身份还原（play_hash/版本号或 seed 覆盖不满足）"
+                               "⇒ 退回实测")
             continue
         events.emit("evolve.parent_inherit", generation=int(gen), status="ok",
                     source=f"gen-{prev:03d}", harness_version=parent_version,

@@ -37,6 +37,7 @@ from dice_ratchet.infra.errors import E, InfraError
 
 from .errors import JudgeFailedError, SmokeFailedError
 from .schemas import Candidate, CandidateReport, Verdict, _plain
+from .versioning import PLAY_CONFIG_FILE, PLAY_PROMPT_FILE
 
 __all__ = [
     "CONDITION_IDS", "DEFAULT_SMOKE_BASKET", "HOLDOUT_BASKET", "PRIMARY_METRIC",
@@ -539,7 +540,7 @@ class CandidateEvaluator:
                 "drop_rate_max": float(getattr(eval_cfg, "drop_rate_max", 0.10) or 0.10)}
 
     def _evaluate_arm(self, arm_dir: Any, *, split: str, basket: Any, arm: str,
-                      harness_version: int) -> Any:
+                      harness_version: int, play_hash: str = "") -> Any:
         from dice_ratchet.evals import evaluate_arm
 
         kwargs: dict[str, Any] = {}
@@ -571,7 +572,7 @@ class CandidateEvaluator:
             arm_dir, split=split, basket=basket, memory_version=int(self.memory_version),
             arm=arm, run_id=self.run_id, protocol=self.protocol, config=self.config,
             generation=int(self.generation), harness_version=int(harness_version),
-            episode_config=self.episode_config, **kwargs)
+            episode_config=self.episode_config, play_hash=str(play_hash or ""), **kwargs)
 
     def _assert_patch_reaches_prompt(self, *, arm: str, arm_dir: Path) -> None:
         """F66 护栏（候选臂专用）：**play 模板必须真的从本臂目录解析出来**。
@@ -609,7 +610,7 @@ class CandidateEvaluator:
                      "并确认 staging 布局镜像 harness 根")
 
     def parent_arms(self, parent_dir: Any, *, parent_version: int,
-                    inherited: Any = None) -> tuple[Any, Any]:
+                    inherited: Any = None, play_hash: str = "") -> tuple[Any, Any]:
         """parent 的 heldout + 冒烟。
 
         **F57（2026-10-12）——``inherited``：跨代继承。** 原先这里**每代都重测**
@@ -625,28 +626,41 @@ class CandidateEvaluator:
         逐代不同；而候选的冒烟跑在本代的 seed 上 ⇒ 「parent 与候选同预算」（FR-07-7）
         要求 parent 的冒烟也落在**同一批 seed** 上。冒烟只有 ``smoke_n``（默认 2）局，
         省它的收益 ≈¥1.7 而会破坏快速淘汰的配对前提，不划算。
+
+        ``play_hash``（B-92 / F63）：起点 harness 的 play 面指纹，写进臂归档 provenance
+        ——它是「这份测量测的是哪份 play 面」的唯一凭据（版本号在候选臂上是 accept 之前的
+        号，不可用）。由编排层算好后传入，本类不碰文件系统。
         """
         if inherited is not None:
             heldout = inherited
         else:
             heldout = self._evaluate_arm(parent_dir, split="heldout",
                                         basket=self.heldout_basket, arm="parent",
-                                        harness_version=int(parent_version))
+                                        harness_version=int(parent_version),
+                                        play_hash=play_hash)
         smoke = self._evaluate_arm(parent_dir, split="train", basket=self.smoke_seeds,
-                                   arm="parent-smoke", harness_version=int(parent_version))
+                                   arm="parent-smoke", harness_version=int(parent_version),
+                                   play_hash=play_hash)
         return heldout, smoke
 
     def candidate_arms(self, staging_dir: Any, *, candidate: Candidate,
-                       harness_version: int) -> tuple[Any, Any, dict[str, Any]]:
-        """候选的冒烟 + heldout + 配对检验（FR-07-6/7/8）。"""
+                       harness_version: int,
+                       play_hash: str = "") -> tuple[Any, Any, dict[str, Any]]:
+        """候选的冒烟 + heldout + 配对检验（FR-07-6/7/8）。
+
+        ``play_hash``（B-92 / F63）：**候选 staging 拷贝**的 play 面指纹——它才是这份
+        测量的身份（``harness_version`` 记的是 accept 之前的在役版本号）。
+        """
         from dice_ratchet.evals import compare_paired
 
         arm = f"cand-{candidate.candidate_id}"
         smoke = self._evaluate_arm(staging_dir, split="train", basket=self.smoke_seeds,
-                                   arm=f"{arm}-smoke", harness_version=int(harness_version))
+                                   arm=f"{arm}-smoke", harness_version=int(harness_version),
+                                   play_hash=play_hash)
         heldout = self._evaluate_arm(staging_dir, split="heldout",
                                      basket=self.heldout_basket, arm=arm,
-                                     harness_version=int(harness_version))
+                                     harness_version=int(harness_version),
+                                     play_hash=play_hash)
         return smoke, heldout, {}
 
 
@@ -682,11 +696,15 @@ def evaluate_candidate(candidate: Candidate, parent: Any, *, cfg: Any,
     seeds = tuple(int(s) for s in (smoke_seeds or ev.smoke_seeds))
 
     try:
+        _assert_play_face_actually_changed(candidate, play_hash=play_hash,
+                                          parent_play_hash=parent_play_hash)
         if parent_smoke is None or parent_heldout is None:
             parent_heldout, parent_smoke = _resolve_parent(
-                ev, parent, parent_heldout=parent_heldout, parent_smoke=parent_smoke)
+                ev, parent, parent_heldout=parent_heldout, parent_smoke=parent_smoke,
+                play_hash=str(parent_play_hash or ""))
         smoke, heldout, _unused = ev.candidate_arms(staging_dir, candidate=candidate,
-                                                    harness_version=version)
+                                                    harness_version=version,
+                                                    play_hash=str(play_hash or ""))
     except InfraError as exc:
         events.emit("evolve.evaluate", candidate_id=candidate.candidate_id,
                     error_code=str(exc.code))
@@ -757,13 +775,72 @@ def evaluate_candidate(candidate: Candidate, parent: Any, *, cfg: Any,
     return report
 
 
+def _play_plane_name(raw: Any) -> str:
+    """把候选声明的文件路径归一成「相对 harness 根」的 play 面名字（B-92）。
+
+    **实测口径**（`runs/m3-formal/generations/gen-00{1,2,3}/candidates/*.json`）：真实候选的
+    ``touched_files`` 是 **`harness/prompts/decision.md`**（带 `harness/` 前缀），diff 头是
+    ``--- a/harness/prompts/decision.md``。若只按文档里那种裸 ``prompts/decision.md`` 比，
+    这个断言会**一次都不触发**——那正是 F73 家族「写了个永不生效的判据」的翻版，故此处显式归一。
+    """
+    name = str(raw).strip().replace("\\", "/")
+    while name.startswith("./"):
+        name = name[2:]
+    for prefix in ("a/", "b/"):
+        if name.startswith(prefix):
+            name = name[len(prefix):]
+    if name.startswith("harness/"):
+        name = name[len("harness/"):]
+    return name
+
+
+def _declared_play_plane_change(candidate: Candidate) -> bool:
+    """候选是否**声明**改了 play 面（B-92 / F63 的窄口径断言用）。
+
+    只看提案方给的 ``touched_files``（先按 ``_play_plane_name`` 归一）：
+
+    - 命中 play 面文件（``prompts/decision.md`` / ``config.json`` / ``tools/*.py``）⇒ ``True``；
+    - 只改学习侧（``reflection.md`` / ``dead_ends.md`` 等**不在** ``play_hash`` 内）⇒ ``False``
+      ——那种提案由 C2 按规则合法拒绝（B-83 的诚实边界），不该被当成机器故障；
+    - ``touched_files`` 为空（提案方没填）⇒ ``False``：宁可漏报，也不能误杀合法候选。
+    """
+    names = {_play_plane_name(f) for f in (candidate.touched_files or ()) if str(f).strip()}
+    if not names:
+        return False
+    if PLAY_PROMPT_FILE in names or PLAY_CONFIG_FILE in names:
+        return True
+    return any(n.startswith("tools/") and n.endswith(".py") for n in names)
+
+
+def _assert_play_face_actually_changed(candidate: Candidate, *, play_hash: str,
+                                       parent_play_hash: str) -> None:
+    """F63/F66 第二半（B-92）：声明改了 play 面、实测却与起点逐字节相同 ⇒ fail-closed。
+
+    **为什么是硬件故障而不是规则拒绝**：``touched_files`` 里写着 ``prompts/decision.md``
+    之类的 play 面文件，而实测 ``play_hash`` 与起点相同 ⇒ 补丁**没有生效**（F66 的现场就是
+    这样：候选臂跑的是 run 级未打补丁的模板）。这属于机器故障，必须响亮失败，不能被当作
+    「候选不好」；而且它**在花钱之前**判（0 局），一次脏提案省 ≈¥21。
+    """
+    if not (_declared_play_plane_change(candidate) and play_hash and parent_play_hash):
+        return
+    if str(play_hash) != str(parent_play_hash):
+        return
+    raise InfraError(
+        E.E_EVOLVE_PATCH_INVALID,
+        f"{candidate.candidate_id}: 补丁声明改了 play 面"
+        f"（touched_files={list(candidate.touched_files)}），但实测 play_hash 与起点逐字节相同"
+        f"（{str(play_hash)[:19]}…）—— 补丁没有生效（F66/F63 家族）",
+        hint="检查 staging 拷贝与模板解析（resolve_path 必须优先 harness_dir）；"
+             "本断言在花钱之前判，0 局消耗")
+
+
 def _resolve_parent(ev: CandidateEvaluator, parent: Any, *, parent_heldout: Any,
-                    parent_smoke: Any) -> tuple[Any, Any]:
+                    parent_smoke: Any, play_hash: str = "") -> tuple[Any, Any]:
     if parent_heldout is not None and parent_smoke is not None:
         return parent_heldout, parent_smoke
     parent_dir = getattr(parent, "dir", None) or parent
     parent_version = int(getattr(parent, "version", 0) or 0)
-    return ev.parent_arms(parent_dir, parent_version=parent_version)
+    return ev.parent_arms(parent_dir, parent_version=parent_version, play_hash=play_hash)
 
 
 def _compare_paired(candidate_arm: Any, parent_arm: Any) -> Any:

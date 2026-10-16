@@ -411,12 +411,27 @@ def write_gen000_baseline(run_ctx: RunContext, *, harness_version: int = 0,
         from .runner import EvalRunnerAdapter
 
         executor = EvalRunnerAdapter(runner)
+    # D-M3-7（2026-10-14）：基线必须写下 v0 的 play 面指纹——它是后续各代「能否直接继承
+    # 这份 40 局测量」的**唯一依据**（用户的步骤 2/3：cycle 0 用 v0 train，起点 heldout
+    # 直接复用基线这 40 局，不重跑）。
+    # **B-92（F63）**：同一枚指纹现在也写进**臂归档 provenance**（`evaluate_arm(play_hash=)`），
+    # 这样跨代继承能按测量身份还原归档——否则候选臂归档只带 accept **之前**的版本号，
+    # 继承会被版本号比对误杀（每代静默重测 40 局 ≈¥21）。
+    baseline_play_hash = ""
+    try:
+        from ..evolve.versioning import play_hash as _play_hash
+
+        baseline_play_hash = str(_play_hash(run_ctx.harness_dir))
+    except Exception as exc: # noqa: BLE001 - 指纹算不出不阻断基线（后代将退回实测）
+        events.emit("loop.resume", phase="baseline", baseline="play_hash_failed",
+                    detail=f"{type(exc).__name__}: {exc}"[:200])
     try:
         parent = evaluate_arm(
             Path(run_ctx.harness_dir), split="heldout", basket=basket,
             memory_version=int(run_ctx.memory_version), arm="parent",
             run_id=run_ctx.run_id, protocol=proto, config=cfg, generation=0,
             harness_version=int(harness_version), runner=executor,
+            play_hash=baseline_play_hash,
             n_workers=int(getattr(cfg.evals, "n_workers", 1)),
             n_rep=int(getattr(cfg.evals.determinism, "n_rep", 1)),
             episode_config=run_ctx.episode_config)
@@ -439,17 +454,11 @@ def write_gen000_baseline(run_ctx: RunContext, *, harness_version: int = 0,
     report["decision"] = "baseline"
     report["decided_by"] = "auto"
     report["reason"] = "harness v0 基线（gen-000，FR-06-13a）"
-    # D-M3-7（2026-10-14）：基线必须写下 v0 的 play 面指纹——它是后续各代「能否直接继承
-    # 这份 40 局测量」的**唯一依据**（用户的步骤 2/3：cycle 0 用 v0 train，起点 heldout
-    # 直接复用基线这 40 局，不重跑）。
-    try:
-        from ..evolve.versioning import play_hash as _play_hash
-
-        report["harness_play_hash"] = str(_play_hash(run_ctx.harness_dir))
-    except Exception as exc: # noqa: BLE001 - 指纹算不出不阻断基线（后代将退回实测）
-        events.emit("loop.resume", phase="baseline", baseline="play_hash_failed",
-                    detail=f"{type(exc).__name__}: {exc}"[:200])
-        report.setdefault("harness_play_hash", "")
+    # D-M3-7（2026-10-14）：基线的 play 面指纹——后续各代「能否直接继承这份 40 局测量」的
+    # **唯一依据**（用户的步骤 2/3：cycle 0 用 v0 train，起点 heldout 直接复用基线这 40 局）。
+    # **B-92（F63）**：上面已经把同一枚指纹交给 `evaluate_arm(play_hash=)` 写进臂归档
+    # provenance ⇒ 继承方按测量身份（而不是版本号）还原归档。
+    report["harness_play_hash"] = str(baseline_play_hash)
     write_generation_report(paths.root, 0, report)
     # F56（2026-10-12，M3 彩排实测）：**基线也要进台账 + 出图**。
     # 现场：`write_gen000_baseline` 原先只写 `report.json` ⇒ `metrics/generations.csv` 从

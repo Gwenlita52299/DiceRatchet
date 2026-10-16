@@ -294,15 +294,18 @@ class ScriptedArms:
         self.paired = paired or _Paired(delta=0.05, significant=True, direction="up")
         self.calls: list[dict[str, Any]] = []
 
-    def parent_arms(self, parent_dir: Any, *, parent_version: int) -> tuple[Any, Any]:
+    def parent_arms(self, parent_dir: Any, *, parent_version: int,
+                    play_hash: str = "", **kwargs: Any) -> tuple[Any, Any]:
         self.calls.append({"arm": "parent", "dir": str(parent_dir),
-                           "version": int(parent_version)})
+                           "version": int(parent_version), "play_hash": str(play_hash)})
         return self.parent_heldout, self.parent_smoke
 
     def candidate_arms(self, staging_dir: Any, *, candidate: Candidate,
-                       harness_version: int) -> tuple[Any, Any, dict[str, Any]]:
+                       harness_version: int, play_hash: str = "",
+                       **kwargs: Any) -> tuple[Any, Any, dict[str, Any]]:
         self.calls.append({"arm": f"cand-{candidate.candidate_id}",
-                           "dir": str(staging_dir), "version": int(harness_version)})
+                           "dir": str(staging_dir), "version": int(harness_version),
+                           "play_hash": str(play_hash)})
         smoke = self.arms.get("smoke") or FakeArm(arm="smoke", win_rate=0.4, n=2)
         heldout = self.arms.get("heldout") or FakeArm(
             arm=f"cand-{candidate.candidate_id}", win_rate=0.35)
