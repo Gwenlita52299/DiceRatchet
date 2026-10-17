@@ -58,7 +58,7 @@ def _state(tmp_path: Path, run_id: str) -> dict:
 
 def test_loop_handlers_registered():
     assert set(loop_cli.HANDLERS) == {("loop", "run"), ("loop", "status"),
-                                      ("loop", "smoke")}
+                                      ("loop", "smoke"), ("loop", "baseline")}
     for path in loop_cli.HANDLERS:
         parser = infra_cli.build_parser()
         args = parser.parse_args(list(path))

@@ -100,6 +100,10 @@ class E(StrEnum):
     E_EVOLVE_GATE_TIMEOUT = "E_EVOLVE_GATE_TIMEOUT"
     E_EVOLVE_VERSION_CONFLICT = "E_EVOLVE_VERSION_CONFLICT"
     E_EVOLVE_GIT_FAILED = "E_EVOLVE_GIT_FAILED"
+    #: 起点守卫（2026-10-17）：起点 harness 的 play 面**没有被门禁裁决过**（既不是原始 v0，
+    #: 也不是任何 versions/v*/ 的已接受内容）⇒ 拒绝起跑。现场：v0+P1 被预装成 version 0 的
+    #: "基线"，循环把它当父代继续演化，P2 的 accept 建立在已恶化的 P1 之上。
+    E_EVOLVE_UNGATED_START = "E_EVOLVE_UNGATED_START"
 
     # ---- E_EVAL_*（MOD-08，测量）-----------------------------------------------------
     E_EVAL_INV5_LEAK = "E_EVAL_INV5_LEAK" # Spec §8.3：泄漏统一码
@@ -187,6 +191,7 @@ EXIT_CODE: Final[Mapping[E, int]] = {
     E.E_EVAL_BASELINE_MISSING: EXIT_DOMAIN,
     E.E_EVAL_TIMEOUT: EXIT_DOMAIN,
     E.E_EVOLVE_VERSION_CONFLICT: EXIT_CONFIG,
+    E.E_EVOLVE_UNGATED_START: EXIT_CONFIG,
     E.E_LLM_UNAVAILABLE: EXIT_MODEL,
     E.E_LLM_LOAD_FAILED: EXIT_MODEL,
     E.E_LLM_OOM: EXIT_MODEL,
@@ -216,6 +221,7 @@ EXIT_CODE: Final[Mapping[E, int]] = {
 
 
 ERROR_MESSAGE: Final[Mapping[E, str]] = {
+    E.E_EVOLVE_UNGATED_START: "起点 harness 的 play 面未经门禁裁决（不是原始 v0，也不是已接受版本）",
     E.E_IO_CONFIG_INVALID: "配置校验失败：键路径或类型不合法",
     E.E_IO_CONFIG_UNKNOWN: "未知配置键（已忽略，不中断）",
     E.E_IO_RUN_CONFLICT: "run 目录已存在且 config_hash 不一致：禁止两套配置写同一 run",

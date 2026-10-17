@@ -380,6 +380,9 @@ def _add_loop(sub: Any) -> None:
                      help="run 启动时先跑 gen-000 基线（默认：使用真实 MOD-07 时开启）")
     run.add_argument("--no-baseline", dest="baseline", action="store_false", default=None,
                      help="跳过 gen-000 基线（只验编排时用）")
+    run.add_argument("--allow-ungated-start", dest="allow_ungated_start",
+                     action="store_true", default=False,
+                     help="显式放行未经门禁裁决的起点 play 面（默认 fail-closed；放行会留痕）")
     _common_run_id(run)
     _set_func(run, _deferred(["loop", "run"], "loop"), ["loop", "run"])
 

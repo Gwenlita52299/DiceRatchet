@@ -76,7 +76,17 @@ def cmd_loop_run(args: argparse.Namespace) -> int:
     # F47-A：演化起跑前的 git 门禁——必须早于 gen-000 基线（那份也要花钱），
     # 否则「脏工作区」要等整代跑完、MOD-07 提交前才被拒（实测白花 3.75 h / ≈¥47）。
     if orch.evolve_fn is not None:
+        # 顺序刻意：先 F47-A 的 git 干净检查（退出码 4 的既有契约），再起点守卫（退出码 2）。
+        # 两者都在 gen-000 基线**之前**，任一条不过都不花钱。
         ensure_evolution_worktree_clean(run_ctx)
+        # 起点守卫（B，2026-10-17）：未经门禁裁决的 play 面不得起跑。
+        # 现场教训：P1 被预装成 version 0 的"基线"，循环把它当父代继续演化，
+        # P2 的 accept 建立在 held-out 0.05 的 P1 之上。
+        from ..evolve.versioning import assert_start_play_plane_accepted
+
+        assert_start_play_plane_accepted(
+            Path(getattr(args, "harness_dir", "harness")),
+            allow_ungated=bool(getattr(args, "allow_ungated_start", False)))
     seeds = _resolve_seeds(args, orch.config, resume=resume)
     run_baseline = getattr(args, "baseline", None)
     if run_baseline is None:

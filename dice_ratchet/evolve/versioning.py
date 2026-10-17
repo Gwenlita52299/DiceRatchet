@@ -1024,3 +1024,87 @@ def gate_state_for(*, generation: int, status: str, harness_version: int,
                       error_code=error_code)
     validate_gate_state(state.as_dict())
     return state
+
+
+# =====================================================================
+# 起点守卫（B，2026-10-17）：未经门禁裁决的 play 面不得起跑
+# =====================================================================
+#
+# 现场：P1（人工去重补丁）在起跑前被写进 ``harness/`` 并记成 version 0。循环的契约是
+# 「起点 harness = 基线」（``loop/generation.py::write_gen000_baseline`` 只测不裁决），
+# 于是 P1 从未作为 candidate 过门禁，却被当成父代继续演化：P2 的 accept 建立在
+# held-out 0.05（vs 裸 v0 0.175）的 P1 之上。
+#
+# 本守卫只做一件事：**起跑前确认起点 play 面是"被裁决过的"**——
+#   * 原始 v0（``harness/BASELINE.json`` 登记的那份 play_hash），或
+#   * 任一 ``harness/versions/v{N}/`` 已接受快照的 play_hash。
+# 否则 fail-closed（``E_EVOLVE_UNGATED_START``，退出码 2），一局都不跑。
+# 它**不**代替门禁：候选补丁仍要先用 ``loop baseline`` 测量并裁决；它只是保证
+# "没裁决过的东西不会悄悄变成下一代父代"。
+
+BASELINE_FILE: Final[str] = "BASELINE.json"
+
+
+def read_baseline_record(root: Path | str) -> dict[str, Any] | None:
+    """读 ``harness/BASELINE.json``（原始 v0 的 play_hash 锚点）；缺失/损坏 → ``None``。"""
+    path = Path(root) / BASELINE_FILE
+    if not path.is_file():
+        return None
+    try:
+        data = read_json(path)
+    except InfraError:
+        return None
+    return dict(data) if isinstance(data, Mapping) else None
+
+
+def record_baseline(root: Path | str, *, note: str = "") -> dict[str, Any]:
+    """把**当前** harness 的 play 面登记为原始基线（人工一次性动作，写 ``BASELINE.json``）。"""
+    root = Path(root)
+    payload = {"version": int(current_version(root)), "play_hash": play_hash(root),
+               "note": str(note or "原始基线（起跑守卫的白名单锚点）")}
+    write_json_atomic(root / BASELINE_FILE, payload)
+    return payload
+
+
+def accepted_play_hashes(root: Path | str) -> dict[str, str]:
+    """已裁决的 play 面：``play_hash → 来源``（``versions/v{N}`` 快照 + ``BASELINE.json``）。"""
+    root = Path(root)
+    out: dict[str, str] = {}
+    versions = root / "versions"
+    if versions.is_dir():
+        for path in sorted(versions.iterdir()):
+            if not path.is_dir() or not path.name.startswith("v"):
+                continue
+            try:
+                out[play_hash(path)] = f"accepted:{path.name}"
+            except OSError:  # pragma: no cover - 快照损坏：不纳入白名单（fail-closed）
+                continue
+    baseline = read_baseline_record(root)
+    if baseline and baseline.get("play_hash"):
+        out[str(baseline["play_hash"])] = f"baseline:v{baseline.get('version', 0)}"
+    return out
+
+
+def assert_start_play_plane_accepted(root: Path | str, *, allow_ungated: bool = False) -> dict[str, Any]:
+    """起点守卫：play 面不在白名单 ⇒ 抛 ``E_EVOLVE_UNGATED_START``（退出码 2）。
+
+    返回 ``{"play_hash", "source", "ok"}`` 便于事件/日志留痕；``allow_ungated=True`` 时
+    显式放行（``--allow-ungated-start``，用于引导新项目或人工复核后的特例），来源记为
+    ``"allow_ungated"``——**放行本身要留痕**，不能静默。
+    """
+    root = Path(root)
+    current = play_hash(root)
+    accepted = accepted_play_hashes(root)
+    if current in accepted:
+        return {"play_hash": current, "source": accepted[current], "ok": True}
+    if allow_ungated:
+        events.emit("evolve.start_guard", status="allow_ungated", play_hash=current[:19])
+        return {"play_hash": current, "source": "allow_ungated", "ok": True}
+    known = ", ".join(sorted(accepted)) or "（无：连 BASELINE.json 都没有登记）"
+    raise InfraError(
+        E.E_EVOLVE_UNGATED_START,
+        f"起点 harness 的 play 面没有被门禁裁决过：{current[:19]}… 不在白名单里",
+        hint=("起跑只接受：原始 v0（`harness/BASELINE.json` 登记）或已接受版本"
+              f"（`harness/versions/v*/`）。已登记：{known}。"
+              "要测一个候选补丁，先用 `loop baseline` 测它、按协议裁决后再让它成为父代；"
+              "确有需要时用 `--allow-ungated-start` 显式放行（会在事件里留痕）。"))
