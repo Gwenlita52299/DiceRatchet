@@ -1,11 +1,11 @@
 {
   "accepted_by": "auto",
-  "artifact_hash": "sha256:67622ff67f4d8eec52f4fbf37840068090081f8096edb7cf56fcdfb52d30fda0",
+  "artifact_hash": "sha256:2c4e3bb8fa8126dccf5dc1a67af5e35911ce14d76f114478fe9393914ae7e025",
   "base_model": null,
-  "created_at": "2026-10-17T01:08:52Z",
+  "created_at": "2026-10-17T04:29:42Z",
   "diff_path": "",
   "git_commit": "",
-  "parent": 1,
-  "reason": "rejected:733b0037f65d:C1:win_rate 0.0750<0.2250",
-  "version": 2
+  "parent": 2,
+  "reason": "rejected:1082757314fc:C1:win_rate 0.1750<0.2250",
+  "version": 3
 }
