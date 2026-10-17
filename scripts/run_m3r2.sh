@@ -39,9 +39,26 @@ PY=".venv/bin/python"
 HARNESS_DIR="harness"          # 生产生效目录（accept ⇒ git commit + tag）
 MODE="${1:-start}"
 
-GENERATIONS=3                  # = 配置默认值（不构成 config_hash override）；本脚本只跑 1 个 cycle
+GENERATIONS=3                  # = 配置默认值（不构成 config_hash override）
 K=30
-TRAIN_SEEDS="train:1000-1089"  # 3 代 × 30 局；cycle 0 的 1000–1029 已由导入提供
+# **本轮只跑 CYCLES 个 cycle**（用户 2026-10-17 裁决：先看 P2）。
+# 教训（2026-10-17 实测）：原先把 `TRAIN_SEEDS` 写死成 `train:1000-1089`（三代），而导入已覆盖
+# 1000–1029 ⇒ 实际跑成了 3 个 cycle（262 局 / ¥241），与"1 个 cycle / ¥100"的裁决不符。
+# 现在由 `CYCLES` **推出** seed 上界：总代数 = 已导入代数 + CYCLES。
+CYCLES="${M3R2_CYCLES:-1}"
+_imported_generations() {
+  "$PY" - "runs/${RUN_ID}/state.json" <<'EOF' 2>/dev/null || echo 0
+import json, sys
+from pathlib import Path
+p = Path(sys.argv[1])
+print(int(json.loads(p.read_text(encoding="utf-8")).get("generation") or 0) if p.is_file() else 0)
+EOF
+}
+IMPORTED_GENS="$(_imported_generations)"
+TOTAL_GENS=$(( IMPORTED_GENS + CYCLES ))
+TRAIN_BASE="$("$PY" -c 'from dice_ratchet.evals.seeds import coerce_protocol, validate_protocol, take; print(take("train", generation=1, protocol=validate_protocol(coerce_protocol(None)))[0])')"
+TRAIN_LAST=$(( TRAIN_BASE + K * TOTAL_GENS - 1 ))
+TRAIN_SEEDS="train:${TRAIN_BASE}-${TRAIN_LAST}"
 
 # --- 环境：与上一轮正式实验逐字同源（4 个 run 级 override，其余走生产默认值）---------------
 export DICERATCHET_EXPERIMENT__ARM=C1
@@ -70,8 +87,8 @@ _banner() {
   echo "臂 / 局型      : C1 / hard × 6"
   echo "起点 harness   : v0 + P1（人工去重；version 仍为 0，play 面 ≠ 裸 v0）"
   echo "held-out 篮子  : H1 731000–731039（40 局，代际裁判；与上一轮同一把尺子）"
-  echo "代数 / K       : max_generations=${GENERATIONS}（本轮只跑 1 个 cycle）/ K=${K}"
-  echo "训练 seed      : ${TRAIN_SEEDS}（1000–1029 由导入提供，1030–1089 待跑）"
+  echo "代数 / K       : max_generations=${GENERATIONS}；本轮 ${CYCLES} 个 cycle（已导入 ${IMPORTED_GENS} 代）/ K=${K}"
+  echo "训练 seed      : ${TRAIN_SEEDS}（${TRAIN_BASE}–$(( TRAIN_BASE + K * IMPORTED_GENS - 1 )) 由导入提供，其后待跑）"
   echo "HITL           : off（decided_by=auto；报告须写明「本轮无人工确认」）"
   echo "harness 目录   : ${HARNESS_DIR}（accept ⇒ git commit + tag harness-v{N}）"
   echo "一次性资源     : H2 / test **本轮不消耗**"
@@ -149,7 +166,27 @@ EOF
   if find "runs/${RUN_ID}" -name test_attestation.json 2>/dev/null | grep -q .; then
     echo "  FAIL 本 run 已有 test_attestation.json（test 是一次性资源）" >&2; fail=1
   else echo "  OK   本 run 无 test 存证"; fi
-  # 8) 成本闸门：E_gen 不超 cap（FR-06-13）
+  # 8) **范围断言**：`--seeds` 实际解析出的 seed 数必须**恰好**等于
+  #    「已导入代数 + CYCLES」× K（2026-10-17 实测教训：多给一块 seed 就多跑一个 cycle，
+  #    每块 ≈¥65 / ≈3 h —— 本轮因此从裁决的 1 个 cycle 跑成了 3 个）。
+  local resolved
+  if resolved="$("$PY" - "$TRAIN_SEEDS" "$K" "$TOTAL_GENS" <<'EOF'
+import sys
+from dice_ratchet.infra import cli as infra_cli
+spec, k, total = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+parsed = infra_cli.parse_seeds_spec(spec)
+seeds = sorted({int(s) for values in parsed.values() for s in values})
+want = k * total
+print(f"{len(seeds)}/{want}")
+raise SystemExit(0 if len(seeds) == want else 1)
+EOF
+)"; then
+    echo "  OK   范围 = 已导入 ${IMPORTED_GENS} 代 + ${CYCLES} 个 cycle（解析出 ${resolved} 个训练 seed）"
+  else
+    echo "  FAIL --seeds 解析出的 seed 数与「已导入 ${IMPORTED_GENS} + ${CYCLES}」个块不符（${resolved:-解析失败}）" >&2
+    fail=1
+  fi
+  # 9) 成本闸门：E_gen 不超 cap（FR-06-13）
   if "$PY" - <<'EOF' >/dev/null 2>&1
 from pathlib import Path
 from dice_ratchet.infra.config import load_config
