@@ -383,6 +383,15 @@ def _add_loop(sub: Any) -> None:
     _common_run_id(run)
     _set_func(run, _deferred(["loop", "run"], "loop"), ["loop", "run"])
 
+    base = _sp(sp, "baseline", help="只测一次 held-out（给定 harness 目录；不训练、不演化）")
+    base.add_argument("--harness-dir", default="harness", help="harness 工件目录（可以是 staging 拷贝）")
+    base.add_argument("--basket", default=None, help="seed 篮子（默认按 evolve.heldout_basket）")
+    base.add_argument("--agent", choices=["llm", "heuristic"], default="llm",
+                      help="测量用的 agent（heuristic 免费，用于自检）")
+    base.add_argument("--model", default=None, help="MOD-03 模型 id（覆盖 inference.model_id）")
+    _common_run_id(base)
+    _set_func(base, _deferred(["loop", "baseline"], "loop"), ["loop", "baseline"])
+
     for name, help_text in (("status", "查看 run 进度"), ("smoke", "冒烟跑一代（免模型）")):
         sp_run = _sp(sp, name, help=help_text)
         if name == "smoke":

@@ -96,6 +96,41 @@ def cmd_loop_run(args: argparse.Namespace) -> int:
     return int(summary.exit_code)
 
 
+def cmd_loop_baseline(args: argparse.Namespace) -> int:
+    """``loop baseline``：对**给定 harness 目录**跑一次 held-out 测量（不训练、不演化）。
+
+    为什么需要它（2026-10-17，协议口径纠正）：D-M3-7 里「候选补丁单独测 held-out」是一个
+    独立动作——P1 没过门禁时，下一轮要测的是 ``v0+P2``（不是 ``v0+P1+P2``）。原先只有
+    ``loop run`` 会在开跑时顺带测 gen-000 基线，且会被后续训练/演化绑在一起；本命令把
+    「测一个 harness」抽出来：落 ``generations/gen-000/report.json`` + 臂归档，然后**停下**。
+    幂等：报告已存在则直接返回（不重复花钱）。
+    """
+    paths, cfg, run_id = infra_cli.cli_init_run(args)
+    _guard_concurrency(cfg)
+    orch, run_ctx = _build_orchestrator(paths, cfg, run_id, args)
+    basket = getattr(args, "basket", None)
+    report_path = write_gen000_baseline(
+        run_ctx, harness_version=int(run_ctx.state.harness_version),
+        basket=basket, runner=orch.runner)
+    if report_path is None:
+        print(json.dumps({"run_id": run_id, "status": "unavailable",
+                          "hint": "MOD-08/模型不可用：基线降级，不阻塞"}, ensure_ascii=False))
+        return 0
+    report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+    heldout = report.get("heldout") or {}
+    print(json.dumps({
+        "run_id": run_id,
+        "report": str(report_path),
+        "decision": report.get("decision"),
+        "harness_version": report.get("harness_version"),
+        "harness_play_hash": report.get("harness_play_hash"),
+        "heldout": {key: heldout.get(key) for key in
+                    ("n", "win_rate", "win_rate_ci95", "mean_stages_cleared",
+                     "mean_hearts_left", "truncation_rate", "illegal_rate", "source")},
+    }, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
 def cmd_loop_status(args: argparse.Namespace) -> int:
     """``loop status``：打印 ``state.json``（只读；不校验 config_hash、不写盘）。"""
     cfg = infra_cli.load_config(infra_cli.config_overrides(args),
@@ -134,6 +169,7 @@ def cmd_loop_smoke(args: argparse.Namespace) -> int:
 HANDLERS: dict[tuple[str, ...], Callable[[argparse.Namespace], int]] = {
     ("loop", "run"): cmd_loop_run,
     ("loop", "status"): cmd_loop_status,
+    ("loop", "baseline"): cmd_loop_baseline,
     ("loop", "smoke"): cmd_loop_smoke,
 }
 
