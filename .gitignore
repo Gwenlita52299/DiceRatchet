@@ -48,3 +48,6 @@ models/
 coverage.xml
 htmlcov/
 .pytest_cache/
+
+# MOD-07 回滚备份（F-M3-6）：备份本体已移出仓库，这里是崩溃遗留的兜底
+harness/.backup-*/

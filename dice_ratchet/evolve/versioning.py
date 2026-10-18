@@ -24,6 +24,7 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
+import tempfile
 from typing import Any, Final, Mapping, Sequence
 
 from dice_ratchet.infra import events
@@ -463,6 +464,31 @@ def commit_harness_version(harness: Path, *, version: int, message: str,
     return str(sha)
 
 
+def _stamp_git_commit(root: Path, *, version: int, sha: str, tag: bool) -> str:
+    """第二次提交：把**提交后才存在**的 ``git_commit`` 回填进版本血缘。
+
+    为什么需要这一次提交（F-M3-6，2026-10-18 现场）：``git_commit`` 记的是「包含本版本
+    快照的那次提交」的 sha，而这个值只有**提交之后**才存在 —— 自引用。修复前的做法是
+    提交完只**改写文件、不提交**，于是 ``harness/version.json`` 与
+    ``harness/versions/v{N}/version.json`` 永远停在工作区改动里：
+
+    * 下一次 ``loop run`` 的 F47-A（``E_IO_GIT_DIRTY``）直接拒绝起跑（mvp1 实测）；
+    * 提交里的 ``git_commit`` 指向**父版本**的提交（把 v6 标成 v5），比空值更误导。
+
+    因此拆成两次提交：①快照/工件（``tag=False``）；②本函数的回填提交（``tag=True``，
+    tag ``harness-v{N}`` 落在回填提交上，于是 checkout 出来的 ``version.json`` 自洽）。
+    回填提交失败只降级（版本本身已成立），不发事件噪声 —— 残留的脏工作区仍会被
+    F47-A 拦下，不会静默通过。
+    """
+    if not sha:
+        return ""
+    try:
+        return str(commit_harness_version(root, version=int(version), tag=tag,
+                                          message=f"git-commit:{sha[:12]}"))
+    except GitFailedError: # pragma: no cover - git 侧失败（版本已成立，仅留脏工作区）
+        return ""
+
+
 # =====================================================================
 # accept（FR-07-9 / NFR-07-6）
 # =====================================================================
@@ -497,9 +523,11 @@ def accept(cand: Candidate, verdict: Verdict, *, run_id: str, cfg: Any,
     diff_path_rel = f"harness/versions/v{new_version}/diff.patch"
 
     # ---- 1) 应用候选到生效工件（先备份，任何失败都恢复）-----------------------------
-    backup = Path(root) / f".backup-v{parent}"
-    if backup.exists(): # pragma: no cover - 上次崩溃遗留
-        shutil.rmtree(backup, ignore_errors=True)
+    # 备份**不能放在 harness/ 里**（F-M3-6，2026-10-18）：`git add harness` 会把
+    # `.backup-v{parent}/` 一起提交（mvp1 实测：accept 的 commit 里混进 6 个备份文件，
+    # 随后 `_restore` 又把它删掉 ⇒ 工作区立刻变脏，下一次 `loop run` 被 F47-A 拦死）。
+    # 临时目录在仓库之外，天然不可能被提交。
+    backup = Path(tempfile.mkdtemp(prefix=f"dice-harness-v{parent}-"))
     copy_harness_tree(root, backup)
     previous_version_file = _read_version_file(root / VERSION_FILE)
     sha = ""
@@ -516,7 +544,9 @@ def accept(cand: Candidate, verdict: Verdict, *, run_id: str, cfg: Any,
         artifact = artifact_hash_of(root)
         payload = _version_payload(
             version=new_version, parent=parent,
-            git_commit=str((previous_version_file or {}).get("git_commit", "")),
+            # 提交后才知道自己的 sha（自引用），这里留空由 `_stamp_git_commit` 回填。
+            # 修复前填的是**父版本**的 sha（把 v6 标成 v5 的提交），比空值更误导。
+            git_commit="",
             artifact_hash=artifact, created_at=created_at, reason=reason_text,
             accepted_by=by, diff_path=diff_path_rel)
         write_version_pointer(root, payload)
@@ -526,10 +556,12 @@ def accept(cand: Candidate, verdict: Verdict, *, run_id: str, cfg: Any,
         # ---- 3) git 提交 + tag ------------------------------------------------------
         message = _commit_message(gen=gen, version=new_version, kind=cand.kind,
                                   rationale=reason_text)
-        sha = commit_harness_version(root, version=new_version, message=message)
+        sha = commit_harness_version(root, version=new_version, message=message, tag=False)
         payload["git_commit"] = sha
         write_version_pointer(root, payload)
         write_json_atomic(snap / VERSION_FILE, dict(payload))
+        # 回填提交：把上面的 sha 写进血缘并打 tag（否则工作区永远脏，见 `_stamp_git_commit`）
+        _stamp_git_commit(root, version=new_version, sha=sha, tag=True)
     except VersionConflictError:
         # 版本号冲突：候选 diff 已经写进生效工件，必须回到调用前（PRD §10 失败保守）。
         # 冲突的那个目录**不是本次建的**，绝不删除（`_discard_new_snapshot` 只收
@@ -749,6 +781,9 @@ def record_rejection(*, run_id: str, generation: int, reason: str, cfg: Any,
         raise
     payload["git_commit"] = str(sha)
     write_version_pointer(root, payload)
+    # 回填提交（不建快照、不打 tag —— D2=A 的「拒绝也要让死路记录进血缘」语义不变，
+    # 只是把「提交后才知道的 sha」也落进同一条血缘，见 `_stamp_git_commit`）。
+    _stamp_git_commit(root, version=new_version, sha=str(sha), tag=False)
 
     ref = _ref_of(root, version=new_version, parent=parent, git_commit=str(sha),
                   created_at=created_at, reason=reason_text, accepted_by="auto",
@@ -848,9 +883,8 @@ def rollback(to_version: int, *, run_id: str, reason: str, decided_by: str,
     created_by = str(decided_by or "human")
     reason_text = str(reason or "manual_rollback")[:300]
 
-    backup = Path(root) / f".backup-v{parent}"
-    if backup.exists(): # pragma: no cover
-        shutil.rmtree(backup, ignore_errors=True)
+    # 备份移出仓库（F-M3-6）：与 accept 同一理由——`git add harness` 会把备份提交进去。
+    backup = Path(tempfile.mkdtemp(prefix=f"dice-harness-v{parent}-"))
     copy_harness_tree(root, backup)
     previous_version_file = _read_version_file(root / VERSION_FILE)
     created_snap: Path | None = None #: 本次新建的快照（**不是** `snap`：那是回滚目标，只读）
@@ -859,7 +893,8 @@ def rollback(to_version: int, *, run_id: str, reason: str, decided_by: str,
         # 先算出新指针内容，再替换工件（revert.patch 基于 current → target）
         payload = _version_payload(
             version=new_version, parent=parent,
-            git_commit=str((previous_version_file or {}).get("git_commit", "")),
+            # 提交后回填（见 `_stamp_git_commit`）；不再冒用父版本的 sha。
+            git_commit="",
             artifact_hash="", created_at=created_at, reason=reason_text,
             accepted_by=created_by,
             diff_path=f"harness/versions/v{new_version}/revert.patch")
@@ -877,7 +912,8 @@ def rollback(to_version: int, *, run_id: str, reason: str, decided_by: str,
 
         message = (f"revert(harness): back to v{target} — {reason_text[:60]}".strip())
         try:
-            sha = commit_harness_version(root, version=new_version, message=message)
+            sha = commit_harness_version(root, version=new_version, message=message,
+                                         tag=False)
         except GitFailedError:
             _restore(root, backup, previous_version_file)
             _discard_new_snapshot(created_snap)
@@ -891,6 +927,8 @@ def rollback(to_version: int, *, run_id: str, reason: str, decided_by: str,
         payload["git_commit"] = sha
         write_version_pointer(root, payload)
         write_json_atomic(new_snap / VERSION_FILE, dict(payload))
+        # 回填提交：否则这两处「提交后才写」的文件永久留在工作区（F-M3-6）。
+        _stamp_git_commit(root, version=new_version, sha=str(sha), tag=True)
     finally:
         shutil.rmtree(backup, ignore_errors=True)
 

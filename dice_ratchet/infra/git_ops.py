@@ -139,7 +139,11 @@ def commit_harness(repo: Path, version: int, message: str) -> str:
     # 以 allow=harness/ 放行即将提交的本目录改动，但工作区其余任何改动仍阻断演化。
     try:
         worktree_clean_check(repo, allow=(HARNESS_DIR,))
-        git_run(["add", HARNESS_DIR], repo)
+        # F-M3-6（2026-10-18）：``.backup-*`` 是 accept/rollback 的回滚备份目录。备份本体
+        # 已移到仓库外的临时目录，这里再兜一层——崩溃遗留的旧备份绝不能进版本历史
+        # （mvp1 现场：accept 的 commit 里混进 6 个备份文件，随后又被删掉 ⇒ 工作区永久脏）。
+        git_run(["add", "--all", "--", HARNESS_DIR,
+                 f":(exclude){HARNESS_DIR}/.backup-*"], repo)
         # 空提交保护：无变化时 git commit --allow-empty 保留版本动作
         result = git_run(["diff", "--cached", "--quiet"], repo, check=False)
         args = ["commit", "-m", full_msg] if result.returncode != 0 else \

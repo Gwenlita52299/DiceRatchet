@@ -229,3 +229,25 @@ def test_tag_version_does_not_delete_same_named_branch(repo: Path, harness: Path
     assert _git(repo, "tag", "-l", "harness-v9").strip() == "harness-v9"
     # 回滚/校验走全限定 ref，与同名分支并存也无歧义
     assert len(_git(repo, "rev-parse", "refs/tags/harness-v9")) == 40
+
+
+@pytest.mark.skipif(not git_available(), reason="git 不可用")
+def test_commit_harness_never_stages_backup_dir(repo: Path, harness: Path):
+    """F-M3-6（2026-10-18）：``harness/.backup-*`` 绝不能被提交。
+
+    mvp1 现场：accept 先把 ``harness/`` 全量备份到 ``harness/.backup-v5/``，再
+    ``git add harness`` ⇒ 6 个备份文件进了版本提交，随后 ``_restore`` 又删掉它们
+    ⇒ 工作区永久变脏，下一次 ``loop run`` 被 F47-A 拦死。
+    """
+    (harness / "prompts" / "decision.md").write_text("v1\n", encoding="utf-8")
+    backup = harness / ".backup-v0"
+    (backup / "prompts").mkdir(parents=True)
+    (backup / "prompts" / "decision.md").write_text("v0\n", encoding="utf-8")
+
+    commit_harness(repo, 1, "with leftover backup")
+
+    tracked = _git(repo, "ls-tree", "-r", "--name-only", "HEAD").splitlines()
+    assert "harness/prompts/decision.md" in tracked
+    assert not [p for p in tracked if ".backup-" in p], tracked
+    # 备份目录本身仍在工作区（不计入版本历史，也不被删除）
+    assert (backup / "prompts" / "decision.md").is_file()

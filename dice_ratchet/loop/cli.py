@@ -88,6 +88,9 @@ def cmd_loop_run(args: argparse.Namespace) -> int:
             Path(getattr(args, "harness_dir", "harness")),
             allow_ungated=bool(getattr(args, "allow_ungated_start", False)))
     seeds = _resolve_seeds(args, orch.config, resume=resume)
+    if seeds and not resume:
+        # F-M3-7：k 与协议的 train.per_generation 必须一致，否则 train 报告段会错位
+        _assert_train_blocks_match_protocol(seeds, orch.config)
     run_baseline = getattr(args, "baseline", None)
     if run_baseline is None:
         run_baseline = orch.evolve_fn is not None
@@ -239,6 +242,45 @@ def _resolve_seeds(args: argparse.Namespace, loop_cfg: Any, *,
     for generation in range(1, int(getattr(loop_cfg, "max_generations", 3)) + 1):
         seeds.extend(take("train", generation=generation, protocol=proto))
     return seeds
+
+
+def _assert_train_blocks_match_protocol(seeds: list[int], loop_cfg: Any) -> None:
+    """``loop.k`` 与协议 ``train.per_generation`` 必须一致（F-M3-7，2026-10-18）。
+
+    为什么必须 fail-closed：训练局的 ``generation`` 标签是 ``state.generation + 1``
+    （F64），而报告里的 ``train`` 段按 ``seeds.take("train", g)`` 取数——后者用的是
+    协议里的 ``per_generation``（默认 30）。两者一旦不等，**第 g 代的训练块就落在
+    ``take(g)`` 窗口之外**，报告会拿空集/半集算 ``train.win_rate`` 与 ``gain_realism``。
+
+    mvp1 现场（``k=10`` + ``--seeds train:1030-1049``）：第 1 代的块是 1030–1039，
+    而 ``take(1)=1000–1029`` ⇒ 交集为空 ⇒ ``gen-001.train.n=0``、``win_rate=0.0``，
+    ``gain_realism`` 建在空集上。提案侧的轨迹/记忆不受影响（它们按"最近 N 条"取），
+    所以**错误只出现在报告指标里**，更需要在起跑前拦下。
+
+    检查方式：逐代把「实际会被标成第 g 代的 k 局」与 ``take("train", g)`` 对一下；
+    有空块就停（不会有局被标成那一代，无需检查）。
+    """
+    from ..evals.seeds import coerce_protocol, take, validate_protocol
+
+    k = max(1, int(getattr(loop_cfg, "k", 1)))
+    max_gen = int(getattr(loop_cfg, "max_generations", 3))
+    proto = validate_protocol(coerce_protocol(None))
+    for gen in range(1, max_gen + 1):
+        block = list(seeds[(gen - 1) * k: gen * k])
+        if not block:
+            return
+        window = set(take("train", generation=gen, protocol=proto))
+        stray = [s for s in block if s not in window]
+        if stray:
+            low, high = min(window), max(window)
+            raise InfraError(
+                E.E_IO_CONFIG_INVALID,
+                f"第 {gen} 代训练块 {block[0]}–{block[-1]} 有 {len(stray)} 局不在协议窗口 "
+                f"{low}–{high} 内（k={k}，train.per_generation={high - low + 1}）："
+                f"报告的 train 段会拿空集算指标",
+                hint="loop.k 必须等于 configs/seeds.yaml 的 train.per_generation（默认 30）；"
+                     "要跑更短的代，请同时把协议的 per_generation 改小（那是新 run 族），"
+                     "不要只改 k")
 
 
 def _build_orchestrator(paths: RunPaths, cfg: Any, run_id: str,

@@ -410,3 +410,53 @@ def test_f55_readonly_command_reads_run_with_different_max_generations(tmp_path,
                                "--agent", "heuristic", "--k", "1"])
     assert code3 != 0 and "E_IO_RUN_CONFLICT" in err3, (code3, err3)
     assert recorded  # 起跑时的 hash 非空（上面第 ② 步的对照基准）
+
+
+# =====================================================================
+# F-M3-7（2026-10-18）：loop.k 必须与 train.per_generation 对齐
+# =====================================================================
+
+def test_train_blocks_must_match_protocol_window():
+    """k=10 + 种子 1030–1049：第 1 代块落在 ``take(1)=1000–1029`` 之外 ⇒ 拒绝。
+
+    mvp1 现场：这样的组合让 ``gen-001.train.n=0``（报告拿空集算 win_rate 与
+    gain_realism），但它不会报错、只会静默产出错误指标。
+    """
+    cfg = LoopConfig(k=10, max_generations=2)
+    with pytest.raises(InfraError) as exc:
+        loop_cli._assert_train_blocks_match_protocol(list(range(1030, 1050)), cfg)
+    assert exc.value.code == E.E_IO_CONFIG_INVALID
+    assert "train.per_generation" in exc.value.hint
+
+
+def test_train_blocks_ok_when_k_equals_per_generation():
+    loop_cli._assert_train_blocks_match_protocol(
+        list(range(1000, 1060)), LoopConfig(k=30, max_generations=2))
+
+
+def test_train_blocks_ignore_incomplete_tail():
+    """只够两代的种子 + 三代的上限：第三代没有块 ⇒ 不检查、也不报错。"""
+    loop_cli._assert_train_blocks_match_protocol(
+        list(range(1000, 1060)), LoopConfig(k=30, max_generations=3))
+
+
+def test_cmd_loop_run_rejects_misaligned_blocks_before_spending(tmp_path, monkeypatch):
+    """接线：``cmd_loop_run`` 在**跑任何一局之前**调用对齐检查。"""
+    cfg = LoopConfig(k=10, max_generations=2)
+
+    class _Orch:
+        config = cfg
+        evolve_fn = None
+
+        def run(self, seeds, *, resume=False, force_rerun=False):
+            raise AssertionError("对齐检查必须先于 orch.run 触发")
+
+    monkeypatch.setattr(loop_cli, "_build_orchestrator",
+                        lambda paths, cfg_, run_id, args: (_Orch(), object()))
+    monkeypatch.setattr(infra_cli, "cli_init_run",
+                        lambda args: (object(), argparse.Namespace(loop=cfg), "r-1"))
+    args = argparse.Namespace(seeds="train:1030-1049", resume=False,
+                              force_rerun=False, baseline=False)
+    with pytest.raises(InfraError) as exc:
+        loop_cli.cmd_loop_run(args)
+    assert exc.value.code == E.E_IO_CONFIG_INVALID
