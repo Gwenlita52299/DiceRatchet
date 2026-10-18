@@ -4,7 +4,7 @@
   "base_model": null,
   "created_at": "2026-10-18T15:34:21Z",
   "diff_path": "",
-  "git_commit": "",
+  "git_commit": "e16c20dbb3a23fc6269036fb53d3d87657823896",
   "parent": 4,
   "reason": "rejected:2b0e1e81bb78:C1:win_rate 0.3500<0.4000",
   "version": 5
