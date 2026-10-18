@@ -304,7 +304,9 @@ evolve:
   # 2026-10-18（F-M3-5）：原 `prompt.show_intent` 无 PolicyConfig 字段、也无读取点，已移除。
   # 2026-10-18（F-M3-9）：`retrieval.top_k` 被 policy.memory_top_k 遮蔽（永不生效），
   # 换成真正生效的 `sampling.memory_top_k`；取值域/生效 mode 见 EVOLVABLE_KEY_SPECS。
-  evolvable_keys: [sampling.temperature, sampling.memory_top_k]
+  # 2026-10-19（F-M3-10）：`sampling.*` 两个键都是**训练侧**（eval 下温度恒 0、heldout 无记忆），
+  # eval 轮次里真正能改变打法的是 plan.max_plan_len / prompt.token_budget / policy.retry_max。
+  evolvable_keys: [sampling.temperature, sampling.memory_top_k, plan.max_plan_len, prompt.token_budget, policy.retry_max]
   tool_import_allowlist: [math, re, json, itertools, functools, typing, dataclasses]
 
 # ============ eval（MOD-08 测量）============

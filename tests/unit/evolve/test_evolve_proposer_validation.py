@@ -245,7 +245,8 @@ def test_config_patch_stale_show_intent_key_rejected():
         evolvable_keys=("sampling.memory_top_k", "sampling.temperature",
                         "prompt.show_intent")))
     assert result.status == "fail"
-    assert any("config_key_not_evolvable" in v for v in result.violations)
+    # 白名单里有、规格表里没有 ⇒ 「没有实现」，与「不在白名单」区分开
+    assert any("config_key_unsupported" in v for v in result.violations)
 
 
 def test_config_patch_unknown_dotted_path_rejected():

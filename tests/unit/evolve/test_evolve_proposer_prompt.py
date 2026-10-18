@@ -65,11 +65,11 @@ def test_prompt_includes_config_patch_example():
     """
     system, _user = P.render_proposer_prompt(_bundle(), make_config())
     assert "config_patch" in system
-    assert '+{"agent.policy.memory_top_k": 3}' in system
-    assert "sampling.memory_top_k` → `agent.policy.memory_top_k" in system
+    assert '+{"agent.policy.max_plan_len": 10}' in system
+    assert "plan.max_plan_len` → `agent.policy.max_plan_len" in system
     assert "禁止嵌套对象" in system
-    # F-M3-9：写「当前模式不生效」的键会被直接判作废，prompt 必须提前说
-    assert "eval` 模式下" in system
+    # F-M3-10：训练侧键在 eval 判定口会被判作废，prompt 必须提前说
+    assert "只在训练侧生效" in system
 
 
 def test_f38_harness_body_is_inlined_and_scopes_placeholder_rule(tmp_path):
@@ -111,13 +111,14 @@ def test_f40_prompt_states_the_rules_the_validator_enforces():
     """
     from dice_ratchet.evolve.schemas import CANDIDATE_SCHEMA
 
-    cfg = make_config(evolvable_keys=("sampling.temperature", "sampling.memory_top_k"))
+    cfg = make_config(evolvable_keys=("sampling.temperature", "plan.max_plan_len",
+                                      "policy.retry_max"))
     system, _user = P.render_proposer_prompt(_bundle(), cfg)
 
-    for key in ("sampling.temperature", "sampling.memory_top_k"):
+    for key in ("sampling.temperature", "plan.max_plan_len", "policy.retry_max"):
         assert key in system, f"prompt 必须列出可改的 config 键：{key}"
     # F-M3-9（方案 A）：取值域必须写进 prompt —— 校验器会按它拒绝越界值
-    assert "[0.7, 1.2]" in system and "[1, 20]" in system
+    assert "[0.7, 1.2]" in system and "[4, 20]" in system and "[0, 4]" in system
     assert str(P._RATIONALE_MAX_CHARS) in system, "prompt 必须给出 rationale 硬上限"
     assert str(P._RATIONALE_GUIDE_CHARS) in system, "prompt 必须给出留余量的建议值"
     # 同一上限只许有一个事实来源：校验器直接取候选 JSON Schema 的 maxLength

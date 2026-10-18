@@ -634,7 +634,10 @@ class EvolveConfig:
     # （agent 显式传参 ⇒ 它永远不生效），已换成**真正生效**的 `sampling.memory_top_k`；
     # 每个键的取值域/生效 mode 见 `evolve/proposer.py::EVOLVABLE_KEY_SPECS`。
     evolvable_keys: tuple[str, ...] = (
+        # 训练侧（eval 下被裁掉）：采样温度、记忆注入条数
         "sampling.temperature", "sampling.memory_top_k",
+        # eval 侧（F-M3-10）：直接作用在决策路径上，能改变 heldout 结果
+        "plan.max_plan_len", "prompt.token_budget", "policy.retry_max",
     )
     tool_import_allowlist: tuple[str, ...] = (
         "math", "re", "json", "itertools", "functools", "typing", "dataclasses",

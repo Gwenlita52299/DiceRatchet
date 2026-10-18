@@ -181,3 +181,55 @@ def test_judge_rejects_when_only_inert_bytes_changed(tmp_path):
                     effective_hash="sha256:same", parent_effective_hash="sha256:same")
     assert verdict.decision == "reject"
     assert "no_effective_change" in verdict.reason
+
+
+# =====================================================================
+# F-M3-10：eval 侧的三个键（训练侧的 sampling.* 在 eval 轮次被裁掉）
+# =====================================================================
+
+EVAL_KEYS = ("plan.max_plan_len", "prompt.token_budget", "policy.retry_max")
+
+
+def test_eval_side_keys_pass_validation_in_eval_mode():
+    """eval 判定口上真正作用在决策路径的三个键：合法值必须放行。"""
+    cases = {"agent.policy.max_plan_len": 10,
+             "agent.policy.prompt_token_budget": 2048,
+             "agent.policy.retry_max": 3}
+    for actual, value in cases.items():
+        result = P.validate_candidate(_config_patch({actual: value}),
+                                      cfg=make_config(evolvable_keys=EVAL_KEYS),
+                                      mode="eval")
+        assert result.status == "pass", (actual, result.violations)
+
+
+def test_eval_side_keys_out_of_range_rejected():
+    for actual, value in (("agent.policy.max_plan_len", 99),
+                          ("agent.policy.prompt_token_budget", 100),
+                          ("agent.policy.retry_max", 9)):
+        result = P.validate_candidate(_config_patch({actual: value}),
+                                      cfg=make_config(evolvable_keys=EVAL_KEYS),
+                                      mode="eval")
+        assert result.status == "fail", actual
+        assert any("config_value_out_of_range" in v for v in result.violations), actual
+
+
+def test_memory_top_k_is_inert_in_eval():
+    """mvp2 实测：heldout 里记忆为空 ⇒ memory_top_k 对判定指标无效，已降级为训练侧键。"""
+    result = P.validate_candidate(
+        _config_patch({"agent.policy.memory_top_k": 3}),
+        cfg=make_config(evolvable_keys=EVAL_KEYS + ("sampling.memory_top_k",)),
+        mode="eval")
+    assert result.status == "fail"
+    assert any("config_key_inert_in_mode" in v for v in result.violations)
+
+
+def test_eval_side_keys_are_effective_by_construction():
+    """这三个键必须真的被 `_sampling`/解析/重试路径读到（否则又回到 mvp1 的老问题）。"""
+    import inspect
+
+    from dice_ratchet.agent import policy as policy_mod
+
+    source = inspect.getsource(policy_mod)
+    assert "max_plan_len" in source          # 解析后截断 plan
+    assert "prompt_token_budget" in source   # prompt 组装预算
+    assert "retry_max" in source             # 每决策尝试次数

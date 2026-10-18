@@ -594,14 +594,14 @@ _CONFIG_PATCH_EXAMPLE = """## `config_patch` 的最小合法样例（只改可�
 +++ b/harness/config.json
 @@ -1 +1 @@
 -{}
-+{"agent.policy.memory_top_k": 3}
++{"agent.policy.max_plan_len": 10}
 
 `harness/config.json` 只接受**扁平点分键**，且顶层前缀必须是 `agent.policy.` /
 `memory.retrieve.` / `agent.tools.`。概念名与实际键的对应：
-`sampling.memory_top_k` → `agent.policy.memory_top_k`，`sampling.temperature` →
-`agent.policy.temperature`。禁止嵌套对象（如 `+{ "sampling": { "memory_top_k": 3 } }`）——
-配置加载会拒绝它。只写**当前模式下生效**的键：`sampling.temperature` 在 `eval` 模式下
-恒为 0.0，写它不会改变打法（会被直接判作废）。"""
+`plan.max_plan_len` → `agent.policy.max_plan_len`，`prompt.token_budget` →
+`agent.policy.prompt_token_budget`，`policy.retry_max` → `agent.policy.retry_max`
+（`sampling.*` 两个键只在训练侧生效，当前判定口是 eval，写它们会被判作废）。
+禁止嵌套对象（如 `+{ "plan": { "max_plan_len": 10 } }`）——配置加载会拒绝它。"""
 
 #: 静态校验全灭后的**重试提醒**（F-M3-4，2026-10-18）。
 #:
@@ -1061,14 +1061,29 @@ HARNESS_CONFIG_PREFIXES: Final[tuple[str, ...]] = tuple(HARNESS_CONFIG_ALLOWED_P
 #: 2026-10-18（F-M3-5）：删除了 ``"prompt."`` → ``agent.policy.`` 这一条——概念白名单里
 #: 已经没有 ``prompt.*`` 键（原 ``prompt.show_intent`` 无 ``PolicyConfig`` 字段，已从白名单
 #: 移除）。保留它只会让 ``agent.policy.show_intent`` 折回一个不存在的概念名。
+#: 2026-10-19（F-M3-10）：为**eval 下真正生效**的键恢复 ``plan.`` / ``prompt.`` / ``policy.``
+#: 三条别名——它们各自对应真实的 ``PolicyConfig`` 字段（max_plan_len / prompt_token_budget /
+#: retry_max），不是占位键。别名只用于「概念名 ↔ 实际键」的折返与嵌套建议，
+#: **写进 config.json 的仍然必须是实际键**（``agent.policy.*``）。
 CONFIG_KEY_ALIASES: Final[dict[str, str]] = {
     "retrieval.": "memory.retrieve.",
     "sampling.": "agent.policy.",
+    "plan.": "agent.policy.",
+    "prompt.": "agent.policy.",
+    "policy.": "agent.policy.",
 }
 
 
 def _actual_config_key(key: str) -> str:
-    """概念名 → ``harness/config.json`` 实际扁平键（已是实际键则原样返回）。"""
+    """概念名 → ``harness/config.json`` 实际扁平键（已是实际键则原样返回）。
+
+    规格表优先：``prompt.token_budget`` 的实际键是 ``agent.policy.prompt_token_budget``，
+    光靠别名会拼成 ``agent.policy.token_budget``（不存在的字段）。别名只用于
+    **规格表之外的**概念名（历史键 / 嵌套建议）。
+    """
+    spec = EVOLVABLE_SPEC_BY_CONCEPT.get(key)
+    if spec is not None:
+        return spec.actual
     for alias, target in CONFIG_KEY_ALIASES.items():
         if key == alias.rstrip(".") or key.startswith(alias):
             return target + key[len(alias):]
@@ -1144,14 +1159,29 @@ class EvolvableKeySpec:
 _TEMPERATURE_LO, _TEMPERATURE_HI = POLICY_TEMPERATURE_RANGE
 
 EVOLVABLE_KEY_SPECS: Final[tuple[EvolvableKeySpec, ...]] = (
-    # 采样温度：**只在 play（训练）模式生效**；eval 恒 0.0，所以 eval 轮次里它是死键。
+    # ---- 训练侧（eval 下不生效，F-M3-10 起在 eval 轮次被裁掉）---------------------
+    # 采样温度：eval 恒 0.0；play 模式 clamp 到该区间。
     EvolvableKeySpec("sampling.temperature", "agent.policy.temperature", "float",
                      _TEMPERATURE_LO, _TEMPERATURE_HI, ("train",),
                      "eval 模式恒 0.0；play 模式 clamp 到该区间"),
-    # 记忆注入条数：**真正决定 prompt 里塞几条记忆**的那个字段（policy.memory_top_k）。
-    # 注意不是 memory.retrieve.top_k —— 那个被 agent 的显式传参遮蔽。
+    # 记忆注入条数：mvp2 实测 **heldout 里记忆为空**（跨 harness 版本被 stale 过滤），
+    # 因此它对判定指标无效——降级为训练侧键，不再让提案方在 eval 轮次里改它。
     EvolvableKeySpec("sampling.memory_top_k", "agent.policy.memory_top_k", "int",
-                     1, 20, ("train", "eval"), "决定决策 prompt 注入的记忆条数"),
+                     1, 20, ("train",), "只影响训练侧的记忆注入条数（判定口不走记忆）"),
+
+    # ---- eval 侧（F-M3-10）：直接作用在决策路径上，能改变 heldout 结果 ------------
+    # 每个决策最多执行几个动作：解析后按它截断 plan（policy.py:337），直接影响回合效率。
+    EvolvableKeySpec("plan.max_plan_len", "agent.policy.max_plan_len", "int",
+                     4, 20, ("train", "eval"),
+                     "每个决策允许的 plan 动作数上限（解析后截断）"),
+    # 提示词组装预算：决定观测/记忆/任务块能占多少 token（policy.py:240）。
+    EvolvableKeySpec("prompt.token_budget", "agent.policy.prompt_token_budget", "int",
+                     1024, 6144, ("train", "eval"),
+                     "决策 prompt 的 token 预算（超出即截断/裁剪）"),
+    # 非法输出重试次数：影响「一次决策最多尝试几次」（policy.py:272）。
+    EvolvableKeySpec("policy.retry_max", "agent.policy.retry_max", "int",
+                     0, 4, ("train", "eval"),
+                     "单次决策失败后的重试次数（影响非法尝试的最终落地）"),
 )
 
 #: 概念名 → 规格（未知概念 = 不是可演化键）
@@ -1277,18 +1307,34 @@ def _validate_config_patch(cand: Candidate, cfg: Any, violations: list[str],
         return leaf_ok.get(key)
 
     resolved = {key: _resolve(key) for key in keys}
-    illegal = sorted(k for k, actual in resolved.items()
-                     if actual is None or actual not in allowed_actual)
-    if illegal:
-        inert = sorted(k for k in illegal
-                       if "." in k and _is_harness_config_key(k)
-                       and _canonical_config_key(k, declared) in declared)
+    unresolved = sorted(k for k, actual in resolved.items() if actual is None)
+    if unresolved:
+        violations.append(f"config_key_not_evolvable:{unresolved}")
+        return
+    filtered = [k for k, actual in resolved.items() if actual not in allowed_actual]
+    if filtered:
+        def _concept(name: str) -> str:
+            return _canonical_config_key(resolved[name] or name, declared)
+
+        # 三种拒绝理由要分清楚（都发生在「花钱之前」）：
+        # ① 在白名单里、但**没有规格/实现**（如已下线的 prompt.show_intent）
+        unsupported = sorted(k for k in filtered
+                             if _concept(k) in declared
+                             and _concept(k) not in EVOLVABLE_SPEC_BY_CONCEPT)
+        # ② 有规格、但**当前 mode 下不生效**（eval 里的 sampling.*）
+        inert = sorted(k for k in filtered if _concept(k) in EVOLVABLE_SPEC_BY_CONCEPT)
+        # ③ 压根不在白名单里
+        rest = sorted(k for k in filtered if k not in unsupported and k not in inert)
+        if unsupported:
+            violations.append(
+                f"config_key_unsupported:{unsupported}"
+                "（在白名单里但没有实现，写了不会生效）")
         if inert:
             violations.append(
                 f"config_key_inert_in_mode:{inert}"
                 f"（mode={mode or '<unknown>'} 下它不改变采样行为）")
-        else:
-            violations.append(f"config_key_not_evolvable:{illegal}")
+        if rest:
+            violations.append(f"config_key_not_evolvable:{rest}")
         return
     # 取值域（F-M3-9 / 方案 A）：越界值在**花钱之前**拒绝，不等 clamp 把它悄悄改掉
     for key, value in values.items():

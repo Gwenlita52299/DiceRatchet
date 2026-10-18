@@ -22,7 +22,10 @@ from dice_ratchet.infra.config import load_config
 CONFIGS = Path(__file__).resolve().parents[3] / "configs"
 
 #: 现行白名单（概念名）。新增键时必须同时能在 `harness/config.json` 里写出来。
-EXPECTED_EVOLVABLE_KEYS = ("sampling.temperature", "sampling.memory_top_k")
+EXPECTED_EVOLVABLE_KEYS = (
+    "sampling.temperature", "sampling.memory_top_k",          # 训练侧
+    "plan.max_plan_len", "prompt.token_budget", "policy.retry_max",  # eval 侧（F-M3-10）
+)
 
 
 def _walk(cfg, dotted: str):
@@ -70,21 +73,17 @@ def test_every_declared_key_has_a_spec():
 
 
 def test_mode_filters_inert_keys():
-    """F-M3-9（方案 C）：eval 模式下 `sampling.temperature` 恒 0.0 ⇒ 不进可演化集。"""
+    """F-M3-9/10：eval 下 `sampling.*` 不生效 ⇒ 只剩三个 eval 侧键。"""
     cfg = load_config(config_dir=CONFIGS).evolve
-    assert P.effective_evolvable_keys(cfg, "eval") == ("sampling.memory_top_k",)
-    assert P.effective_evolvable_keys(cfg, "train") == (
-        "sampling.temperature", "sampling.memory_top_k")
+    assert P.effective_evolvable_keys(cfg, "eval") == (
+        "plan.max_plan_len", "prompt.token_budget", "policy.retry_max")
+    assert P.effective_evolvable_keys(cfg, "train") == EXPECTED_EVOLVABLE_KEYS
 
 
-def test_show_intent_is_no_longer_an_alias_source():
-    """`prompt.` 别名随 `prompt.show_intent` 一起下线。
-
-    否则 `agent.policy.show_intent` 会被折回一个不存在的概念名，校验器给出的
-    拒绝理由会误导提案方去改一个同样非法的键。
-    """
-    assert "prompt." not in P.CONFIG_KEY_ALIASES
-    assert P._actual_config_key("prompt.show_intent") == "prompt.show_intent"
+def test_show_intent_is_not_a_known_key():
+    """`prompt.show_intent` 不是规格表里的键（别名存在也不代表可演化）。"""
+    assert "prompt.show_intent" not in P.EVOLVABLE_SPEC_BY_CONCEPT
+    assert P._actual_config_key("prompt.show_intent") == "agent.policy.show_intent"
 
 
 def test_show_intent_direct_patch_is_rejected():
@@ -98,4 +97,5 @@ def test_show_intent_direct_patch_is_rejected():
     cfg = load_config(config_dir=CONFIGS)
     result = P.validate_candidate(cand, cfg=cfg.evolve)
     assert result.status == "fail"
+    # 它不在白名单里（默认白名单已无该键）⇒ 通用「不可演化」拒绝
     assert any("config_key_not_evolvable" in v for v in result.violations)
