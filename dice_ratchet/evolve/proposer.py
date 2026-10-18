@@ -598,8 +598,8 @@ _CONFIG_PATCH_EXAMPLE = """## `config_patch` 的最小合法样例（只改可�
 `harness/config.json` 只接受**扁平点分键**，且顶层前缀必须是 `agent.policy.` /
 `memory.retrieve.` / `agent.tools.`。概念名与实际键的对应：
 `retrieval.top_k` → `memory.retrieve.top_k`，`sampling.temperature` →
-`agent.policy.temperature`。`prompt.show_intent` 目前没有对应的 PolicyConfig 字段，
-不要写。禁止嵌套对象（如 `+{ "retrieval": { "top_k": 3 } }`）——配置加载会拒绝它。"""
+`agent.policy.temperature`。禁止嵌套对象（如 `+{ "retrieval": { "top_k": 3 } }`）——
+配置加载会拒绝它。"""
 
 #: 静态校验全灭后的**重试提醒**（F-M3-4，2026-10-18）。
 #:
@@ -1053,17 +1053,13 @@ HARNESS_CONFIG_PREFIXES: Final[tuple[str, ...]] = tuple(HARNESS_CONFIG_ALLOWED_P
 
 #: ``evolve.evolvable_keys`` 用的是**概念名**（PRD 口径），而 ``harness/config.json``
 #: 必须写实际路径。两边的等价关系只在这里定义一次。
+#: 2026-10-18（F-M3-5）：删除了 ``"prompt."`` → ``agent.policy.`` 这一条——概念白名单里
+#: 已经没有 ``prompt.*`` 键（原 ``prompt.show_intent`` 无 ``PolicyConfig`` 字段，已从白名单
+#: 移除）。保留它只会让 ``agent.policy.show_intent`` 折回一个不存在的概念名。
 CONFIG_KEY_ALIASES: Final[dict[str, str]] = {
     "retrieval.": "memory.retrieve.",
     "sampling.": "agent.policy.",
-    "prompt.": "agent.policy.",
 }
-
-#: 留在 ``evolvable_keys`` 里、但 ``AppConfig`` 目前**没有**对应字段的概念键。
-#: 校验器显式拒绝：否则它会通过白名单，直到配置加载 ``_from_dict`` 才
-#: ``E_IO_CONFIG_INVALID``（又白跑一代）。要么给 ``PolicyConfig`` 加字段，要么把它
-#: 从白名单删除——这是需要单独裁决的协议问题（见评审 §3.6）。
-UNIMPLEMENTED_CONFIG_KEYS: Final[frozenset[str]] = frozenset({"agent.policy.show_intent"})
 
 
 def _actual_config_key(key: str) -> str:
@@ -1077,9 +1073,10 @@ def _actual_config_key(key: str) -> str:
 def _canonical_config_key(key: str, evolvable: set[str]) -> str:
     """实际扁平键 → 概念名（``memory.retrieve.top_k`` → ``retrieval.top_k``）。
 
-    反向映射有歧义：``sampling.*`` 与 ``prompt.*`` 都映射到 ``agent.policy.*``。
-    用 ``evolvable`` 消歧（``agent.policy.show_intent`` 必须折回 ``prompt.show_intent``，
-    而不是 ``sampling.show_intent``）。
+    反向映射**可能**有歧义（若将来一个实际前缀对应多个概念前缀，如
+    ``sampling.*`` / ``prompt.*`` 都映射到 ``agent.policy.*``），用 ``evolvable``
+    消歧：只认白名单里真实存在的那个概念名。2026-10-18（F-M3-5）起
+    ``prompt.*`` 已不在白名单，别名表里只剩一对一映射，这里的消歧逻辑保留为防御。
     """
     for alias, target in CONFIG_KEY_ALIASES.items():
         if key == target.rstrip(".") or key.startswith(target):
@@ -1111,6 +1108,11 @@ def _validate_config_patch(cand: Candidate, cfg: Any, violations: list[str]) -> 
 
     这样 ``{"memory.retrieve.top_k": 3}`` 通过，``{"retrieval": {"top_k": 3}}`` /
     ``{"retrieval.top_k": 3}`` / ``{"seed": 7}`` 都被拒绝（后两者在加载器那边也会失败）。
+
+    F-M3-5（2026-10-18）：概念白名单里的 ``prompt.show_intent`` 已删除（无对应
+    ``PolicyConfig`` 字段），别名表也去掉了 ``prompt.`` 前缀；``agent.policy.show_intent``
+    现在走通用路径被 ``config_key_not_evolvable`` 拒绝，不再需要专门的
+    ``config_key_unimplemented`` 分支。
     """
     evolvable = {str(k) for k in getattr(cfg, "evolvable_keys", ())}
     if not evolvable:
@@ -1126,11 +1128,15 @@ def _validate_config_patch(cand: Candidate, cfg: Any, violations: list[str]) -> 
         nested = sorted(str(k) for k, value in parsed.items()
                         if isinstance(value, Mapping))
         if nested:
+            # 只把**能通过加载器**的叶子当作改写示例；否则（如已下线的
+            # ``prompt.show_intent``）宁可不说，也不要给一个同样非法的键名。
             leaves = sorted({_actual_config_key(path)
                              for path in _json_leaf_paths(parsed)})
+            usable = [leaf for leaf in leaves if _is_harness_config_key(leaf)]
+            example = f"，例如 {usable[:1]}" if usable else ""
             violations.append(
                 f"config_patch_nested_object:{nested}"
-                f"（请改写成扁平点分键，例如 {leaves[:1]}；"
+                f"（请改写成扁平点分键{example}；"
                 "harness/config.json 只接受 agent.policy.* / memory.retrieve.* / "
                 "agent.tools.*）")
             return
@@ -1143,12 +1149,6 @@ def _validate_config_patch(cand: Candidate, cfg: Any, violations: list[str]) -> 
             if not keys:
                 violations.append("config_patch_no_evolvable_key")
                 return
-    unimplemented = sorted(k for k in keys if k in UNIMPLEMENTED_CONFIG_KEYS)
-    if unimplemented:
-        violations.append(
-            f"config_key_unimplemented:{unimplemented}"
-            "（PolicyConfig 当前没有该字段；写了会在配置加载时失败）")
-        return
     illegal = sorted(k for k in keys
                      if not _is_harness_config_key(k)
                      or not _key_is_evolvable(k, evolvable))

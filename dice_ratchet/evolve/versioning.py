@@ -182,7 +182,7 @@ def play_hash(root: Path | str) -> str:
        在那两行之间恒真，判它没有信息量；
     3. F66 的第二半：候选补丁是否**真的改变了打法**。
 
-    ``config.json``（``agent.policy.*`` 采样温度 / ``show_intent``、``memory.retrieve.*``）
+    ``config.json``（``agent.policy.*`` 采样温度、``memory.retrieve.*``）
     与 ``tools/*.py`` 都在 play 面内——它们确实改变决策，必须计入。
 
     缺失/不可读的文件用 ``"<missing>"`` 占位（而不是跳过）：删掉一个 play 文件必然

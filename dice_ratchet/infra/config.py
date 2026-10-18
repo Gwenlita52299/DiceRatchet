@@ -622,8 +622,14 @@ class EvolveConfig:
     hitl: bool = True
     gate_timeout_hours: int = 24
     propose_max_retries: int = 2
+    # `config_patch` 白名单（概念名，非实际键路径）。**不变量**：每一项都必须能经
+    # `proposer._actual_config_key` 映射成 `harness/config.json` 加载器接受的实际字段，
+    # 否则候选会在「训练跑完、配置加载时」才 `E_IO_CONFIG_INVALID`——白跑一代。
+    # 2026-10-18（F-M3-5）：原第三项 `prompt.show_intent` 没有任何 `PolicyConfig` 字段、
+    # 也没有运行期读取点（意图/推理已由 `decision.md` 强制 `reasoning` 恒开），已移除；
+    # 回归判据见 `tests/unit/evolve/test_evolve_evolvable_keys.py`。
     evolvable_keys: tuple[str, ...] = (
-        "retrieval.top_k", "sampling.temperature", "prompt.show_intent",
+        "retrieval.top_k", "sampling.temperature",
     )
     tool_import_allowlist: tuple[str, ...] = (
         "math", "re", "json", "itertools", "functools", "typing", "dataclasses",

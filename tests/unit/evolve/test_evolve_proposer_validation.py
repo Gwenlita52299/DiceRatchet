@@ -230,20 +230,22 @@ def test_config_patch_actual_agent_policy_key_passes():
     assert result.status == "pass", result.violations
 
 
-def test_config_patch_unimplemented_key_rejected():
-    """``prompt.show_intent`` 在白名单里，但 ``PolicyConfig`` 没有该字段。
+def test_config_patch_stale_show_intent_key_rejected():
+    """``prompt.show_intent`` 已从白名单移除（F-M3-5）：旧配置里残留它也不放行。
 
-    必须在花钱前显式拒绝；否则它会通过白名单、到配置加载 ``_from_dict`` 才
-    ``E_IO_CONFIG_INVALID``（又白跑一代）。
+    它是 Spec §5 的概念占位键，``PolicyConfig`` 从来没有这个字段。历史实现靠一个
+    专门的 ``config_key_unimplemented`` 分支拦住它；现在走通用路径（列表外的键），
+    理由更直接：它就不是一个可演化键。
     """
     diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
             '@@ -1 +1 @@\n-{}\n+{"agent.policy.show_intent": true}\n')
     cand = make_candidate(kind="config_patch", diff=diff,
                           touched=["harness/config.json"])
     result = P.validate_candidate(cand, cfg=make_config(
-        evolvable_keys=("prompt.show_intent",)))
+        evolvable_keys=("retrieval.top_k", "sampling.temperature",
+                        "prompt.show_intent")))
     assert result.status == "fail"
-    assert any("config_key_unimplemented" in v for v in result.violations)
+    assert any("config_key_not_evolvable" in v for v in result.violations)
 
 
 def test_config_patch_unknown_dotted_path_rejected():
