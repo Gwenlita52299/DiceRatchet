@@ -106,6 +106,10 @@ class InferenceCallRecord:
     error_code: str | None = None
     resident_gb: float | None = None
     inflight: int | None = None
+    #: 服务方前缀缓存命中/未命中的输入 token（本地后端恒 0；2026-10-17 新增）
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
+    cache_hit_rate: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         """JSON 友好形态（tuple → list；浮点 round(4)，对齐 B-34）。"""
@@ -123,6 +127,9 @@ class InferenceCallRecord:
                 "backend": data["backend"], "latency_ms": data["latency_ms"],
                 "prompt_tokens": data["prompt_tokens"],
                 "completion_tokens": data["completion_tokens"],
+                "cache_hit_tokens": data["cache_hit_tokens"],
+                "cache_miss_tokens": data["cache_miss_tokens"],
+                "cache_hit_rate": data["cache_hit_rate"],
                 "attempt": data["attempt"], "outcome_kind": data["outcome_kind"],
                 "prompt_digest": data["prompt_digest"], "error_code": data["error_code"],
                 "grammar_used": data["grammar_used"], "json_mode": data["json_mode"]}
@@ -152,11 +159,21 @@ def make_call_record(*, call_id: str, model_id: str, backend: str, mode: str, ct
                      prefill_ms: int | None = None, decode_ms: int | None = None,
                      degraded_reason: str | None = None, error_code: str | None = None,
                      resident_gb: float | None = None, inflight: int | None = None,
+                     cache_hit_tokens: int = 0,
                      ts: str | None = None, seed: int | None = None) -> InferenceCallRecord:
-    """构造一条埋点记录；``tok_per_s = completion_tokens / decode_ms × 1000``（PRD §13）。"""
+    """构造一条埋点记录；``tok_per_s = completion_tokens / decode_ms × 1000``（PRD §13）。
+
+    ``cache_hit_tokens`` 由后端从服务方 usage 里取（本地后端不传 ⇒ 0）；这里统一把
+    命中数夹到 ``[0, prompt_tokens]``，并派生 ``cache_miss_tokens`` / ``cache_hit_rate``，
+    保证三个字段在记录里任何时刻都自洽。
+    """
     tok_per_s: float | None = None
     if decode_ms and decode_ms > 0 and completion_tokens > 0:
         tok_per_s = completion_tokens / decode_ms * 1000.0
+    prompt_total = int(prompt_tokens)
+    hit = max(0, min(int(cache_hit_tokens), prompt_total))
+    miss = max(0, prompt_total - hit)
+    rate = round(hit / prompt_total, 6) if prompt_total > 0 else 0.0
     return InferenceCallRecord(
         call_id=call_id, ts=ts or utc_now_iso(), event=CALL_EVENT,
         run_id=ctx.run_id, episode_id=ctx.episode_id, generation=ctx.generation,
@@ -164,7 +181,7 @@ def make_call_record(*, call_id: str, model_id: str, backend: str, mode: str, ct
         seed=ctx.seed if ctx.seed is not None else seed, step=ctx.step,
         model_id=model_id, backend=backend, mode=mode, purpose=ctx.purpose,
         schema_id=ctx.schema_id, caller=ctx.caller, prompt_digest=digest,
-        prompt_tokens=int(prompt_tokens), completion_tokens=int(completion_tokens),
+        prompt_tokens=prompt_total, completion_tokens=int(completion_tokens),
         max_tokens=int(max_tokens), temperature=float(temperature), top_p=float(top_p),
         top_k=int(top_k), repetition_penalty=float(repetition_penalty),
         sampling_seed=sampling_seed, grammar_used=bool(grammar_used), json_mode=bool(json_mode),
@@ -172,7 +189,8 @@ def make_call_record(*, call_id: str, model_id: str, backend: str, mode: str, ct
         tok_per_s=tok_per_s, attempt=int(attempt), attempts=int(attempts),
         retry_reasons=tuple(retry_reasons), outcome_kind=outcome_kind,
         finish_reason=finish_reason, degraded_reason=degraded_reason, error_code=error_code,
-        resident_gb=resident_gb, inflight=inflight)
+        resident_gb=resident_gb, inflight=inflight,
+        cache_hit_tokens=hit, cache_miss_tokens=miss, cache_hit_rate=rate)
 
 
 def read_call_records(path: Path) -> list[dict[str, Any]]:

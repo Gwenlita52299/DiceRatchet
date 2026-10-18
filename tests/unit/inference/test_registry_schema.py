@@ -42,6 +42,16 @@ def test_shipped_registry_is_typed():
     assert flash.cost_registered is True and flash.cost_currency == "CNY"
     cost = flash.estimate_cost(prompt_tokens=1000, completion_tokens=1000)
     assert cost == {"amount": 0.01, "currency": "CNY", "basis": "peak"}
+    # 2026-10-17：缓存命中输入单独登记（高峰 ¥0.04/M = 未命中价的 1/50）
+    assert flash.cache_cost_registered is True
+    assert flash.cost_per_1k_input_cache_hit == pytest.approx(0.00004)
+    cached = flash.estimate_cost(prompt_tokens=1000, completion_tokens=0,
+                                 cache_hit_tokens=1000)
+    assert cached == {"amount": pytest.approx(0.00004), "currency": "CNY", "basis": "peak"}
+    # 命中 token 夹到 [0, prompt]；显式传负数不会产生负成本
+    assert flash.estimate_cost(prompt_tokens=1000, completion_tokens=0,
+                               cache_hit_tokens=-5) == {
+        "amount": pytest.approx(0.002), "currency": "CNY", "basis": "peak"}
     # 未登记单价的模型 → None（不拿 0 冒充免费）
     assert registry.spec("mock").estimate_cost(prompt_tokens=1, completion_tokens=1) is None
 

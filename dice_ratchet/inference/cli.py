@@ -153,6 +153,9 @@ def _health_dict(health: Any) -> dict[str, Any]:
 
 def _usage_dict(usage: Any) -> dict[str, Any]:
     return {"prompt_tokens": usage.prompt_tokens, "completion_tokens": usage.completion_tokens,
+            "cache_hit_tokens": usage.cache_hit_tokens,
+            "cache_miss_tokens": usage.cache_miss_tokens,
+            "cache_hit_rate": usage.cache_hit_rate,
             "latency_ms": usage.latency_ms, "ttft_ms": usage.ttft_ms,
             "prefill_ms": usage.prefill_ms, "decode_ms": usage.decode_ms}
 

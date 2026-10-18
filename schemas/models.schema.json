@@ -42,6 +42,7 @@
         "api_key_env": { "type": "string" },
         "api_supports_seed": { "type": "boolean" },
         "cost_per_1k_input": { "type": "number", "minimum": 0 },
+        "cost_per_1k_input_cache_hit": { "type": "number", "minimum": 0 },
         "cost_per_1k_output": { "type": "number", "minimum": 0 },
         "cost_currency": { "type": "string" },
         "cost_basis": { "type": "string" }
@@ -120,6 +121,7 @@
           "description": "思考模式开关（OpenAI 格式 thinking.type）；空串 = 不发送、用服务方默认"
         },
         "cost_per_1k_input": { "type": "number", "minimum": 0 },
+        "cost_per_1k_input_cache_hit": { "type": "number", "minimum": 0 },
         "cost_per_1k_output": { "type": "number", "minimum": 0 },
         "cost_currency": { "type": "string" },
         "cost_basis": { "type": "string" }

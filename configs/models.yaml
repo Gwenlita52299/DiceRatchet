@@ -134,10 +134,12 @@ models:
     api_thinking: disabled
     # 实测：模型名 DeepSeek-V4.1-Flash；响应里的 model 字段会覆盖为实际 revision
     model_revision: DeepSeek-V4.1-Flash
-    # 官方定价（人民币 / 百万 tokens，2026-10-08 取自 api-docs.deepseek.com/zh-cn/quick_start/pricing）：
+    # 官方定价（人民币 / 百万 tokens，2026-10-17 复核 api-docs.deepseek.com/zh-cn/quick_start/pricing）：
+    #   输入(缓存命中) 空闲 ¥0.02 / 高峰 ¥0.04；
     #   输入(缓存未命中) 空闲 ¥1 / 高峰 ¥2；输出 空闲 ¥4 / 高峰 ¥8。
     # 这里登记**高峰档**（最坏上界）；空闲档是它的一半。换算成 1k tokens 单价如下。
     cost_per_1k_input: 0.002
+    cost_per_1k_input_cache_hit: 0.00004 # 高峰 ¥0.04/M = 未命中价的 1/50
     cost_per_1k_output: 0.008
     cost_currency: CNY
     cost_basis: peak # 高峰时段上界（北京时间工作日 9:00-12:00 / 14:00-18:00）
@@ -171,6 +173,7 @@ models:
     api_thinking: disabled
     model_revision: DeepSeek-V4-Pro-0813
     cost_per_1k_input: 0.009
+    cost_per_1k_input_cache_hit: 0.0003 # 高峰 ¥0.30/M
     cost_per_1k_output: 0.027
     cost_currency: CNY
     cost_basis: peak

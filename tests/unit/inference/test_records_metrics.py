@@ -20,7 +20,7 @@ MESSAGES = [Message(role="system", content="sys"), Message(role="user", content=
 def _record(*, call_id="c-000001", attempt=1, attempts=1, outcome="action",
             error_code=None, latency=100, decode=50, completion=10, purpose="decision",
             episode_id=None, backend="mock", model_id="mock-a", mode="train",
-            retry_reasons=(), degraded_reason=None):
+            retry_reasons=(), degraded_reason=None, cache_hit_tokens=0):
     return make_call_record(
         call_id=call_id, model_id=model_id, backend=backend, mode=mode,
         ctx=CallContext(run_id="r-1", episode_id=episode_id, purpose=purpose, seed=7),
@@ -30,7 +30,7 @@ def _record(*, call_id="c-000001", attempt=1, attempts=1, outcome="action",
         attempt=attempt, attempts=attempts, retry_reasons=retry_reasons,
         outcome_kind=outcome, finish_reason="stop", decode_ms=decode, ttft_ms=1,
         prefill_ms=1, error_code=error_code, degraded_reason=degraded_reason,
-        resident_gb=5.6, inflight=1)
+        resident_gb=5.6, inflight=1, cache_hit_tokens=cache_hit_tokens)
 
 
 # ---- prompt_digest 口径 --------------------------------------------------------------
@@ -68,6 +68,24 @@ def test_call_record_event_payload_has_required_fields():
     for key in ("call_id", "model_id", "backend", "latency_ms", "prompt_tokens",
                 "completion_tokens", "attempt", "outcome_kind"):
         assert key in event
+
+
+def test_call_record_derives_cache_hit_fields_and_validates_schema():
+    """2026-10-17：命中/未命中/命中率三字段必须自洽，且进 schema 与事件。"""
+    record = _record(cache_hit_tokens=8)
+    assert record.cache_hit_tokens == 8
+    assert record.cache_miss_tokens == 12
+    assert record.cache_hit_rate == pytest.approx(0.4)
+    validate_schema("inference_call", record.as_dict())
+    event = record.to_event()
+    assert event["cache_hit_tokens"] == 8
+    assert event["cache_miss_tokens"] == 12
+    assert event["cache_hit_rate"] == pytest.approx(0.4)
+    # 夹取：超过 prompt 或负数都不会让三字段互相矛盾
+    clamped = _record(cache_hit_tokens=999)
+    assert (clamped.cache_hit_tokens, clamped.cache_miss_tokens) == (20, 0)
+    negative = _record(cache_hit_tokens=-3)
+    assert (negative.cache_hit_tokens, negative.cache_miss_tokens) == (0, 20)
 
 
 def test_call_record_step_fields_are_trajectory_safe():
@@ -128,6 +146,15 @@ def test_aggregate_reports_first_pass_retry_and_error_rates():
     assert overall["error_rate_by_code"] == {str(E.E_LLM_SCHEMA_INVALID): round(1 / 3, 4)}
     assert overall["latency_ms"]["p50"] > 0
     assert "mock-a|decision" in agg["by_model_purpose"]
+
+
+def test_aggregate_reports_cache_hit_rate():
+    records = [_record(call_id="c-000001", cache_hit_tokens=8),
+               _record(call_id="c-000002", cache_hit_tokens=0)]
+    overall = aggregate(records)["overall"]
+    assert overall["cache_hit_tokens"] == 8
+    assert overall["cache_miss_tokens"] == 32
+    assert overall["cache_hit_rate"] == round(8 / 40, 4)
 
 
 def test_aggregate_counts_degraded_as_valid_but_not_action():

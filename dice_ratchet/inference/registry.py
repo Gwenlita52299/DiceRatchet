@@ -83,29 +83,45 @@ class ModelSpec:
     #: 注意服务方可能分时段计价：cost_basis 说明登记的是哪一档（如「peak 上界」）。
     cost_per_1k_input: float = 0.0
     cost_per_1k_output: float = 0.0
+    #: 缓存命中输入的 1k tokens 单价（服务方前缀缓存；未登记时按未命中价计，绝不猜 0）
+    cost_per_1k_input_cache_hit: float | None = None
     cost_currency: str = ""
     cost_basis: str = ""
     #: 是否**显式登记**过单价：未登记时 ``estimate_cost`` 返回 ``None``（记 null，不猜 0）
     cost_registered: bool = False
+    #: 是否显式登记过缓存命中单价（未登记 ⇒ 命中 token 也按未命中价计，保守上界）
+    cache_cost_registered: bool = False
 
     @property
     def has_weights(self) -> bool:
         """是否有需要落盘校验的权重（``mock`` / ``api`` 后端为 False）。"""
         return bool(self.weights_path)
 
-    def estimate_cost(self, *, prompt_tokens: int, completion_tokens: int
-                      ) -> dict[str, Any] | None:
+    def estimate_cost(self, *, prompt_tokens: int, completion_tokens: int,
+                      cache_hit_tokens: int = 0) -> dict[str, Any] | None:
         """按登记单价估算一次调用成本；**未登记即返回 None**（报告里记 null，绝不猜 0）。
 
         返回 ``{"amount": float, "currency": str, "basis": str}``：金额与币种分开记，
         因为服务方可能按人民币计价、且分高峰/空闲两档（``basis`` 说明登记的是哪一档）。
         金额保留 9 位而不是 6 位：单次调用常在 1e-5 量级，6 位会把 0.0000107 抹成
         0.000011（约 3% 误差），长跑汇总会系统性偏高。
+
+        ``cache_hit_tokens``：服务方前缀缓存命中的输入 token。显式登记了
+        ``cost_per_1k_input_cache_hit`` 时，命中部分按缓存价、其余按未命中价；
+        未登记时**全部按未命中价**（保守上界，不会把未知折扣当成已知）。
         """
         if not self.cost_registered:
             return None
+        prompt = max(0, int(prompt_tokens))
+        hit = max(0, min(int(cache_hit_tokens), prompt))
+        miss = prompt - hit
+        hit_price = (float(self.cost_per_1k_input_cache_hit)
+                     if self.cache_cost_registered
+                     and self.cost_per_1k_input_cache_hit is not None
+                     else self.cost_per_1k_input)
         amount = round(
-            prompt_tokens / 1000.0 * self.cost_per_1k_input
+            hit / 1000.0 * hit_price
+            + miss / 1000.0 * self.cost_per_1k_input
             + completion_tokens / 1000.0 * self.cost_per_1k_output, 9)
         return {"amount": amount, "currency": self.cost_currency or "unspecified",
                 "basis": self.cost_basis or "unspecified"}
@@ -282,10 +298,15 @@ def _build_spec(model_id: str, entry: Mapping[str, Any], defaults: Mapping[str, 
         api_thinking=str(_pick(entry, defaults, "api_thinking", "")),
         cost_per_1k_input=float(_pick(entry, defaults, "cost_per_1k_input", 0.0)),
         cost_per_1k_output=float(_pick(entry, defaults, "cost_per_1k_output", 0.0)),
+        cost_per_1k_input_cache_hit=(
+            float(_pick(entry, defaults, "cost_per_1k_input_cache_hit"))
+            if ("cost_per_1k_input_cache_hit" in entry
+                or "cost_per_1k_input_cache_hit" in defaults) else None),
         cost_currency=str(_pick(entry, defaults, "cost_currency", "")),
         cost_basis=str(_pick(entry, defaults, "cost_basis", "")),
         # 只有**显式**登记过单价才算「有成本口径」；仅靠 defaults 兜底不算（避免假账）
         cost_registered=any(k in entry for k in ("cost_per_1k_input", "cost_per_1k_output")),
+        cache_cost_registered="cost_per_1k_input_cache_hit" in entry,
     )
 
 

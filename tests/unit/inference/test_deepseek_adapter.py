@@ -90,11 +90,18 @@ class FakeTransport:
 
 
 def ok_response(text: str, *, model: str = "deepseek-flash",
-                prompt_tokens: int = 11, completion_tokens: int = 7) -> ApiResponse:
+                prompt_tokens: int = 11, completion_tokens: int = 7,
+                cache_hit_tokens: int | None = None) -> ApiResponse:
+    usage: dict[str, Any] = {"prompt_tokens": prompt_tokens,
+                             "completion_tokens": completion_tokens}
+    if cache_hit_tokens is not None:
+        usage["prompt_cache_hit_tokens"] = cache_hit_tokens
+        usage["prompt_cache_miss_tokens"] = prompt_tokens - cache_hit_tokens
+        usage["prompt_tokens_details"] = {"cached_tokens": cache_hit_tokens}
     body = {"id": "x", "model": model, "choices": [{"message": {"role": "assistant",
                                                                 "content": text},
                                                     "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens}}
+            "usage": usage}
     return ApiResponse(status=200, text=json.dumps(body, ensure_ascii=False))
 
 
@@ -259,7 +266,9 @@ def test_generate_success_writes_audit_without_key(tmp_path):
     assert record["replay"] is False
     # 响应里的 model 字段覆盖登记的 revision（如实记服务方实际返回的版本）
     assert record["model_revision"] == "deepseek-flash"
-    assert record["usage"] == {"prompt_tokens": 11, "completion_tokens": 7}
+    assert record["usage"] == {
+        "prompt_tokens": 11, "completion_tokens": 7,
+        "cache_hit_tokens": 0, "cache_miss_tokens": 11, "cache_hit_rate": 0.0}
     # 成本：金额 + 币种 + 档位分开记（登记的是人民币高峰档上界）
     assert record["cost_estimate"] == {"amount": pytest.approx(
         11 / 1000 * 0.002 + 7 / 1000 * 0.008, rel=1e-9), "currency": "CNY", "basis": "peak"}
@@ -290,6 +299,33 @@ def test_usage_falls_back_to_estimate_when_absent(tmp_path):
     run(_load(adapter, deepseek_spec()))
     result = run(_generate(adapter))
     assert result.usage.prompt_tokens > 0 and result.usage.completion_tokens == 0
+
+
+def test_generate_records_cache_hit_tokens_and_discounts_cost(tmp_path):
+    """2026-10-17：缓存命中 token 必须进 usage/事件，成本按命中价分档。"""
+    infra = RecordingInfra(run_id="r-api-cache")
+    transport = FakeTransport(ok_response(decision_json(), prompt_tokens=100,
+                                          cache_hit_tokens=64))
+    adapter = DeepSeekAPIAdapter(infra=infra, transport=transport, api_key="k",
+                                config=inference_config(api_record_dir="llm_api"),
+                                runs_root=tmp_path)
+    run(_load(adapter, shipped_deepseek_spec()))
+    result = run(_generate(adapter, json_mode=True))
+
+    assert result.usage.cache_hit_tokens == 64
+    assert result.usage.cache_miss_tokens == 36
+    assert result.usage.cache_hit_rate == pytest.approx(0.64)
+    record = json.loads(next((tmp_path / "r-api-cache" / "llm_api").glob("*.json"))
+                        .read_text(encoding="utf-8"))
+    assert record["usage"] == {
+        "prompt_tokens": 100, "completion_tokens": 7,
+        "cache_hit_tokens": 64, "cache_miss_tokens": 36, "cache_hit_rate": 0.64}
+    assert record["cost_estimate"]["amount"] == pytest.approx(
+        64 / 1000 * 0.00004 + 36 / 1000 * 0.002 + 7 / 1000 * 0.008, rel=1e-9)
+    event = infra.events[0][1]
+    assert event["cache_hit_tokens"] == 64
+    assert event["cache_miss_tokens"] == 36
+    assert event["cache_hit_rate"] == pytest.approx(0.64)
 
 
 def test_key_is_redacted_from_error_messages(tmp_path):

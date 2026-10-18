@@ -185,6 +185,25 @@ def _response_hash(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _cache_hit_tokens(usage: Mapping[str, Any], prompt_tokens: int) -> int:
+    """从服务方 usage 里取前缀缓存命中 token（两个官方字段都认，取先出现的）。
+
+    DeepSeek 同时返回 ``prompt_cache_hit_tokens`` 与 ``prompt_tokens_details.cached_tokens``；
+    不同兼容实现只给其中一个。缺失时返回 0（不猜），并夹到 ``[0, prompt_tokens]``，
+    防止服务方口径漂移把 ``cache_hit_tokens + cache_miss_tokens`` 弄得不自洽。
+    """
+    candidates = (usage.get("prompt_cache_hit_tokens"),)
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, Mapping):
+        candidates += (details.get("cached_tokens"),)
+    for raw in candidates:
+        if isinstance(raw, bool): # bool 是 int 的子类，明确排除
+            continue
+        if isinstance(raw, int):
+            return max(0, min(int(raw), max(0, int(prompt_tokens))))
+    return 0
+
+
 # =====================================================================
 # 适配器
 # =====================================================================
@@ -337,10 +356,15 @@ class DeepSeekAPIAdapter(LocalBackend):
             "max_tokens": int(max_tokens),
             "json_mode": bool(json_mode),
             "usage": {"prompt_tokens": usage.prompt_tokens,
-                      "completion_tokens": usage.completion_tokens},
+                      "completion_tokens": usage.completion_tokens,
+                      "cache_hit_tokens": usage.cache_hit_tokens,
+                      "cache_miss_tokens": usage.cache_miss_tokens,
+                      "cache_hit_rate": usage.cache_hit_rate},
             # 未登记单价时为 null（不拿 0 冒充"免费"）；金额与币种分开记
-            "cost_estimate": spec.estimate_cost(prompt_tokens=usage.prompt_tokens,
-                                               completion_tokens=usage.completion_tokens),
+            "cost_estimate": spec.estimate_cost(
+                prompt_tokens=usage.prompt_tokens,
+                completion_tokens=usage.completion_tokens,
+                cache_hit_tokens=usage.cache_hit_tokens),
             "latency_ms": latency_ms,
             "attempts": int(parsed["attempts"]),
             "status": int(response.status),
@@ -353,7 +377,10 @@ class DeepSeekAPIAdapter(LocalBackend):
                      response_status=int(response.status))
         self._infra.emit("llm.api.call", **{k: v for k, v in audit.items()
                                            if k not in ("sampling", "usage")},
-                         temperature=sampling["temperature"], top_p=sampling["top_p"])
+                         temperature=sampling["temperature"], top_p=sampling["top_p"],
+                         cache_hit_tokens=usage.cache_hit_tokens,
+                         cache_miss_tokens=usage.cache_miss_tokens,
+                         cache_hit_rate=usage.cache_hit_rate)
         result = make_result(text=parsed["text"], usage=usage, backend="deepseek",
                              model_id=spec.model_id, messages=messages,
                              finish_reason=parsed["finish_reason"],
@@ -530,7 +557,9 @@ class DeepSeekAPIAdapter(LocalBackend):
         prompt = int(prompt_tokens) if isinstance(prompt_tokens, int) else \
             estimate_prompt_tokens(messages)
         completion = int(completion_tokens) if isinstance(completion_tokens, int) else 0
-        return Usage(prompt_tokens=prompt, completion_tokens=completion, latency_ms=latency_ms)
+        hit = _cache_hit_tokens(usage, prompt)
+        return Usage(prompt_tokens=prompt, completion_tokens=completion, latency_ms=latency_ms,
+                     cache_hit_tokens=hit)
 
     # ---- replay / 审计落盘 ---------------------------------------------------------
     def _replay_response(self, request_hash: str) -> ApiResponse:

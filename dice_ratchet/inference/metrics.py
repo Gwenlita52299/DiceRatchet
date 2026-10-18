@@ -66,6 +66,7 @@ def _call_summary(attempts: Sequence[dict[str, Any]]) -> dict[str, Any]:
         "latency_ms": sum(int(a.get("latency_ms") or 0) for a in attempts),
         "prompt_tokens": sum(int(a.get("prompt_tokens") or 0) for a in attempts),
         "completion_tokens": sum(int(a.get("completion_tokens") or 0) for a in attempts),
+        "cache_hit_tokens": sum(int(a.get("cache_hit_tokens") or 0) for a in attempts),
         "decode_ms": sum(int(a.get("decode_ms") or 0) for a in attempts),
     }
 
@@ -91,6 +92,8 @@ def aggregate(records: Sequence[InferenceCallRecord | Mapping[str, Any]]) -> dic
         retry_histogram = Counter(int(c["attempts"]) for c in subset)
         decode_ms = sum(c["decode_ms"] for c in subset)
         completion = sum(c["completion_tokens"] for c in subset)
+        prompt = sum(c["prompt_tokens"] for c in subset)
+        cache_hit = sum(c["cache_hit_tokens"] for c in subset)
         total = len(subset)
         return {
             "n_calls": total,
@@ -98,6 +101,10 @@ def aggregate(records: Sequence[InferenceCallRecord | Mapping[str, Any]]) -> dic
                            "p95": round(percentile(latencies, 0.95), 4),
                            "max": round(max(latencies), 4) if latencies else 0.0},
             "tok_per_s": round(completion / decode_ms * 1000.0, 4) if decode_ms else None,
+            # 2026-10-17：前缀缓存命中（token 加权；本地后端恒 0）
+            "cache_hit_tokens": cache_hit,
+            "cache_miss_tokens": max(0, prompt - cache_hit),
+            "cache_hit_rate": round(cache_hit / prompt, 4) if prompt else 0.0,
             "first_pass_valid_rate": round(len(valid_first) / total, 4) if total else 0.0,
             # §13 逐字口径（仅 action）；MLX 阶段一恒 degraded，故同时给出上一条
             "first_pass_action_rate": round(len(action_first) / total, 4) if total else 0.0,

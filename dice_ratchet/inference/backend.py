@@ -81,7 +81,13 @@ class Message:
 
 @dataclass(frozen=True)
 class Usage:
-    """token 与延迟埋点（FR-03-03：前四个字段必须有）。"""
+    """token 与延迟埋点（FR-03-03：前四个字段必须有）。
+
+    2026-10-17（缓存修复）：新增**前缀缓存**指标。服务方（DeepSeek）在
+    ``usage.prompt_cache_hit_tokens`` / ``prompt_tokens_details.cached_tokens`` 里返回
+    命中的输入 token；本地后端没有前缀缓存，``cache_hit_tokens`` 保持 0
+    （``cache_miss_tokens`` 由属性按 ``prompt_tokens`` 派生）。
+    """
 
     prompt_tokens: int
     completion_tokens: int
@@ -89,6 +95,20 @@ class Usage:
     ttft_ms: int | None = None
     prefill_ms: int | None = None
     decode_ms: int | None = None
+    #: 命中服务方前缀缓存的输入 token（0 = 未命中/后端不支持）
+    cache_hit_tokens: int = 0
+
+    @property
+    def cache_miss_tokens(self) -> int:
+        """未命中的输入 token（= ``prompt_tokens - cache_hit_tokens``）。"""
+        return max(0, self.prompt_tokens - self.cache_hit_tokens)
+
+    @property
+    def cache_hit_rate(self) -> float:
+        """``cache_hit_tokens / prompt_tokens``（0..1；prompt 为 0 时返回 0.0）。"""
+        if self.prompt_tokens <= 0:
+            return 0.0
+        return round(self.cache_hit_tokens / self.prompt_tokens, 6)
 
 
 @dataclass(frozen=True)
@@ -470,6 +490,7 @@ def _emit_records(*, attempts: Sequence[_Attempt], total: int, outcome: str, fin
             ttft_ms=attempt.usage.ttft_ms, prefill_ms=attempt.usage.prefill_ms,
             decode_ms=attempt.usage.decode_ms, error_code=(None if success else error_code),
             degraded_reason=(final_degraded if success else None),
+            cache_hit_tokens=attempt.usage.cache_hit_tokens,
             resident_gb=resident_gb, inflight=inflight)
         records.append(record)
         if record_sink is not None:
@@ -908,6 +929,7 @@ class BackendManager:
             sampling_seed=sampling["seed"], grammar_used=False, json_mode=False,
             latency_ms=out.usage.latency_ms, attempt=1, attempts=1,
             outcome_kind=out.outcome_kind, finish_reason=out.finish_reason,
+            cache_hit_tokens=out.usage.cache_hit_tokens,
             resident_gb=spec.resident_gb_est, inflight=self._inflight)
         if self._record_sink is not None:
             self._record_sink(record)
