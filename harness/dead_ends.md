@@ -10,3 +10,9 @@
 - 触及文件：harness/harness/prompts/decision.md（4 行）
 - 指标：Δwin_rate=-0.1000；p=0.4240；候选 win_rate=0.1750；stages=4.5250
 - 提案理由：reflect:train#0/#1/#2/#3/#7/#16 一致指出心数在第 3-4 关耗尽、防御与续航是瓶颈而非输出；traj:train#0-#3 均 stages=4 且 hearts=0。现有第 10 条只在约束段泛泛提及，未进入「回合预算」决策前置。与 dead_ends 的 gen-002 不同：那条改的是非法动作自检清单，本条改的是心数/防御优先级，机制不同。
+## gen-001 · 2b0e1e81bb78
+- 类型：config_patch
+- 结局：reject（C1:win_rate 0.3500<0.4000）
+- 触及文件：harness/harness/config.json（2 行）
+- 指标：Δwin_rate=-0.1000；p=0.7266；候选 win_rate=0.3500；stages=4.8000
+- 提案理由：reflect:train#0-#9 十条反思高度同质（心数/防御管理），traj:train#0-#9 显示 10 局仅 2 胜、多数在第 4-5 关心数归零。当前 memory_top_k 偏小会只注入最近 1-2 条同质记忆，提高注入条数可让决策 prompt 同时看到非法尝试(7-26 次)与心数管理两类教训。与 dead_ends 的 gen-002/gen-003 不同：那两条改 de
