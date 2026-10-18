@@ -1,5 +1,0 @@
-{
-  "version": 0,
-  "play_hash": "sha256:af817e7c8f548ba5e9e72802eea4d294db86cc645b7c8c9c96ef104ddfd87623",
-  "note": "原始 v0（M1 收口后、未演化）的 play 面指纹：起跑守卫的白名单锚点。它不是版本号意义上的 accepted 版本（v0 从来不建 versions/v0），所以单独登记在这里；改动原始 v0 时必须同步更新，否则守卫会把新内容当成未裁决补丁拦下。见 docs/reviews/2026-10-17-M3R2-协议口径纠正-P1应判负.md"
-}
