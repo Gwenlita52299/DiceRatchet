@@ -1,11 +1,11 @@
 {
-  "accepted_by": "auto",
-  "artifact_hash": "sha256:2c4e3bb8fa8126dccf5dc1a67af5e35911ce14d76f114478fe9393914ae7e025",
+  "accepted_by": "human",
+  "artifact_hash": "sha256:1dcda24eed87980cc09c87ac9aaad86e937890560b955b31a223f54faca350d9",
   "base_model": null,
-  "created_at": "2026-10-17T04:29:42Z",
-  "diff_path": "",
-  "git_commit": "cad38a1e181e361a9786ab8fdbb94f895e054b47",
-  "parent": 2,
-  "reason": "rejected:1082757314fc:C1:win_rate 0.1750<0.2250",
-  "version": 3
+  "created_at": "2026-10-18T05:36:08Z",
+  "diff_path": "harness/versions/v4/diff.patch",
+  "git_commit": "",
+  "parent": 0,
+  "reason": "cachefix A/B (2026-10-17, run cachefix-b0): v0 + prompt static-first; H1 40 heldout 7/40 vs bare v0 7/40 (McNemar p=1.0); unique cache 10.8%->40.1%; cost_estimate 19.74 vs ~33; truncation 0.05 vs 0.10. Rebased from bare v0; v3 P1/P2 rules are NOT included. See docs/reviews/2026-10-17-API缓存命中修复.md §3.2.",
+  "version": 4
 }
