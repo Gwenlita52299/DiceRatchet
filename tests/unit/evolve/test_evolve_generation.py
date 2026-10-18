@@ -11,6 +11,7 @@ MOD-08 与 MOD-02 都打桩：
 
 from __future__ import annotations
 
+import csv
 import importlib
 import json
 from dataclasses import replace
@@ -203,6 +204,38 @@ def test_no_candidate_still_writes_report(tmp_path):
     assert report["decision"] == "reject"
     assert report["candidates"] == []
     assert report["reason"] == "no_candidate"
+
+
+def test_no_candidate_inherits_parent_heldout_without_measuring(tmp_path, monkeypatch):
+    """F-M3-4：``no_candidate`` 也要把 parent 的已有测量继承进 report/台账（0 局）。
+
+    m3r4 cycle 1 的现场：提案在校验阶段全灭后直接落骨架报告，台账 parent 行变成
+    ``n=0``——「本代在役 harness 的 heldout」凭空消失。修复只做**继承**，绝不实测
+    （没有候选可比较，补跑 40 局只是白花钱）。
+    """
+    harness, evolve, app_cfg, run_root, run_ctx, state = _setup(tmp_path)
+    ev = ScriptedEvaluator()
+    parent_arm = FakeArm(arm="parent", win_rate=0.175, n=40)
+    monkeypatch.setattr(GEN, "_inherited_parent_heldout",
+                        lambda *a, **k: (parent_arm, "inherited:gen-000"))
+    outcome = _run(run_ctx, state, evaluator=ev, client=StubLLM([{"candidates": []}]))
+    assert outcome.decision == "reject"
+    assert outcome.error_code == str(E.E_EVOLVE_NO_CANDIDATE)
+    # 一局都不跑：继承路径不得调用 parent_arms / candidate_arms。
+    assert ev.calls == []
+
+    report = _read_report(run_root, 1)
+    assert report["heldout"]["n"] == 40
+    assert report["heldout"]["win_rate"] == pytest.approx(0.175)
+    assert report["heldout"]["source"] == "inherited:gen-000"
+
+    # F57：``source=inherited:*`` 不写台账行（本代没有真实测量，写行会在图上多一个
+    # 与上一代重合的点）。这里锁住「没有 n=0 的假行」，而不是要求一行 n=40。
+    ledger = run_root / "metrics" / "generations.csv"
+    if ledger.is_file():
+        with ledger.open(encoding="utf-8") as handle:
+            rows = [row for row in csv.DictReader(handle) if row["generation"] == "1"]
+        assert rows == [], rows
 
 
 def test_propose_failure_still_writes_report(tmp_path):

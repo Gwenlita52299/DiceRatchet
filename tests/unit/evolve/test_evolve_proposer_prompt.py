@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -52,6 +54,20 @@ def test_prompt_slots_are_whitelisted():
     assert "## harness" in user
     assert "## 任务" in user
     assert set(P.PROMPT_PLACEHOLDERS) == {"observation", "memory", "harness", "task"}
+
+
+def test_prompt_includes_config_patch_example():
+    """F-M3-4：``config_patch`` 必须给出可直接照抄的合法形态（扁平白名单键）。
+
+    m3r4 cycle 1 的失败现场：模型想改 ``retrieval.top_k``，却把整份 config 写成嵌套
+    对象；而 ``harness/config.json`` 只接受 ``agent.policy.*`` / ``memory.retrieve.*`` /
+    ``agent.tools.*`` 的扁平点分键。prompt 必须给出**实际可写**的键与禁用形态。
+    """
+    system, _user = P.render_proposer_prompt(_bundle(), make_config())
+    assert "config_patch" in system
+    assert '+{"memory.retrieve.top_k": 3}' in system
+    assert "retrieval.top_k` → `memory.retrieve.top_k" in system
+    assert "禁止嵌套对象" in system
 
 
 def test_f38_harness_body_is_inlined_and_scopes_placeholder_rule(tmp_path):
@@ -262,6 +278,54 @@ def test_propose_all_invalid_returns_no_candidate_code():
     result = P.propose(_bundle(), cfg=make_config(propose_max_retries=2), rng_seed=7,
                        client=llm)
     assert result.error_code == str(E.E_EVOLVE_NO_CANDIDATE)
+    # F-M3-4：一次格式错误不再直接终代；重试用满 propose_max_retries。
+    assert len(llm.calls) == 3
+
+
+def test_propose_retries_after_all_candidates_invalid():
+    """F-M3-4：首轮候选全被静态校验拒绝 ⇒ 用同一份约束重提，第二次命中即采用。"""
+    invalid = proposal_payload(diff=prompt_diff(path="harness/x.py"))
+    valid = proposal_payload()
+    llm = StubLLM([{"candidates": [invalid]}, {"candidates": [valid]}])
+    result = P.propose(_bundle(), cfg=make_config(propose_max_retries=1), rng_seed=7,
+                       client=llm)
+    assert result.ok, (result.error_code, result.reason)
+    assert len(result.candidates) == 1
+    assert len(llm.calls) == 2
+    assert result.n_generated == 2
+    retry_user = llm.calls[1]["messages"][1]["content"]
+    assert "重试提醒" in retry_user
+    assert "上一次被拒绝的原因" in retry_user
+
+
+def test_propose_validation_retry_zero_keeps_single_call():
+    invalid = proposal_payload(diff=prompt_diff(path="harness/x.py"))
+    llm = StubLLM([{"candidates": [invalid]}])
+    result = P.propose(_bundle(), cfg=make_config(propose_max_retries=0), rng_seed=7,
+                       client=llm)
+    assert result.error_code == str(E.E_EVOLVE_NO_CANDIDATE)
+    assert len(llm.calls) == 1
+
+
+def test_propose_event_records_real_usage(monkeypatch):
+    """F-M3-4：``evolve.propose`` 的 token/latency 必须来自真实调用，而不是写死 0。"""
+    from dice_ratchet.infra import events as events_mod
+
+    emitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(events_mod, "emit",
+                        lambda event, **kw: emitted.append({"event": event, **kw}))
+
+    class _Result:
+        text = json.dumps({"candidates": [proposal_payload()]})
+        usage = SimpleNamespace(prompt_tokens=1234, completion_tokens=56, latency_ms=789)
+
+    result = P.propose(_bundle(), cfg=make_config(), rng_seed=7,
+                       client=StubLLM([_Result()]))
+    assert result.ok
+    event = [e for e in emitted if e["event"] == "evolve.propose"][-1]
+    assert event["prompt_tokens"] == 1234
+    assert event["latency_ms"] == 789
+    assert event["n_candidates"] == 1
 
 
 def test_propose_retries_then_succeeds():

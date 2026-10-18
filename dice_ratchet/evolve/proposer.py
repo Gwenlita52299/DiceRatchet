@@ -27,6 +27,7 @@ import re
 from typing import Any, Callable, Final, Iterable, Mapping, Sequence
 
 from dice_ratchet.infra import events
+from dice_ratchet.infra.config import HARNESS_CONFIG_ALLOWED_PREFIXES
 from dice_ratchet.infra.errors import E, InfraError
 from dice_ratchet.infra.io import read_json
 
@@ -581,6 +582,36 @@ _SYSTEM_TEMPLATE = """你是 DiceRatchet 的 harness 改进提案者（proposer�
 
 你看不到留出集数据，也不需要它们。"""
 
+#: ``config_patch`` 的**最小合法样例**（F-M3-4，2026-10-18）。
+#:
+#: m3r4 cycle 1 的失败现场：模型想改 ``retrieval.top_k``，但把整份 ``config.json``
+#: 写成 ``{"retrieval": {"top_k": 3}}``，而系统提示只说了「只能改点分键」、没给具体
+#: 形态 ⇒ 旧校验器把容器键 ``retrieval`` 判成非法。这里补一个可直接照抄的样例，
+#: 并明确 ``harness/config.json`` 只收**扁平白名单键**（嵌套对象会被配置加载器拒绝）。
+_CONFIG_PATCH_EXAMPLE = """## `config_patch` 的最小合法样例（只改可演化键）
+--- a/harness/config.json
++++ b/harness/config.json
+@@ -1 +1 @@
+-{}
++{"memory.retrieve.top_k": 3}
+
+`harness/config.json` 只接受**扁平点分键**，且顶层前缀必须是 `agent.policy.` /
+`memory.retrieve.` / `agent.tools.`。概念名与实际键的对应：
+`retrieval.top_k` → `memory.retrieve.top_k`，`sampling.temperature` →
+`agent.policy.temperature`。`prompt.show_intent` 目前没有对应的 PolicyConfig 字段，
+不要写。禁止嵌套对象（如 `+{ "retrieval": { "top_k": 3 } }`）——配置加载会拒绝它。"""
+
+#: 静态校验全灭后的**重试提醒**（F-M3-4，2026-10-18）。
+#:
+#: 固定文案只陈述「上一轮没通过静态校验」这一事实与已有约束；调用方还会追加本轮
+#: 校验器给出的拒绝原因（仅含候选自身的路径/键名），两者都不注入证据束之外的
+#: 数据（INV-3/FR-07-3）。
+_RETRY_NOTE = """
+
+## 重试提醒
+上一次提案没有通过静态校验（路径 / 改动面 / `config_patch` 键名等）。请重新逐条核对
+上面的硬约束与 `config_patch` 样例，只输出输出契约要求的 JSON 对象。"""
+
 _TASK_BLOCK = """## 任务
 提出 {n_candidates} 个**互相不同**的候选改动，覆盖不同的改动面（prompt / tool / config）。
 每个候选必须引用证据条目 id 作为理由依据。"""
@@ -620,6 +651,9 @@ def render_proposer_prompt(bundle: EvidenceBundle, cfg: Any) -> tuple[str, str]:
         rationale_guide=_RATIONALE_GUIDE_CHARS,
         allowed_imports="、".join(sorted(str(a) for a in allowlist)),
         frozen=FROZEN_SIGNATURE)
+    # F-M3-4：把合法形态放在**约束区**（system），而不是输出契约里，避免与
+    # 「只输出一个 JSON 对象」的契约文本混在一起。
+    system = system + "\n\n" + _CONFIG_PATCH_EXAMPLE
 
     task = _TASK_BLOCK.format(n_candidates=int(getattr(cfg, "n_candidates", 1)))
     memory_block = _render_items(bundle.memory_items, empty="（无可用策略记忆）")
@@ -997,35 +1031,127 @@ def _validate_tool_patch(cand: Candidate, tool_paths: Sequence[str],
     # （合法的最小改动可能只改一行函数体，diff 上下文不含装饰器）。
 
 
+def _json_leaf_paths(value: Any, prefix: str = "") -> set[str]:
+    """把可解析的 JSON 对象展开成**叶子**点分路径（数组/标量都算叶子）。
+
+    仅供 ``config_patch`` 的诊断信息使用：真正写进 ``harness/config.json`` 的键必须
+    是**扁平点分键**（见 ``HARNESS_CONFIG_PREFIXES``），嵌套对象会被配置加载器拒绝。
+    """
+    if isinstance(value, Mapping) and value:
+        paths: set[str] = set()
+        for key, child in value.items():
+            name = str(key)
+            paths |= _json_leaf_paths(child, f"{prefix}.{name}" if prefix else name)
+        return paths
+    return {prefix} if prefix else set()
+
+
+#: ``harness/config.json`` 允许的顶层前缀（与 ``infra.config`` 的加载器同一口径）。
+#: 在这里提前判一遍，避免「校验通过、配置加载时才 ``E_IO_CONFIG_INVALID``」的候选
+#: 白跑一代。
+HARNESS_CONFIG_PREFIXES: Final[tuple[str, ...]] = tuple(HARNESS_CONFIG_ALLOWED_PREFIXES)
+
+#: ``evolve.evolvable_keys`` 用的是**概念名**（PRD 口径），而 ``harness/config.json``
+#: 必须写实际路径。两边的等价关系只在这里定义一次。
+CONFIG_KEY_ALIASES: Final[dict[str, str]] = {
+    "retrieval.": "memory.retrieve.",
+    "sampling.": "agent.policy.",
+    "prompt.": "agent.policy.",
+}
+
+
+def _actual_config_key(key: str) -> str:
+    """概念名 → ``harness/config.json`` 实际扁平键（已是实际键则原样返回）。"""
+    for alias, target in CONFIG_KEY_ALIASES.items():
+        if key == alias.rstrip(".") or key.startswith(alias):
+            return target + key[len(alias):]
+    return key
+
+
+def _canonical_config_key(key: str) -> str:
+    """实际扁平键 → 概念名（``memory.retrieve.top_k`` → ``retrieval.top_k``）。"""
+    for alias, target in CONFIG_KEY_ALIASES.items():
+        if key == target.rstrip(".") or key.startswith(target):
+            return alias + key[len(target):]
+    return key
+
+
+def _is_harness_config_key(key: str) -> bool:
+    return any(key == prefix.rstrip(".") or key.startswith(prefix)
+               for prefix in HARNESS_CONFIG_PREFIXES)
+
+
 def _validate_config_patch(cand: Candidate, cfg: Any, violations: list[str]) -> None:
-    """``config_patch`` 只能改 ``evolve.evolvable_keys`` 声明的键（FR-07-4）。"""
+    """``config_patch`` 只能改 ``evolve.evolvable_keys`` 声明的键（FR-07-4）。
+
+    F-M3-4（2026-10-18，m3r4 cycle 1）：候选把 ``config.json`` 写成
+    ``{"retrieval": {"top_k": 3}}``（嵌套对象），旧实现按 ``_JSON_KEY_RE`` 抽出
+    ``retrieval`` 与 ``top_k``，把**容器键** ``retrieval`` 判成非法，整条候选作废
+    （``n_candidates=0`` ⇒ 整代 `no_candidate`）。但嵌套对象本身也不是
+    ``harness/config.json`` 的合法形态：加载器要求**扁平点分键**且顶层前缀必须在
+    ``agent.policy.*`` / ``memory.retrieve.*`` / ``agent.tools.*`` 内（``infra.config``）。
+    因此这里改成：
+
+    1. 整对象 JSON：嵌套值 ⇒ ``config_patch_nested_object``（可操作地告诉模型写扁平键）；
+    2. 扁平键：必须同时满足「加载器前缀」与「可演化键」（完整路径或末段短名）；
+    3. 逐行片段：按同一规则判正则抽出的键。
+
+    这样 ``{"memory.retrieve.top_k": 3}`` 通过，``{"retrieval": {"top_k": 3}}`` /
+    ``{"retrieval.top_k": 3}`` / ``{"seed": 7}`` 都被拒绝（后两者在加载器那边也会失败）。
+    """
     evolvable = {str(k) for k in getattr(cfg, "evolvable_keys", ())}
     if not evolvable:
         violations.append("config_patch_without_evolvable_keys")
         return
     text = "\n".join(_added_lines(cand.diff))
-    keys = {m.group(1) for m in _JSON_KEY_RE.finditer(text)}
-    if not keys:
-        # 非 JSON 形态的 diff（例如整文件替换）→ 退化为子串匹配
-        keys = {k for k in evolvable if k in text}
-        if not keys:
-            violations.append("config_patch_no_evolvable_key")
+    parsed: Any = None
+    try:
+        parsed = json.loads(text)
+    except (TypeError, ValueError):
+        parsed = None
+    if isinstance(parsed, Mapping):
+        nested = sorted(str(k) for k, value in parsed.items()
+                        if isinstance(value, Mapping))
+        if nested:
+            leaves = sorted({_actual_config_key(path)
+                             for path in _json_leaf_paths(parsed)})
+            violations.append(
+                f"config_patch_nested_object:{nested}"
+                f"（请改写成扁平点分键，例如 {leaves[:1]}；"
+                "harness/config.json 只接受 agent.policy.* / memory.retrieve.* / "
+                "agent.tools.*）")
             return
-    illegal = sorted(k for k in keys if not _key_is_evolvable(k, evolvable))
+        keys = {str(k) for k in parsed}
+    else:
+        keys = {m.group(1) for m in _JSON_KEY_RE.finditer(text)}
+        if not keys:
+            # 非 JSON 形态的 diff（例如整文件替换）→ 退化为子串匹配
+            keys = {k for k in evolvable if k in text}
+            if not keys:
+                violations.append("config_patch_no_evolvable_key")
+                return
+    illegal = sorted(k for k in keys
+                     if not _is_harness_config_key(k)
+                     or not _key_is_evolvable(k, evolvable))
     if illegal:
         violations.append(f"config_key_not_evolvable:{illegal}")
 
 
 def _key_is_evolvable(key: str, evolvable: set[str]) -> bool:
-    """``config.json`` 的键允许两种写法：完整点分路径，或末段短名。
+    """``config.json`` 的键允许两种写法：概念名的完整路径，或**裸末段短名**。
 
-    ``evolvable_keys`` 用 Spec §5 的点分路径（``retrieval.top_k``），而 harness 的
-    ``config.json`` 可能就写成 ``{"retrieval": {"top_k": 12}}`` 里的裸 ``top_k``——
-    只要它是某个可演化路径的末段即视为合法（``sampling.seed`` 不是任何可演化路径的
-    末段，因此仍被拒）。
+    ``evolvable_keys`` 用 Spec §5 的概念路径（``retrieval.top_k``），而实际写进
+    ``harness/config.json`` 的键是 ``memory.retrieve.top_k``（加载器前缀 + 概念别名）。
+    因此这里先把实际键折回概念名再比；**裸末段**（``top_k``）仍接受，兼容逐行 diff
+    片段里只出现叶子名的情况。带点的未知路径不再靠「末段碰巧相同」放行
+    （``agent.policy.foo.top_k`` 必须拒绝——它在加载器那边也会因未知键失败）。
     """
     if key in evolvable:
         return True
+    if _canonical_config_key(key) in evolvable:
+        return True
+    if "." in key:
+        return False
     return any(spec.rsplit(".", 1)[-1] == key for spec in evolvable)
 
 
@@ -1376,11 +1502,13 @@ def propose(bundle: EvidenceBundle, *, cfg: Any, rng_seed: int, client: Any = No
         return ProposalResult(error_code=str(E.E_EVOLVE_PROPOSE_FAILED),
                               reason="no_client")
 
+    usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0, "latency_ms": 0}
     payload: Any = None
     for attempt in range(retries + 1):
         try:
             payload = _call_generate_json(resolved, system=system, user=user, schema=schema,
-                                          seed=_attempt_seed(rng_seed, attempt))
+                                          seed=_attempt_seed(rng_seed, attempt),
+                                          usage_out=usage)
         except InfraError as exc:
             last_error = f"{exc.code}"
             payload = None
@@ -1391,7 +1519,8 @@ def propose(bundle: EvidenceBundle, *, cfg: Any, rng_seed: int, client: Any = No
             break
     if payload is None:
         events.emit("evolve.propose", gen=int(generation), n_candidates=0,
-                    error_code=str(E.E_EVOLVE_PROPOSE_FAILED), reason=last_error[:200])
+                    error_code=str(E.E_EVOLVE_PROPOSE_FAILED), reason=last_error[:200],
+                    **usage)
         return ProposalResult(error_code=str(E.E_EVOLVE_PROPOSE_FAILED),
                               reason=last_error[:200])
 
@@ -1399,7 +1528,8 @@ def propose(bundle: EvidenceBundle, *, cfg: Any, rng_seed: int, client: Any = No
         raw_items = parse_proposal_payload(payload)
     except ProposeFailedError as exc:
         events.emit("evolve.propose", gen=int(generation), n_candidates=0,
-                    error_code=str(E.E_EVOLVE_PROPOSE_FAILED), reason=str(exc)[:200])
+                    error_code=str(E.E_EVOLVE_PROPOSE_FAILED), reason=str(exc)[:200],
+                    **usage)
         return ProposalResult(error_code=str(E.E_EVOLVE_PROPOSE_FAILED),
                               reason=str(exc)[:200])
 
@@ -1408,21 +1538,54 @@ def propose(bundle: EvidenceBundle, *, cfg: Any, rng_seed: int, client: Any = No
                       for item in raw_items]
     except (InfraError, ProposeFailedError) as exc:
         events.emit("evolve.propose", gen=int(generation), n_candidates=0,
-                    error_code=str(E.E_EVOLVE_PROPOSE_FAILED), reason=str(exc)[:200])
+                    error_code=str(E.E_EVOLVE_PROPOSE_FAILED), reason=str(exc)[:200],
+                    **usage)
         return ProposalResult(error_code=str(E.E_EVOLVE_PROPOSE_FAILED),
                               reason=str(exc)[:200])
 
     # ---- 合法性校验：非法候选直接丢弃（该候选 reject 由上层落盘）---------------------
-    kept: list[Candidate] = []
-    for cand in candidates:
-        result = validate_candidate(cand, cfg=cfg)
-        if result.ok:
-            kept.append(cand)
-        else:
-            events.emit("evolve.validate", candidate_id=cand.candidate_id, status="fail",
-                        violations=list(result.violations),
-                        diff_lines=result.diff_lines,
-                        touched_files=list(result.touched_files))
+    violations_seen: list[str] = []
+
+    def _validate_batch(batch: Sequence[Candidate]) -> list[Candidate]:
+        kept_local: list[Candidate] = []
+        for cand in batch:
+            result = validate_candidate(cand, cfg=cfg)
+            if result.ok:
+                kept_local.append(cand)
+            else:
+                events.emit("evolve.validate", candidate_id=cand.candidate_id, status="fail",
+                            violations=list(result.violations),
+                            diff_lines=result.diff_lines,
+                            touched_files=list(result.touched_files))
+                violations_seen.append(
+                    f"{cand.kind}: {'; '.join(str(v) for v in result.violations)}"[:300])
+        return kept_local
+
+    kept = _validate_batch(candidates)
+
+    # ---- 全部未过静态校验 → 用**同一份约束**重提（F-M3-4，2026-10-18）------------------
+    # 修复前：一次格式错误（例如把 config.json 写成嵌套对象）就让整代 no_candidate，
+    # 而训练局已经花掉。``propose_max_retries`` 原先只覆盖「API 调用失败」，现在也覆盖
+    # 「候选全灭」。重提只追加**本轮校验器给出的拒绝原因**与固定提醒；两者都只含候选
+    # 自身的路径/键名，不注入证据束之外的上下文（INV-3）。
+    for attempt in range(1, retries + 1):
+        if kept:
+            break
+        retry_note = _RETRY_NOTE
+        if violations_seen:
+            retry_note += "\n上一次被拒绝的原因：\n" + "\n".join(
+                f"- {item}" for item in violations_seen[-3:])
+        try:
+            retry_payload = _call_generate_json(
+                resolved, system=system, user=user + retry_note, schema=schema,
+                seed=_attempt_seed(rng_seed, retries + attempt), usage_out=usage)
+            retry_items = parse_proposal_payload(retry_payload)
+            batch = [normalize_generated_candidate(item, gen_id=gen_id)
+                     for item in retry_items]
+        except Exception: # noqa: BLE001 - 重提失败按「仍无候选」处理，不掩盖首个错误
+            continue
+        candidates.extend(batch)
+        kept = _validate_batch(batch)
 
     # ---- 去重（FR-07-5）→ 排序（优先级降序、同优先级 id 升序）→ 预算截断（NFR-07-5）---
     deduped_all, n_deduped = dedupe_candidates(kept)
@@ -1432,7 +1595,9 @@ def propose(bundle: EvidenceBundle, *, cfg: Any, rng_seed: int, client: Any = No
 
     events.emit("evolve.propose", gen=int(generation), n_candidates=len(deduped),
                 n_deduped=int(n_deduped),
-                kinds=[c.kind for c in deduped], prompt_tokens=0, latency_ms=0)
+                kinds=[c.kind for c in deduped],
+                prompt_tokens=int(usage["prompt_tokens"]),
+                latency_ms=int(usage["latency_ms"]))
     if not deduped:
         return ProposalResult(candidates=(), error_code=str(E.E_EVOLVE_NO_CANDIDATE),
                               n_generated=len(candidates), n_deduped=int(n_deduped),
@@ -1450,7 +1615,8 @@ def _attempt_seed(rng_seed: int, attempt: int) -> int:
 
 
 def _call_generate_json(client: Any, *, system: str, user: str,
-                        schema: Mapping[str, Any], seed: int) -> Any:
+                        schema: Mapping[str, Any], seed: int,
+                        usage_out: dict[str, int] | None = None) -> Any:
     """按 MOD-03 的**统一同步契约**调用 ``generate_json``（Issue #1 §2）。
 
     契约形参是 ``generate_json(messages, schema, *, mode, sampling, seed)``
@@ -1463,6 +1629,12 @@ def _call_generate_json(client: Any, *, system: str, user: str,
 
     ``sampling`` 只给 ``temperature=0.0``：提案是**结构化判定输入**，必须走评估口径
     （B-14），token 上限沿用配置里的 ``inference.max_tokens``。
+
+    ``usage_out``（F-M3-4，2026-10-18）：把本次调用的 prompt/completion/latency **累加**
+    进调用方的字典。修复前 ``evolve.propose`` 事件把 ``prompt_tokens``/``latency_ms``
+    写死为 0，实际 10,654 tok / 2.2 s 的提案在事件流里看起来像没花钱。``generate_json``
+    的返回若是 MOD-03 的 ``GenerationResult``（带 ``.usage``）就取真实值；测试假件返回
+    dict 时保持 0（不猜）。
     """
     import asyncio
     import inspect
@@ -1474,6 +1646,12 @@ def _call_generate_json(client: Any, *, system: str, user: str,
                                   max_tokens=_PROPOSE_MAX_TOKENS)
     if inspect.isawaitable(result):
         result = asyncio.run(result)
+    if usage_out is not None:
+        usage = getattr(result, "usage", None)
+        if usage is not None:
+            for key in ("prompt_tokens", "completion_tokens", "latency_ms"):
+                value = getattr(usage, key, 0)
+                usage_out[key] = int(usage_out.get(key, 0) or 0) + int(value or 0)
     return _extract_json(result)
 
 

@@ -347,16 +347,37 @@ def _run_generation(*, state: Any, run_ctx: Any, runner: Any, cfg: Any, app_cfg:
         except Exception as exc: # noqa: BLE001
             events.emit("evolve.proposal_checkpoint", gen=gen, status="failed",
                         detail=str(exc)[:200])
-    if not prop.candidates:
-        result.error_code = prop.error_code or str(E.E_EVOLVE_NO_CANDIDATE)
-        result.reason = prop.reason or "no_candidate"
-        _finish_report(result=result, run_ctx=run_ctx, cfg=cfg, ctx=ctx,
-                       run_id=run_id, protocol=protocol, now=now)
-        return result
-
     # ---- 2) 冒烟 seed：本代训练块末尾（FR-07-6）-------------------------------------
     smoke_n = int(getattr(cfg, "smoke_n", 2))
     smoke_seeds = tuple(take("train", generation=gen, protocol=protocol)[-max(1, smoke_n):])
+
+    if not prop.candidates:
+        result.error_code = prop.error_code or str(E.E_EVOLVE_NO_CANDIDATE)
+        result.reason = prop.reason or "no_candidate"
+        # F-M3-4（2026-10-18，m3r4 cycle 1）：即使一个候选都没有，也把 parent 的**已有
+        # 测量**继承进 report/台账（0 局）。修复前这里直接落骨架报告 ⇒ 台账 parent 行
+        # ``n=0``，“本代在役 harness 的 heldout”在报告里凭空消失。这里**只继承、绝不实测**：
+        # 没有候选可比较，补跑 40 局只是白花钱（继承失败就退回骨架，不 fail-open 到实测）。
+        try:
+            ev = _build_evaluator(cfg=cfg, app_cfg=app_cfg, evaluator=evaluator,
+                                  runner=runner, protocol=protocol,
+                                  memory_version=memory_version, run_id=run_id, gen=gen,
+                                  smoke_seeds=smoke_seeds, episode_config=episode_config,
+                                  seed=seed, run_dir=run_root)
+            inherited, source = _inherited_parent_heldout(
+                ev, run_root=run_root, gen=gen, parent=parent, harness=harness,
+                play_hash=str(result.parent_play_hash))
+            result.heldout_source = source
+            if inherited is not None:
+                result.parent_heldout = inherited
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc: # noqa: BLE001 - 继承失败只降级为空指标，不阻断拒绝落盘
+            events.emit("evolve.evaluate", candidate_id="parent",
+                        error_code=str(getattr(exc, "code", E.E_EVOLVE_EVAL_FAILED)))
+        _finish_report(result=result, run_ctx=run_ctx, cfg=cfg, ctx=ctx,
+                       run_id=run_id, protocol=protocol, now=now)
+        return result
 
     # ---- 3) parent 的 heldout（优先**继承**同 play 面的测量）+ 本代冒烟 ---------------
     # D-M3-7（2026-10-14 用户架构）：每代**只测候选**。起点的 heldout 只要 play 面没变

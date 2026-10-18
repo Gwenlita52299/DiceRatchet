@@ -169,7 +169,8 @@ def test_allowlisted_import_passes():
 
 def test_config_patch_evolvable_key_passes():
     diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
-            '@@ -2,1 +2,1 @@\n-  "top_k": 12,\n+  "top_k": 8,\n')
+            '@@ -2,1 +2,1 @@\n-  "memory.retrieve.top_k": 12,\n'
+            '+  "memory.retrieve.top_k": 8,\n')
     cand = make_candidate(kind="config_patch", diff=diff,
                           touched=["harness/config.json"])
     result = P.validate_candidate(cand, cfg=make_config(
@@ -180,6 +181,65 @@ def test_config_patch_evolvable_key_passes():
 def test_config_patch_non_evolvable_key_rejected():
     diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
             '@@ -3,1 +3,1 @@\n-  "seed": 0\n+  "seed": 7\n')
+    cand = make_candidate(kind="config_patch", diff=diff,
+                          touched=["harness/config.json"])
+    result = P.validate_candidate(cand, cfg=make_config(
+        evolvable_keys=("retrieval.top_k",)))
+    assert result.status == "fail"
+    assert any("config_key_not_evolvable" in v for v in result.violations)
+
+
+def test_config_patch_nested_object_rejected_with_actionable_reason():
+    """F-M3-4：m3r4 cycle 1 的现场形态 ``{"retrieval": {"top_k": 3}}``。
+
+    嵌套对象不是 ``harness/config.json`` 的合法形态（加载器只收扁平点分键），
+    必须在**花钱之前**拒绝，并告诉提案方该写什么；不能像旧实现那样只报
+    ``config_key_not_evolvable:['retrieval']``（看起来像「键名不对」）。
+    """
+    diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
+            '@@ -1 +1 @@\n-{}\n+{"retrieval": {"top_k": 3}}\n')
+    cand = make_candidate(kind="config_patch", diff=diff,
+                          touched=["harness/config.json"])
+    result = P.validate_candidate(cand, cfg=make_config(
+        evolvable_keys=("retrieval.top_k",)))
+    assert result.status == "fail"
+    assert any("config_patch_nested_object" in v for v in result.violations)
+    assert any("memory.retrieve.top_k" in v for v in result.violations)
+
+
+def test_config_patch_conceptual_short_key_rejected():
+    """``retrieval.top_k`` 是概念名；直接写进 config.json 会被加载器拒绝。"""
+    diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
+            '@@ -1 +1 @@\n-{}\n+{"retrieval.top_k": 3}\n')
+    cand = make_candidate(kind="config_patch", diff=diff,
+                          touched=["harness/config.json"])
+    result = P.validate_candidate(cand, cfg=make_config(
+        evolvable_keys=("retrieval.top_k",)))
+    assert result.status == "fail"
+    assert any("config_key_not_evolvable" in v for v in result.violations)
+
+
+def test_config_patch_container_replaced_by_scalar_rejected():
+    """把整个容器替换成标量（``{"retrieval": 3}``）不是「改一个键」，必须拒绝。"""
+    diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
+            '@@ -1 +1 @@\n-{}\n+{"retrieval": 3}\n')
+    cand = make_candidate(kind="config_patch", diff=diff,
+                          touched=["harness/config.json"])
+    result = P.validate_candidate(cand, cfg=make_config(
+        evolvable_keys=("retrieval.top_k",)))
+    assert result.status == "fail"
+    assert any("config_key_not_evolvable" in v for v in result.violations)
+
+
+def test_config_patch_multiline_nested_fragment_rejected():
+    """逐行 diff 的嵌套片段（非完整 JSON）同样不是扁平键形态 ⇒ 拒绝。"""
+    diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
+            '@@ -1,2 +1,4 @@\n'
+            ' {\n'
+            '+  "retrieval": {\n'
+            '+    "top_k": 3\n'
+            '+  }\n'
+            ' }\n')
     cand = make_candidate(kind="config_patch", diff=diff,
                           touched=["harness/config.json"])
     result = P.validate_candidate(cand, cfg=make_config(
