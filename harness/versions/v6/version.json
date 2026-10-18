@@ -1,0 +1,11 @@
+{
+  "accepted_by": "auto",
+  "artifact_hash": "sha256:55666b00140f3b019f5b65d866b67e869bccfeaef8cd43b8cf9eea03a8078051",
+  "base_model": null,
+  "created_at": "2026-10-18T12:11:37Z",
+  "diff_path": "harness/versions/v6/diff.patch",
+  "git_commit": "c8cb74cb4d56ac0ddab27d8bee2c257857f01ccb",
+  "parent": 5,
+  "reason": "reflect:train#13 显示胜局仍有 27 次非法尝试、214 决策，traj:train#13 是唯一 win；traj:train#5/#9/#15/#18 因回合上限截断。高随机采样放大无效试探与拖回合。与 dead_ends 的 gen-001（改 memory.retrieve.top_k）不同：本条降采样温度，直接压缩决策抖动，机制不同。",
+  "version": 6
+}

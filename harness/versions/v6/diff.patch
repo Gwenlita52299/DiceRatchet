@@ -1,0 +1,5 @@
+--- a/harness/config.json
++++ b/harness/config.json
+@@ -1 +1 @@
+-{}
++{"agent.policy.temperature": 0.4}

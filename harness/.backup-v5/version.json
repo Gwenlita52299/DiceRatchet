@@ -1,0 +1,11 @@
+{
+  "accepted_by": "auto",
+  "artifact_hash": "sha256:70a6128bc0120ed7b29c3bfcc970947dcbff4fcd2583c652fe21d7eaa6547432",
+  "base_model": null,
+  "created_at": "2026-10-18T10:48:32Z",
+  "diff_path": "",
+  "git_commit": "c8cb74cb4d56ac0ddab27d8bee2c257857f01ccb",
+  "parent": 4,
+  "reason": "rejected:981c7adfccdf:C1:win_rate 0.3000<0.3500",
+  "version": 5
+}
