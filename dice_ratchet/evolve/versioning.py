@@ -43,7 +43,8 @@ __all__ = [
     "PLAY_TOOLS_GLOB", "VERSION_FILE", "accept", "artifact_hash_of",
     "build_decision_sections", "commit_harness_version", "copy_harness_tree",
     "current_version", "diff_trees", "extract_version_file", "gate_state_for",
-    "load_version", "next_version", "play_hash", "play_plane_files", "read_ledger",
+    "effective_play_hash", "load_version", "next_version", "play_hash",
+    "play_plane_files", "read_ledger",
     "record_rejection", "rollback", "snapshot_harness", "stage_candidate",
     "staging_dir_for", "tree_digest", "unified_diff", "write_candidate_patch",
     "write_dead_end", "write_ledger", "write_version_pointer",
@@ -197,6 +198,46 @@ def play_hash(root: Path | str) -> str:
         except OSError:
             digest = "<missing>"
         items.append((name, digest))
+    payload = json.dumps(items, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def effective_play_hash(root: Path | str, *, policy_base: Any = None,
+                        mode: str | None = None) -> str:
+    """play 面的**生效**指纹：模板/工具字节 + 当前 ``mode`` 下真正生效的采样值。
+
+    与 ``play_hash`` 的分工（F-M3-9，方案 B）：
+
+    * ``play_hash`` = **字节**指纹，同时充当**测量身份**（臂归档、代际继承、起点守卫）。
+      它必须保持「同一份文件 = 同一串」，所以不能把生效语义塞进去（会让历史归档失配）；
+    * ``effective_play_hash`` 只用于 C2「打法是否真的变了」。它把 ``config.json`` 的字节
+      换成 ``effective_policy_values`` 的结果（eval 归一 + clamp 之后），于是「改了个不生效
+      的字节」（mvp1 的 ``temperature: 0.4``）不再算变化。
+
+    ``policy_base`` 是 run 级 ``PolicyConfig``（env/CLI 已生效的那一份）；候选目录的
+    ``config.json`` 覆盖在它之上再取生效值——与 ``loop.cli._policy_factory`` 的逐臂解析链
+    一致。缺省退回 ``PolicyConfig()`` 默认值。
+    """
+    from dice_ratchet.infra.config import (PolicyConfig, apply_policy_overrides,
+                                           effective_policy_values,
+                                           harness_policy_overrides)
+
+    base = Path(root)
+    items: list[tuple[str, str]] = []
+    for name in play_plane_files(base):
+        if name == PLAY_CONFIG_FILE:
+            continue
+        try:
+            digest = hashlib.sha256((base / name).read_bytes()).hexdigest()
+        except OSError:
+            digest = "<missing>"
+        items.append((name, digest))
+    policy = policy_base if policy_base is not None else PolicyConfig()
+    effective = effective_policy_values(
+        apply_policy_overrides(policy, harness_policy_overrides(base)),
+        mode=str(mode or "play"))
+    items.append(("effective", json.dumps(effective, sort_keys=True,
+                                          separators=(",", ":"))))
     payload = json.dumps(items, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 

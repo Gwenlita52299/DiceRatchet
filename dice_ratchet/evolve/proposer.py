@@ -27,7 +27,8 @@ import re
 from typing import Any, Callable, Final, Iterable, Mapping, Sequence
 
 from dice_ratchet.infra import events
-from dice_ratchet.infra.config import HARNESS_CONFIG_ALLOWED_PREFIXES
+from dice_ratchet.infra.config import (HARNESS_CONFIG_ALLOWED_PREFIXES,
+                                      POLICY_TEMPERATURE_RANGE)
 from dice_ratchet.infra.errors import E, InfraError
 from dice_ratchet.infra.io import read_json
 
@@ -593,13 +594,14 @@ _CONFIG_PATCH_EXAMPLE = """## `config_patch` 的最小合法样例（只改可�
 +++ b/harness/config.json
 @@ -1 +1 @@
 -{}
-+{"memory.retrieve.top_k": 3}
++{"agent.policy.memory_top_k": 3}
 
 `harness/config.json` 只接受**扁平点分键**，且顶层前缀必须是 `agent.policy.` /
 `memory.retrieve.` / `agent.tools.`。概念名与实际键的对应：
-`retrieval.top_k` → `memory.retrieve.top_k`，`sampling.temperature` →
-`agent.policy.temperature`。禁止嵌套对象（如 `+{ "retrieval": { "top_k": 3 } }`）——
-配置加载会拒绝它。"""
+`sampling.memory_top_k` → `agent.policy.memory_top_k`，`sampling.temperature` →
+`agent.policy.temperature`。禁止嵌套对象（如 `+{ "sampling": { "memory_top_k": 3 } }`）——
+配置加载会拒绝它。只写**当前模式下生效**的键：`sampling.temperature` 在 `eval` 模式下
+恒为 0.0，写它不会改变打法（会被直接判作废）。"""
 
 #: 静态校验全灭后的**重试提醒**（F-M3-4，2026-10-18）。
 #:
@@ -624,7 +626,8 @@ _OUTPUT_CONTRACT = """## 输出契约（只输出这个 JSON 对象）
                  "expected_effect": ["win_rate", "up", 2]}]}"""
 
 
-def render_proposer_prompt(bundle: EvidenceBundle, cfg: Any) -> tuple[str, str]:
+def render_proposer_prompt(bundle: EvidenceBundle, cfg: Any, *,
+                           mode: str | None = None) -> tuple[str, str]:
     """产出 ``(system, user)``（FR-07-3：模板化，**不允许**插入证据束之外的上下文）。
 
     回归判据（PRD §11-4）：system+user 里出现的 ``{{...}}`` 占位符必须 ⊆
@@ -639,8 +642,10 @@ def render_proposer_prompt(bundle: EvidenceBundle, cfg: Any) -> tuple[str, str]:
     allowlist = getattr(cfg, "tool_import_allowlist", _DEFAULT_IMPORT_ALLOWLIST)
     # F40：`config_patch` 可改的键必须与校验器用**同一份**配置（`evolve.evolvable_keys`），
     # 否则模型只能盲猜键名 —— 实测首轮 try 就因 `config_key_not_evolvable` 作废。
-    evolvable_keys = "、".join(sorted(str(k) for k in
-                                      (getattr(cfg, "evolvable_keys", ()) or ()))) or "（无）"
+    evolvable_keys = "、".join(
+        f"{spec.concept}（{spec.actual}，{spec.range_text()}；{spec.note}）"
+        for spec in (EVOLVABLE_SPEC_BY_CONCEPT[c]
+                     for c in effective_evolvable_keys(cfg, mode))) or "（无）"
     system = _SYSTEM_TEMPLATE.format(
         allowed_files=allowed_files,
         max_lines=int(getattr(cfg, "max_diff_lines", 40)),
@@ -1091,8 +1096,102 @@ def _is_harness_config_key(key: str) -> bool:
                for prefix in HARNESS_CONFIG_PREFIXES)
 
 
-def _validate_config_patch(cand: Candidate, cfg: Any, violations: list[str]) -> None:
-    """``config_patch`` 只能改 ``evolve.evolvable_keys`` 声明的键（FR-07-4）。
+#: 可演化键的**规格表**（F-M3-9，2026-10-18）：白名单不再只是一串字符串，而是
+#: 「概念名 → 实际键 + 取值域 + 在哪些 mode 下真正生效」。
+#:
+#: 为什么需要这张表（mvp1 现场）：`evolvable_keys` 原来只声明「可写」，没声明
+#: 「写了会不会生效」。两个历史键都写不进行为——
+#:   * `sampling.temperature`：eval 模式恒 0.0、play 模式 clamp 到 0.7–1.2；
+#:   * `retrieval.top_k`：被 `policy.memory_top_k` 在检索调用处遮蔽（agent 显式传参）。
+#: 于是 `config_patch` 只能产出「字节变了、行为没变」的候选，C2 被骗过（gen-002 accept）。
+@dataclass(frozen=True)
+class EvolvableKeySpec:
+    """一个可演化键的契约（``concept`` 是白名单口径，``actual`` 是 config.json 的写法）。"""
+
+    concept: str
+    actual: str
+    kind: str                      # "int" | "float"
+    lo: float | None               # 允许区间（含端点）
+    hi: float | None
+    modes: tuple[str, ...]         # 在哪些 ``inference.mode`` 下真正生效
+    note: str = ""
+
+    def in_mode(self, mode: str | None) -> bool:
+        """``mode`` 为空 ⇒ 不裁剪（测试/未知场景）；否则按白名单判定。"""
+        return True if not mode else str(mode) in self.modes
+
+    def accepts(self, value: Any) -> bool:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return False
+        if self.kind == "int" and float(int(number)) != number:
+            return False
+        if self.lo is not None and number < self.lo:
+            return False
+        if self.hi is not None and number > self.hi:
+            return False
+        return True
+
+    def range_text(self) -> str:
+        if self.lo is None and self.hi is None:
+            return "任意"
+        lo = "-∞" if self.lo is None else f"{self.lo:g}"
+        hi = "+∞" if self.hi is None else f"{self.hi:g}"
+        return f"[{lo}, {hi}]" + ("（整数）" if self.kind == "int" else "")
+
+
+_TEMPERATURE_LO, _TEMPERATURE_HI = POLICY_TEMPERATURE_RANGE
+
+EVOLVABLE_KEY_SPECS: Final[tuple[EvolvableKeySpec, ...]] = (
+    # 采样温度：**只在 play（训练）模式生效**；eval 恒 0.0，所以 eval 轮次里它是死键。
+    EvolvableKeySpec("sampling.temperature", "agent.policy.temperature", "float",
+                     _TEMPERATURE_LO, _TEMPERATURE_HI, ("train",),
+                     "eval 模式恒 0.0；play 模式 clamp 到该区间"),
+    # 记忆注入条数：**真正决定 prompt 里塞几条记忆**的那个字段（policy.memory_top_k）。
+    # 注意不是 memory.retrieve.top_k —— 那个被 agent 的显式传参遮蔽。
+    EvolvableKeySpec("sampling.memory_top_k", "agent.policy.memory_top_k", "int",
+                     1, 20, ("train", "eval"), "决定决策 prompt 注入的记忆条数"),
+)
+
+#: 概念名 → 规格（未知概念 = 不是可演化键）
+EVOLVABLE_SPEC_BY_CONCEPT: Final[dict[str, EvolvableKeySpec]] = {
+    spec.concept: spec for spec in EVOLVABLE_KEY_SPECS
+}
+#: 实际键 → 规格
+EVOLVABLE_SPEC_BY_ACTUAL: Final[dict[str, EvolvableKeySpec]] = {
+    spec.actual: spec for spec in EVOLVABLE_KEY_SPECS
+}
+
+
+def effective_evolvable_keys(cfg: Any, mode: str | None = None) -> tuple[str, ...]:
+    """当前配置 + 当前模式下**真正可演化**的概念键（F-M3-9）。
+
+    三重过滤：① 在 ``evolve.evolvable_keys`` 里；② 规格表认识它；③ 在当前 ``mode``
+    下生效。提案 prompt 与校验器都用这一份，保证「模型看到的」与「会被接受的」同源。
+    """
+    declared = [str(k) for k in (getattr(cfg, "evolvable_keys", ()) or ())]
+    out: list[str] = []
+    for concept in declared:
+        spec = EVOLVABLE_SPEC_BY_CONCEPT.get(concept)
+        if spec is None or not spec.in_mode(mode):
+            continue
+        out.append(concept)
+    return tuple(out)
+
+
+def _inference_mode(app_config: Any) -> str | None:
+    """从 ``AppConfig`` 取 ``inference.mode``（``None`` = 不裁剪，测试路径）。"""
+    if app_config is None:
+        return None
+    inference = getattr(app_config, "inference", None)
+    mode = getattr(inference, "mode", None) if inference is not None else None
+    return str(mode) if mode else None
+
+
+def _validate_config_patch(cand: Candidate, cfg: Any, violations: list[str],
+                           *, mode: str | None = None) -> None:
+    """``config_patch`` 只能改**生效中的** ``evolve.evolvable_keys``（FR-07-4 / F-M3-9）。
 
     F-M3-4（2026-10-18，m3r4 cycle 1）：候选把 ``config.json`` 写成
     ``{"retrieval": {"top_k": 3}}``（嵌套对象），旧实现按 ``_JSON_KEY_RE`` 抽出
@@ -1113,10 +1212,24 @@ def _validate_config_patch(cand: Candidate, cfg: Any, violations: list[str]) -> 
     ``PolicyConfig`` 字段），别名表也去掉了 ``prompt.`` 前缀；``agent.policy.show_intent``
     现在走通用路径被 ``config_key_not_evolvable`` 拒绝，不再需要专门的
     ``config_key_unimplemented`` 分支。
+
+    F-M3-9（2026-10-18）：白名单从「一串字符串」升级成**规格表**（``EVOLVABLE_KEY_SPECS``）：
+    * 当前模式不生效的键（eval 下的 ``sampling.temperature``）⇒ ``config_key_inert_in_mode``；
+    * 取值越界（``temperature`` 必须落在 clamp 窗口内）⇒ ``config_value_out_of_range``；
+    * 未知概念（规格表里没有）⇒ ``config_key_not_evolvable``。
     """
-    evolvable = {str(k) for k in getattr(cfg, "evolvable_keys", ())}
-    if not evolvable:
+    allowed = set(effective_evolvable_keys(cfg, mode))
+    declared = {str(k) for k in getattr(cfg, "evolvable_keys", ())}
+    if not declared:
         violations.append("config_patch_without_evolvable_keys")
+        return
+    if not allowed:
+        # 白名单非空但当前模式下全都失效：说清楚是哪几个键、为什么，别让模型猜。
+        inert = sorted(declared)
+        violations.append(
+            f"config_key_inert_in_mode:{inert}"
+            f"（当前 mode={mode or '<unknown>'} 下这些键不改变采样行为；"
+            "请改 proposals 的 prompt_patch/tool_patch 面）")
         return
     text = "\n".join(_added_lines(cand.diff))
     parsed: Any = None
@@ -1124,6 +1237,7 @@ def _validate_config_patch(cand: Candidate, cfg: Any, violations: list[str]) -> 
         parsed = json.loads(text)
     except (TypeError, ValueError):
         parsed = None
+    values: dict[str, Any] = {}
     if isinstance(parsed, Mapping):
         nested = sorted(str(k) for k, value in parsed.items()
                         if isinstance(value, Mapping))
@@ -1141,40 +1255,54 @@ def _validate_config_patch(cand: Candidate, cfg: Any, violations: list[str]) -> 
                 "agent.tools.*）")
             return
         keys = {str(k) for k in parsed}
+        values = {str(k): v for k, v in parsed.items()}
     else:
         keys = {m.group(1) for m in _JSON_KEY_RE.finditer(text)}
         if not keys:
             # 非 JSON 形态的 diff（例如整文件替换）→ 退化为子串匹配
-            keys = {k for k in evolvable if k in text}
+            keys = {k for k in allowed if k in text}
             if not keys:
                 violations.append("config_patch_no_evolvable_key")
                 return
-    illegal = sorted(k for k in keys
-                     if not _is_harness_config_key(k)
-                     or not _key_is_evolvable(k, evolvable))
+    # 写进文件的必须是**实际键**（`agent.policy.*`），或 diff 片段里的**裸末段**
+    # （`memory_top_k`）。概念名（`sampling.memory_top_k`）**不能**直接写——加载器不认，
+    # 运行期 `harness_policy_overrides` 也只会读 `agent.policy.*`（写了等于静默空转）。
+    allowed_actual = {EVOLVABLE_SPEC_BY_CONCEPT[c].actual for c in allowed}
+    leaf_ok = {spec.actual.rsplit(".", 1)[-1]: spec.actual
+               for spec in (EVOLVABLE_SPEC_BY_CONCEPT[c] for c in allowed)}
+
+    def _resolve(key: str) -> str | None:
+        if "." in key:
+            return key if _is_harness_config_key(key) else None
+        return leaf_ok.get(key)
+
+    resolved = {key: _resolve(key) for key in keys}
+    illegal = sorted(k for k, actual in resolved.items()
+                     if actual is None or actual not in allowed_actual)
     if illegal:
-        violations.append(f"config_key_not_evolvable:{illegal}")
+        inert = sorted(k for k in illegal
+                       if "." in k and _is_harness_config_key(k)
+                       and _canonical_config_key(k, declared) in declared)
+        if inert:
+            violations.append(
+                f"config_key_inert_in_mode:{inert}"
+                f"（mode={mode or '<unknown>'} 下它不改变采样行为）")
+        else:
+            violations.append(f"config_key_not_evolvable:{illegal}")
+        return
+    # 取值域（F-M3-9 / 方案 A）：越界值在**花钱之前**拒绝，不等 clamp 把它悄悄改掉
+    for key, value in values.items():
+        spec = EVOLVABLE_SPEC_BY_ACTUAL.get(_actual_config_key(key))
+        if spec is None:
+            continue
+        if not spec.accepts(value):
+            violations.append(
+                f"config_value_out_of_range:{spec.actual}={value!r}"
+                f"（允许 {spec.range_text()}）")
 
 
-def _key_is_evolvable(key: str, evolvable: set[str]) -> bool:
-    """``config.json`` 的键允许两种写法：概念名的完整路径，或**裸末段短名**。
-
-    ``evolvable_keys`` 用 Spec §5 的概念路径（``retrieval.top_k``），而实际写进
-    ``harness/config.json`` 的键是 ``memory.retrieve.top_k``（加载器前缀 + 概念别名）。
-    因此这里先把实际键折回概念名再比；**裸末段**（``top_k``）仍接受，兼容逐行 diff
-    片段里只出现叶子名的情况。带点的未知路径不再靠「末段碰巧相同」放行
-    （``agent.policy.foo.top_k`` 必须拒绝——它在加载器那边也会因未知键失败）。
-    """
-    if key in evolvable:
-        return True
-    if _canonical_config_key(key, evolvable) in evolvable:
-        return True
-    if "." in key:
-        return False
-    return any(spec.rsplit(".", 1)[-1] == key for spec in evolvable)
-
-
-def validate_candidate(cand: Candidate, *, cfg: Any) -> ValidationResult:
+def validate_candidate(cand: Candidate, *, cfg: Any,
+                       mode: str | None = None) -> ValidationResult:
     """FR-07-4 的改动面硬约束（纯函数；不落盘、不调模型）。
 
     检查顺序固定（保证 ``reason`` 确定性）：schema → 路径 → 行/字符数 → 依赖 →
@@ -1233,7 +1361,7 @@ def validate_candidate(cand: Candidate, *, cfg: Any) -> ValidationResult:
     elif cand.kind == "config_patch":
         if CONFIG_FILE not in paths:
             violations.append("config_patch_without_config_file")
-        _validate_config_patch(cand, cfg, violations)
+        _validate_config_patch(cand, cfg, violations, mode=mode)
     elif cand.kind == "prompt_patch":
         if not any(p in (DECISION_PROMPT, REFLECTION_PROMPT) for p in paths):
             violations.append("prompt_patch_without_prompt_file")
@@ -1478,14 +1606,15 @@ def order_candidates(candidates: Iterable[Candidate]) -> tuple[Candidate, ...]:
                         key=lambda c: (-int(c.expected_effect.priority), c.candidate_id)))
 
 
-def proposal_inputs(bundle: EvidenceBundle, cfg: Any) -> dict[str, Any]:
+def proposal_inputs(bundle: EvidenceBundle, cfg: Any, *,
+                    mode: str | None = None) -> dict[str, Any]:
     """提案的**输入指纹面**（F42-B 检查点用）。
 
     与 ``propose`` 内部渲染调用**共用同一句**（``render_proposer_prompt`` + ``candidate_schema_dict``），
     避免「检查点按另一份参数算指纹」这类静默漂移。返回的 ``system`` / ``user`` / ``schema``
     就是真正送进 LLM 的三段。
     """
-    system, user = render_proposer_prompt(bundle, cfg)
+    system, user = render_proposer_prompt(bundle, cfg, mode=mode)
     return {"system": system, "user": user, "schema": candidate_schema_dict()}
 
 
@@ -1508,7 +1637,8 @@ def propose(bundle: EvidenceBundle, *, cfg: Any, rng_seed: int, client: Any = No
         assert_no_holdout_leak(bundle, cfg=cfg, protocol=protocol)
     except HoldoutLeakError:
         raise # INV-5 致命：交由上层中止本代 + audit 告警（PRD §10）
-    rendered = dict(inputs) if inputs is not None else proposal_inputs(bundle, cfg)
+    rendered = (dict(inputs) if inputs is not None
+                else proposal_inputs(bundle, cfg, mode=_inference_mode(app_config)))
     system, user, schema = rendered["system"], rendered["user"], rendered["schema"]
     retries = max(0, int(getattr(cfg, "propose_max_retries", 2)))
     last_error = ""
@@ -1543,6 +1673,7 @@ def propose(bundle: EvidenceBundle, *, cfg: Any, rng_seed: int, client: Any = No
         return ProposalResult(error_code=str(E.E_EVOLVE_PROPOSE_FAILED),
                               reason=last_error[:200])
 
+    mode = _inference_mode(app_config)
     try:
         raw_items = parse_proposal_payload(payload)
     except ProposeFailedError as exc:
@@ -1568,7 +1699,7 @@ def propose(bundle: EvidenceBundle, *, cfg: Any, rng_seed: int, client: Any = No
     def _validate_batch(batch: Sequence[Candidate]) -> list[Candidate]:
         kept_local: list[Candidate] = []
         for cand in batch:
-            result = validate_candidate(cand, cfg=cfg)
+            result = validate_candidate(cand, cfg=cfg, mode=mode)
             if result.ok:
                 kept_local.append(cand)
             else:

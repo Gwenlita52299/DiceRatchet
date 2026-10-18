@@ -174,6 +174,9 @@ class GenerationResult:
     parent_play_hash: str = ""
     #: accept 之后重新算的在役 play 面指纹（未 accept / 算不出 → 空）。
     accepted_play_hash: str = ""
+    #: F-M3-9（方案 B）：起点 harness 的**生效**指纹（文件字节 + 当前 mode 下真正生效的
+    #: 采样值）。C2 要求它与 ``play_hash`` 同时变化，否则「改了个不生效的字节」也算变。
+    parent_effective_hash: str = ""
     #: D2=A（2026-10-14）：拒绝时**轻量推进**后的版本号（``v_N+1``，无快照、无 tag）。
     #: 非 ``None`` 时它就是本代「结束时在役」的版本号（``harness_version``）。
     retained_version: int | None = None
@@ -298,6 +301,13 @@ def run_one_generation(*, state: Any, run_ctx: Any, runner: Any = None,
     return _as_outcome(result)
 
 
+def _inference_mode(app_cfg: Any) -> str | None:
+    """``inference.mode``（``None`` = 不裁剪/不归一，测试路径）。"""
+    inference = getattr(app_cfg, "inference", None)
+    mode = getattr(inference, "mode", None) if inference is not None else None
+    return str(mode) if mode else None
+
+
 def _run_generation(*, state: Any, run_ctx: Any, runner: Any, cfg: Any, app_cfg: Any,
                     gen: int, run_id: str, ctx: EvolveContext, memory: Any,
                     evaluator: Any, client: Any, protocol: Any, memory_version: int,
@@ -325,11 +335,20 @@ def _run_generation(*, state: Any, run_ctx: Any, runner: Any, cfg: Any, app_cfg:
     except Exception as exc: # noqa: BLE001 - 指纹算不出不阻断本代（继承会退回重测）
         events.emit("evolve.play_hash", generation=int(gen), status="failed",
                     detail=f"{type(exc).__name__}: {exc}"[:200])
+    # F-M3-9（方案 B）：**生效**指纹（文件字节之外还看当前 mode 下真正生效的采样值）。
+    # C2 要求它与字节指纹**同时**变化，否则「改了个不生效的字节」也会被判成打法变了。
+    try:
+        result.parent_effective_hash = versioning_mod.effective_play_hash(
+            harness, policy_base=app_cfg.agent.policy,
+            mode=_inference_mode(app_cfg))
+    except Exception as exc: # noqa: BLE001
+        events.emit("evolve.play_hash", generation=int(gen), status="failed",
+                    kind="effective", detail=f"{type(exc).__name__}: {exc}"[:200])
     bundle = proposer_mod.build_evidence_bundle(
         run_id=run_id, n_traj=int(getattr(cfg, "n_traj", 20)), cfg=cfg, memory=memory,
         run_dir=run_root, harness=harness, generation=gen)
     rng_seed = propose_seed(run_id, gen, seed=seed)
-    inputs = proposer_mod.proposal_inputs(bundle, cfg)
+    inputs = proposer_mod.proposal_inputs(bundle, cfg, mode=_inference_mode(app_cfg))
     fingerprint = checkpoint_mod.proposal_fingerprint(
         run_id=run_id, generation=gen, propose_seed=rng_seed,
         harness_version=int(getattr(parent, "version", 0) or 0),
@@ -406,7 +425,10 @@ def _run_generation(*, state: Any, run_ctx: Any, runner: Any, cfg: Any, app_cfg:
         report = _evaluate_one(cand=cand, cfg=cfg, ev=ev, parent=parent,
                                parent_heldout=parent_heldout, parent_smoke=parent_smoke,
                                smoke_seeds=smoke_seeds, run_id=run_id, gen=gen, ctx=ctx,
-                               parent_play_hash=str(result.parent_play_hash or ""))
+                               parent_play_hash=str(result.parent_play_hash or ""),
+                               parent_effective_hash=str(result.parent_effective_hash or ""),
+                               mode=_inference_mode(app_cfg),
+                               policy_base=app_cfg.agent.policy)
         result.reports.append(report)
         _write_candidate(result.reports[-1], run_root=run_root, gen=gen)
         if report.verdict is not None and report.verdict.decision == "accept":
@@ -641,11 +663,12 @@ def _heldout_archive_for(arms_dir: Path, generation: int, candidate_id: str) -> 
 def _evaluate_one(*, cand: Candidate, cfg: Any, ev: Any, parent: HarnessRef,
                   parent_heldout: Any, parent_smoke: Any, smoke_seeds: Sequence[int],
                   run_id: str, gen: int, ctx: EvolveContext,
-                  parent_play_hash: str = "") -> CandidateReport:
+                  parent_play_hash: str = "", parent_effective_hash: str = "",
+                  mode: str | None = None, policy_base: Any = None) -> CandidateReport:
     """单候选的完整链路（FR-07-4 → FR-07-13 → FR-07-6 → FR-07-7 → FR-07-8）。"""
     run_root, harness = ctx.root, ctx.harness
     # ---- ① 改动面硬约束（纯函数，先于任何落盘）-------------------------------------
-    validation = proposer_mod.validate_candidate(cand, cfg=cfg)
+    validation = proposer_mod.validate_candidate(cand, cfg=cfg, mode=mode)
     events.emit("evolve.validate", candidate_id=cand.candidate_id, status=validation.status,
                 violations=list(validation.violations), diff_lines=validation.diff_lines,
                 touched_files=list(validation.touched_files))
@@ -706,6 +729,14 @@ def _evaluate_one(*, cand: Candidate, cfg: Any, ev: Any, parent: HarnessRef,
         events.emit("evolve.play_hash", generation=int(gen), status="failed",
                     candidate_id=cand.candidate_id,
                     detail=f"{type(exc).__name__}: {exc}"[:200])
+    try:
+        candidate_effective_hash = str(versioning_mod.effective_play_hash(
+            staging, policy_base=policy_base, mode=mode) or "")
+    except Exception as exc: # noqa: BLE001
+        candidate_effective_hash = ""
+        events.emit("evolve.play_hash", generation=int(gen), status="failed",
+                    candidate_id=cand.candidate_id, kind="effective",
+                    detail=f"{type(exc).__name__}: {exc}"[:200])
 
     # ---- ⑤ 冒烟 → heldout → 配对 → 判定表 -----------------------------------------
     report = judge_mod.evaluate_candidate(
@@ -713,7 +744,9 @@ def _evaluate_one(*, cand: Candidate, cfg: Any, ev: Any, parent: HarnessRef,
         parent_heldout=parent_heldout, parent_smoke=parent_smoke,
         harness_version=int(getattr(parent, "version", 0) or 0), generation=gen,
         smoke_seeds=smoke_seeds, play_hash=candidate_play_hash,
-        parent_play_hash=str(parent_play_hash or ""))
+        parent_play_hash=str(parent_play_hash or ""),
+        effective_hash=candidate_effective_hash,
+        parent_effective_hash=str(parent_effective_hash or ""))
     if report.error_code == str(E.E_EVOLVE_LOAD_FAILED): # pragma: no cover - 防御
         return report
     return report

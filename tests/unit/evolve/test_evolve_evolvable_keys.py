@@ -22,7 +22,7 @@ from dice_ratchet.infra.config import load_config
 CONFIGS = Path(__file__).resolve().parents[3] / "configs"
 
 #: 现行白名单（概念名）。新增键时必须同时能在 `harness/config.json` 里写出来。
-EXPECTED_EVOLVABLE_KEYS = ("retrieval.top_k", "sampling.temperature")
+EXPECTED_EVOLVABLE_KEYS = ("sampling.temperature", "sampling.memory_top_k")
 
 
 def _walk(cfg, dotted: str):
@@ -39,6 +39,8 @@ def test_default_evolvable_keys_are_the_two_real_ones():
     cfg = load_config(config_dir=CONFIGS)
     assert cfg.evolve.evolvable_keys == EXPECTED_EVOLVABLE_KEYS
     assert "prompt.show_intent" not in cfg.evolve.evolvable_keys
+    # F-M3-9：`retrieval.top_k` 被 policy.memory_top_k 遮蔽（永不生效）⇒ 已移出白名单
+    assert "retrieval.top_k" not in cfg.evolve.evolvable_keys
 
 
 def test_every_evolvable_key_maps_to_a_loadable_harness_key(tmp_path):
@@ -56,6 +58,23 @@ def test_every_evolvable_key_maps_to_a_loadable_harness_key(tmp_path):
         harness = tmp_path / "config.json"
         harness.write_text(json.dumps({actual: value}), encoding="utf-8")
         load_config(config_dir=CONFIGS, harness_config=harness)  # 不抛即通过
+
+
+def test_every_declared_key_has_a_spec():
+    """白名单里的每一项都必须在规格表里（否则读值域/生效 mode 时无据可依）。"""
+    cfg = load_config(config_dir=CONFIGS)
+    for concept in cfg.evolve.evolvable_keys:
+        assert concept in P.EVOLVABLE_SPEC_BY_CONCEPT, concept
+        spec = P.EVOLVABLE_SPEC_BY_CONCEPT[concept]
+        assert spec.actual.startswith("agent.policy."), spec.actual
+
+
+def test_mode_filters_inert_keys():
+    """F-M3-9（方案 C）：eval 模式下 `sampling.temperature` 恒 0.0 ⇒ 不进可演化集。"""
+    cfg = load_config(config_dir=CONFIGS).evolve
+    assert P.effective_evolvable_keys(cfg, "eval") == ("sampling.memory_top_k",)
+    assert P.effective_evolvable_keys(cfg, "train") == (
+        "sampling.temperature", "sampling.memory_top_k")
 
 
 def test_show_intent_is_no_longer_an_alias_source():

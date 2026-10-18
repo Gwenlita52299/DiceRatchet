@@ -45,6 +45,8 @@ __all__ = [
     "MemoryConfig", "LoopConfig", "EvolveConfig",
     "EvalConfig", "InfraConfig", "SeedsProtocol",
     "MODEL_ROLES", "EXPERIMENT_ARMS", "ARM_HARNESS_MODES",
+    "POLICY_TEMPERATURE_RANGE", "apply_policy_overrides", "effective_policy_values",
+    "harness_policy_overrides",
     "load_config", "load_seeds", "load_models", "config_hash", "canonical_json",
     "derive_seed", "artifact_hash", "flatten_config", "apply_overrides",
     "harness_overridden_keys", "env_applied_keys", "full_config", "config_drift",
@@ -628,8 +630,11 @@ class EvolveConfig:
     # 2026-10-18（F-M3-5）：原第三项 `prompt.show_intent` 没有任何 `PolicyConfig` 字段、
     # 也没有运行期读取点（意图/推理已由 `decision.md` 强制 `reasoning` 恒开），已移除；
     # 回归判据见 `tests/unit/evolve/test_evolve_evolvable_keys.py`。
+    # 2026-10-18（F-M3-9）：`retrieval.top_k` 被 `policy.memory_top_k` 在检索调用处遮蔽
+    # （agent 显式传参 ⇒ 它永远不生效），已换成**真正生效**的 `sampling.memory_top_k`；
+    # 每个键的取值域/生效 mode 见 `evolve/proposer.py::EVOLVABLE_KEY_SPECS`。
     evolvable_keys: tuple[str, ...] = (
-        "retrieval.top_k", "sampling.temperature",
+        "sampling.temperature", "sampling.memory_top_k",
     )
     tool_import_allowlist: tuple[str, ...] = (
         "math", "re", "json", "itertools", "functools", "typing", "dataclasses",
@@ -1319,6 +1324,89 @@ def harness_overridden_keys(cfg: AppConfig) -> tuple[str, ...]:
 def env_applied_keys(cfg: AppConfig) -> tuple[str, ...]:
     """本次加载真正生效的 ``DICERATCHET_*`` 变量名（供 config.json 环境变量白名单）。"""
     return tuple(getattr(cfg, _ENV_APPLIED_ATTR, ()))
+
+
+# =====================================================================
+# harness 覆盖的**逐臂生效**（F-M3-8，2026-10-18）
+# =====================================================================
+
+#: 采样温度在 play 模式的生效窗口。``agent/policy.py`` 的 clamp 与提案校验器共用这一份
+#: （原先 0.7/1.2 硬编码在 policy.py，校验器无法引用）。
+POLICY_TEMPERATURE_RANGE: Final[tuple[float, float]] = (0.7, 1.2)
+
+
+def harness_policy_overrides(harness_dir: Path | str | None) -> dict[str, Any]:
+    """读 ``<harness_dir>/config.json``，返回 ``PolicyConfig`` 的字段覆盖（短名）。
+
+    为什么需要（F-M3-8，2026-10-18 现场）：``harness/config.json`` 原本只在**进程启动**时
+    由 ``load_config(harness_config=…)`` 读一次，而候选臂是**另一份目录**（staging 拷贝）。
+    于是 ``config_patch`` 候选在评估里根本不生效——字节变了、行为没变，C2 照样判
+    「play 面已变」。mvp1 的 gen-002（``agent.policy.temperature: 0.4``）就是这样被 accept 的。
+
+    只取 ``agent.policy.*``；``memory.retrieve.*`` / ``agent.tools.*`` 不归 PolicyConfig 管
+    （前者被 ``policy.memory_top_k`` 遮蔽，见 MOD-04 PRD）。未知字段 → ``E_IO_CONFIG_INVALID``
+    （与启动期 ``_from_dict`` 同一口径，不静默忽略）。
+    """
+    if not harness_dir:
+        return {}
+    path = Path(harness_dir) / "config.json"
+    if not path.is_file():
+        return {}
+    try:
+        flat = json.loads(path.read_text(encoding="utf-8") or "{}")
+    except (OSError, json.JSONDecodeError) as exc:
+        raise InfraError(E.E_IO_CONFIG_INVALID,
+                         f"{path} 解析失败：{exc}") from exc
+    if not isinstance(flat, dict):
+        raise InfraError(E.E_IO_CONFIG_INVALID, f"{path} 顶层必须是对象")
+    known = {f.name for f in fields(PolicyConfig)}
+    out: dict[str, Any] = {}
+    for raw_key, value in flat.items():
+        key = _normalize_flat_key(str(raw_key))
+        if not key.startswith("agent.policy."):
+            continue
+        name = key[len("agent.policy."):]
+        if name not in known:
+            raise InfraError(E.E_IO_CONFIG_INVALID,
+                             f"{path} 含未知 PolicyConfig 字段：{key}",
+                             hint=f"合法字段：{', '.join(sorted(known))}")
+        out[name] = value
+    return out
+
+
+def apply_policy_overrides(policy: PolicyConfig,
+                           overrides: Mapping[str, Any]) -> PolicyConfig:
+    """把 ``harness_policy_overrides`` 的结果套到 ``PolicyConfig``（返回新实例）。
+
+    只替换显式给出的字段，然后跑 ``validate()``：越界值在这里就炸。提案校验器会在
+    **花钱之前**用同一套区间拦下同一个值（这里是最后一道）。
+    """
+    if not overrides:
+        return policy
+    from dataclasses import replace as _replace
+
+    out = _replace(policy, **dict(overrides))
+    out.validate()
+    return out
+
+
+def effective_policy_values(policy: PolicyConfig, *, mode: str) -> dict[str, Any]:
+    """``config_patch`` 关心的、**生效后**的采样参数（供 C2 判「打法真的变了」）。
+
+    与 ``agent.policy._sampling`` 同一套规则：``eval`` 恒 ``temperature=0.0`` /
+    ``top_p=1.0``；否则温度 clamp 到 ``POLICY_TEMPERATURE_RANGE``。返回的字典是 C2
+    「生效指纹」的语义部分——它只含真正进入采样的量，不含 ``config.json`` 的字节。
+    """
+    lo, hi = POLICY_TEMPERATURE_RANGE
+    if str(mode) == "eval":
+        temperature, top_p = 0.0, 1.0
+    else:
+        temperature = min(hi, max(lo, float(policy.temperature)))
+        top_p = float(policy.top_p)
+    return {"temperature": round(float(temperature), 6),
+            "top_p": round(float(top_p), 6),
+            "memory_top_k": int(policy.memory_top_k)}
+
 
 
 def _del_path(data: dict[str, Any], path: str) -> None:

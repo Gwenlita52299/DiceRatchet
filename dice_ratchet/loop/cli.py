@@ -378,6 +378,8 @@ def _policy_factory(cfg: Any, client: Any, agent_kind: str,
     from ..agent.policy import PolicyAgent
 
     base = cfg.agent.policy
+    from ..infra.config import apply_policy_overrides, harness_policy_overrides
+
     if agent_kind == "heuristic":
         base = replace(base, mode="baseline_heuristic", temperature=0.0)
     else:
@@ -391,7 +393,11 @@ def _policy_factory(cfg: Any, client: Any, agent_kind: str,
         # ``harness/`` ⇒ 候选补丁从未进入决策 prompt（实测 40/40 个 seed 的
         # ``prompt_hash`` 与 parent 逐字节相同）。缺省仍用 run 级目录。
         target = default_dir if harness_dir is None else Path(harness_dir)
-        return PolicyAgent(base, llm=client, memory=None, harness_dir=target)
+        # F-M3-8（2026-10-18）：同名目录里的 ``config.json`` 也必须生效。原先只有
+        # 「启动时读一次 run 级 harness/config.json」，候选臂的 config 从未被读过
+        # ⇒ `config_patch` 的候选字节变了、行为没变（mvp1 的 gen-002 因此被误 accept）。
+        policy_cfg = apply_policy_overrides(base, harness_policy_overrides(target))
+        return PolicyAgent(policy_cfg, llm=client, memory=None, harness_dir=target)
 
     return factory
 

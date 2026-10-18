@@ -169,12 +169,12 @@ def test_allowlisted_import_passes():
 
 def test_config_patch_evolvable_key_passes():
     diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
-            '@@ -2,1 +2,1 @@\n-  "memory.retrieve.top_k": 12,\n'
-            '+  "memory.retrieve.top_k": 8,\n')
+            '@@ -2,1 +2,1 @@\n-  "agent.policy.memory_top_k": 5,\n'
+            '+  "agent.policy.memory_top_k": 3,\n')
     cand = make_candidate(kind="config_patch", diff=diff,
                           touched=["harness/config.json"])
     result = P.validate_candidate(cand, cfg=make_config(
-        evolvable_keys=("retrieval.top_k",)))
+        evolvable_keys=("sampling.memory_top_k",)))
     assert result.status == "pass", result.violations
 
 
@@ -184,7 +184,7 @@ def test_config_patch_non_evolvable_key_rejected():
     cand = make_candidate(kind="config_patch", diff=diff,
                           touched=["harness/config.json"])
     result = P.validate_candidate(cand, cfg=make_config(
-        evolvable_keys=("retrieval.top_k",)))
+        evolvable_keys=("sampling.memory_top_k",)))
     assert result.status == "fail"
     assert any("config_key_not_evolvable" in v for v in result.violations)
 
@@ -197,24 +197,24 @@ def test_config_patch_nested_object_rejected_with_actionable_reason():
     ``config_key_not_evolvable:['retrieval']``（看起来像「键名不对」）。
     """
     diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
-            '@@ -1 +1 @@\n-{}\n+{"retrieval": {"top_k": 3}}\n')
+            '@@ -1 +1 @@\n-{}\n+{"sampling": {"memory_top_k": 3}}\n')
     cand = make_candidate(kind="config_patch", diff=diff,
                           touched=["harness/config.json"])
     result = P.validate_candidate(cand, cfg=make_config(
-        evolvable_keys=("retrieval.top_k",)))
+        evolvable_keys=("sampling.memory_top_k",)))
     assert result.status == "fail"
     assert any("config_patch_nested_object" in v for v in result.violations)
-    assert any("memory.retrieve.top_k" in v for v in result.violations)
+    assert any("agent.policy.memory_top_k" in v for v in result.violations)
 
 
 def test_config_patch_conceptual_short_key_rejected():
-    """``retrieval.top_k`` 是概念名；直接写进 config.json 会被加载器拒绝。"""
+    """概念名（``sampling.memory_top_k``）不能直接写进 config.json。"""
     diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
-            '@@ -1 +1 @@\n-{}\n+{"retrieval.top_k": 3}\n')
+            '@@ -1 +1 @@\n-{}\n+{"sampling.memory_top_k": 3}\n')
     cand = make_candidate(kind="config_patch", diff=diff,
                           touched=["harness/config.json"])
     result = P.validate_candidate(cand, cfg=make_config(
-        evolvable_keys=("retrieval.top_k",)))
+        evolvable_keys=("sampling.memory_top_k",)))
     assert result.status == "fail"
     assert any("config_key_not_evolvable" in v for v in result.violations)
 
@@ -242,7 +242,7 @@ def test_config_patch_stale_show_intent_key_rejected():
     cand = make_candidate(kind="config_patch", diff=diff,
                           touched=["harness/config.json"])
     result = P.validate_candidate(cand, cfg=make_config(
-        evolvable_keys=("retrieval.top_k", "sampling.temperature",
+        evolvable_keys=("sampling.memory_top_k", "sampling.temperature",
                         "prompt.show_intent")))
     assert result.status == "fail"
     assert any("config_key_not_evolvable" in v for v in result.violations)
@@ -255,7 +255,7 @@ def test_config_patch_unknown_dotted_path_rejected():
     cand = make_candidate(kind="config_patch", diff=diff,
                           touched=["harness/config.json"])
     result = P.validate_candidate(cand, cfg=make_config(
-        evolvable_keys=("retrieval.top_k",)))
+        evolvable_keys=("sampling.memory_top_k",)))
     assert result.status == "fail"
 
 
@@ -266,7 +266,7 @@ def test_config_patch_container_replaced_by_scalar_rejected():
     cand = make_candidate(kind="config_patch", diff=diff,
                           touched=["harness/config.json"])
     result = P.validate_candidate(cand, cfg=make_config(
-        evolvable_keys=("retrieval.top_k",)))
+        evolvable_keys=("sampling.memory_top_k",)))
     assert result.status == "fail"
     assert any("config_key_not_evolvable" in v for v in result.violations)
 
@@ -283,7 +283,7 @@ def test_config_patch_multiline_nested_fragment_rejected():
     cand = make_candidate(kind="config_patch", diff=diff,
                           touched=["harness/config.json"])
     result = P.validate_candidate(cand, cfg=make_config(
-        evolvable_keys=("retrieval.top_k",)))
+        evolvable_keys=("sampling.memory_top_k",)))
     assert result.status == "fail"
     assert any("config_key_not_evolvable" in v for v in result.violations)
 

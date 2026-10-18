@@ -302,7 +302,9 @@ evolve:
   # ⚠️ 属于 `config_hash` 的一部分：改这一行 = 换 run-id 族，已有 run 不能 `--resume`。
   # 概念名（非实际键路径）；每一项都必须能映射成 harness/config.json 接受的实际字段。
   # 2026-10-18（F-M3-5）：原 `prompt.show_intent` 无 PolicyConfig 字段、也无读取点，已移除。
-  evolvable_keys: [retrieval.top_k, sampling.temperature]
+  # 2026-10-18（F-M3-9）：`retrieval.top_k` 被 policy.memory_top_k 遮蔽（永不生效），
+  # 换成真正生效的 `sampling.memory_top_k`；取值域/生效 mode 见 EVOLVABLE_KEY_SPECS。
+  evolvable_keys: [sampling.temperature, sampling.memory_top_k]
   tool_import_allowlist: [math, re, json, itertools, functools, typing, dataclasses]
 
 # ============ eval（MOD-08 测量）============

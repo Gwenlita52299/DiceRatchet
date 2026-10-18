@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Final, Mapping, Protocol, Sequence, runtime_checkable
 
 from dice_ratchet.infra import events as _events
-from dice_ratchet.infra.config import derive_seed
+from dice_ratchet.infra.config import POLICY_TEMPERATURE_RANGE, derive_seed
 from dice_ratchet.infra.errors import E, InfraError
 from dice_ratchet.sandbox import audit as sandbox_audit
 from dice_ratchet.sandbox.api import SandboxEnv, StepResult
@@ -481,7 +481,10 @@ class PolicyAgent:
             temperature = 0.0
             top_p = 1.0
         else:
-            temperature = min(1.2, max(0.7, float(cfg.temperature)))
+            # 上下界与提案校验器共用一份（``infra.config.POLICY_TEMPERATURE_RANGE``）：
+            # 原先硬编码 0.7/1.2，校验器无法引用同一个窗口（F-M3-8）。
+            lo, hi = POLICY_TEMPERATURE_RANGE
+            temperature = min(hi, max(lo, float(cfg.temperature)))
             top_p = float(cfg.top_p)
         seed = derive_seed("policy", str(cfg.sampling_seed_salt), str(ctx.run),
                            str(ctx.episode), int(ctx.seed), int(decision_index),

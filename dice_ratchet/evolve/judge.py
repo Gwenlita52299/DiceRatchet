@@ -226,7 +226,8 @@ def _incomplete(value: Any) -> bool:
 
 
 def judge(cand_report: CandidateReport, parent_report: Any, *, cfg: Any,
-          generation: int = 0, play_hash: str = "", parent_play_hash: str = "") -> Verdict:
+          generation: int = 0, play_hash: str = "", parent_play_hash: str = "",
+          effective_hash: str = "", parent_effective_hash: str = "") -> Verdict:
     """§8.2 判定表：短路求值，六项全 True → ``accept``，否则 ``reject``。
 
     ``parent_report`` 是 parent 的 heldout ``ArmResult``（含 ``metrics``）；
@@ -312,6 +313,8 @@ def judge(cand_report: CandidateReport, parent_report: Any, *, cfg: Any,
              f"delta={paired.get('delta')} p={paired.get('p')}")
     ph = str(play_hash or "")
     prev_ph = str(parent_play_hash or "")
+    eff = str(effective_hash or "")
+    prev_eff = str(parent_effective_hash or "")
     if not ph or not prev_ph:
         c2_ok = False
         c2_reason = "play_hash_unavailable"
@@ -321,6 +324,12 @@ def judge(cand_report: CandidateReport, parent_report: Any, *, cfg: Any,
         c2_ok = False
         c2_reason = "no_play_change"
         c2_detail = (f"play 面未变（{ph[:19]}）：补丁没有改变打法；{stats}")
+    elif eff and prev_eff and eff == prev_eff:
+        # F-M3-9（方案 B）：字节变了、**生效值**没变 ⇒ 不是真的改变打法。
+        c2_ok = False
+        c2_reason = "no_effective_change"
+        c2_detail = (f"play 面字节已变（{prev_ph[:19]} → {ph[:19]}）但生效采样值未变"
+                     f"（{prev_eff[:19]}）：改的键在当前 mode 下不生效；{stats}")
     else:
         c2_ok = True
         c2_reason = ""
@@ -328,9 +337,10 @@ def judge(cand_report: CandidateReport, parent_report: Any, *, cfg: Any,
     trace.append(condition_trace_entry(
         "C2", c2_ok, c2_detail,
         value={"candidate_play_hash": ph, "parent_play_hash": prev_ph,
+               "candidate_effective_hash": eff, "parent_effective_hash": prev_eff,
                "metric": metric, "significant": significant, "direction": direction,
                "delta": paired.get("delta"), "p": paired.get("p")},
-        threshold="play_hash != parent_play_hash"))
+        threshold="play_hash != parent_play_hash 且 effective_play_hash 变化"))
     if not c2_ok:
         return _fail("C2", c2_reason, code=str(E.E_EVOLVE_NO_GAIN),
                      cand=cand_report, generation=generation, trace=trace)
@@ -681,7 +691,9 @@ def evaluate_candidate(candidate: Candidate, parent: Any, *, cfg: Any,
                        parent_heldout: Any = None, parent_smoke: Any = None,
                        harness_version: int = 0, generation: int = 0,
                        smoke_seeds: Sequence[int] = (),
-                       play_hash: str = "", parent_play_hash: str = "") -> CandidateReport:
+                       play_hash: str = "", parent_play_hash: str = "",
+                       effective_hash: str = "",
+                       parent_effective_hash: str = "") -> CandidateReport:
     """冒烟 → 快速淘汰 → heldout → 配对检验（FR-07-6/7）。
 
     ``parent`` 是 parent 的 ``HarnessRef``（取 ``.version`` 与 ``.dir``）；
@@ -760,7 +772,9 @@ def evaluate_candidate(candidate: Candidate, parent: Any, *, cfg: Any,
                              elapsed_s=time.perf_counter() - started)
     verdict = judge(report, parent_heldout, cfg=cfg, generation=int(generation),
                     play_hash=str(play_hash or ""),
-                    parent_play_hash=str(parent_play_hash or ""))
+                    parent_play_hash=str(parent_play_hash or ""),
+                    effective_hash=str(effective_hash or ""),
+                    parent_effective_hash=str(parent_effective_hash or ""))
     report = CandidateReport(candidate=report.candidate, smoke=report.smoke,
                              heldout=report.heldout, paired=report.paired,
                              train=report.train, diversity=report.diversity,
