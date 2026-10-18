@@ -1059,6 +1059,12 @@ CONFIG_KEY_ALIASES: Final[dict[str, str]] = {
     "prompt.": "agent.policy.",
 }
 
+#: 留在 ``evolvable_keys`` 里、但 ``AppConfig`` 目前**没有**对应字段的概念键。
+#: 校验器显式拒绝：否则它会通过白名单，直到配置加载 ``_from_dict`` 才
+#: ``E_IO_CONFIG_INVALID``（又白跑一代）。要么给 ``PolicyConfig`` 加字段，要么把它
+#: 从白名单删除——这是需要单独裁决的协议问题（见评审 §3.6）。
+UNIMPLEMENTED_CONFIG_KEYS: Final[frozenset[str]] = frozenset({"agent.policy.show_intent"})
+
 
 def _actual_config_key(key: str) -> str:
     """概念名 → ``harness/config.json`` 实际扁平键（已是实际键则原样返回）。"""
@@ -1068,11 +1074,18 @@ def _actual_config_key(key: str) -> str:
     return key
 
 
-def _canonical_config_key(key: str) -> str:
-    """实际扁平键 → 概念名（``memory.retrieve.top_k`` → ``retrieval.top_k``）。"""
+def _canonical_config_key(key: str, evolvable: set[str]) -> str:
+    """实际扁平键 → 概念名（``memory.retrieve.top_k`` → ``retrieval.top_k``）。
+
+    反向映射有歧义：``sampling.*`` 与 ``prompt.*`` 都映射到 ``agent.policy.*``。
+    用 ``evolvable`` 消歧（``agent.policy.show_intent`` 必须折回 ``prompt.show_intent``，
+    而不是 ``sampling.show_intent``）。
+    """
     for alias, target in CONFIG_KEY_ALIASES.items():
         if key == target.rstrip(".") or key.startswith(target):
-            return alias + key[len(target):]
+            candidate = alias + key[len(target):]
+            if candidate in evolvable:
+                return candidate
     return key
 
 
@@ -1130,6 +1143,12 @@ def _validate_config_patch(cand: Candidate, cfg: Any, violations: list[str]) -> 
             if not keys:
                 violations.append("config_patch_no_evolvable_key")
                 return
+    unimplemented = sorted(k for k in keys if k in UNIMPLEMENTED_CONFIG_KEYS)
+    if unimplemented:
+        violations.append(
+            f"config_key_unimplemented:{unimplemented}"
+            "（PolicyConfig 当前没有该字段；写了会在配置加载时失败）")
+        return
     illegal = sorted(k for k in keys
                      if not _is_harness_config_key(k)
                      or not _key_is_evolvable(k, evolvable))
@@ -1148,7 +1167,7 @@ def _key_is_evolvable(key: str, evolvable: set[str]) -> bool:
     """
     if key in evolvable:
         return True
-    if _canonical_config_key(key) in evolvable:
+    if _canonical_config_key(key, evolvable) in evolvable:
         return True
     if "." in key:
         return False

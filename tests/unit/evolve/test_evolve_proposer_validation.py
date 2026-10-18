@@ -219,6 +219,44 @@ def test_config_patch_conceptual_short_key_rejected():
     assert any("config_key_not_evolvable" in v for v in result.violations)
 
 
+def test_config_patch_actual_agent_policy_key_passes():
+    """``agent.policy.temperature`` 是 ``sampling.temperature`` 的实际键。"""
+    diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
+            '@@ -1 +1 @@\n-{}\n+{"agent.policy.temperature": 0.8}\n')
+    cand = make_candidate(kind="config_patch", diff=diff,
+                          touched=["harness/config.json"])
+    result = P.validate_candidate(cand, cfg=make_config(
+        evolvable_keys=("sampling.temperature",)))
+    assert result.status == "pass", result.violations
+
+
+def test_config_patch_unimplemented_key_rejected():
+    """``prompt.show_intent`` 在白名单里，但 ``PolicyConfig`` 没有该字段。
+
+    必须在花钱前显式拒绝；否则它会通过白名单、到配置加载 ``_from_dict`` 才
+    ``E_IO_CONFIG_INVALID``（又白跑一代）。
+    """
+    diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
+            '@@ -1 +1 @@\n-{}\n+{"agent.policy.show_intent": true}\n')
+    cand = make_candidate(kind="config_patch", diff=diff,
+                          touched=["harness/config.json"])
+    result = P.validate_candidate(cand, cfg=make_config(
+        evolvable_keys=("prompt.show_intent",)))
+    assert result.status == "fail"
+    assert any("config_key_unimplemented" in v for v in result.violations)
+
+
+def test_config_patch_unknown_dotted_path_rejected():
+    """``agent.policy.foo.top_k`` 不能靠「末段相同」混过白名单。"""
+    diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
+            '@@ -1 +1 @@\n-{}\n+{"agent.policy.foo.top_k": 3}\n')
+    cand = make_candidate(kind="config_patch", diff=diff,
+                          touched=["harness/config.json"])
+    result = P.validate_candidate(cand, cfg=make_config(
+        evolvable_keys=("retrieval.top_k",)))
+    assert result.status == "fail"
+
+
 def test_config_patch_container_replaced_by_scalar_rejected():
     """把整个容器替换成标量（``{"retrieval": 3}``）不是「改一个键」，必须拒绝。"""
     diff = ('--- a/harness/config.json\n+++ b/harness/config.json\n'
