@@ -23,8 +23,8 @@ CONFIGS = Path(__file__).resolve().parents[3] / "configs"
 
 #: 现行白名单（概念名）。新增键时必须同时能在 `harness/config.json` 里写出来。
 EXPECTED_EVOLVABLE_KEYS = (
-    "sampling.temperature", "sampling.memory_top_k",          # 训练侧
-    "plan.max_plan_len", "prompt.token_budget", "policy.retry_max",  # eval 侧（F-M3-10）
+    "sampling.temperature", "sampling.memory_top_k",       # 训练侧
+    "prompt.token_budget", "policy.retry_max",             # eval 侧（F-M3-10/11，实测 binding）
 )
 
 
@@ -76,7 +76,7 @@ def test_mode_filters_inert_keys():
     """F-M3-9/10：eval 下 `sampling.*` 不生效 ⇒ 只剩三个 eval 侧键。"""
     cfg = load_config(config_dir=CONFIGS).evolve
     assert P.effective_evolvable_keys(cfg, "eval") == (
-        "plan.max_plan_len", "prompt.token_budget", "policy.retry_max")
+        "prompt.token_budget", "policy.retry_max")
     assert P.effective_evolvable_keys(cfg, "train") == EXPECTED_EVOLVABLE_KEYS
 
 

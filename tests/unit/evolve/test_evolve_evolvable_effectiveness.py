@@ -116,7 +116,8 @@ def test_apply_policy_overrides_changes_effective_values():
     assert patched.memory_top_k == 2 and patched.temperature == 1.0
     # eval 下温度恒 0.0，但 memory_top_k 依然生效
     assert effective_policy_values(patched, mode="eval") == {
-        "temperature": 0.0, "top_p": 1.0, "memory_top_k": 2}
+        "temperature": 0.0, "top_p": 1.0, "memory_top_k": 2,
+        "max_plan_len": 12, "prompt_token_budget": 3072, "retry_max": 2}
     assert effective_policy_values(patched, mode="train")["temperature"] == 1.0
 
 
@@ -188,6 +189,18 @@ def test_judge_rejects_when_only_inert_bytes_changed(tmp_path):
 # =====================================================================
 
 EVAL_KEYS = ("plan.max_plan_len", "prompt.token_budget", "policy.retry_max")
+
+
+def test_effective_hash_tracks_decision_path_knobs(tmp_path):
+    """mvp3 现场：候选把 `max_plan_len` 从 12 改到 16，C2 却报 `no_effective_change`
+    —— 因为生效指纹只覆盖采样值。修复后决策路径上的旋钮也必须进指纹。"""
+    base = write_harness(tmp_path / "base")
+    cand = write_harness(tmp_path / "cand")
+    (cand / "config.json").write_text(
+        json.dumps({"agent.policy.max_plan_len": 16}), encoding="utf-8")
+    policy = PolicyConfig()
+    assert (V.effective_play_hash(base, policy_base=policy, mode="eval")
+            != V.effective_play_hash(cand, policy_base=policy, mode="eval"))
 
 
 def test_eval_side_keys_pass_validation_in_eval_mode():

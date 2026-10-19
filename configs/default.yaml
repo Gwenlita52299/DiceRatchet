@@ -306,7 +306,7 @@ evolve:
   # 换成真正生效的 `sampling.memory_top_k`；取值域/生效 mode 见 EVOLVABLE_KEY_SPECS。
   # 2026-10-19（F-M3-10）：`sampling.*` 两个键都是**训练侧**（eval 下温度恒 0、heldout 无记忆），
   # eval 轮次里真正能改变打法的是 plan.max_plan_len / prompt.token_budget / policy.retry_max。
-  evolvable_keys: [sampling.temperature, sampling.memory_top_k, plan.max_plan_len, prompt.token_budget, policy.retry_max]
+  evolvable_keys: [sampling.temperature, sampling.memory_top_k, prompt.token_budget, policy.retry_max]
   tool_import_allowlist: [math, re, json, itertools, functools, typing, dataclasses]
 
 # ============ eval（MOD-08 测量）============

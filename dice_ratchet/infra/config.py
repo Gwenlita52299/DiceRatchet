@@ -636,8 +636,12 @@ class EvolveConfig:
     evolvable_keys: tuple[str, ...] = (
         # 训练侧（eval 下被裁掉）：采样温度、记忆注入条数
         "sampling.temperature", "sampling.memory_top_k",
-        # eval 侧（F-M3-10）：直接作用在决策路径上，能改变 heldout 结果
-        "plan.max_plan_len", "prompt.token_budget", "policy.retry_max",
+        # eval 侧（F-M3-10/11）：直接作用在决策路径上，且**实测会 binding**
+        #   prompt.token_budget：mvp3 实测 13.9% 的决策 prompt > 3072（p50 2819、p90 3107）
+        #   policy.retry_max   ：attempts 分布 1:6092 / 2:348 / 3:23（约 6% 的决策会重试）
+        # `plan.max_plan_len` 的规格仍在 EVOLVABLE_KEY_SPECS 里，但**默认不进白名单**：
+        # mvp3 实测 plan 长度 max 9 < 上限 12 ⇒ 改成 16 在行为上完全不动（不 binding）。
+        "prompt.token_budget", "policy.retry_max",
     )
     tool_import_allowlist: tuple[str, ...] = (
         "math", "re", "json", "itertools", "functools", "typing", "dataclasses",
@@ -1408,7 +1412,12 @@ def effective_policy_values(policy: PolicyConfig, *, mode: str) -> dict[str, Any
         top_p = float(policy.top_p)
     return {"temperature": round(float(temperature), 6),
             "top_p": round(float(top_p), 6),
-            "memory_top_k": int(policy.memory_top_k)}
+            "memory_top_k": int(policy.memory_top_k),
+            # 决策路径上的三个「非采样」旋钮（F-M3-10）。必须一起进指纹：mvp3 的候选改的是
+            # `max_plan_len`，而指纹只覆盖采样值 ⇒ C2 误判成 `no_effective_change`。
+            "max_plan_len": int(policy.max_plan_len),
+            "prompt_token_budget": int(policy.prompt_token_budget),
+            "retry_max": int(policy.retry_max)}
 
 
 
