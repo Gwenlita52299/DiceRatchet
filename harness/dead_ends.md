@@ -10,3 +10,9 @@
 - 触及文件：harness/harness/prompts/decision.md（4 行）
 - 指标：Δwin_rate=-0.1000；p=0.4240；候选 win_rate=0.1750；stages=4.5250
 - 提案理由：reflect:train#0/#1/#2/#3/#7/#16 一致指出心数在第 3-4 关耗尽、防御与续航是瓶颈而非输出；traj:train#0-#3 均 stages=4 且 hearts=0。现有第 10 条只在约束段泛泛提及，未进入「回合预算」决策前置。与 dead_ends 的 gen-002 不同：那条改的是非法动作自检清单，本条改的是心数/防御优先级，机制不同。
+## gen-001 · fcb663ce2a58
+- 类型：config_patch
+- 结局：reject（C1:win_rate 0.1000<0.1250）
+- 触及文件：harness/harness/config.json（2 行）
+- 指标：Δwin_rate=-0.0750；p=0.5488；候选 win_rate=0.1000；stages=4.5250
+- 提案理由：reflect:train#1/#3/#7/#12 显示非法尝试 6~21 次，traj:train#6 因 E_KERNEL_TURN_LIMIT 截断判负；非法动作会让整条决策作废重试，重试预算不足时直接烧掉回合。与 dead_ends 的 gen-002/gen-003 不同：那两条改 decision.md 文案，本条只调 config 的 retry_max，机制是给非法尝试更多落地机会
