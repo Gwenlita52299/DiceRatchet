@@ -1,11 +1,11 @@
 {
-  "accepted_by": "human",
-  "artifact_hash": "sha256:1dcda24eed87980cc09c87ac9aaad86e937890560b955b31a223f54faca350d9",
+  "accepted_by": "auto",
+  "artifact_hash": "sha256:75d0ac0f4b790441f182b848a49103a56fde1d9626051c82249bbe0cfdd8ae13",
   "base_model": null,
-  "created_at": "2026-10-18T05:36:08Z",
-  "diff_path": "harness/versions/v4/diff.patch",
+  "created_at": "2026-10-19T13:04:58Z",
+  "diff_path": "harness/versions/v5/diff.patch",
   "git_commit": "",
-  "parent": 0,
-  "reason": "cachefix A/B (2026-10-17, run cachefix-b0): v0 + prompt static-first; H1 40 heldout 7/40 vs bare v0 7/40 (McNemar p=1.0); unique cache 10.8%->40.1%; cost_estimate 19.74 vs ~33; truncation 0.05 vs 0.10. Rebased from bare v0; v3 P1/P2 rules are NOT included. See docs/reviews/2026-10-17-API缓存命中修复.md §3.2.",
-  "version": 4
+  "parent": 4,
+  "reason": "reflect:train#3/#8 非法尝试达 19/22 次，traj:train#3 因 E_KERNEL_TURN_LIMIT 截断判负；非法动作会让整次决策作废重试，重试预算不足时回合被烧掉。与 dead_ends 的 gen-002/gen-003 不同：那两条改 decision.md 文案（自检清单/心数优先级），本条改 config 的重试预算，机制不同且不动 prompt。",
+  "version": 5
 }
