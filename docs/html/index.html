@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DiceRatchet · 模块可视化讲解</title>
+<meta name="description" content="DiceRatchet 九个模块的可视化讲解：从游戏内核、沙箱、推理与策略，到闭环编排、harness 自进化与测量。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="shell">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html">
+    <span class="logo">◈ <b>DiceRatchet</b></span>
+    <div class="sub">模块可视化讲解 · docs/html<br>源 commit 879ea49 · 2026-10-17</div>
+  </a>
+  <nav class="nav">
+    <div class="nav-title">总览</div>
+    <a href="index.html">闭环与模块地图 <span class="tag">00</span></a>
+    <a href="game.html">游戏本体 GAME <span class="tag">G</span></a>
+    <div class="nav-title">环境层 L0</div>
+    <a href="mod-01.html">MOD-01 env-rules <span class="tag">01</span></a>
+    <a href="mod-02.html">MOD-02 env-sandbox <span class="tag">02</span></a>
+    <div class="nav-title">智能体层 L1</div>
+    <a href="mod-03.html">MOD-03 inference <span class="tag">03</span></a>
+    <a href="mod-04.html">MOD-04 policy <span class="tag">04</span></a>
+    <a href="mod-05.html">MOD-05 memory <span class="tag">05</span></a>
+    <div class="nav-title">进化层 L2</div>
+    <a href="mod-06.html">MOD-06 loop <span class="tag">06</span></a>
+    <a href="mod-07.html">MOD-07 evolve <span class="tag">07</span></a>
+    <div class="nav-title">测量与工程 L3</div>
+    <a href="mod-08.html">MOD-08 evals <span class="tag">08</span></a>
+    <a href="mod-09.html">MOD-09 infra <span class="tag">09</span></a>
+  </nav>
+</aside>
+
+<main class="main"><div class="wrap">
+
+  <header class="reveal">
+    <div class="eyebrow">Recursive Self-Improvement · Harness Evolution</div>
+    <h1>让智能体<strong>改自己的 harness</strong><br><span class="thin">然后诚实地证明它真的变强了</span></h1>
+    <p class="lede">DiceRatchet 把一个可玩的骰子 roguelike 当作训练场：模型按规则打局，局末反思、写入记忆，再让另一个角色提出对<strong>提示词与工具</strong>的修改；每一代候选都必须过测量与门禁，才能成为一个新的 harness 版本。</p>
+    <div class="badges">
+      <span class="badge game">GAME 先行</span>
+      <span class="badge l0">L0 环境</span>
+      <span class="badge l1">L1 智能体</span>
+      <span class="badge l2">L2 进化</span>
+      <span class="badge l3">L3 测量/工程</span>
+      <span class="badge ok">M3 第二轮已产出首个 accept（provisional）</span>
+    </div>
+    <div class="kpis">
+      <div class="kpi accent"><div class="num">9<span class="unit">+GAME</span></div><div class="label">可独立讲解的模块</div></div>
+      <div class="kpi"><div class="num">2,192<span class="unit">条</span></div><div class="label">Python 用例（pytest 收集）</div></div>
+      <div class="kpi"><div class="num">49<span class="unit">项</span></div><div class="label">游戏内核测试（Node）</div></div>
+      <div class="kpi warn"><div class="num">¥240.94<span class="unit">/ 262 局</span></div><div class="label">m3r2 实际花费与局数</div></div>
+    </div>
+  </header>
+
+  <section class="reveal">
+    <h2><span class="no">01</span>一句话看懂闭环</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 980 330" role="img" aria-label="DiceRatchet 闭环：训练、反思、记忆、提案、评估、门禁、版本">
+        <defs>
+          <marker id="i-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#37d6c0"/>
+          </marker>
+          <marker id="i-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3a4d66"/>
+          </marker>
+        </defs>
+
+        <rect x="18" y="110" width="140" height="86" rx="11" class="n-box-accent"/>
+        <text x="88" y="136" text-anchor="middle" class="n-label">① play</text>
+        <text x="88" y="156" text-anchor="middle" class="n-sub">K=30 训练局</text>
+        <text x="88" y="174" text-anchor="middle" class="n-tiny">MOD-06 / MOD-04</text>
+
+        <rect x="188" y="110" width="140" height="86" rx="11" class="n-box"/>
+        <text x="258" y="136" text-anchor="middle" class="n-label">② reflect</text>
+        <text x="258" y="156" text-anchor="middle" class="n-sub">局末结构化反思</text>
+        <text x="258" y="174" text-anchor="middle" class="n-tiny">MOD-06 / MOD-03</text>
+
+        <rect x="358" y="110" width="140" height="86" rx="11" class="n-box"/>
+        <text x="428" y="136" text-anchor="middle" class="n-label">③ memory</text>
+        <text x="428" y="156" text-anchor="middle" class="n-sub">去重 / 检索 / 快照</text>
+        <text x="428" y="174" text-anchor="middle" class="n-tiny">MOD-05</text>
+
+        <rect x="528" y="110" width="140" height="86" rx="11" class="n-box-warn"/>
+        <text x="598" y="136" text-anchor="middle" class="n-label">④ propose</text>
+        <text x="598" y="156" text-anchor="middle" class="n-sub">补丁 + rationale</text>
+        <text x="598" y="174" text-anchor="middle" class="n-tiny">MOD-07</text>
+
+        <rect x="698" y="110" width="140" height="86" rx="11" class="n-box-warn"/>
+        <text x="768" y="136" text-anchor="middle" class="n-label">⑤ evaluate</text>
+        <text x="768" y="156" text-anchor="middle" class="n-sub">冒烟 + held-out</text>
+        <text x="768" y="174" text-anchor="middle" class="n-tiny">MOD-08 / MOD-07</text>
+
+        <rect x="848" y="110" width="112" height="86" rx="11" class="n-box-accent"/>
+        <text x="904" y="136" text-anchor="middle" class="n-label">⑥ gate</text>
+        <text x="904" y="156" text-anchor="middle" class="n-sub">C0–C5</text>
+        <text x="904" y="174" text-anchor="middle" class="n-tiny">accept / reject</text>
+
+        <path d="M158 153 L188 153" class="edge-flow" marker-end="url(#i-ar)"/>
+        <path d="M328 153 L358 153" class="edge-flow" marker-end="url(#i-ar)"/>
+        <path d="M498 153 L528 153" class="edge-flow" marker-end="url(#i-ar)"/>
+        <path d="M668 153 L698 153" class="edge-flow" marker-end="url(#i-ar)"/>
+        <path d="M838 153 L848 153" class="edge-flow" marker-end="url(#i-ar)"/>
+
+        <path d="M904 196 C 904 292, 88 292, 88 196" class="edge-dash" marker-end="url(#i-ar2)"/>
+        <text x="496" y="286" text-anchor="middle" class="n-tiny">accept ⇒ versions/v{N} + tag；reject ⇒ dead_ends.md（D2=A：拒绝也推进指针）</text>
+
+        <rect x="228" y="18" width="524" height="56" rx="10" class="n-box"/>
+        <text x="490" y="41" text-anchor="middle" class="n-label">环境层：GAME 规则内核（JS）↔ MOD-01 纯 Python 等价内核</text>
+        <text x="490" y="60" text-anchor="middle" class="n-sub">MOD-02 是唯一合法通道：投影 / 隔离 / 审计 / 蜜罐</text>
+        <path d="M490 74 L490 110" class="edge" marker-end="url(#i-ar2)"/>
+
+        <rect x="26" y="232" width="400" height="40" rx="8" class="n-box"/>
+        <text x="226" y="257" text-anchor="middle" class="n-sub">MOD-08 测量：held-out 赢率 / 关数 / 截断 / 基线</text>
+        <rect x="470" y="232" width="240" height="40" rx="8" class="n-box"/>
+        <text x="590" y="257" text-anchor="middle" class="n-sub">MOD-09 工程：配置 / 日志 / 守卫</text>
+      </svg>
+      <div class="caption"><b>每一代是一次完整实验。</b>训练局只碰 train seed；门禁用独立的 held-out 篮子；test 只在一个里程碑消耗一次（INV-5）。</div>
+    </div>
+    <div class="callout"><b>RSI 的难点不是“让模型改代码”，而是“改完怎么知道它真的更好”。</b>所以本项目的重心一半在进化（MOD-07），一半在测量与判据（MOD-08）：候选补丁先过冒烟，再在 held-out 上做配对比较，最后按 C0–C5 六道条件裁决。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">02</span>分层与依赖</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 940 330" role="img" aria-label="模块分层：L0 环境、L1 智能体、L2 进化、L3 测量与工程">
+        <rect x="20" y="26" width="900" height="62" rx="10" class="lane"/>
+        <text x="40" y="50" class="lane-label">L3 · 测量与工程</text>
+        <rect x="150" y="38" width="210" height="38" rx="8" class="n-box"/><text x="255" y="62" text-anchor="middle" class="n-sub">MOD-08 evals（测量）</text>
+        <rect x="380" y="38" width="210" height="38" rx="8" class="n-box"/>
+        <text x="485" y="62" text-anchor="middle" class="n-sub">MOD-09 infra（横切）</text>
+        <rect x="610" y="38" width="280" height="38" rx="8" class="n-box"/>
+        <text x="750" y="62" text-anchor="middle" class="n-sub">命令面 / 配置 / 日志 / 守卫 / git</text>
+
+        <rect x="20" y="104" width="900" height="62" rx="10" class="lane"/>
+        <text x="40" y="128" class="lane-label">L2 · 进化</text>
+        <rect x="150" y="116" width="210" height="38" rx="8" class="n-box-accent"/><text x="255" y="140" text-anchor="middle" class="n-sub">MOD-06 loop（编排）</text>
+        <rect x="380" y="116" width="210" height="38" rx="8" class="n-box-accent"/>
+        <text x="485" y="140" text-anchor="middle" class="n-sub">MOD-07 evolve（自进化）</text>
+        <text x="660" y="140" class="n-tiny">闭环：play → … → gate</text>
+
+        <rect x="20" y="182" width="900" height="62" rx="10" class="lane"/>
+        <text x="40" y="206" class="lane-label">L1 · 智能体</text>
+        <rect x="150" y="194" width="130" height="38" rx="8" class="n-box"/><text x="215" y="218" text-anchor="middle" class="n-sub">MOD-03 推理</text>
+        <rect x="296" y="194" width="130" height="38" rx="8" class="n-box"/>
+        <text x="361" y="218" text-anchor="middle" class="n-sub">MOD-04 策略</text>
+        <rect x="442" y="194" width="130" height="38" rx="8" class="n-box"/>
+        <text x="507" y="218" text-anchor="middle" class="n-sub">MOD-05 记忆</text>
+        <text x="600" y="218" class="n-tiny">决策 = prompt(obs + memory) → Action</text>
+
+        <rect x="20" y="260" width="900" height="62" rx="10" class="lane"/>
+        <text x="40" y="284" class="lane-label">L0 · 环境</text>
+        <rect x="150" y="272" width="130" height="38" rx="8" class="n-box-accent"/><text x="215" y="296" text-anchor="middle" class="n-sub">MOD-01 规则内核</text>
+        <rect x="296" y="272" width="130" height="38" rx="8" class="n-box-accent"/>
+        <text x="361" y="296" text-anchor="middle" class="n-sub">MOD-02 沙箱</text>
+        <rect x="442" y="272" width="200" height="38" rx="8" class="n-box-game"/>
+        <text x="542" y="296" text-anchor="middle" class="n-sub">GAME 网页版（JS，规则 SSoT）</text>
+        <path d="M542 272 L542 250" class="edge-dash"/>
+      </svg>
+      <div class="caption"><b>依赖只向下。</b>L1+ 不得 import <code>dice_ratchet.env.*</code>；<code>infra</code> 不得 import 任何其他子包；跨层调用经 Spec §4.7 的签名表。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">03</span>九个模块，各自回答一个问题</h2>
+    <div class="module-grid">
+      <a class="module-card" href="mod-01.html">
+        <div class="top"><span class="id">MOD-01</span><span class="name">env-rules</span></div>
+        <div class="desc">游戏规则能不能用 Python 逐字节复现？答案靠 5 组 golden 对拍。</div>
+        <div class="foot"><span class="badge l0">L0</span><span class="badge ok">已落地</span><span class="badge">零依赖</span></div>
+      </a>
+      <a class="module-card" href="mod-02.html">
+        <div class="top"><span class="id">MOD-02</span><span class="name">env-sandbox</span></div>
+        <div class="desc">agent 该看到什么、能做什么？投影裁剪 + 代码隔离 + 审计与蜜罐三道防线。</div>
+        <div class="foot"><span class="badge l0">L0</span><span class="badge ok">已落地</span><span class="badge">INV-1/2/4</span></div>
+      </a>
+      <a class="module-card" href="mod-03.html">
+        <div class="top"><span class="id">MOD-03</span><span class="name">inference</span></div>
+        <div class="desc">模型输出为什么老是坏 JSON？统一后端契约 + 三级修复 + 按调用方给预算。</div>
+        <div class="foot"><span class="badge l1">L1</span><span class="badge ok">已落地</span><span class="badge">本地 / API</span></div>
+      </a>
+      <a class="module-card" href="mod-04.html">
+        <div class="top"><span class="id">MOD-04</span><span class="name">policy</span></div>
+        <div class="desc">把观测变成 prompt、把文本变成合法动作；再离谱也不污染环境与指标。</div>
+        <div class="foot"><span class="badge l1">L1</span><span class="badge ok">已落地</span><span class="badge">INV-3</span></div>
+      </a>
+      <a class="module-card" href="mod-05.html">
+        <div class="top"><span class="id">MOD-05</span><span class="name">memory</span></div>
+        <div class="desc">反思怎么变成可检索、可淘汰、可回滚的记忆？以及 held-out seed 永不入库。</div>
+        <div class="foot"><span class="badge l1">L1</span><span class="badge ok">已落地</span><span class="badge">INV-5</span></div>
+      </a>
+      <a class="module-card" href="mod-06.html">
+        <div class="top"><span class="id">MOD-06</span><span class="name">loop</span></div>
+        <div class="desc">谁把每一局、每 K 局、每一代串起来？还要可中断、可续跑、不重复计分。</div>
+        <div class="foot"><span class="badge l2">L2</span><span class="badge ok">已落地</span><span class="badge">含新命令 loop baseline</span></div>
+      </a>
+      <a class="module-card" href="mod-07.html">
+        <div class="top"><span class="id">MOD-07</span><span class="name">evolve</span></div>
+        <div class="desc">候选补丁从哪来、怎么打、按什么裁决？C0–C5 与版本/回滚都在这里。</div>
+        <div class="foot"><span class="badge l2">L2</span><span class="badge ok">已落地</span><span class="badge">起点守卫</span></div>
+      </a>
+      <a class="module-card" href="mod-08.html">
+        <div class="top"><span class="id">MOD-08</span><span class="name">evals</span></div>
+        <div class="desc">“变强了”怎么变成可复算的数字？基线、配对、坍缩、消融、test 终检。</div>
+        <div class="foot"><span class="badge l3">L3</span><span class="badge ok">已落地</span><span class="badge">INV-7</span></div>
+      </a>
+      <a class="module-card" href="mod-09.html">
+        <div class="top"><span class="id">MOD-09</span><span class="name">infra</span></div>
+        <div class="desc">配置、日志、CLI、确定性守卫与 git 门禁——所有模块都踩在上面的地板。</div>
+        <div class="foot"><span class="badge l3">L3</span><span class="badge ok">已落地</span><span class="badge">退出码 0–5/130</span></div>
+      </a>
+      <a class="module-card" href="game.html">
+        <div class="top"><span class="id">GAME</span><span class="name">游戏本体</span></div>
+        <div class="desc">先做出人类能玩的网页版骰子 roguelike，再让训练链路按同一套规则跑。</div>
+        <div class="foot"><span class="badge game">G0</span><span class="badge ok">49 项测试</span><span class="badge">5 组 golden</span></div>
+      </a>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">04</span>当前进展：首个 accept，但账本要纠正</h2>
+    <p>2026-10-17 的 m3r2 是项目第一次出现 <code>accept</code>：起点 0.05 → 第 1 代候选 0.275。但随后发现<strong>起点本身有问题</strong>——人工去重的 P1 从未过门禁，却被装成了 version 0 的“基线”。</p>
+    <div class="diagram">
+      <svg viewBox="0 0 900 260" role="img" aria-label="P1 未过门禁导致起点偏移">
+        <rect x="26" y="92" width="150" height="70" rx="10" class="n-box-warn"/>
+        <text x="101" y="118" text-anchor="middle" class="n-label">裸 v0</text>
+        <text x="101" y="138" text-anchor="middle" class="n-sub">held-out 0.175</text>
+        <text x="101" y="154" text-anchor="middle" class="n-tiny">play_hash af817e7c</text>
+
+        <rect x="216" y="92" width="150" height="70" rx="10" class="n-box-bad"/>
+        <text x="291" y="118" text-anchor="middle" class="n-label">v0 + P1</text>
+        <text x="291" y="138" text-anchor="middle" class="n-sub">held-out 0.05</text>
+        <text x="291" y="154" text-anchor="middle" class="n-tiny">未过门禁 · 898af395</text>
+
+        <rect x="406" y="92" width="170" height="70" rx="10" class="n-box"/>
+        <text x="491" y="118" text-anchor="middle" class="n-label">v0 + P1 + P2</text>
+        <text x="491" y="138" text-anchor="middle" class="n-sub">held-out 0.275（accept）</text>
+        <text x="491" y="154" text-anchor="middle" class="n-tiny">0a649689 · provisional v1</text>
+
+        <rect x="626" y="92" width="150" height="70" rx="10" class="n-box-accent"/>
+        <text x="701" y="118" text-anchor="middle" class="n-label">v0 + P2</text>
+        <text x="701" y="138" text-anchor="middle" class="n-sub">待测 40 局 ≈¥33</text>
+        <text x="701" y="154" text-anchor="middle" class="n-tiny">c249fb7f · m3r3 起点</text>
+
+        <path d="M176 127 L216 127" class="edge-red" marker-end="url(#i-ar2)"/>
+        <text x="196" y="116" text-anchor="middle" class="n-tiny">P1</text>
+        <path d="M366 127 L406 127" class="edge" marker-end="url(#i-ar2)"/>
+        <text x="386" y="116" text-anchor="middle" class="n-tiny">P2</text>
+        <path d="M576 127 L626 127" class="edge-flow" marker-end="url(#i-ar)"/>
+        <text x="601" y="116" text-anchor="middle" class="n-tiny">移出 P1</text>
+
+        <rect x="216" y="196" width="430" height="40" rx="8" class="n-box-bad"/>
+        <text x="431" y="221" text-anchor="middle" class="n-sub">协议口径：P1 是 cycle 0 候选，0.05 &lt; 0.175 ⇒ 判负 ⇒ v1 应为 v0</text>
+        <path d="M291 162 L291 196" class="edge-red"/>
+        <path d="M491 162 L491 196" class="edge-red"/>
+      </svg>
+      <div class="caption"><b>已经发生的产物不重写。</b>m3r2 的 v1 保留为“含 P1 的 provisional v1”；在役 harness（version 3）暂不动，等 v0+P2 测完一次性纠正。</div>
+    </div>
+    <div class="cards">
+      <div class="card"><h3>新增：<code>loop baseline</code></h3><p>只测一个给定 harness 的 held-out，落报告与臂归档后停下——不训练、不演化、不提交 git。幂等，重复调用不重复花钱。</p></div>
+      <div class="card"><h3>新增：起点守卫</h3><p><code>loop run</code> 起跑前，起点的 play_hash 必须是原始 v0 或任一已接受快照，否则 <code>E_EVOLVE_UNGATED_START</code>（退出码 2），一局都不跑。</p></div>
+      <div class="card"><h3>顺序：先免费，后付费</h3><p>git 干净检查（退出码 4）→ 起点守卫（退出码 2）→ gen-000 基线（开始花钱）。两条前置都不过就不产生费用。</p></div>
+    </div>
+    <div class="callout warn"><b>为什么 P1 的教训重要。</b>如果不守住“起点必须被裁决过”，闭环会稳定地在错误基线上演化：每一代都“有提升”，但相对真正的 v0 可能是倒退。守卫只能保证“没裁决过的东西不会悄悄变成父代”，它不能替代门禁本身。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">05</span>七条不变量（任何 PR 都不得违反）</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>不变量</th><th>一句话</th><th>主要落点</th></tr></thead>
+        <tbody>
+          <tr><td><code>INV-1</code></td><td>agent 不得触达 Env 内部</td><td>MOD-02 import 门禁 / 静态守卫</td></tr>
+          <tr><td><code>INV-2</code></td><td>观测必须白名单投影</td><td>MOD-02 <code>project_state()</code></td></tr>
+          <tr><td><code>INV-3</code></td><td>prompt 只含四类白名单上下文</td><td>MOD-04 组装器 + 泄漏扫描</td></tr>
+          <tr><td><code>INV-4</code></td><td>harness 代码受限执行</td><td>MOD-02 <code>ToolWorker</code> 子进程</td></tr>
+          <tr><td><code>INV-5</code></td><td>train / held-out / test 三方隔离</td><td>MOD-08 seeds + MOD-05 四拦截点</td></tr>
+          <tr><td><code>INV-6</code></td><td>随机性只来自显式 seed</td><td>MOD-01 RNG + MOD-09 确定性守卫</td></tr>
+          <tr><td><code>INV-7</code></td><td>主指标只用环境原生结果</td><td>MOD-08 <code>win_rate</code> 第一判定量</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">06</span>怎么读这套讲解</h2>
+    <div class="cards">
+      <div class="card"><h3>想理解系统</h3><p>从本页的闭环图与分层图开始，按 L0 → L1 → L2 → L3 顺序点开模块页。每页都有“在系统里的位置”与“相邻模块”。</p></div>
+      <div class="card"><h3>想看判据</h3><p>直接去 <a href="mod-07.html">MOD-07</a>（C0–C5 门禁）与 <a href="mod-08.html">MOD-08</a>（基线 / 配对 / 坍缩 / test 终检）。</p></div>
+      <div class="card"><h3>想改代码</h3><p>每页底部给出 PRD 与代码路径。纪律：先改 PRD / Spec，再改代码与用例；判据类改动必须证明“修复前失败”。</p></div>
+    </div>
+    <div class="callout"><b>这些页面不是 PRD 的镜像。</b>它们是“按当前代码重画的理解路径”：讲结构、画流程、指出现场状态与已知边界。规范文本仍以 <a href="../模块拆分Spec-DiceRatchet.md">Spec</a> 与 <a href="../prd/">PRD</a> 为准。</div>
+  </section>
+
+  <footer class="footer">
+    <span>DiceRatchet 模块可视化讲解 · 总览</span>
+    <span>源 commit 879ea49 · 2026-10-17 · 事实来源：Spec / PRD / 代码 / runs</span>
+  </footer>
+
+</div></main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

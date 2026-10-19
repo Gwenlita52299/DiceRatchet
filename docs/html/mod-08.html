@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MOD-08 evals · DiceRatchet 可视化讲解</title>
+<meta name="description" content="MOD-08 evals：把“有没有变强”变成可复算的数字——seed 协议、基线、配对检验、坍缩检测与判据 1 判定器。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="shell">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html">
+    <span class="logo">◈ <b>DiceRatchet</b></span>
+    <div class="sub">模块可视化讲解 · docs/html<br>源 commit 879ea49 · 2026-10-17</div>
+  </a>
+  <nav class="nav">
+    <div class="nav-title">总览</div>
+    <a href="index.html">闭环与模块地图 <span class="tag">00</span></a>
+    <a href="game.html">游戏本体 GAME <span class="tag">G</span></a>
+    <div class="nav-title">环境层 L0</div>
+    <a href="mod-01.html">MOD-01 env-rules <span class="tag">01</span></a>
+    <a href="mod-02.html">MOD-02 env-sandbox <span class="tag">02</span></a>
+    <div class="nav-title">智能体层 L1</div>
+    <a href="mod-03.html">MOD-03 inference <span class="tag">03</span></a>
+    <a href="mod-04.html">MOD-04 policy <span class="tag">04</span></a>
+    <a href="mod-05.html">MOD-05 memory <span class="tag">05</span></a>
+    <div class="nav-title">进化层 L2</div>
+    <a href="mod-06.html">MOD-06 loop <span class="tag">06</span></a>
+    <a href="mod-07.html">MOD-07 evolve <span class="tag">07</span></a>
+    <div class="nav-title">测量与工程 L3</div>
+    <a href="mod-08.html">MOD-08 evals <span class="tag">08</span></a>
+    <a href="mod-09.html">MOD-09 infra <span class="tag">09</span></a>
+  </nav>
+</aside>
+
+<main class="main"><div class="wrap">
+
+  <header class="reveal">
+    <div class="eyebrow">L3 · 测量层 · Milestone M1 → M3</div>
+    <h1>MOD-08 <span class="thin">evals</span></h1>
+    <p class="lede">测量的<strong>唯一出口</strong>。它只读轨迹与报告、不参与决策；存在的理由只有一个：让“自我改进是否真的发生”成为可复现、可审计、可证伪的数字，而不是模型自评。</p>
+    <div class="badges">
+      <span class="badge l3">L3 测量</span>
+      <span class="badge ok">✅ 已落地</span>
+      <span class="badge">INV-5 / INV-7</span>
+      <span class="badge">判据 1 判定器</span>
+    </div>
+  </header>
+
+  <section class="reveal">
+    <h2><span class="no">01</span>seed 协议：三个世界，永不相交</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 940 270" role="img" aria-label="train/heldout/test 三个 seed 区间">
+        <defs>
+          <marker id="s-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#37d6c0"/>
+          </marker>
+          <marker id="s-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3a4d66"/>
+          </marker>
+        </defs>
+        <rect x="30" y="56" width="400" height="80" rx="10" class="n-box-accent"/>
+        <text x="230" y="82" text-anchor="middle" class="n-label">train · 1000–1999</text>
+        <text x="230" y="104" text-anchor="middle" class="n-sub">每代切 30 个（g0: 1000–1029 …）</text>
+        <text x="230" y="122" text-anchor="middle" class="n-tiny">训练、反思、记忆都只能来自这里</text>
+
+        <rect x="470" y="30" width="200" height="62" rx="10" class="n-box-warn"/>
+        <text x="570" y="54" text-anchor="middle" class="n-label">H1 · 731000–731039</text>
+        <text x="570" y="76" text-anchor="middle" class="n-tiny">40 局 · 代际裁判</text>
+
+        <rect x="690" y="30" width="200" height="62" rx="10" class="n-box"/>
+        <text x="790" y="54" text-anchor="middle" class="n-label">H2 · 731040–731079</text>
+        <text x="790" y="76" text-anchor="middle" class="n-tiny">40 局 · 消融</text>
+
+        <rect x="470" y="108" width="200" height="62" rx="10" class="n-box"/>
+        <text x="570" y="132" text-anchor="middle" class="n-label">H3 · 731080–731099</text>
+        <text x="570" y="154" text-anchor="middle" class="n-tiny">20 局 · 彩排 reserve（可重复）</text>
+
+        <rect x="690" y="108" width="200" height="62" rx="10" class="n-box-bad"/>
+        <text x="790" y="132" text-anchor="middle" class="n-label">test · 947000–947099</text>
+        <text x="790" y="154" text-anchor="middle" class="n-tiny">100 局 · 里程碑一次</text>
+
+        <path d="M430 96 C 450 96, 452 61, 470 61" class="edge" marker-end="url(#s-ar2)"/>
+        <path d="M430 110 C 450 110, 452 139, 470 139" class="edge" stroke-dasharray="4 4"/>
+
+        <rect x="30" y="170" width="860" height="76" rx="10" class="n-box-bad"/>
+        <text x="460" y="194" text-anchor="middle" class="n-sub">INV-5：held-out / test 的 seed 值不得进入 prompt、记忆、日志或训练轨迹</text>
+        <text x="460" y="214" text-anchor="middle" class="n-tiny">协议摘要 seeds_hash = sha256:686b2618…（六位端口空间，与耗时/年份/token 预算不撞车）</text>
+        <text x="460" y="232" text-anchor="middle" class="n-tiny">审计按数字串边界扫描；MOD-05 在写入/快照/返回三处复检</text>
+      </svg>
+      <div class="caption"><b>六位端口不是随便选的。</b>四位 seed 会和耗时（2072.8）、token 预算（2048）、年份（2026）撞车，导致“数字串相等即泄漏”不健全。换成六位后，死名单整删，扫描面反而更严。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">02</span>一次测量如何落盘</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 940 300" role="img" aria-label="评估、臂归档、代际报告与台账的关系">
+        <defs>
+          <marker id="s-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#37d6c0"/>
+          </marker>
+          <marker id="s-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3a4d66"/>
+          </marker>
+        </defs>
+        <rect x="20" y="72" width="170" height="80" rx="10" class="n-box-accent"/>
+        <text x="105" y="98" text-anchor="middle" class="n-label">evaluate_arm</text>
+        <text x="105" y="118" text-anchor="middle" class="n-sub">n 局 × seed 列表</text>
+        <text x="105" y="138" text-anchor="middle" class="n-tiny">局级并发，顺序归一</text>
+
+        <rect x="220" y="56" width="200" height="112" rx="10" class="n-box-warn"/>
+        <text x="320" y="82" text-anchor="middle" class="n-label">臂归档</text>
+        <text x="320" y="102" text-anchor="middle" class="n-tiny">metrics/arms/gen{NNN}-…-{arm}.json</text>
+        <text x="320" y="122" text-anchor="middle" class="n-sub">provenance + 逐局明细</text>
+        <text x="320" y="142" text-anchor="middle" class="n-tiny">身份：play / seeds / model</text>
+        <text x="320" y="160" text-anchor="middle" class="n-tiny">全等且覆盖完整 ⇒ 0 局复用</text>
+
+        <rect x="450" y="56" width="210" height="112" rx="10" class="n-box"/>
+        <text x="555" y="82" text-anchor="middle" class="n-label">代际报告</text>
+        <text x="555" y="102" text-anchor="middle" class="n-tiny">generations/gen-NNN/report.json</text>
+        <text x="555" y="122" text-anchor="middle" class="n-sub">heldout / train / gain / diversity</text>
+        <text x="555" y="142" text-anchor="middle" class="n-tiny">+ report.sha256</text>
+        <text x="555" y="160" text-anchor="middle" class="n-tiny">schema 校验后才算数</text>
+
+        <rect x="690" y="56" width="220" height="112" rx="10" class="n-box-accent"/>
+        <text x="800" y="82" text-anchor="middle" class="n-label">台账 + 绘图</text>
+        <text x="800" y="102" text-anchor="middle" class="n-tiny">metrics/generations.csv</text>
+        <text x="800" y="122" text-anchor="middle" class="n-sub">(generation, split, arm) 三键 upsert</text>
+        <text x="800" y="142" text-anchor="middle" class="n-tiny">plots/ 5 张 PNG（必须有数据点）</text>
+        <text x="800" y="160" text-anchor="middle" class="n-tiny">三方共用 ledger_and_plots()</text>
+
+        <path d="M190 112 L220 112" class="edge" marker-end="url(#s-ar2)"/>
+        <path d="M420 112 L450 112" class="edge" marker-end="url(#s-ar2)"/>
+        <path d="M660 112 L690 112" class="edge-flow" marker-end="url(#s-ar)"/>
+
+        <rect x="220" y="208" width="460" height="56" rx="9" class="n-box-bad"/>
+        <text x="450" y="231" text-anchor="middle" class="n-sub">任何一步都不得“静默降级”：失败要么写错误码，要么发事件</text>
+        <text x="450" y="250" text-anchor="middle" class="n-tiny">空白图 = E_IO_PLOT_NO_DATA；dropped = 计 n 按 lose；低置信 = low_confidence</text>
+        <path d="M320 168 L320 208" class="edge-red"/>
+      </svg>
+      <div class="caption"><b>报告是判据的唯一权威。</b><code>eval report</code> 重算不得覆盖 <code>report.json</code> 的判决；版本列以报告为准，不一致时发 <code>eval.ledger_version_conflict</code> 并打印 before/after。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">03</span>判据 1：held-out 不降，且真的接受过</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>条件</th><th>口径</th></tr></thead>
+        <tbody>
+          <tr><td>可比对</td><td>相邻两代 held-out；相邻两代 <code>play_hash</code> 相同 ⇒ <code>not_applicable</code>（不计入可比对）</td></tr>
+          <tr><td>逐对通过</td><td><code>ci_lo(g) ≥ win_rate(g−1) − 0.02</code> 或 <code>P(gap&gt;0) ≥ 0.90</code></td></tr>
+          <tr><td>接受记录</td><td>以各代 <code>report.json</code> 的 <code>decision</code> 为准；<strong>≥1 次 accept</strong>，否则“全拒”也算单调不降（退化通过）</td></tr>
+          <tr><td>判定器</td><td><code>eval acceptance</code> → <code>metrics/acceptance.json</code>；<strong>总是退出码 0</strong>（判定器不是守卫）</td></tr>
+          <tr><td>样本资格</td><td><code>--hitl=false</code> 的 auto 决策，若 <code>condition_trace</code> 完整则计入；报告必须写“本轮无人工确认”</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn"><b>诚实边界：winner's curse。</b>上一代被 accept ⇒ 本代起点就是“被选择后的测量”，本身偏高。判据只能给 <code>baseline_selection.selected</code> 标注，不能假装它是无偏基线；不重测、不换篮子。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">04</span>判据 2：4–5pp 的量级靠连续指标</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 880 230" role="img" aria-label="赢率与关数的统计功效">
+        <rect x="26" y="42" width="380" height="140" rx="11" class="n-box-bad"/>
+        <text x="216" y="70" text-anchor="middle" class="n-label">win_rate（n=40）</text>
+        <text x="216" y="96" text-anchor="middle" class="n-sub">粒度 1/40 = 2.5 pp</text>
+        <text x="216" y="118" text-anchor="middle" class="n-sub">等效可判门槛 ≈ 15 pp</text>
+        <text x="216" y="140" text-anchor="middle" class="n-tiny">同一 harness 四次实测极差 7.5 pp</text>
+        <text x="216" y="160" text-anchor="middle" class="n-tiny">⇒ 只能判“不显著退化”，判不了小增益</text>
+
+        <rect x="446" y="42" width="408" height="140" rx="11" class="n-box-accent"/>
+        <text x="650" y="70" text-anchor="middle" class="n-label">mean_stages_cleared（配对 bootstrap）</text>
+        <text x="650" y="96" text-anchor="middle" class="n-sub">Δ=0.30 关 = 6 关制的 5.0 pp</text>
+        <text x="650" y="118" text-anchor="middle" class="n-sub">power 0.66–0.97</text>
+        <text x="650" y="140" text-anchor="middle" class="n-tiny">同 seed 配对，消除局面差异</text>
+        <text x="650" y="160" text-anchor="middle" class="n-tiny">⇒ 4–5pp 量级由它承担</text>
+
+        <text x="440" y="210" text-anchor="middle" class="n-tiny">结论：两个指标不能互相替代——一个负责“不退化”，一个负责“有提升”。</text>
+      </svg>
+      <div class="caption"><b>为什么不用统计门决定 accept。</b>C2 原先要求“显著提升”，但 n=40 上等效门槛是 +15pp，实测效应只有 +2.5–7.5pp ⇒ 是门没有功效，不是候选不够好。现在 C2 改判“play 面确实变了”，统计量降级为报告项。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">05</span>坍缩检测：C1–C4</h2>
+    <div class="cards">
+      <div class="card"><h3>C1 熵斜率</h3><p>局内动作熵的斜率过低 ⇒ 决策越来越机械。需连续 <code>confirm_generations</code> 代触发。</p></div>
+      <div class="card"><h3>C2 动作种类比例</h3><p>高频 kind 占比过高 ⇒ 策略退化为单一打法。需连续确认。</p></div>
+      <div class="card"><h3>C3 分布冻结</h3><p>跨代 kind 分布 JSD 过低 ⇒ 看起来在演化、其实没变。<strong>单代即触发</strong>。</p></div>
+      <div class="card"><h3>C4 序列重复</h3><p>相同动作序列比例过高 ⇒ 复读。也<strong>单代即触发</strong>。</p></div>
+    </div>
+    <div class="callout"><b>坍缩是“否决”，不是“拒绝”。</b><code>collapse_flag=true</code> 时禁止 <code>real_gain</code>，但报告仍保留完整指标；它不负责决定 accept/reject，那个权力在 MOD-07。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">06</span>当前状态</h2>
+    <div class="kpis">
+      <div class="kpi accent"><div class="num">1</div><div class="label">m3r2 的可比对代对数</div></div>
+      <div class="kpi"><div class="num">3</div><div class="label">m3-formal 的 not_applicable 对数</div></div>
+      <div class="kpi warn"><div class="num">0.325</div><div class="label">heuristic 基线（hard×6，H1）</div></div>
+      <div class="kpi bad"><div class="num">0.175</div><div class="label">裸 v0 的 held-out（n=40）</div></div>
+    </div>
+    <div class="callout warn"><b>没有免费的重测。</b>同一 harness 在同一批 40 seed 上四次测量的赢率是 0.175 / 0.100 / 0.150 / 0.100（极差 7.5 pp）——重测不是“更准”，而是引入新的抖动。这也是按 play 面继承归档测量的原因。</div>
+    <div class="callout"><b>基线现状：</b><code>random</code> 与 <code>heuristic</code> 在新 H1 上已测；<code>fixed_prompt</code> 的 0.0% 来自 F45-2 之前的旧四位协议归档，新 H1 上仍缺这一测（≈¥35）。引用时必须写清来源。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">07</span>延伸阅读</h2>
+    <ul class="clean">
+      <li><a href="mod-07.html">MOD-07 evolve</a> —— 测量结果如何变成裁决。</li>
+      <li><a href="mod-06.html">MOD-06 loop</a> —— 每代何时触发测量。</li>
+      <li><a href="../prd/MOD-08-evals-PRD.md">MOD-08 PRD</a> · <a href="../../configs/seeds.yaml">seeds.yaml</a></li>
+    </ul>
+  </section>
+
+  <div class="pager">
+    <a class="prev" href="mod-07.html"><span class="dir">PREV</span><span class="to">← MOD-07 evolve</span></a>
+    <a class="next" href="mod-09.html"><span class="dir">NEXT</span><span class="to">MOD-09 infra →</span></a>
+  </div>
+
+  <footer class="footer">
+    <span>DiceRatchet 模块可视化讲解 · MOD-08</span>
+    <span>事实来源：<code>dice_ratchet/evals/*</code> + PRD · 生成于 2026-10-17</span>
+  </footer>
+
+</div></main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

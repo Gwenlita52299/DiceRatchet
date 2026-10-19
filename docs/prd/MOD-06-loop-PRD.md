@@ -1,6 +1,7 @@
 # MOD-06 loop 技术 PRD
 
-> 版本：v1.7（2026-10-15 **F63：gen-000 基线的测量身份进臂归档**——`write_gen000_baseline` 现在把 harness v0 的 `play_hash` 交给 `evaluate_arm(play_hash=)`（原先只在评测后写进 `report.json` 的 `harness_play_hash`），这样后续各代继承这份 40 局测量时能按 play 面还原归档，而不是被「accept 之前的版本号」误杀。对齐 Spec v2.33 B-92，见 FR-06-13a 注与 §17）
+> 版本：v1.8（2026-10-17 **协议口径纠正：新增 `loop baseline` + 起点守卫**——`loop baseline` 只测一个给定 harness 的 held-out（不训练/不演化/不提交 git，幂等），把「测一个候选」从 `loop run` 里抽出来；`loop run` 起跑前新增**起点守卫**（`assert_start_play_plane_accepted`：起点 play 面必须是原始 v0 或任一已接受快照，否则 `E_EVOLVE_UNGATED_START`/退出码 2，一局都不跑），顺序为 git 干净检查 → 起点守卫 → gen-000 基线。现场教训：P1 被预装成 version 0 的“基线”，从未过门禁却成了 P2 的父代。见 FR-06-13b、§9.4、§17）
+> **历史版本**：v1.7（2026-10-15 **F63：gen-000 基线的测量身份进臂归档**——`write_gen000_baseline` 现在把 harness v0 的 `play_hash` 交给 `evaluate_arm(play_hash=)`（原先只在评测后写进 `report.json` 的 `harness_play_hash`），这样后续各代继承这份 40 局测量时能按 play 面还原归档，而不是被「accept 之前的版本号」误杀。对齐 Spec v2.33 B-92，见 FR-06-13a 注与 §17）
 > **历史版本**：v1.6（2026-10-10 新增 §9.3：演化起跑前的 git 门禁（F47-A：同一判据原只长在 accept 的提交前检查里，脏工作区要等整代跑完才拒），见 §17）· 历史版本：v1.5（新增 §9.2：`--resume` 必须能重入未完成的周期边界，F34）· 状态：草案（待评审）· 所属里程碑：M2 · 上游 Spec：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突时以 Spec 为准）· 作者：MOD-06 模块作者
 > 代码路径：`dice_ratchet/loop/{runner.py, reflect.py, generation.py}` · 产物路径：`runs/<run_id>/`
 
@@ -34,7 +35,7 @@ MOD-06 是 L2 进化层里的**编排器**：它自己不产生策略、不训�
 
 | 使用方 | 场景 | 用到的接口 |
 |---|---|---|
-| 人类研究者（CLI） | 冒烟一局、跑 N 代、看进度、Ctrl-C 后续跑、处理 HITL | `loop run/resume/status`、`evolve approve\|rollback` |
+| 人类研究者（CLI） | 冒烟一局、跑 N 代、看进度、Ctrl-C 后续跑、处理 HITL、单独测一个候选 harness | `loop run/resume/status/baseline`、`evolve approve\|rollback` |
 | MOD-07 evolve | 每代周期边界被调用；评估直接调 MOD-08 `evaluate_arm`（Spec §4.7），本模块提供 `run_episode` 作为底层执行器 | `evolve_fn(state, run_ctx)` |
 | MOD-08 evals | 从轨迹与计分台账算指标 | 文件契约（§7），不调函数 |
 | 回归测试 | 固定 seed 跑 3 局做 golden/冒烟 | `run_episode()` |
@@ -47,6 +48,8 @@ python -m dice_ratchet loop run --agent llm --seeds train:1000-1029 --k 30 --hit
 python -m dice_ratchet loop status --run-id <run_id>
 python -m dice_ratchet loop run --run-id <run_id> --resume
 python -m dice_ratchet loop smoke --seeds train:1000-1002 --k 3 --no-reflect   # 只验编排，不调模型
+python -m dice_ratchet loop baseline --run-id <run_id> --harness-dir <dir> --basket H1
+#   ↑ 2026-10-17 新增：只测一个给定 harness 的 held-out（不训练、不演化、不提交 git），幂等
 ```
 
 ## 4. 功能需求（FR-06-x，编号，每条可测试）
@@ -60,27 +63,33 @@ python -m dice_ratchet loop smoke --seeds train:1000-1002 --k 3 --no-reflect   #
 - **FR-06-2（每步必落盘）**：每个 `StepRecord`（含 reject 行）立即追加到 `episodes/<split>/<episode_key>.jsonl` 并 `flush`，字段按 Spec v1.3 §4.5（MOD-09 schema 校验）。LLM 字段只挂在决策内第一个执行的动作行上。局末追加 `episode_end` 行。崩溃时最多丢当前决策。
 - **FR-06-3（局末反思与用量回写）**：训练局结束（含截断）后：
   1. 调用 `record_usage(episode_key, memory_ids, outcome, adopted_ids=…, tick=…)` 回写本局所有决策的记忆使用情况（Spec §4.7）。
-  2. 若 `reflect_enabled`，由 `loop.reflect.reflect(summary, client, template)` 渲染 `harness/prompts/reflection.md` → MOD-03 `generate_json()` → 通过 MOD-05 的 `ReflectionEntry` schema → `add_reflection(entry, provenance)`。
+  2. 若 `reflect_enabled`，由 `loop.reflect.reflect(summary, client=…, template=…)` 渲染 `harness/prompts/reflection.md` → MOD-03 `generate_json()` → 通过 MOD-05 的 `ReflectionEntry` schema → `add_reflection(entry, provenance)`。
 
   `EpisodeSummary` 是确定性摘要：结局、关数、心数、战斗数、非法/fallback 次数，以及最近 `reflect_context_window` 局的同类摘要；由本模块从轨迹生成，不经 LLM。
 
   评估局不反思、不回写（INV-5）。
 - **FR-06-3a（逻辑时钟）**：`tick` = 已完成的训练局数，每局结束 +1，写入 `state.json`；它是 MOD-05 淘汰、TTL 与时新度的唯一时间源（Spec §8.1）。
-- **FR-06-4（反思降级）**：反思任一步失败（超时/JSON 非法/schema 不符/MOD-05 写失败）→ 事件 `reflect` 记 `status="skipped"`，`reflections/<seed>.json` 写 `{"skipped": true, "reason": "<E_*>"}`，主循环继续。**反思失败绝不判该局失败、绝不阻塞 run**。
+- **FR-06-4（反思降级）**：反思任一步失败（超时/JSON 非法/schema 不符/MOD-05 写失败）→ 事件 `reflect` 记 `status="skipped"`，`reflections/<episode_key>.json` 写 `{"skipped": true, "reason": "<E_*>"}`，主循环继续。**反思失败绝不判该局失败、绝不阻塞 run**。
 - **FR-06-5（周期触发）**：每完成 K 局训练局触发一次演化周期，`K = loop.k`（默认 30）；条件为 `len(completed_train_seeds) % K == 0` 且 `generation < loop.max_generations` 且 `phase == "playing"`。
-- **FR-06-6（周期幂等）**：同一 `cycle_index` 至多触发一次：先原子落盘 `phase="evolving"` + `evolving_cycle=cycle_index`，再调 MOD-07；返回后写 `last_completed_cycle=cycle_index` 并回 `phase="playing"`。若进程在 `evolving` 阶段被杀，`--resume` **不重跑** MOD-07，而是检查其产物（`generations/gen-XXX/report.json` / `decision.json`）存在性：存在则标该 cycle 完成，否则重置 `phase="playing"` 后重新触发。
+- **FR-06-6（周期幂等）**：同一 `cycle_index` 至多触发一次：先原子落盘 `phase="evolving"` + `evolving_cycle=cycle_index`，再调 MOD-07；返回后写 `last_completed_cycle=cycle_index` 并回 `phase="playing"`。若进程在 `evolving` 阶段被杀，`--resume` **不重跑** MOD-07，而是检查其产物（`generations/gen-XXX/report.json`；`decision.json` 从未落盘）存在性：存在则标该 cycle 完成，否则重置 `phase="playing"` 后重新触发。
 - **FR-06-7（generation 与 harness_version）**：`state.generation` 单调不减，仅在 MOD-07 返回「本代已裁决」（接受或拒绝均算）后 `+1`；`harness_version` 每局开始时从 `harness/version.json` 重读（不跨代缓存），故 HITL 挂起期间人工切换 harness 立即生效。
 - **FR-06-8（run 状态机）**：`state.json` 至少含 `run_id / phase / generation / harness_version / k / completed_train_seeds / pending_queue / hitl_pending / counters / budget / updated_at`（§7.1）；`phase ∈ {pending, playing, reflecting, evolving, hitl_wait, done, failed}`。
 - **FR-06-9（断点续跑）**：`loop run --run-id <id> --resume` 读 `state.json`（`config_hash` 不含 harness，所以演化过的 run 也能续跑，Spec B-19），跳过 `completed_train_seeds`，从 `pending_queue` 头部继续，不重复计分（§7.3 幂等键）。
 - **FR-06-10（计分幂等）**：计分只发生在 episode 正常收尾；写入前检查 `metrics/scoreboard.json` 是否已有该 `episode_key`，追加后 fsync。同 seed 因 `--force-rerun` 重跑时，旧记录标 `superseded_by` 而非删除。
-- **FR-06-11（HITL 挂起）**：`loop.hitl=true` 时 MOD-07 产出候选与决策记录后不直接生效；MOD-06 写 `state.hitl_pending={"cycle","generation","candidate_dir","report"}`、置 `phase="hitl_wait"`、退出码 `0`（正常挂起非错误）。人工执行 `evolve approve|rollback --generation g`（MOD-07 命令，MOD-06 只消费结果状态）后，`loop run --run-id <id> --resume` 读 `harness/version.json` 与 `hitl_pending`，清空标记并继续。
+- **FR-06-11（HITL 挂起）**：`loop.hitl=true` 时 MOD-07 产出候选与决策记录后不直接生效；MOD-06 写 `state.hitl_pending={"cycle","generation","candidate_dir","report"}`、置 `phase="hitl_wait"`、退出码 `0`（正常挂起非错误）。人工执行 `evolve approve|rollback --run-id <id> --generation g`（MOD-07 命令，`--run-id` 必填，MOD-06 只消费结果状态）后，`loop run --run-id <id> --resume` 读 `harness/version.json` 与 `hitl_pending`，清空标记并继续。
 - **FR-06-12（评估执行器）**：MOD-08 `evaluate_arm()` 通过注入的 `EpisodeRunner.run_episode(split="heldout", arm=...)` 执行评估局。本模块只负责执行与落盘，**不做任何聚合指标**（聚合归 MOD-08）。v1.0 的 `run_evaluation_batch()` 已并入 MOD-08 门面。
 - **FR-06-13（成本闸门，Spec v1.3 §8.6）**：
-  - 每代启动前按 `E_gen = K + (H + S) + C·(S + H)` 计算本代局数：训练 K、parent 的 heldout H 与冒烟 S、C 个候选各自的冒烟与 heldout。默认 30 + 45 + 2×45 = 165。**⚠️ 2026-10-14 修订（D-M3-7）**：公式与默认值未变（`E_gen` 仍是与上限比较的保守值）；但 parent 的 heldout 改为**按 play 面指纹继承**（同 play 面已有测量命中即 0 局、不重测）⇒ 继承命中时**实际每 cycle = 74 局** = `K 30 + parent 冒烟 2 + 候选(冒烟 2 + heldout 40)`，只有继承未命中时才退回上式实测。
+  - 每代启动前按 `E_gen = K + (H + S) + C·(S + H)` 计算本代局数：训练 K、parent 的 heldout H 与冒烟 S、C 个候选各自的冒烟与 heldout。默认 30 + 42 + 1×42 = 114（K=30、H=40、S=2、C=1，≤ 上限 120）。**⚠️ 2026-10-14 修订（D-M3-7）**：公式与默认值未变（`E_gen` 仍是与上限比较的保守值）；但 parent 的 heldout 改为**按 play 面指纹继承**（同 play 面已有测量命中即 0 局、不重测）⇒ 继承命中时**实际每 cycle = 74 局** = `K 30 + parent 冒烟 2 + 候选(冒烟 2 + heldout 40)`，只有继承未命中时才退回上式实测。
   - `E_gen > loop.max_episodes_per_generation`（**默认 120**，2026-10-06 M2 开工 D-1 由 170 下调；D-1 下 `E_gen = K + (1+C)(S+H) = 30 + 2×42 = 114`，**⚠️ 114 是公式上限；D-M3-7 起继承命中时实际每 cycle = 74 局**）时拒绝启动该代，记 `loop.budget_exhausted`，退出码 1，并提示下调 C 或 S。这是全系统**唯一**的成本上限，MOD-07 不另设。
   - 每代开始写一条 `loop.cycle_start{e_gen, est_hours}` 事件，其中 `est_hours = E_gen × D × t_d`，`t_d` 取 MOD-03 实测 p50。
 - **FR-06-13a（gen-000 基线）**：run 启动时（`generation=0`），先对 harness v0 在 H1 上调 MOD-08 `evaluate_arm` 与 `evaluate_generation`，生成 `generations/gen-000/report.json`（`decision="baseline"`），后续各代与它对比。
   **⚠️ 2026-10-15（Spec v2.33 / B-92，F63）**：v0 的 `play_hash` 在**评测之前**先算一次并交给 `evaluate_arm(play_hash=)`（写进臂归档 provenance 的 `harness_play_hash`），同一个值随后仍写进 `report.json.harness_play_hash`。顺序是刻意的：accept 会改写 `harness/`，之后再也算不出「起点长什么样」；而基线的测量身份（而不只是版本号 0）是后代能否直接继承这 40 局的**唯一依据**。
+- **FR-06-13b（`loop baseline`：只测一个 harness）**（2026-10-17，协议口径纠正）：
+  `loop baseline --run-id <id> --harness-dir <dir> [--basket H1] [--agent llm|heuristic]` 对**给定 harness 目录**跑一次 held-out 测量，落 `generations/gen-000/report.json` + 臂归档后**停下**：不训练、不演化、不提交 git、不做门禁裁决。
+  - **为什么需要它**：D-M3-7 里「候选补丁单独测 held-out」是一个独立动作。协议纠正后要测 `v0+P2`，而 `loop run` 会把测量和训练/演化绑在一起。
+  - **幂等**：`gen-000/report.json` 已存在则直接返回（不重复花钱）；**幂等键是 run 目录，不比对 harness 身份**——同一 `--run-id` 下换 `--harness-dir` 会返回旧测量，换 harness 必须换 run-id。`--basket` 缺省取 `evolve.heldout_basket`。
+  - **不做起点守卫**：测量候选正是它的合法用途（守卫只拦 `loop run`）。
+  - **不产生裁决**：它只产出测量；是否接受仍由 MOD-07 的 C0–C5 判定。
 - **FR-06-14（并发纪律）**：
   - 训练局串行（`train_concurrency` 固定 1）；写共享记忆须持 `runs/<run_id>/locks/memory.lock` 文件锁。
   - 评估局采用**局级并发**：`eval_concurrency` 默认 2，同一进程内用 asyncio/线程，**共享同一个 `BackendManager` 推理队列**（Spec P-10 / §8.6）。评估局使用冻结的 harness 快照与 `memory.frozen(v)` 只读视图，禁止写记忆库。
@@ -89,7 +98,7 @@ python -m dice_ratchet loop smoke --seeds train:1000-1002 --k 3 --no-reflect   #
 
 ## 5. 非功能需求（NFR-06-x：确定性/性能/可复现/可观测）
 
-- **NFR-06-1（确定性）**：同一 `run_id` + 同 seed 清单 + 同 `harness_version` + `mode=eval`（温度 0）时，评估局与并发度无关，且`obs_digest`/`action`/`reward` 序列逐字节一致；所有随机来自 `dice_ratchet.infra.rng_for(seed, namespace)`，禁用 `random`/`time` 相关随机（MOD-09 `guards.py` CI 扫描）。
+- **NFR-06-1（确定性）**：同一 `run_id` + 同 seed 清单 + 同 `harness_version` + `mode=eval`（温度 0）时，评估局与并发度无关，且`obs_digest`/`action`/`reward` 序列逐字节一致；所有随机必须来自显式 seed 的派生函数（评估侧为 `evals.harness.rng_for(spec)`；`dice_ratchet/infra/` **没有** `rng_for`，旧文案是错的），禁用 `random`/`time` 相关随机（MOD-09 `guards.py` CI 扫描）。
 - **NFR-06-2（可复现）**：`state.json` 能独立重建「下一步做什么」，不依赖内存态；`runs/<run_id>/config.json` 固化合并后配置（含 `config_hash`）。
 - **NFR-06-3（性能）**：编排层单步开销（不含推理与环境 step）≤ 5 ms（M5 本机）；每步 ≤ 1 次 append+flush；代际目录用增量读，不整目录 `glob`。
 - **NFR-06-4（可观测）**：事件统一经 MOD-09 `emit` 写入 `events.jsonl`，名称为 `loop.{episode_start,episode_end,cycle_start,reflect,budget_exhausted,interrupted,resume}`（Spec §8.2）。轨迹行不是事件。v1.0 的 `metrics/loop_trace.jsonl` 已废弃。
@@ -132,6 +141,8 @@ def reflect(summary: "EpisodeSummary", *, client: "InferenceClient", template: P
 
 # dice_ratchet/loop/generation.py —— 评估一律委托 MOD-08 evaluate_arm（Spec §4.7），本模块不自建评估批
 def episodes_per_generation(cfg: "LoopConfig") -> int: ...              # FR-06-13：K + (H+S) + C·(S+H)
+def write_gen000_baseline(run_ctx, *, harness_version: int, basket: str | None = None,
+                          runner: "EpisodeRunner | None" = None) -> Path | None: ...   # FR-06-13a/13b
 def maybe_run_generation(*, state: "RunState", run_ctx: "RunContext",
                          evolve_fn: "Callable[[RunState, RunContext], EvolveOutcome]",
                          force: bool = False) -> "RunState": ...   # 幂等：同 cycle_index 只调一次
@@ -191,7 +202,7 @@ runs/<run_id>/
   queue.jsonl             # 待做队列追加式事件日志（add/done/skip），供恢复与审计
   events.jsonl            # 结构化事件（MOD-09 emit）
   episodes/<split>/<episode_key>.jsonl   # 每步一行（Spec v1.3 §4.5 字段，本模块写）
-  reflections/<seed>.json # 每局一份反思或 skipped 标注
+  reflections/<episode_key>.json # 每局一份反思或 skipped 标注
   generations/gen-<NNN>/  # MOD-07 写的候选与报告；本模块只读、只检查存在性
   metrics/scoreboard.json # 计分台账（幂等键 episode_key）
   locks/memory.lock       # 训练局共享记忆写入文件锁
@@ -200,13 +211,13 @@ runs/<run_id>/
 
 ### 7.2 状态机转移
 
-`pending → playing → (reflecting → playing)* → evolving → (hitl_wait → playing | playing) → … → done`；异常边：任意 phase → `failed`（不可恢复，如 `E_IO_RUN_STATE`）；`playing → interrupted`（临时态，恢复回 `playing`）。
+`pending → playing → (reflecting → playing)* → evolving → (hitl_wait → playing | playing) → … → done`；异常边：任意 phase → `failed`（不可恢复，如 `E_IO_RUN_STATE`）；信号中断**不引入 `interrupted` phase**：只写 `state.interrupted_at` 并落盘，`phase` 保持原值，`--resume` 从原 phase 继续。
 
 ### 7.3 幂等键
 
 - **计分幂等**：`episode_key = f"e-{seed:06d}-g{generation:03d}-{arm}"`（Spec v1.3 §4.5 / B-16，取代 P-13 的旧格式）。同一 seed 在不同代、不同臂下各计一条记录，同代同臂内重复执行只保留一条。
 - **周期幂等**：`cycle_index = len(completed_train_seeds) // k`，以 `last_completed_cycle` + `evolving_cycle` + MOD-07 产物存在性三重校验。
-- **反思幂等**：`reflections/<seed>.json` 已 `status=="ok"` 则跳过；`skipped` 需 `--retry-reflections` 显式重试。
+- **反思幂等**：`reflections/<episode_key>.json` 已 `status=="ok"` 则跳过；`skipped` 需 `--retry-reflections` 显式重试。
 - **已裁决（Spec v1.4 B-36，与 P-14 一致）**：训练/评估 seed **必须**经 MOD-08 `evals.seeds.take` 取用，MOD-06 不得自行按 `seed % 2` 之类规则切分；仅校验传入 seed 的 split 标签与 MOD-08 注册表一致，不一致立即抛 `E_EVAL_SPLIT_VIOLATION`（守 INV-5）。
 
 ## 8. 关键流程（伪代码或时序）
@@ -307,7 +318,7 @@ MOD-06 **不自己装配模型**：`loop run --agent llm` 的客户端由**组�
 | `loop.max_candidates_per_generation` | int | 3 | 每代候选数上限，硬上限 3（Spec §8.6） |
 | `loop.eval_seeds_per_candidate` | int | 40 | 单候选评估局数；`× candidates` 不得超下一条 |
 | `loop.max_episodes_per_generation` | int | **120** | 每代总局数上限，与 `E_gen` 比较（FR-06-13，全系统唯一成本上限）；2026-10-06 D-1：170 → 120，与 `C=1/S=2/H=40` 一起定（`E_gen=114` 是**公式上限**；⚠️ D-M3-7 起继承命中时实际每 cycle = 74 局） |
-| `loop.n_candidates` / `loop.smoke_n` / `loop.heldout_n` | int | **1 / 2 / 40** | 参与 `E_gen` 计算；`n_candidates` 与 MOD-07 `evolve.n_candidates`、`heldout_n` 与 MOD-08 `n_heldout` 由 `load_config()` 校验一致（`config.py:558/562`）；**`smoke_n` 与 `evolve.smoke_n` 无自动校验，改 S 必须两处同步**（2026-10-06 D-1） |
+| `loop.n_candidates` / `loop.smoke_n` / `loop.heldout_n` | int | **1 / 2 / 40** | 参与 `E_gen` 计算；`n_candidates` 与 MOD-07 `evolve.n_candidates`、`heldout_n` 与 MOD-08 `n_heldout` 由 `load_config()` 校验一致（跨段一致性在 `config.py:781-788`）；**`smoke_n` 与 `evolve.smoke_n` 无自动校验，改 S 必须两处同步**（2026-10-06 D-1） |
 | `loop.io_retry` / `loop.io_backoff_ms` | int / int | 3 / 200 | 磁盘写失败重试次数与指数退避基数（200/400/800 ms） |
 | `loop.llm_timeout_s` | float | 90.0 | 单次决策生成超时（透传 MOD-03） |
 | `loop.fallback_on_llm_failure` | bool | true | 模型连续失败降级 heuristic，该局标 `not_for_eval` |
@@ -399,6 +410,39 @@ gen-000 基线之前**通过 MOD-09 的工作区干净性判据；脏 → `E_IO_
 修复前第一条断言 `0 == 4` 失败。为此 `tests/integration/test_loop_closure.py` 的 3 条编排用例
 改用**仓库外**的 harness 拷贝（`--harness-dir`），使它们不依赖宿主工作区是否干净。
 
+### 9.4 起跑前的第二道守卫：起点必须是「被裁决过的」（v1.8 新增；2026-10-17）
+
+**约束**：`loop run` 在**会演化**时，于 §9.3 的 git 干净检查之后、gen-000 基线之前，调用
+`evolve/versioning.py::assert_start_play_plane_accepted(harness_dir, allow_ungated=...)`：
+起点 harness 的 `play_hash` 必须等于下列之一——
+
+- `harness/BASELINE.json` 登记的**原始 v0** `play_hash`；或
+- `harness/versions/v*/` 任一**已接受快照**的 `play_hash`。
+
+否则 **fail-closed**：`E_EVOLVE_UNGATED_START`（退出码 **2**），**一局都不跑**。
+
+**顺序（刻意如此）**：git 干净检查（退出码 4）→ 起点守卫（退出码 2）→ gen-000 基线（开始花钱）。
+两条前置都不过时不产生任何推理费用。
+
+**现场教训（2026-10-17）**：m3r2 把人工去重的 P1 直接预装成 version 0 的“基线”。它从未作为
+candidate 过门禁，却成了 P2 的父代 ⇒ P2 的 accept 建立在 held-out **0.05**（裸 v0 是 **0.175**）
+的 P1 之上。协议口径：P1 应在 cycle 0 被判负，`v1 = v0`，下一轮测 `v0+P2`。
+
+**显式放行**：`loop run --allow-ungated-start` 发 `evolve.start_guard` 事件（`status="allow_ungated"`），
+来源记 `allow_ungated`——放行本身必须留痕，不允许静默。用于引导新项目或人工复核后的特例。
+
+**它不做什么（诚实边界）**：
+
+- **不追溯否定**已在账本里的版本：在役 v1 是 provisional 这一事实要靠账本修复（C 方案），守卫不处理；
+- **不替代门禁**：它只保证“没裁决过的东西不会悄悄变成父代”，不判断一个已接受版本是否**应该**被接受；
+- **不拦** `loop baseline`（测量候选是它的合法用途）、`--no-evolve` 与 `loop smoke`。
+
+**维护规则**：改动原始 v0（`harness/prompts/decision.md` / `config.json` / `tools/*.py`）时，
+必须同步更新 `harness/BASELINE.json` 的 `play_hash`，否则新内容会被当成未裁决补丁拦下。
+
+**护栏**：`tests/unit/evolve/test_start_guard.py`（6 条：原始 v0 通过 / 未裁决改动拒绝 /
+放行留痕 / 已接受快照通过 / 学习侧改动不拦 / 无锚点 fail-closed）。
+
 ## 10. 错误处理与降级（使用 Spec §8 的错误码前缀）
 
 | 触发条件 | 错误码 | MOD-06 行为 | 计入评估样本 |
@@ -416,11 +460,13 @@ gen-000 基线之前**通过 MOD-09 的工作区干净性判据；脏 → `E_IO_
 | 评估局失败 | `E_EVAL_EPISODE` | 由 MOD-08 记为 dropped，**按 lose 计入 n**（Spec §8.5）；dropped 率 >10% 则 `low_confidence` | — |
 | 种子 split 标签越权 | `E_EVAL_SPLIT_VIOLATION` | 立即中止（INV-5 违反，P0） | — |
 | 配置非法（如 `train_concurrency>1`） | `E_IO_CONCURRENCY` | 启动即拒绝，退出码 `2` | — |
+| 起点 harness 的 play 面未经门禁裁决 | `E_EVOLVE_UNGATED_START` | **起跑前**拒绝（退出码 `2`），一局都不跑；只有原始 v0（`harness/BASELINE.json`）或任一已接受快照可起跑；`--allow-ungated-start` 显式放行并留痕 | — |
+| 工作区不干净（演化起跑前） | `E_IO_GIT_DIRTY` | 起跑前拒绝（退出码 `4`），零推理调用；见 §9.3 | — |
 | 收到 `SIGINT`/`SIGTERM` | `E_IO_INTERRUPTED`（事件级） | 完成当前 step 落盘 → 写 `state.json` → 退出码 `130`；`--resume` 可无损续跑 | — |
 
 ## 11. 测试计划（单测/集成，用「给定-当-则」写验收用例）
 
-单测（`tests/unit/test_loop_*.py`，纯假依赖，不调模型、不写真实 `runs/`）：
+单测（`tests/unit/loop/test_loop_*.py`，纯假依赖，不调模型、不写真实 `runs/`）：
 
 - **T-06-1 单局时序**：给定假 `PolicyProto`（每个决策 1 步）与假 `SandboxEnv`（3 步后 `terminated=True`）；当 `run_episode(seed=1, split="train", arm="train")`；则 JSONL 恰好 3 行步骤 + 1 行 `episode_end`，`outcome` 取自 `info["outcome"]`，每行 `obs_digest` 以 `sha256:` 开头，文件路径为 `episodes/train/e-000001-g000-train.jsonl`。
 - **T-06-2 截断与计负**：给定假 env 在第 5 步返回 `truncated=True, truncation_reason="step_limit"`（另一组为 `"policy_failure"`）；当 跑一局；则 `outcome=="lose"`、`truncation_reason` 原样记录、truncated 计数 +1，且本模块自身不做任何步数计数。
@@ -439,7 +485,7 @@ gen-000 基线之前**通过 MOD-09 的工作区干净性判据；脏 → `E_IO_
 集成测试（`tests/integration/test_loop_closure.py`）：
 
 - **T-06-14 闭环冒烟（G6）**：给定 `loop smoke --seeds train:1000-1002 --k 3 --no-reflect`；当 执行；则 < 2 s 完成、退出码 0、`state.json` 为 `phase=="done"`、产出 3 个 `episodes/*.jsonl`。
-- **T-06-15 固定 seed 确定性（G2/G3）**：给定 `--seeds train:1000-1004 --agent heuristic --eval-workers 1`；当 跑两次（不同 `run_id`）；则两次 `obs_digest+action+reward` 序列逐字节相同。
+- **T-06-15 固定 seed 确定性（G2/G3）**：给定 `--seeds train:1000-1004 --agent heuristic`（并发由 `eval.n_workers` 配置，CLI 无 `--eval-workers`）；当 跑两次（不同 `run_id`）；则两次 `obs_digest+action+reward` 序列逐字节相同。
 - **T-06-16 真实演化一轮（M2）**：给定 本地小模型 + `--k 3 --generations 1`；当 执行；则 `generations/gen-000/`（基线，`decision="baseline"`）与 `generations/gen-001/`（第 1 代裁决）都有 `report.json`，`state.generation==1`，`events.jsonl` 含 `loop.cycle_start` 与 `evolve.decision` 事件。
 - **T-06-17 断电模拟**：给定 在 `state.json` 原子替换前后注入 `kill -9`；当 `--resume`；则 状态可解析、无重复计分、无已完成 seed 丢失。
 
@@ -449,7 +495,7 @@ gen-000 基线之前**通过 MOD-09 的工作区干净性判据；脏 → `E_IO_
 - **G2 Golden**：本模块不产出 golden 轨迹（归 MOD-01/02），但必须消费其 golden seed 集跑通且不修改既有 golden 文件。
 - **G3 确定性**：T-06-15 通过；`loop/` 经 MOD-09 `guards.py` AST 扫描 0 处 `random`/`time` 依赖。
 - **G4 泄漏审计**：`python -m dice_ratchet audit leak --run-id <run_id>` 对本模块产出的 run 0 告警；`state.json` 与 `reflections/*.json` 中不得出现 held-out/test seed 值（按 MOD-08 seed 注册表白名单正则扫描）。
-- **G5 Schema**：§6 的 JSON Schema 落 `dice_ratchet/loop/schemas/`，round-trip 测试通过。
+- **G5 Schema**：§6 的 JSON Schema 落 `schemas/run_state.schema.json`（schema 根统一在仓库 `schemas/`），round-trip 测试通过。
 - **G6 可复现命令**：§3 四条命令在干净 checkout 上可直接复制执行成功（含 `--no-reflect` 免模型路径）。
 - **M2 验收（计划 §7 / Spec §7）**：闭环自动运行 ≥1 轮演化并产出 diff 与决策记录；`--resume` 与 HITL 挂起/恢复各有一条端到端演示记录（README 附命令与日志片段）。
 - **计分正确性**：任意中断/恢复组合下，`scoreboard.json` 的 `episode_key` 集合等于「实际完整跑完的 episode 集合」，无重复、无幻影。
@@ -465,7 +511,7 @@ gen-000 基线之前**通过 MOD-09 的工作区干净性判据；脏 → `E_IO_
 | （非法尝试） | 由 MOD-04 发 `policy.reject`，本模块不重复发 | `illegal_rate`、格式鲁棒性 |
 | `loop.reflect` | `episode_key, status(ok\|skipped), reason, latency_ms, template_sha256` | 反思成功率、模板版本追溯 |
 | `loop.cycle_start` | `cycle, generation, e_gen, est_hours` | 周期开销与预算追踪 |
-| `evolve.decision` | `generation, decision, decided_by`（**由 MOD-07 发出**） | 代际曲线 |
+| `evolve.decision` | `generation, decision, decided_by`（正常裁决由 MOD-07 发出；**MOD-06 在 `E_EVOLVE_*` 降级路径也会发** `decision="error_reject"`、`decided_by="auto"`） | 代际曲线 |
 | `loop.budget_exhausted` | `e_gen, cap` | 成本失控告警 |
 | `loop.interrupted` / `loop.resume` | `phase, completed, pending, tick` | 续跑可靠性 |
 
@@ -523,4 +569,5 @@ gen-000 基线之前**通过 MOD-09 的工作区干净性判据；脏 → `E_IO_
 | v1.4 | 2026-10-09 | **新增 §9.1「评估局的环境隔离」**（对齐 Spec v2.2 B-46；处置缺陷 F30，登记残留 F31）。① **约束**：本模块注入 MOD-08 的执行器**不得跨评估局共享 `SandboxEnv`**——`evaluate_arm(n_workers=cfg.evals.n_workers=2)` 驱动同一个 runner，而 `SandboxEnv` 是有状态单实例 ⇒ 两局 `reset`/`step` 交错、观测串局 ⇒ 模型按别的局的相位出动作 ⇒ 非法 ⇒ 重试耗尽 ⇒ fallback。② **实测**（§3.2 冒烟 5/40 局时发现并中止）：`illegal_rate ≈ 0.285` / `fallback_rate ≈ 0.290`，同臂同 seed 同时间窗的 `play`（`SandboxRunner` 每局新 env、`n_workers=1`）为 `0.032` / `0.000`；`heuristic` 臂复现 H1 全 40 局——共享 env 13/40 局非法、0/40 胜，每局新 env 0/40、18/40 = 45.0%（对上 `greedy_counter` hard×6 45.5%）。③ **落地**：`loop/cli.py` 改注入 `env_factory=_env_factory(cfg)`（每局 `episode_id=key`、局末 `close()`，与 MOD-08 `SandboxRunner` 同构）；构造代价 1.1 ms/局。**这与 FR-06-14「评估局并发时 MOD-04 不可共享实例」是同一条理由**，此前只落到 `policy` 上。④ **护栏**：`tests/integration/test_loop_env_isolation.py` 从组合根装配，断言 `runner.env is None` + `n_workers=1` 与 `=2` 逐字段一致；`git stash` 掉修复后 **5/5 稳定失败**。门禁 **1870 passed / 2 skipped**。⑤ 登记 **F31**（局末 `state.counters.*` 跨线程读改写，仅影响上报值、零读取点，本轮未修） |
 | v1.5 | 2026-10-10 | **新增 §9.2：`--resume` 必须能重入未完成的周期边界（F34，对齐 Spec v2.3）**。① 实测：`--resume` 一个「队列已空、周期边界崩溃」的 run 会返回 **退出码 0 / `phase=done`**，但 `generation` 不动、`evolving_cycle` 悬着 ⇒ 静默成功（零成本探针实测，见 §9.2）。② 修法：队列排空后补一次 `maybe_run_generation`（其 docstring 本就定义了该重入语义），靠 `cycle_due` 的幂等键防重复。③ 护栏：`test_f34_resume_reenters_boundary_when_queue_empty`（修复前失败）。 |
 | v1.7 | 2026-10-15 | **F63：gen-000 基线的测量身份写进臂归档（Spec v2.33 / B-92；用户指令「修复F52/63」）**。① **改了什么**：`write_gen000_baseline` 把 harness v0 的 `play_hash` 在评测**之前**算好，交给 `evaluate_arm(play_hash=)`（→ 归档 provenance 的 `harness_play_hash`），同一个值继续写进 `report.json.harness_play_hash`（D-M3-7 用它判继承资格）。② **为什么**：继承的资格 ① 走 report 的 play 面，但资格 ③ 落到 `restore_arm_from_archive`，后者曾按 `harness_version` 判——候选臂归档记的是 accept **之前**的号，被接受那代的测量因此永远还原不了，继承静默退化成重测 40 局 ≈¥21 ≈1.7 h。基线这一侧原本也没有归档身份，同一条路会让 `gen-000 → gen-001` 的继承缺少可对拍的指纹（旧归档一律重算，fail-closed）。③ **副产品**：指纹计算失败时照旧记 `loop.resume{baseline="play_hash_failed"}` 并留空串，不阻断基线。④ **诚实边界**：`harness_play_hash` 进 `ARM_PROVENANCE_KEYS` ⇒ 修复前落盘的归档不再被复用（刻意）。**成本：¥0**。 |
+| v1.8 | 2026-10-17 | **协议口径纠正：`loop baseline` + 起点守卫（对齐 Spec v2.35 / B-95；纯代码 + 文档，¥0）**。① **`loop baseline`**（FR-06-13b）：对给定 `--harness-dir` 跑一次 held-out，落 `generations/gen-000/report.json` + 臂归档后停下——不训练、不演化、不提交 git；`gen-000/report.json` 已存在则直接返回（幂等）；`--basket` 缺省取 `evolve.heldout_basket`；不做起点守卫（测量候选是合法用途）。② **起点守卫**（§9.4）：`loop run` 在 git 干净检查之后、gen-000 基线之前调 `evolve/versioning.py::assert_start_play_plane_accepted` —— 起点 play_hash 必须 ∈ {`harness/BASELINE.json` 的原始 v0, `harness/versions/v*/` 任一已接受快照}，否则 `E_EVOLVE_UNGATED_START`（退出码 2）、零推理调用；`--allow-ungated-start` 显式放行并发 `evolve.start_guard` 事件留痕。③ **顺序**：git 干净检查（退出码 4）→ 起点守卫（退出码 2）→ gen-000 基线（花钱）。④ **现场**：m3r2 把人工去重的 P1 预装成 version 0 的“基线”，它从未过门禁却成了 P2 的父代（P1 held-out 0.05 vs 裸 v0 0.175）⇒ 协议要求 P1 判负、`v1 = v0`、下一轮测 `v0+P2`。⑤ **维护规则**：改原始 v0 时必须同步更新 `harness/BASELINE.json` 的 `play_hash`。⑥ **护栏**：`tests/unit/evolve/test_start_guard.py` 6 条 + `tests/unit/loop/test_loop_cli.py` handler 注册断言；`tests/unit/{evolve,loop}` + 两条 integration 共 **409 passed**。⑦ **诚实边界**：守卫不追溯否定已接受版本、不替代门禁；`loop baseline` 只产出测量，裁决仍归 MOD-07。 |
 | v1.6 | 2026-10-10 | **新增 §9.3：演化起跑前的 git 门禁（F47-A，对齐 Spec v2.5 B-56）**。① 实测：MOD-09 的 `worktree_clean_check()` 虽被称为「演化前门禁」，但唯一调用点在 `commit_harness()` 内部 = accept 第 3 步 ⇒ 脏工作区要等**整代跑完**才拒（3.75 h / ≈¥47），且失败被记成 `decision="error_reject"` 之前还是 `reject`/`accept` 混用（见 MOD-07 §6.6）。② 修法：`cmd_loop_run` 在 `_build_orchestrator()` 之后、`write_gen000_baseline()` **之前**调 `ensure_evolution_worktree_clean(run_ctx)`（→ `git_ops.preflight_worktree_clean`），非 git 路径降级跳过、脏 → `E_IO_GIT_DIRTY`（退出码 4）。③ **范围界定**：只拦会落版本的 run（`--no-evolve`/`loop smoke` 不拦），且不放进 `LoopOrchestrator.run()` 内部——否则程序化嵌入、测试、本地未提交改动的诊断一律被拦；`--resume`/HITL 续跑都走同一 CLI 入口，已被覆盖。④ 护栏 3 条（脏 → 退出码 4 + 零推理调用 + 基线未开跑 / smoke 不拦 / 助手三分支），修复前第一条 `assert 0 == 4` 失败；`tests/integration/test_loop_closure.py` 的 3 条编排用例改用仓库外 harness 拷贝以保持与宿主工作区无关。 |

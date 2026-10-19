@@ -1,6 +1,8 @@
 # MOD-03 inference 技术 PRD
 
-> 版本：v1.7（2026-10-10 **`generate_json` 增加按调用方的 `max_tokens`**（Spec v2.3 B-47，F37：决策点 ~200 token 与 harness 提案 ~500 token 不能共用同一个全局上限）；见 §6/§17）· 状态：草案（待复核）· 所属里程碑：M1（DeepSeek 后端为 Issue #1 追加）
+> 版本：v1.9（2026-10-17 **配置/产物/后端口径对齐现状（纯文档，¥0）**：补 `deepseek` 后端与 `E_LLM_NONDETERMINISTIC`；删掉「自动换 `fallback_backend` / 自动降 `max_inflight` 重试」这两条未实现的行为；更正 `eval_temperature`、8B/30B 的 `perf_budget`、`resident_gb_measured` 与 `llm_calls.jsonl`/`inference_agg.json` 的落盘位置、`first_pass_valid_rate` 口径、四个集成测试文件名与 `$.plan[0].kind`。见 §17）
+> **历史版本**：v1.8（2026-10-17 **配置与温度口径对齐现状（纯文档，¥0）**：① 删掉不存在的 `inference.eval_temperature`——评估温度实际是 `evals.determinism.eval_temperature`（固定 0.0，`validate()` 拒绝其他值）；② 训练温度区间由 `[0.7,1.0]` 更正为 **`[0.7,1.2]`**（clamp 在 MOD-04 `PolicyAgent`，本模块只做采样白名单）。见 §9/§17）
+> **历史版本**：v1.7（2026-10-10 **`generate_json` 增加按调用方的 `max_tokens`**（Spec v2.3 B-47，F37：决策点 ~200 token 与 harness 提案 ~500 token 不能共用同一个全局上限）；见 §6/§17）· 状态：草案（待复核）· 所属里程碑：M1（DeepSeek 后端为 Issue #1 追加）
 > 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（**唯一事实来源**；冲突以 Spec 为准）
 > 上游计划：[../../项目计划-DiceRatchet.md](../../项目计划-DiceRatchet.md) §4 技术栈（Mac M5 24GB / MLX 或 llama.cpp / Qwen3-8B → 27B Q4）、§8 风险（LLM 输出非 JSON）
 > 作者：DiceRatchet 技术文档（MOD-03 负责模块）· 依赖：MOD-09 infra（配置、日志、run_id、CLI）
@@ -62,10 +64,10 @@ MOD-03 是 L1 层唯一的"模型出口"：把 `Mac M5 24GB + 全程离线` 的�
 
 | # | 类别 | 要求 |
 |---|---|---|
-| NFR-03-01 | 确定性 | 评估模式固定 `temperature=0.0, top_p=1.0, top_k=0` + 显式 seed；训练模式 `temperature ∈ [0.7,1.0]`（计划 §3.3 防确定性窥探），故**训练模式不承诺文本级复现**。三级口径：**L1**（硬要求）同后端同模型文件重跑 3 次文本逐字节相同；**L2**（软要求，不保证）跨后端文本一致——kernel 与量化不同；**L3**（提交口径）轨迹级可复现以 `obs_digest` + `action` JSON 为准，`llm_raw` 不参与 `state_hash`（INV-2/INV-6）。 |
-| NFR-03-02 | 性能 | 8B-Q4，prompt ≤1024 tok、`max_tokens=128`：p50 ≤1.5 s、p95 ≤3 s、吞吐 ≥25 tok/s；30B-A3B-Q4 同条件 p95 ≤8 s、吞吐 ≥12 tok/s。阈值登记在注册表 `perf_budget`，CI 每日基准超阈告警。 |
-| NFR-03-03 | 资源 | 常驻内存（权重 + KV + 运行时）≤ `ram_budget_gb`（默认 20.0，24GB 留 4GB 给 Python/环境/OS）；实测值写 `runs/<run_id>/config.json#inference.resident_gb_measured`。 |
-| NFR-03-04 | 可复现 | 采样参数属 `harness/config.json#inference`（可演化，被 `config_hash` 覆盖）；`configs/models.yaml` 是静态注册表，M1–M3 不参与演化，只允许人工变更并记 CHANGELOG。 |
+| NFR-03-01 | 确定性 | 评估模式固定 `temperature=0.0, top_p=1.0, top_k=0` + 显式 seed；训练模式 `temperature ∈ [0.7,1.2]`（计划 §3.3 防确定性窥探；**clamp 落在 MOD-04 `PolicyAgent`**，见 `agent/policy.py`，MOD-03 只做采样白名单校验），故**训练模式不承诺文本级复现**。三级口径：**L1**（硬要求）同后端同模型文件重跑 3 次文本逐字节相同；**L2**（软要求，不保证）跨后端文本一致——kernel 与量化不同；**L3**（提交口径）轨迹级可复现以 `obs_digest` + `action` JSON 为准，`llm_raw` 不参与 `state_hash`（INV-2/INV-6）。 |
+| NFR-03-02 | 性能 | 8B-Q4 的 `perf_budget` 现在是 **p50 5000 ms / p95 6000 ms / ≥10 tok/s**（2026-10-04 真实 prompt n=200 实测回填：p50 5687 ms / p95 11703 ms / 12.0 tok/s；原 1500/3000/25 **未达成**，新值只用于捕捉回归）；30B-A3B-Q4 是 **p95 8000 ms / ≥12 tok/s**。阈值登记在注册表 `perf_budget`，CI 每日基准超阈告警。 |
+| NFR-03-03 | 资源 | 常驻内存（权重 + KV + 运行时）≤ `ram_budget_gb`（默认 20.0，24GB 留 4GB 给 Python/环境/OS）；实测值写 `runs/<run_id>/metrics/inference_bench.json#resident_gb_measured`（`inference bench` 的产物；run 的 `config.json` 里**没有**这个键）。 |
+| NFR-03-04 | 可复现 | 采样参数属 `configs/default.yaml#inference`（静态层，计入 `config_hash`）；**`inference.*` 不在 `harness/config.json` 的白名单里**（白名单只有 `agent.policy.*` / `memory.retrieve.*` / `agent.tools.*`）。`configs/models.yaml` 是静态注册表，M1–M3 不参与演化，只允许人工变更并记 CHANGELOG。 |
 | NFR-03-05 | 可观测 | 一次调用 = 一条结构化埋点；禁止自建日志格式（Spec §8.2）。常规日志只存 `prompt_digest`，原文仅 `debug_dump_raw=true` 时落 `runs/<run_id>/raw/`。 |
 | NFR-03-06 | 离线 | 零外网；`llama-server` 只监听 `127.0.0.1`；加载前校验权重 `sha256`，不匹配抛 `E_LLM_UNAVAILABLE`。 |
 | NFR-03-07 | 可维护 | 新增后端只需实现 5 个方法 + `name`/`model_id` 属性；同一套一致性测试套件覆盖全部实现。 |
@@ -77,7 +79,7 @@ MOD-03 是 L1 层唯一的"模型出口"：把 `Mac M5 24GB + 全程离线` 的�
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 OutcomeKind = Literal["action", "degraded", "error"]
-BackendName = Literal["mlx", "llama_cpp", "llama_server", "mock"]
+BackendName = Literal["mlx", "llama_cpp", "llama_server", "mock", "deepseek"]
 
 @dataclass(frozen=True)
 class Message: role: Literal["system", "user", "assistant"]; content: str
@@ -95,7 +97,7 @@ class BackendHealth:
 @dataclass(frozen=True)
 class GenerationResult:
     text: str; parsed: dict[str, Any] | None; usage: Usage; attempts: int   # attempts ∈ 1..max_attempts
-    retry_reasons: list[str]                                                # ["ValidationError:$.action.kind"]
+    retry_reasons: list[str]                                                # ["ValidationError:$.plan[0].kind"]
     finish_reason: Literal["stop", "length", "timeout", "error"]; outcome_kind: OutcomeKind
     model_id: str; backend: BackendName; prompt_digest: str                 # "sha256:<hex>"
     raw_texts: list[str] = field(default_factory=list)
@@ -180,7 +182,7 @@ DECISION_SCHEMA: dict[str, Any] = {
 |---|---|---|
 | 运行形态 | 进程内 `mlx_lm.load()` + `stream_generate()`，`asyncio.to_thread` 不阻塞事件循环 | 进程内 `Llama.create_completion`；或子进程 `llama-server` + `POST /v1/chat/completions` |
 | 结构化输出 | JSON mode：自定义 logits 白名单掩码；**无 GBNF**（`supports_grammar: false`） | GBNF：`LlamaGrammar.from_string(gbnf)`；server 模式走请求体 `"grammar"` 字段 |
-| 并发 | `max_inflight=1` | server 模式 `--parallel 4 --cont-batching` → `max_inflight=4`；进程内 1 |
+| 并发 | `max_inflight=1` | 注册表默认 1；server 模式 `--parallel 1`（**没有** `cont-batching` / 4 并发档）；评估模式强制 1 |
 | 卸载 | 释放引用 + `mx.clear_cache()` + `mx.metal.clear_cache()` | 进程内置 `None`；server 发 `SIGTERM` 并 `wait()` |
 | 典型失败 | Metal OOM → 包装 `E_LLM_OOM` | server 未就绪/端口占用 → `E_LLM_LOAD_FAILED`；5xx → `E_LLM_BACKEND_ERROR` |
 | 选型 | 阶段一默认（Apple Silicon 更快、迭代快） | 阶段二默认（30B MoE GGUF 生态成熟 + GBNF 稳定），需真并发时用 server 模式 |
@@ -224,7 +226,7 @@ models:
     kv_gb_per_1k_tokens: 0.15
     max_inflight: 1; supports_grammar: false; supports_json_mode: true; fallback_backend: llama_cpp
     default_sampling: {temperature: 0.7, top_p: 0.95, top_k: 0, repetition_penalty: 1.05}
-    perf_budget: {p50_latency_ms: 1500, p95_latency_ms: 3000, min_tok_per_s: 25}
+    perf_budget: {p50_latency_ms: 5000, p95_latency_ms: 6000, min_tok_per_s: 10}   # 实测回填（原 1500/3000/25 未达成）
   qwen3-30b-a3b-q4:            # 阶段二；见预算结论：32768 / 16384 均超预算
     backend: llama_server
     weights_path: models/Qwen3-30B-A3B-Q4_K_M.gguf
@@ -232,7 +234,7 @@ models:
     context_length: 8192; kv_cache_bits: 8; resident_gb_est: 18.8; kv_gb_per_1k_tokens: 0.05
     max_inflight: 1; supports_grammar: true; supports_json_mode: true
     server_args: ["--parallel", "1", "--host", "127.0.0.1"]   # port 由 manager 分配
-    perf_budget: {p50_latency_ms: 5000, p95_latency_ms: 6000, min_tok_per_s: 10}   # 阶段一 qwen3-8b-q4 实测回填后的值
+    perf_budget: {p95_latency_ms: 8000, min_tok_per_s: 12}
 ```
 
 **内存预算公式**：`required_gb = resident_gb_est + kv_gb_per_1k_tokens × (context_length/1000) × max_inflight + 1.0`（1.0 = 临时缓冲）。`required_gb > ram_budget_gb` → 在 acquire 前拒绝并抛 `E_LLM_OOM`。代入 30B：`32768/4` → `18.8 + 0.05×32×4 + 1.0 = 26.2 > 20.0`（拒绝）；`16384/2` → `21.4`（拒绝）；`8192/1` → `20.2`（临界，需实测调 `kv_cache_bits=4` 或修正 `resident_gb_est`）。**已裁决（Spec v1.3 P-10 → §8.6）**：30B-A3B 在 24GB 机器上默认 `context_length=8192, max_inflight=1`；"评估要并发跑多局"通过**局级并发（`loop.eval_concurrency` 个 episode，默认 2，共享一个串行推理队列）**实现，而非模型级批处理——与 Spec §8.6 成本可控一致，并避免 OOM 抖动。
@@ -329,12 +331,12 @@ async def _attempt_loop(spec, messages, schema, grammar, sampling, deadline) -> 
 | `mode` | enum | `train` | `train`/`eval`；`eval` 收紧采样并强制 seed（FR-03-07） |
 | `ram_budget_gb` | float | `20.0` | 内存预算上限；注册表可覆盖 |
 | `max_attempts` / `retry_backoff_ms` / `total_timeout_ms` | int | `3` / `200` / `120000` | 尝试次数（含首答）/ 退避基数（指数倍增）/ 全程墙钟预算（2026-10-04 实测由 8000 回填；**2026-10-06 起 dataclass 默认与 `configs/default.yaml` 一致**，此前 `InferenceConfig.total_timeout_ms` 停留在 8000——只影响「不读 YAML 直接构造配置」的路径，`config_hash` 不变；守门用例见 `tests/unit/infra/test_config.py::test_inference_defaults_match_yaml`） |
-| `generate_timeout_ms` / `max_tokens` / `reasoning_max_tokens` | int | `30000` / `256` / `160` | 单次 `generate` 超时 / 决策 tok 上限（Spec §8.6）/ 分两次生成时 `reasoning` 预算 |
+| `generate_timeout_ms` / `max_tokens` / `reasoning_max_tokens` | int | `30000` / `256` / `160` | 单次 `generate` 超时 / 决策 tok 上限（Spec §8.6）/ `reasoning` 预算——**`reasoning_max_tokens` 当前只有声明与校验，没有消费者（预留）** |
 | `context_overflow_policy` | enum | `reject` | `reject` → `E_LLM_CONTEXT_OVERFLOW`；`truncate` → 截断最早的 user 消息 |
-| `eval_temperature` / `train_temperature_min` | float | `0.0`（固定）/ `0.7` | 评估温度（B-14，不可配置为其他值）/ 训练温度下限（计划 §3.3） |
+| `train_temperature_min` | float | `0.7` | 训练温度下限（计划 §3.3）。**⚠️ 2026-10-17 更正**：本表原先还列了 `inference.eval_temperature`，该键**不存在**——评估温度是 `evals.determinism.eval_temperature`（MOD-08 的配置段），固定 `0.0` 且 `validate()` 拒绝改成其他值；`inference.mode="eval"` 只是要求调用方满足 `temperature==0.0` + `seed is not None` |
 | `seed` | int\|null | `null` | 采样 seed；评估模式必须非空（由 MOD-09 seed 注册表传入） |
 | `cache_prompt` | bool | `true` | 复用前缀 KV（system + few-shot 不变时显著降延迟）。**⚠️ 2026-10-14 修订（F62 批次的实测）**：该键**只被本地 `llama_backend` 消费**（`llama-server` 请求体）⇒ 对 **API 臂（`C1`）无收益**（无本地 prefill）；且注册表只有 `cost_per_1k_input/output`、`llm_api/*.json` 的 `usage` **没有 cache 字段** ⇒ **API 侧命中率不可直接测**（`cost_estimate` 一律按未命中计价，会系统性高估） |
-| `kv_cache_bits` / `max_inflight` | int | 注册表值 | 覆盖注册表；`kv_cache_bits=4` 可救 30B 预算（Q-4）；评估模式强制 `max_inflight=1` |
+| `kv_cache_bits` / `max_inflight` | int | 注册表值 | `kv_cache_bits` **仅登记、未接线**（后端直接用注册表的 `spec.kv_cache_bits`）；`max_inflight` 是**上限**（实际取 `min(spec.max_inflight, cfg)`，只能压低）；评估模式强制 1 |
 | `debug_dump_raw` | bool | `false` | 落 `runs/<run_id>/raw/llm/<call_id>.txt`；默认只存 digest |
 | `skip_hash_check` | bool | `false` | 对应 `DICERATCHET_INFERENCE_SKIP_HASH=1`；CI 必须为 false（Q-6） |
 | `llama_server_startup_timeout_ms` / `llama_server_port` | int | `60000` / `0` | 等 server `/health` 就绪（超时 `E_LLM_LOAD_FAILED`）/ `0` = 自动分配空闲端口 |
@@ -353,10 +355,13 @@ class InferenceError(RuntimeError):
 | 错误码 | 触发 | `retryable` | 上层行为 |
 |---|---|---|---|
 | `E_LLM_UNAVAILABLE` | `model_id` 不在注册表 / 权重缺失 / `sha256` 不匹配 | False | 立即 fallback heuristic；该局 `exclude_reason=E_LLM_UNAVAILABLE` |
-| `E_LLM_LOAD_FAILED` | 权重加载异常、server 起不来、端口占用 | True（退避后换 `fallback_backend` 重试 1 次） | 仍失败 → fallback heuristic，标注"模型不可用"（Spec §8.5） |
-| `E_LLM_OOM` | Metal/系统 OOM；或预算检查前置拒绝 | True（降 `max_inflight`/`kv_cache_bits` 后重试 1 次） | 仍失败 → fallback heuristic，run 级 `degraded_runs += 1` |
+| `E_LLM_LOAD_FAILED` | 权重加载异常、server 起不来、端口占用 | True（但 **`BackendManager` 当前没有"换 `fallback_backend` 重试"的分支**——`fallback_backend` 只在注册表登记，未被消费） | fallback heuristic，标注"模型不可用"（Spec §8.5） |
+| `E_LLM_OOM` | Metal/系统 OOM；或预算检查前置拒绝 | True（但**没有**"降 `max_inflight`/`kv_cache_bits` 后自动重试"的实现；`check_budget` 只抛错） | fallback heuristic，run 级 `degraded_runs += 1` |
 | `E_LLM_TIMEOUT` | 超 `total_timeout_ms` 或 `generate_timeout_ms` | True（最多 1 次） | 仍失败 → fallback heuristic；**该局不计入评估样本**（Spec §8.5） |
 | `E_LLM_SCHEMA_INVALID` | 三次尝试后仍不满足 schema | False | 返回 `outcome_kind="error"`；MOD-04 把它计为该决策的**一次失败尝试**（Spec §4.3 L0 层：修复过程本身不计非法） |
+| `E_LLM_NONDETERMINISTIC` | 同一 request hash 的 API 响应 hash 变化（DeepSeek 不承诺跨时间确定性） | False | **不抛给调用方**：绝不覆盖旧证据，写 `llm.nondeterministic` 事件 / 错误码留痕 |
+| `E_LLM_UNSUPPORTED` | 可选辅助接口（`count_tokens` / `embed`）未实现 | False | 调用方按能力探测降级 |
+| `E_LLM_EXTRACT_FAILED` | MOD-05 的 LLM 候选抽取失败 | False | 降级为规则抽取（MEM-05 负责处置） |
 | `E_LLM_CONTEXT_OVERFLOW` | `prompt_tokens + max_tokens > context_length` 且策略 `reject` | False | MOD-04 缩短上下文后重试（上下文裁剪策略归 MOD-04） |
 | `E_LLM_BACKEND_ERROR` | 采样参数越界、server 5xx、grammar 编译失败且后端无 JSON mode | 参数类 False / 后端类 True（1 次） | 参数类直接上报；后端类重试后仍失败 → fallback heuristic |
 
@@ -368,7 +373,7 @@ class InferenceError(RuntimeError):
 |---|---|
 | 单测 `test_backend_protocol.py` | 给定任一后端实现，当跑同一套一致性套件（`load → health → generate → unload`），则 5 个方法 + `name`/`model_id` 齐备且 `isinstance(x, Backend)` 为真（`@runtime_checkable`，NFR-03-07）。 |
 | 单测 `test_schema_compile.py` | 给定 `DECISION_SCHEMA`，当 `compile_grammar()`，则输出能被 `llama_cpp.LlamaGrammar` 解析的合法 GBNF（不得返回 None）；给定含 `allOf` 的 schema，则返回 `None` 而不抛错。 |
-| 单测 `test_validate_roundtrip.py` | 给定 12 正例 / 9 反例，当 `jsonschema.validate`，则正例全过、反例全失败且 `json_path` 指向 `$.action.kind` 等预期路径（G5）。 |
+| 单测 `test_validate_roundtrip.py` | 给定 12 正例 / 9 反例，当 `jsonschema.validate`，则正例全过、反例全失败且 `json_path` 指向 `$.plan[0].kind` 等预期路径（G5）。 |
 | 单测 `test_sampling_guard.py` | 给定 `mode="eval", temperature=0.3`（或 0.9），当 `generate_json`，则抛 `E_LLM_BACKEND_ERROR`，且**零埋点**、`MockBackend.generate` 调用数为 0。 |
 | 单测 `test_memory_budget.py` | 给定 `qwen3-30b-a3b-q4, context_length=32768, max_inflight=4`，当 `estimate_required_gb`，则 > 20.0，且 `generate_json` 抛 `E_LLM_OOM` 而零提交。 |
 | 单测 `test_retry_backoff.py` | 给定 `MockBackend` 前两次坏 JSON、第三次合法，当 `generate_json`，则 `attempts==3`、`len(retry_reasons)==2`、假时钟观测退避 `[200, 400] ms`。 |
@@ -376,10 +381,10 @@ class InferenceError(RuntimeError):
 | 单测 `test_cli_smoke.py` | 给定 `_robustness` 返回 `passed=false`（未达 M1 阈值），当 `inference robustness`，则**退出码 1**（领域失败，非 2/3 的配置/模型错误）且报告仍落盘；给定 `passed=true`，当带 `--out` 跑，则退出码 0 且写到指定路径；给定未知模型，当 `inference probe`，则退出码 3 且**不产出报告文件**（`metrics/` 目录由 `init_run_dir` 预建，故判据是文件不存在而非目录不存在）。（2026-10-06 复核 M-5 补：集成套件 `test_inference_cli.py` 覆盖成功路径，本文件补它观测不到的阈值失败分支。） |
 | 单测 `test_repair_prompt.py` | 给定坏 JSON + `ValidationError`，当 `repair_messages`，则追加的 user 消息同时含原始输出、错误消息、`json_path`、schema JSON，且**不修改**原 `messages`（不可变契约）。 |
 | 集成 `test_inference_robustness.py` | 给定 200 条真实固定 prompt（MOD-04 决策模板快照），当对 `qwen3-8b-q4` 跑 `generate_json`，则首答通过率 ≥ 90%、三级全失败率 ≤ 1%，产出 `runs/<run_id>/metrics/format_robustness.json`（M1 交付物）。**2026-10-06 复核 M-1**：该工件必须与**当前快照/模板**同批产出——旧工件（2026-10-04）早于 F13/F23/F25 的模板改动，已用当前快照重跑 n=200 覆盖（首答 0.94 → **0.995**、`schema_fail_rate` 0.005 → **0.0**）；换快照/模板后重跑并覆盖属 G2 要求的显式变更。 |
-| 集成 `test_determinism.py` | 给定 `mode="eval", temperature=0, seed=1042`，当同 prompt 连跑 3 次，则 `text` 逐字节相同且 `prompt_digest` 相同；换 seed 后允许不同（G3/INV-6）。 |
-| 集成 `test_concurrency.py` | 给定 `max_inflight=1` 与 4 个并发 `generate_json`，当 `asyncio.gather`，则观测最大 `inflight==1`、全部成功、总墙钟 ≈ 4 × 单次延迟（验证局级并发的排队语义）。 |
-| 集成 `test_backend_swap.py` | 给定同 prompt 分别打到 `MLXBackend` 与 `LlamaCppBackend`，当比较 `parsed`，则两者都通过 `DECISION_SCHEMA`（**不**断言文本相同，见 NFR-03-01 L2）。 |
-| 集成 `test_unload_releases.py` | 给定已加载模型，当 `unload()`，则 `health().state=="unloaded"` 且 `resident_gb < 1.0`（macOS 用 `psutil` 断言）。 |
+| 集成 `test_inference_determinism.py` | 给定 `mode="eval", temperature=0, seed=1042`，当同 prompt 连跑 3 次，则 `text` 逐字节相同且 `prompt_digest` 相同；换 seed 后允许不同（G3/INV-6）。 |
+| 集成 `test_inference_concurrency.py` | 给定 `max_inflight=1` 与 4 个并发 `generate_json`，当 `asyncio.gather`，则观测最大 `inflight==1`、全部成功、总墙钟 ≈ 4 × 单次延迟（验证局级并发的排队语义）。 |
+| 集成 `test_inference_backend_swap.py` | 给定同 prompt 分别打到 `MLXBackend` 与 `LlamaCppBackend`，当比较 `parsed`，则两者都通过 `DECISION_SCHEMA`（**不**断言文本相同，见 NFR-03-01 L2）。 |
+| 集成 `test_inference_unload_releases.py` | 给定已加载模型，当 `unload()`，则 `health().state=="unloaded"` 且 `resident_gb < 1.0`（macOS 用 `psutil` 断言）。 |
 
 **`MockBackend`（测试基石，零依赖）**：`MockBackend(script: list[str | Exception], *, delay_ms: int = 0, name: BackendName = "mock", model_id: str = "mock-1")` —— 按脚本逐次返回预设输出，支持注入延迟 / 异常 / OOM，供全部单测使用。
 
@@ -389,7 +394,7 @@ class InferenceError(RuntimeError):
 |---|---|---|
 | G1 单测 | §11 单测全绿；`dice_ratchet/inference` 行覆盖率 ≥ 80%（`schema.py` ≥ 90%）；后端一致性套件 100% 通过 | `pytest tests/unit/inference -q --cov=dice_ratchet.inference` |
 | G2 Golden | `DECISION_SCHEMA`、其 GBNF 产物、修复 prompt 快照入 `tests/golden/inference/`（`decision_schema.json` / `.gbnf` / `repair_prompt.txt`），变更必须显式更新并在 PR 说明 | golden diff 为空 |
-| G3 确定性 | `test_determinism.py` 通过；评估模式 3 次重跑 `llm_raw` 逐字节一致 | CI 日志 |
+| G3 确定性 | `test_inference_determinism.py` 通过；评估模式 3 次重跑 `llm_raw` 逐字节一致 | CI 日志 |
 | G4 泄漏审计 | 输出只含模型文本与埋点，不含 `seed`/`full_state`/未公开信息；`audit leak` 在本模块自测 run 上 0 告警 | `python -m dice_ratchet audit leak --run-id <run_id>` |
 | G5 Schema 校验 | `DECISION_SCHEMA`、`InferenceCallRecord`、`models.yaml` 三者均有 schema 定义 + round-trip 测试 | `test_validate_roundtrip.py`、`test_registry_schema.py` |
 | G6 可复现命令 | 可复制执行成功：`python -m dice_ratchet inference probe --model qwen3-8b-q4`；`... inference bench --model qwen3-8b-q4 --n 50`；`... inference robustness --model qwen3-8b-q4 --n 200` | 退出码 0 + 报告落盘 |
@@ -397,23 +402,23 @@ class InferenceError(RuntimeError):
 
 ## 13. 指标与埋点
 
-`InferenceCallRecord`（每次尝试一行 → `runs/<run_id>/metrics/llm_calls.jsonl`）：
+`InferenceCallRecord`（每次尝试一行 → **`runs/<run_id>/events.jsonl` 的 `llm.call` 事件**；`metrics/llm_calls.jsonl` 目前**没有写入点**，是历史设计名）：
 
 ```jsonc
 {"call_id":"c-000412","run_id":"a1b2c3d4-9f0e1a2b-20260930T120000Z","ts":"2026-09-30T12:00:00Z",
  "event":"llm_call","episode_id":"e-000123","generation":3,"harness_version":7,"seed":1042,"step":14,
  "model_id":"qwen3-8b-q4","backend":"mlx","mode":"eval","purpose":"decision",
- "schema_id":"action.v1","caller":"mod-04","prompt_digest":"sha256:...",
+ "schema_id":"decision.v1","caller":"mod-04","prompt_digest":"sha256:...",
  "prompt_tokens":932,"completion_tokens":61,"max_tokens":256,
  "temperature":0.0,"top_p":1.0,"top_k":0,"repetition_penalty":1.05,"sampling_seed":1042,
  "grammar_used":false,"json_mode":true,
  "latency_ms":812,"ttft_ms":180,"prefill_ms":210,"decode_ms":600,"tok_per_s":101.7,
- "attempt":1,"attempts":3,"retry_reasons":["ValidationError:$.action.kind"],
+ "attempt":1,"attempts":3,"retry_reasons":["ValidationError:$.plan[0].kind"],
  "outcome_kind":"action","finish_reason":"stop","degraded_reason":null,"error_code":null,
  "resident_gb":5.7,"inflight":1}
 ```
 
-聚合指标 `runs/<run_id>/metrics/inference_agg.json`（MOD-08 消费）：`latency_ms` p50/p95/max（按 `model_id × purpose` 分组）；`tok_per_s = completion_tokens / decode_ms × 1000`；`first_pass_valid_rate = (attempts==1 且 outcome_kind=="action") / 总调用`（M1 格式鲁棒性核心）；`schema_fail_rate`（目标 ≤ 1%）；`retry_histogram`（`attempts` 分布）；`degraded_call_rate`；`error_rate_by_code`（目标 `E_LLM_TIMEOUT` ≤ 2%、`E_LLM_OOM` == 0）；`calls_per_episode` / `tokens_per_episode`（成本，Spec §8.6）。
+聚合指标**内嵌在** `runs/<run_id>/metrics/inference_{bench,robustness}.json`（**没有**独立的 `inference_agg.json` 落盘）：`latency_ms` p50/p95/max（按 `model_id × purpose` 分组）；`tok_per_s = completion_tokens / decode_ms × 1000`；`first_pass_valid_rate = (attempts==1 且 outcome_kind ∈ {action, degraded}) / 总调用`；**逐字公式 `(attempts==1 且 action)` 对应的是 `first_pass_action_rate`**（另一个键，别混用）；`schema_fail_rate`（目标 ≤ 1%）；`retry_histogram`（`attempts` 分布）；`degraded_call_rate`；`error_rate_by_code`（目标 `E_LLM_TIMEOUT` ≤ 2%、`E_LLM_OOM` == 0）；`calls_per_episode` / `tokens_per_episode`（成本，Spec §8.6）。
 
 口径要求：一次调用一条记录，禁止聚合后丢失单次细节；`prompt_digest = "sha256:" + sha256(␟ 连接各 `f"{m.role}\x1f{m.content}"`)，可离线复算。
 
@@ -495,4 +500,6 @@ Qwen3 思考模式烧光 token 预算、probe prompt 欠约束（详见 [M1 验�
 | v1.5 | 2026-10-06 | **对齐超时默认值的三层漂移**（复核登记 → 已修）：① `InferenceConfig.total_timeout_ms` dataclass 默认 8000 → **120000**（与 `configs/default.yaml` 一致）；② `inference/backend.py` 的同键 `getattr` 兜底 8_000 → **120_000**；③ 连带把 `app.py` / `evals/cli.py` 的 `seed_timeout_s` 兜底（300 / 1800）对齐为 **14400**（`EvalConfig` / `EvalSpec` / YAML 三方原已一致）。依据：`_default_dict()` 取自 dataclass、YAML 逐键覆盖，故改 dataclass 默认**不改变生效值**（仍 120000 / 14400），**`config_hash` 实测不变**（`b6f119ca325e282d`），存量 run 不会 `E_IO_RUN_CONFLICT`；差异只影响「不读 YAML 直接构造配置」的路径。新增守门用例 `tests/unit/infra/test_config.py`（7 条，含源码文本级兜底校验），并做变异验证 |
 | v1.4 | 2026-10-06 | **补记 2026-10-04 的真实模型实测回填**（此前只在 §16 Q-2/Q-6 与配置注释里，变更记录缺一条）：权重 `mlx-community/Qwen3-8B-4bit` 落盘（`weights_sha256=20303070…`）、`resident_gb_est` 5.6 → **4.6077**、`perf_budget` 1500/3000/25 → **5000/6000/10**（原目标实测未达成，按实测重设）、`total_timeout_ms` 8000 ms → **120000 ms**（8 s < 实测 p50，正常决策会被判 `E_LLM_TIMEOUT`）；主快照 n=200 实测 `m1_evidence=true`、首答 0.94、`schema_fail_rate` 0.005、`t_d` p50 5.687 s / p95 11.70 s；并登记只有真实权重能暴露的 **F14**（mlx-lm API 漂移：`load(tokenizer_path=)` / `stream_generate(seed=)` / `mx.metal.*` 改名）、**F15**（Qwen3 思考模式烧光 token 预算 → 显式 `enable_thinking=False`）、**F16**（probe/bench 固定 prompt 欠约束）、**F17**（权重摘要误把 HF 下载缓存算进去）。依据 [M1 验收报告 §12](../reviews/2026-10-04-M1验收报告.md) |
 | v1.6 | 2026-10-09 | **三角色解耦 + DeepSeek API 后端回填**（对齐 Spec v2.0 B-42；依据 [Issue #1 落地报告](../tasks/2026-10-08-issue-1-角色解耦落地报告.md)）。① §2.1 新增四个文件：`client.py`（三角色共用的 `InferenceClient` 同步契约）、`deepseek_backend.py`、`roles.py`（`RoleModelProvider` / `resolve_role_bindings` / `role_model_ids` / `run_provenance`）、`secrets.py`。② **新增 §7.1**：三角色（`policy`/`reflection`/`proposer`）的绑定**全部来自配置**，四级优先级 `experiment.roles.<role>` > `experiment.arms[arm].<role>` > `models.<role>` > `inference.model_id`，**fail-closed**（未知角色/未知臂/空 `model_id`/注册表缺模型/`provider=api` 缺 key 环境变量一律显式报错，绝不静默降级）；每个 run 落 `runs/<run_id>/models_provenance.json`（三角色各自的 `model_id`/`provider`/`backend`/`model_revision`/`online`/`api_key_present` + 臂 + `harness` 模式 + `config_hash`，**key 本体绝不落盘**）。③ 注册表新增 `deepseek-flash`（`provider=api`、`api_supports_seed=false`、`api_thinking=disabled`、`supports_grammar=false` 走 `json_object` + jsonschema）与 `deepseek-v4-pro`（已登记、当前无臂使用）；实测该账号**已无 `deepseek-chat`**（旧名下线）。④ §9 新增三行配置：`api_key_file`（默认 `.env`；真实环境变量优先、只读注册表声明的 `api_key_env`、key 只进内存、空串即关闭）、`models.policy/reflection/proposer`、`experiment.arm/roles/arms`（臂定义计入 `config_hash`）。⑤ **登记两条实测口径**：(a) DeepSeek **不承诺跨时间确定性**——字节相同的请求 9 次返回 9 个不同响应，故 `E_EVAL_NONDETERMINISTIC` 的判据改为按 request hash 比对 response hash；(b) `flash` 默认开思考模式会让 `content` 返空、每次白花一次调用，故结构化流水线显式 `api_thinking: disabled` |
+| v1.9 | 2026-10-17 | **配置/产物/后端口径对齐现状（纯文档，¥0）**。① `BackendName` 补 `deepseek`（第五个后端），§2.1 的「四者」同步。② §10 补 `E_LLM_NONDETERMINISTIC`（DeepSeek 同 request hash 响应变化；不抛给调用方，写 `llm.nondeterministic`）、`E_LLM_UNSUPPORTED`、`E_LLM_EXTRACT_FAILED`。③ 删掉两条**未实现**的行为：LOAD_FAILED「换 `fallback_backend` 重试 1 次」、OOM「降 `max_inflight`/`kv_cache_bits` 后重试 1 次」——`fallback_backend` 只登记未消费，`check_budget` 只抛错。④ 采样参数不在 `harness/config.json#inference`（白名单只有 `agent.policy.*`/`memory.retrieve.*`/`agent.tools.*`），而在 `configs/default.yaml#inference`。⑤ 8B `perf_budget` 改为实测回填的 5000/6000/10，30B 改为 p95 8000 / 12 tok/s；`resident_gb_measured` 落 `metrics/inference_bench.json`；`llm_calls.jsonl` 与 `inference_agg.json` 均无写入点（埋点实际是 `events.jsonl` 的 `llm.call`、聚合内嵌在 bench/robustness 报告）。⑥ `first_pass_valid_rate` 含 `degraded`；逐字 `(attempts==1 且 action)` 对应 `first_pass_action_rate`。⑦ 四个集成测试名补 `test_inference_` 前缀；`$.action.kind` → `$.plan[0].kind`；`schema_id` 为 `decision.v1`。⑧ `reasoning_max_tokens` 与 `kv_cache_bits` 标「未消费/未接线」，`max_inflight` 是 `min()` 上限。 |
+| v1.8 | 2026-10-17 | **配置表与温度区间对齐现状（纯文档，¥0）**。① **删除幻影键**：§9 原列 `inference.eval_temperature`，但 `AppConfig` 里没有这个键；真实键是 `evals.determinism.eval_temperature`（固定 `0.0`，`EvalConfig.validate()` 在改成其他值时直接抛 `E_IO_CONFIG_INVALID`）。`inference.mode="eval"` 的语义只是「要求调用方给 `temperature=0.0` 且 `seed` 非空」。② **温度区间**：NFR-03-01 原写训练模式 `[0.7,1.0]`，与 `agent/policy.py` 的 `min(1.2, max(0.7, cfg.temperature))` 不符 ⇒ 更正为 `[0.7,1.2]`，并写明 clamp 属 MOD-04、MOD-03 只做 `[0,1.5]` 的采样白名单校验。 |
 | v1.7 | 2026-10-10 | **`generate_json` 增加按调用方的 `max_tokens`（F37，对齐 Spec v2.3 B-47）**。① 背景：本键同时是「调用方未显式指定时的模态默认」，MOD-07 的提案也走它，而 256 只够决策点 ⇒ 提案一律被截断（`finish_reason=length`）→ 报成 `E_LLM_SCHEMA_INVALID` → 0 候选。② 修法：契约增加可选 `max_tokens`，`BackendInferenceClient` 原样带给 MOD-03（`BackendManager` 本就支持 per-call 覆盖，已有用例）。③ **明确否掉全局抬高**：2048 时 `mock`（4096）触发 71 例 `E_LLM_CONTEXT_OVERFLOW`、并吃掉 8B 余量；纯代码路线还保住了 `config_hash`（已付基线可复用）。④ 新增 §6.1 说明；护栏两条（门面转发 + proposer 传值），修复前均失败。 |

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MOD-07 evolve · DiceRatchet 可视化讲解</title>
+<meta name="description" content="MOD-07 evolve：候选补丁从哪来、怎么打、按 C0–C5 裁决，以及 accept/reject 如何改变 harness 版本。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="shell">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html">
+    <span class="logo">◈ <b>DiceRatchet</b></span>
+    <div class="sub">模块可视化讲解 · docs/html<br>源 commit 879ea49 · 2026-10-17</div>
+  </a>
+  <nav class="nav">
+    <div class="nav-title">总览</div>
+    <a href="index.html">闭环与模块地图 <span class="tag">00</span></a>
+    <a href="game.html">游戏本体 GAME <span class="tag">G</span></a>
+    <div class="nav-title">环境层 L0</div>
+    <a href="mod-01.html">MOD-01 env-rules <span class="tag">01</span></a>
+    <a href="mod-02.html">MOD-02 env-sandbox <span class="tag">02</span></a>
+    <div class="nav-title">智能体层 L1</div>
+    <a href="mod-03.html">MOD-03 inference <span class="tag">03</span></a>
+    <a href="mod-04.html">MOD-04 policy <span class="tag">04</span></a>
+    <a href="mod-05.html">MOD-05 memory <span class="tag">05</span></a>
+    <div class="nav-title">进化层 L2</div>
+    <a href="mod-06.html">MOD-06 loop <span class="tag">06</span></a>
+    <a href="mod-07.html">MOD-07 evolve <span class="tag">07</span></a>
+    <div class="nav-title">测量与工程 L3</div>
+    <a href="mod-08.html">MOD-08 evals <span class="tag">08</span></a>
+    <a href="mod-09.html">MOD-09 infra <span class="tag">09</span></a>
+  </nav>
+</aside>
+
+<main class="main"><div class="wrap">
+
+  <header class="reveal">
+    <div class="eyebrow">L2 · 进化层 · Milestone M2 → M3</div>
+    <h1>MOD-07 <span class="thin">evolve</span></h1>
+    <p class="lede">RSI 的<strong>执行者</strong>：把训练证据变成候选补丁，把候选补丁变成测量，再把测量变成一次<strong>可审计的裁决</strong>。它不允许“先进再修”，任何不确定都退化为拒绝。</p>
+    <div class="badges">
+      <span class="badge l2">L2 进化</span>
+      <span class="badge ok">✅ 已落地</span>
+      <span class="badge">C0–C5 门禁</span>
+      <span class="badge">accept / reject / rollback</span>
+    </div>
+  </header>
+
+  <section class="reveal">
+    <h2><span class="no">01</span>一个候选的一生</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 980 330" role="img" aria-label="候选补丁从证据到裁决的流水线">
+        <defs>
+          <marker id="e-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#37d6c0"/>
+          </marker>
+          <marker id="e-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3a4d66"/>
+          </marker>
+        </defs>
+
+        <rect x="18" y="104" width="128" height="70" rx="9" class="n-box"/>
+        <text x="82" y="130" text-anchor="middle" class="n-label">证据</text>
+        <text x="82" y="150" text-anchor="middle" class="n-tiny">traj / reflect / memory</text>
+        <text x="82" y="166" text-anchor="middle" class="n-tiny">只允许 train</text>
+
+        <rect x="168" y="104" width="128" height="70" rx="9" class="n-box-warn"/>
+        <text x="232" y="130" text-anchor="middle" class="n-label">propose</text>
+        <text x="232" y="150" text-anchor="middle" class="n-tiny">2048 tok 预算</text>
+        <text x="232" y="166" text-anchor="middle" class="n-tiny">inline 文件正文</text>
+
+        <rect x="318" y="104" width="118" height="70" rx="9" class="n-box"/>
+        <text x="377" y="130" text-anchor="middle" class="n-label">validate</text>
+        <text x="377" y="150" text-anchor="middle" class="n-tiny">行数/文件/白名单</text>
+        <text x="377" y="166" text-anchor="middle" class="n-tiny">补丁可达 prompt</text>
+
+        <rect x="458" y="104" width="118" height="70" rx="9" class="n-box"/>
+        <text x="517" y="130" text-anchor="middle" class="n-label">scan</text>
+        <text x="517" y="150" text-anchor="middle" class="n-tiny">AST / import 门禁</text>
+        <text x="517" y="166" text-anchor="middle" class="n-tiny">fail-closed</text>
+
+        <rect x="598" y="104" width="118" height="70" rx="9" class="n-box"/>
+        <text x="657" y="130" text-anchor="middle" class="n-label">smoke</text>
+        <text x="657" y="150" text-anchor="middle" class="n-tiny">2 局 triage</text>
+        <text x="657" y="166" text-anchor="middle" class="n-tiny">不是证据</text>
+
+        <rect x="738" y="104" width="108" height="70" rx="9" class="n-box-accent"/>
+        <text x="792" y="130" text-anchor="middle" class="n-label">heldout</text>
+        <text x="792" y="150" text-anchor="middle" class="n-tiny">40 局候选</text>
+        <text x="792" y="166" text-anchor="middle" class="n-tiny">parent 可继承</text>
+
+        <rect x="868" y="104" width="96" height="70" rx="9" class="n-box-warn"/>
+        <text x="916" y="130" text-anchor="middle" class="n-label">C0–C5</text>
+        <text x="916" y="150" text-anchor="middle" class="n-tiny">裁决</text>
+        <text x="916" y="166" text-anchor="middle" class="n-tiny">accept/reject</text>
+
+        <path d="M146 139 L168 139" class="edge" marker-end="url(#e-ar2)"/>
+        <path d="M296 139 L318 139" class="edge" marker-end="url(#e-ar2)"/>
+        <path d="M436 139 L458 139" class="edge" marker-end="url(#e-ar2)"/>
+        <path d="M576 139 L598 139" class="edge" marker-end="url(#e-ar2)"/>
+        <path d="M716 139 L738 139" class="edge" marker-end="url(#e-ar2)"/>
+        <path d="M846 139 L868 139" class="edge-flow" marker-end="url(#e-ar)"/>
+
+        <rect x="318" y="206" width="420" height="40" rx="8" class="n-box-bad"/>
+        <text x="528" y="231" text-anchor="middle" class="n-sub">validate / scan 任一失败 ⇒ 该候选 reject，0 局、0 裁决成本</text>
+        <path d="M377 174 L377 206" class="edge-red"/>
+        <path d="M517 174 L517 206" class="edge-red"/>
+
+        <rect x="598" y="266" width="366" height="40" rx="8" class="n-box"/>
+        <text x="781" y="291" text-anchor="middle" class="n-sub">accept ⇒ versions/v{N} + tag；reject ⇒ dead_ends.md + 指针 +1</text>
+        <path d="M916 174 C 916 266, 964 286, 964 286" class="edge-dash"/>
+      </svg>
+      <div class="caption"><b>先便宜地拒绝，再花钱地接受。</b>判断“补丁是否真的进入 prompt”在评估之前完成（F66）；冒烟只做 triage；真正的证据只有 held-out。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">02</span>C0–C5：六道门</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 940 380" role="img" aria-label="C0 到 C5 的判定顺序">
+        <rect x="360" y="20" width="220" height="44" rx="9" class="n-box-accent"/>
+        <text x="470" y="47" text-anchor="middle" class="n-label">候选 + parent 测量</text>
+
+        <rect x="360" y="92" width="220" height="44" rx="9" class="n-box"/>
+        <text x="470" y="119" text-anchor="middle" class="n-sub">C0 完备性：parent 三率齐全？</text>
+        <path d="M470 64 L470 92" class="edge" marker-end="url(#e-ar2)"/>
+        <text x="530" y="84" class="n-tiny">缺 → incomplete_report · reject</text>
+
+        <rect x="360" y="164" width="220" height="44" rx="9" class="n-box"/>
+        <text x="470" y="191" text-anchor="middle" class="n-sub">C1 胜率不显著退化</text>
+        <path d="M470 136 L470 164" class="edge" marker-end="url(#e-ar2)"/>
+
+        <rect x="360" y="236" width="220" height="44" rx="9" class="n-box-warn"/>
+        <text x="470" y="263" text-anchor="middle" class="n-sub">C2 play 面确实变了</text>
+        <path d="M470 208 L470 236" class="edge" marker-end="url(#e-ar2)"/>
+
+        <rect x="360" y="308" width="220" height="44" rx="9" class="n-box"/>
+        <text x="470" y="335" text-anchor="middle" class="n-sub">C3 / C4 过拟合与坍缩</text>
+        <path d="M470 280 L470 308" class="edge" marker-end="url(#e-ar2)"/>
+
+        <rect x="640" y="236" width="250" height="116" rx="11" class="n-box-bad"/>
+        <text x="765" y="264" text-anchor="middle" class="n-label">C5 三轴退化门</text>
+        <text x="765" y="286" text-anchor="middle" class="n-tiny">candidate ≤ min(parent + tol, backstop)</text>
+        <text x="765" y="306" text-anchor="middle" class="n-tiny">illegal / fallback / truncation</text>
+        <text x="765" y="326" text-anchor="middle" class="n-tiny">tol 0.05 · backstop 0.35 / 0.25 / 0.60</text>
+        <path d="M580 258 L640 258" class="edge" marker-end="url(#e-ar2)"/>
+
+        <rect x="50" y="236" width="250" height="116" rx="11" class="n-box-accent"/>
+        <text x="175" y="264" text-anchor="middle" class="n-label">裁决</text>
+        <text x="175" y="286" text-anchor="middle" class="n-sub">全过 ⇒ accept</text>
+        <text x="175" y="306" text-anchor="middle" class="n-sub">任一不过 ⇒ reject（保留 parent）</text>
+        <text x="175" y="326" text-anchor="middle" class="n-tiny">不确定也拒绝，绝不“先进再修”</text>
+        <path d="M360 258 L300 258" class="edge" marker-end="url(#e-ar2)"/>
+
+        <rect x="50" y="92" width="250" height="100" rx="10" class="n-box"/>
+        <text x="175" y="118" text-anchor="middle" class="n-label">C2 为什么换轴</text>
+        <text x="175" y="140" text-anchor="middle" class="n-tiny">n=40 上等效门槛 ≈ +15 pp</text>
+        <text x="175" y="158" text-anchor="middle" class="n-tiny">实测效应只有 +2.5–7.5 pp</text>
+        <text x="175" y="176" text-anchor="middle" class="n-tiny">⇒ 统计门没有功效，改判“打法变了”</text>
+      </svg>
+      <div class="caption"><b>accept 的语义不是“显著变强”。</b>它是“打法确实变了，且没有判定出的退化”。这个措辞是刻意的：n=40 的赢率只能判 ≥15pp，把 accept 说成“变强”会过度承诺。</div>
+    </div>
+    <div class="callout warn"><b>C5 的 tol 是起点值，不是标定值。</b><code>illegal</code>/<code>fallback</code> 是步级（tol ≈ 上千个事件），<code>truncation</code> 是局级（tol ≈ 2 局）——三轴不可互换。“用实测抖动标定 tol”这件事仍未做。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">03</span>play 面指纹：什么算“打法”</h2>
+    <pre>play_hash = sha256(
+  prompts/decision.md  +  config.json  +  tools/*.py
+)   <span class="c"># 不含 reflection.md / dead_ends.md（学习侧，不是打法）</span></pre>
+    <div class="cards">
+      <div class="card"><h3>跨代继承</h3><p>起点 held-out 可按 <code>harness_play_hash</code> 复用——同 play 面已有测量即 0 局，不重测。每 cycle 从 114 局降到 <strong>74 局</strong>。</p></div>
+      <div class="card"><h3>判据 1 的同起点豁免</h3><p>相邻两代 play 面相同 ⇒ 记 <code>not_applicable</code>，不计入可比对；“不降”在两个逐字节相同的起点之间是恒真命题。</p></div>
+      <div class="card"><h3>F66 的第二半</h3><p>候选声明改了 play 面文件、实测 <code>play_hash</code> 却没变 ⇒ <code>E_EVOLVE_PATCH_INVALID</code>，<strong>花钱之前</strong>拒绝。</p></div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">04</span>版本：accept 建快照，reject 只留死路</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 900 250" role="img" aria-label="accept 与 reject 对版本目录的不同影响">
+        <rect x="26" y="52" width="240" height="150" rx="11" class="n-box-accent"/>
+        <text x="146" y="78" text-anchor="middle" class="n-label">accept</text>
+        <text x="146" y="100" text-anchor="middle" class="n-sub">versions/v{N}/ 全量拷贝</text>
+        <text x="146" y="120" text-anchor="middle" class="n-sub">version.json 指针更新</text>
+        <text x="146" y="140" text-anchor="middle" class="n-sub">commit + tag harness-v{N}</text>
+        <text x="146" y="162" text-anchor="middle" class="n-tiny">失败自清：删本次新建快照</text>
+        <text x="146" y="182" text-anchor="middle" class="n-tiny">先门禁后 git add</text>
+
+        <rect x="330" y="52" width="260" height="150" rx="11" class="n-box-warn"/>
+        <text x="460" y="78" text-anchor="middle" class="n-label">reject（D2=A）</text>
+        <text x="460" y="100" text-anchor="middle" class="n-sub">不建快照、不打 tag</text>
+        <text x="460" y="120" text-anchor="middle" class="n-sub">dead_ends.md 追加一条</text>
+        <text x="460" y="140" text-anchor="middle" class="n-sub">指针 +1（内容不变）</text>
+        <text x="460" y="162" text-anchor="middle" class="n-tiny">play 面逐字节未变</text>
+        <text x="460" y="182" text-anchor="middle" class="n-tiny">下一代从死路记录里学</text>
+
+        <rect x="654" y="52" width="220" height="150" rx="11" class="n-box"/>
+        <text x="764" y="78" text-anchor="middle" class="n-label">rollback</text>
+        <text x="764" y="100" text-anchor="middle" class="n-sub">versions/v{X}/ 覆盖 harness/</text>
+        <text x="764" y="120" text-anchor="middle" class="n-sub">version=new_version</text>
+        <text x="764" y="140" text-anchor="middle" class="n-sub">parent=current_version</text>
+        <text x="764" y="162" text-anchor="middle" class="n-tiny">编号不回退（护栏：v0 回滚 ⇒ 3/2）</text>
+        <text x="764" y="182" text-anchor="middle" class="n-tiny">写 revert.patch + 报告</text>
+
+        <path d="M266 127 L330 127" class="edge" marker-end="url(#e-ar2)"/>
+        <path d="M590 127 L654 127" class="edge-dash"/>
+        <text x="450" y="228" text-anchor="middle" class="n-tiny">“版本号推进”不等于“内容变了”——所以继承与判据都改问 play_hash，而不是版本号。</text>
+      </svg>
+      <div class="caption"><b>D2=A 的代价与收益。</b>拒绝也推进指针，是为了让“这一代被拒绝过”可追溯；代价是版本号不再等价于 play 面，这也是 D-M3-7 改用 play_hash 的原因。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">05</span>起点守卫与账本边界</h2>
+    <div class="callout"><b>守卫做什么：</b><code>assert_start_play_plane_accepted()</code> 在 <code>loop run</code> 起跑前检查起点 <code>play_hash</code> 必须是原始 v0（<code>harness/BASELINE.json</code>）或任一已接受快照；否则 <code>E_EVOLVE_UNGATED_START</code>（退出码 2），零推理调用。</div>
+    <div class="callout warn"><b>守卫不做什么：</b>不追溯否定已经记在账本里的版本；不替代门禁；不拦 <code>loop baseline</code>（测量候选是它的合法用途）。m3r2 的 <code>v1</code> 是 provisional 这一事实，只能靠账本修复，不能靠守卫。</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>错误码</th><th>触发</th><th>处置</th></tr></thead>
+        <tbody>
+          <tr><td><code>E_EVOLVE_PATCH_INVALID</code></td><td>diff 不合法 / 不可达 / 声明改了 play 面却没变</td><td>候选 reject，0 局</td></tr>
+          <tr><td><code>E_EVOLVE_SCAN_FAILED</code></td><td>受限执行扫描失败</td><td>候选 reject，整批拒绝</td></tr>
+          <tr><td><code>E_EVOLVE_LOAD_FAILED</code></td><td>工具 worker 起不来</td><td>候选 reject，0 局（发生在 accept/评估之前）</td></tr>
+          <tr><td><code>E_EVOLVE_NO_GAIN</code> / <code>ILLEGAL_RATE</code></td><td>C1/C2 或 C5 失败</td><td>reject，保留 parent</td></tr>
+          <tr><td><code>E_EVOLVE_VERSION_CONFLICT</code></td><td>版本号冲突 / 指针不一致</td><td>中止 accept，人工介入，不自动 merge</td></tr>
+          <tr><td><code>E_EVOLVE_GIT_FAILED</code></td><td>git commit/tag 失败</td><td><code>decision="error_reject"</code>，version.json 不变</td></tr>
+          <tr><td><code>E_EVOLVE_UNGATED_START</code></td><td>起点 play 面未裁决</td><td>起跑前拒绝（退出码 2），0 局</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">06</span>当前状态（2026-10-17）</h2>
+    <div class="kpis">
+      <div class="kpi accent"><div class="num">1<span class="unit">次</span></div><div class="label">项目首次 accept（m3r2，provisional）</div></div>
+      <div class="kpi"><div class="num">0.275</div><div class="label">该候选 held-out 胜率（n=40）</div></div>
+      <div class="kpi bad"><div class="num">0.05</div><div class="label">起点 v0+P1 的胜率（裸 v0 0.175）</div></div>
+      <div class="kpi warn"><div class="num">P2</div><div class="label">下一步要独立复测的补丁</div></div>
+    </div>
+    <div class="callout bad"><b>首个 accept 的账本要纠正。</b>m3r2 的 P1 没有过门禁就被预装成起点；按协议 P1 应判负、<code>v1 = v0</code>，被测的应是 <code>v0+P2</code>。已发生的产物不重写，只改解释与在役 lineage；在役 harness 在 <code>v0+P2</code> 测完前不动。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">07</span>延伸阅读</h2>
+    <ul class="clean">
+      <li><a href="mod-06.html">MOD-06 loop</a> —— 谁在周期边界调用它、怎么续跑。</li>
+      <li><a href="mod-08.html">MOD-08 evals</a> —— held-out 与配对检验的细节。</li>
+      <li><a href="../prd/MOD-07-evolve-PRD.md">MOD-07 PRD</a> · <a href="../reviews/2026-10-14-M3-DM37架构改造与7步对照.md">D-M3-7 七步口径</a></li>
+    </ul>
+  </section>
+
+  <div class="pager">
+    <a class="prev" href="mod-06.html"><span class="dir">PREV</span><span class="to">← MOD-06 loop</span></a>
+    <a class="next" href="mod-08.html"><span class="dir">NEXT</span><span class="to">MOD-08 evals →</span></a>
+  </div>
+
+  <footer class="footer">
+    <span>DiceRatchet 模块可视化讲解 · MOD-07</span>
+    <span>事实来源：<code>dice_ratchet/evolve/*</code> + PRD · 生成于 2026-10-17</span>
+  </footer>
+
+</div></main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

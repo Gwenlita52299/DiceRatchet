@@ -1,6 +1,6 @@
 # GAME-02 配表规格与内容数据
 
-> 版本：v1.1（2026-09-30 16:39 按实现回写，见 §9）· 状态：待评审 · 上游：[GAME-00-webgame-PRD.md](GAME-00-webgame-PRD.md) · [GAME-01-kernel-contract.md](GAME-01-kernel-contract.md)
+> 版本：v1.2（2026-10-17 与 `content/*.json` 对齐：技能骰 17、普通怪 15，见 §9）· 历史版本：v1.1（2026-09-30 16:39 按实现回写）· 状态：待评审 · 上游：[GAME-00-webgame-PRD.md](GAME-00-webgame-PRD.md) · [GAME-01-kernel-contract.md](GAME-01-kernel-contract.md)
 > 定位：把 GAME-00 的规则**落到可实现的纯数据**。本文件的表即为 `content/*.json` 的**权威内容与数值基线**；
 > 实现者可直接照抄，也可按 §8 的平衡流程调整数值（调整必须回写本文件）。
 >
@@ -111,7 +111,7 @@
 
 ---
 
-## 2. 技能骰（`skill` 类，15 颗）
+## 2. 技能骰（`skill` 类，17 颗：blade 5 / arcana 5 / verdant 5 / common 2）
 
 **风险等级由 loader 依面统计自动判定**（GAME-00 §5.3）。下表 `risk` 为**期望值**，loader 校验必须一致。
 
@@ -424,7 +424,7 @@
 
 ## 5. 怪物配表
 
-### 5.1 普通怪物（`normal`，14 只，每学派 ≥4）
+### 5.1 普通怪物（`normal`，15 只：verdant 5 / arcana 5 / blade 4 / neutral 1）
 
 | id | 名称 | school | hp | 槽（constraint→effect） | 骰 | ai |
 |---|---|---|---|---|---|---|
@@ -629,3 +629,4 @@ op 枚举：gain_gold | lose_gold | gain_die | remove_die | gain_relic | lose_re
 |---|---|---|
 | v1.0 | 2026-09-30 | 首版：角色与初始骰池、17 颗普通/技能/厄咒骰的完整 6 面配表、8 处学派自检修正与最终 `school` 序列、10 关 3 章结构、精英/普通/Boss 共 23 只怪物、编队表、12 个事件、14 个遗物、平衡流程与 5 种 bot 策略 |
 | v1.1 | 2026-09-30 16:39 | 按 `src/game` 实现回写：§1.1 `slot_5` 可重复使用、能力按场计；§4 第 3/6 关 `nodeBudget` 末行 2→1、休息点选项、精英放置与战斗奖励规则；§5 敌人意图分配与厄咒骰持续性、新增编队 `g_12`；§6 事件表与实现对齐；§7 `relic_blade_echo`/`relic_deck_thin` 精确化；§8.1 难度三项平衡标定与通关率 |
+| v1.2 | 2026-10-17 | **与实际配表对齐（纯文档，¥0）**：① §2 技能骰 15 → **17**（`skills.json` 实测 17 条，§2.1–§2.4 与 §3.1 最终表本来就是 17 行）；② §5.1 普通怪物 14 → **15**（`monsters.json` 实测 normal 15 / elite 6 / boss 3 = 24；分布 verdant 5 / arcana 5 / blade 4 / neutral 1，原文「每学派 ≥4」对 neutral 不成立）。 |

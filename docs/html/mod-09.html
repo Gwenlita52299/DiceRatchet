@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MOD-09 infra · DiceRatchet 可视化讲解</title>
+<meta name="description" content="MOD-09 infra：配置优先级与 config_hash、run 目录与事件、CLI 与退出码、确定性守卫与 git 门禁。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="shell">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html">
+    <span class="logo">◈ <b>DiceRatchet</b></span>
+    <div class="sub">模块可视化讲解 · docs/html<br>源 commit 879ea49 · 2026-10-17</div>
+  </a>
+  <nav class="nav">
+    <div class="nav-title">总览</div>
+    <a href="index.html">闭环与模块地图 <span class="tag">00</span></a>
+    <a href="game.html">游戏本体 GAME <span class="tag">G</span></a>
+    <div class="nav-title">环境层 L0</div>
+    <a href="mod-01.html">MOD-01 env-rules <span class="tag">01</span></a>
+    <a href="mod-02.html">MOD-02 env-sandbox <span class="tag">02</span></a>
+    <div class="nav-title">智能体层 L1</div>
+    <a href="mod-03.html">MOD-03 inference <span class="tag">03</span></a>
+    <a href="mod-04.html">MOD-04 policy <span class="tag">04</span></a>
+    <a href="mod-05.html">MOD-05 memory <span class="tag">05</span></a>
+    <div class="nav-title">进化层 L2</div>
+    <a href="mod-06.html">MOD-06 loop <span class="tag">06</span></a>
+    <a href="mod-07.html">MOD-07 evolve <span class="tag">07</span></a>
+    <div class="nav-title">测量与工程 L3</div>
+    <a href="mod-08.html">MOD-08 evals <span class="tag">08</span></a>
+    <a href="mod-09.html">MOD-09 infra <span class="tag">09</span></a>
+  </nav>
+</aside>
+
+<main class="main"><div class="wrap">
+
+  <header class="reveal">
+    <div class="eyebrow">L3 · 工程横切 · Milestone M0 → M3</div>
+    <h1>MOD-09 <span class="thin">infra</span></h1>
+    <p class="lede">所有模块都踩在上面的<strong>地板</strong>：配置怎么合并、run 目录长什么样、事件怎么落盘、退出码怎么分、随机与 import 怎么被守卫、git 什么时候能提交。它自己不产生实验结论，但决定了结论可不可信。</p>
+    <div class="badges">
+      <span class="badge l3">L3 工程</span>
+      <span class="badge ok">✅ 已落地</span>
+      <span class="badge">退出码 0–5 / 130</span>
+      <span class="badge">确定性守卫</span>
+    </div>
+  </header>
+
+  <section class="reveal">
+    <h2><span class="no">01</span>配置：五层合并，一个哈希</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 920 300" role="img" aria-label="配置优先级与 config_hash">
+        <defs>
+          <marker id="i9-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#37d6c0"/>
+          </marker>
+          <marker id="i9-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3a4d66"/>
+          </marker>
+        </defs>
+        <rect x="24" y="30" width="240" height="42" rx="8" class="n-box"/>
+        <text x="144" y="56" text-anchor="middle" class="n-sub">代码 dataclass 默认值</text>
+        <rect x="24" y="82" width="240" height="42" rx="8" class="n-box"/>
+        <text x="144" y="108" text-anchor="middle" class="n-sub">configs/default.yaml</text>
+        <rect x="24" y="134" width="240" height="42" rx="8" class="n-box-warn"/>
+        <text x="144" y="160" text-anchor="middle" class="n-sub">harness/config.json（可演化白名单）</text>
+        <rect x="24" y="186" width="240" height="42" rx="8" class="n-box"/>
+        <text x="144" y="212" text-anchor="middle" class="n-sub">DICERATCHET_* 环境变量</text>
+        <rect x="24" y="238" width="240" height="42" rx="8" class="n-box-accent"/>
+        <text x="144" y="264" text-anchor="middle" class="n-sub">CLI 显式参数</text>
+
+        <text x="300" y="160" text-anchor="middle" class="n-tiny">优先级递增 →</text>
+        <path d="M144 72 L144 82" class="edge" marker-end="url(#i9-ar2)"/>
+        <path d="M144 124 L144 134" class="edge" marker-end="url(#i9-ar2)"/>
+        <path d="M144 176 L144 186" class="edge" marker-end="url(#i9-ar2)"/>
+        <path d="M144 228 L144 238" class="edge" marker-end="url(#i9-ar2)"/>
+
+        <rect x="340" y="76" width="230" height="148" rx="11" class="n-box-warn"/>
+        <text x="455" y="102" text-anchor="middle" class="n-label">AppConfig</text>
+        <text x="455" y="124" text-anchor="middle" class="n-sub">frozen dataclass + validate()</text>
+        <text x="455" y="144" text-anchor="middle" class="n-tiny">未知键：告警并忽略</text>
+        <text x="455" y="162" text-anchor="middle" class="n-tiny">类型/越界：E_IO_CONFIG_INVALID</text>
+        <text x="455" y="180" text-anchor="middle" class="n-tiny">嵌套用双下划线分层</text>
+        <text x="455" y="198" text-anchor="middle" class="n-tiny">DICERATCHET_ENV__SANDBOX__…</text>
+
+        <rect x="622" y="52" width="270" height="90" rx="11" class="n-box-accent"/>
+        <text x="757" y="78" text-anchor="middle" class="n-label">config_hash（16 hex）</text>
+        <text x="757" y="98" text-anchor="middle" class="n-tiny">排序键 + 紧凑 JSON</text>
+        <text x="757" y="116" text-anchor="middle" class="n-tiny">排除易变键 / 绝对路径 / harness 覆盖子树</text>
+        <text x="757" y="134" text-anchor="middle" class="n-tiny">同 run 不同 hash ⇒ E_IO_RUN_CONFLICT</text>
+
+        <rect x="622" y="162" width="270" height="90" rx="11" class="n-box"/>
+        <text x="757" y="188" text-anchor="middle" class="n-label">artifact_hash</text>
+        <text x="757" y="208" text-anchor="middle" class="n-tiny">harness 文件内容摘要</text>
+        <text x="757" y="226" text-anchor="middle" class="n-tiny">与 config_hash 分开：harness 变不影响续跑</text>
+        <text x="757" y="244" text-anchor="middle" class="n-tiny">逐代写入 version.json / report</text>
+
+        <path d="M570 150 L622 110" class="edge" marker-end="url(#i9-ar2)"/>
+        <path d="M570 168 L622 200" class="edge" marker-end="url(#i9-ar2)"/>
+      </svg>
+      <div class="caption"><b>“同一 run 只能同族配置”。</b>冲突时提示会给出键级漂移摘要（新增/删除/值变化各多少键并点名），但判定仍只看 <code>config_hash</code>——不提供“忽略漂移”的开关。</div>
+    </div>
+    <div class="callout warn"><b>环境变量必须双下划线。</b><code>DICERATCHET_ENV__SANDBOX__POLICY_FAILURE_STREAK</code> 生效；写成单下划线会被静默忽略（且不报未知键）。短别名 <code>POLICY__…</code> 可用，但它只是别名。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">02</span>run 目录：一次实验的全部证据</h2>
+    <pre>runs/&lt;run_id&gt;/
+├── config.json          <span class="c"># 配置快照 + config_hash + content_hash</span>
+├── state.json           <span class="c"># phase / generation / 队列 / 计数器</span>
+├── events.jsonl         <span class="c"># 结构化事件（唯一事件出口）</span>
+├── episodes/&lt;split&gt;/    <span class="c"># 逐局轨迹（每步一行）</span>
+├── reflections/         <span class="c"># 局末反思或 skipped 标注</span>
+├── memory/              <span class="c"># memory_active.jsonl + memory_v{N}.jsonl</span>
+├── generations/         <span class="c"># gen-NNN/report.json + candidates/ + patches/</span>
+├── metrics/             <span class="c"># generations.csv / arms/ / acceptance.json</span>
+├── plots/               <span class="c"># 5 张 PNG（必须由数据点）</span>
+├── prompts/             <span class="c"># ⚠️ 目录存在，但当前没有写入点</span>
+├── audit/               <span class="c"># leak-&lt;scope&gt;.json / harness-gate.json / env_error_*.json</span>
+└── llm_api/             <span class="c"># API 请求/响应 hash 与 usage（不含 key）</span></pre>
+    <div class="callout"><b>证据链的原则：</b>先写轨迹并 flush，再写 <code>state.json</code>；计分台账按 <code>episode_key</code> 去重；报告写完后才写 <code>.sha256</code> 存档。崩溃最多丢当前决策，不会产生“半局计入”。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">03</span>退出码：两根正交的轴</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>码</th><th>含义</th><th>典型场景</th></tr></thead>
+        <tbody>
+          <tr><td><code>0</code></td><td>成功（含 HITL 挂起）</td><td>跑完、正常挂起、判定器输出结论</td></tr>
+          <tr><td><code>1</code></td><td>领域失败</td><td>验收不达标、判定器 ok=false（但命令本身成功）</td></tr>
+          <tr><td><code>2</code></td><td>配置 / 环境错误</td><td>config 非法、run 冲突、未裁决起点</td></tr>
+          <tr><td><code>3</code></td><td>模型不可用</td><td>未知 model_id / 权重缺失 / 后端起不来</td></tr>
+          <tr><td><code>4</code></td><td>沙箱 / 守卫违例</td><td>脏工作区、import 越权、不变式违反、规则集钉扎不符</td></tr>
+          <tr><td><code>5</code></td><td>IO 落盘失败</td><td>磁盘满 / 写失败 / 绘图无数据</td></tr>
+          <tr><td><code>130</code></td><td>Ctrl-C</td><td>当前 step 落盘后中断，可 <code>--resume</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout"><b>结论轴与守卫轴分开。</b><code>audit leak</code> 的 0/1/2 是“有没有泄漏”的结论轴；4 是“审计器自己不可信/环境不合法”的守卫轴。把两者混成一个码，会让“实验结论是否定”和“命令失败”无法区分。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">04</span>守卫：随机、分层 import、git</h2>
+    <div class="cards">
+      <div class="card"><h3>确定性守卫</h3><p><code>scan_determinism()</code>：禁未显式 seed 的 <code>random</code>/<code>numpy.random</code>、禁时间参与采样、禁 <code>uuid4()</code> 做标识。命中 → <code>E_IO_GUARD_RANDOM</code>（退出码 4）。</p></div>
+      <div class="card"><h3>分层 import</h3><p><code>scan_layer_imports()</code>：L1+ 出现 <code>import dice_ratchet.env</code> → <code>E_IO_GUARD_LAYER</code>（INV-1）。例外必须写 <code># guard: allow … reason=…</code> 并留痕。</p></div>
+      <div class="card"><h3>git 门禁</h3><p>起跑前 <code>preflight_worktree_clean()</code>：脏 → <code>E_IO_GIT_DIRTY</code>（退出码 4），0 推理。提交前 <code>commit_harness()</code> 再兜底一次。</p></div>
+      <div class="card"><h3>事件注册</h3><p>事件名必须登记在 <code>EVENT_REGISTRY</code>；未登记在 dev 抛 <code>E_IO_EVENT_UNKNOWN</code>，生产改写成 <code>infra.unknown_event</code> 并保留原名。</p></div>
+    </div>
+    <div class="callout bad"><b>2026-10-17 修掉的一类真缺陷：</b>有 8 个事件只 emit、未登记（<code>evolve.start_guard</code>、<code>evolve.parent_inherit</code>、<code>evals.arm_reused</code> 等）⇒ 生产里“留痕”实际丢掉了事件名。现在已全部登记，`evals.*` 经别名归一为 `eval.*`。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">05</span>当前状态</h2>
+    <div class="kpis">
+      <div class="kpi accent"><div class="num">2,192</div><div class="label">Python 用例（pytest 收集）</div></div>
+      <div class="kpi"><div class="num">0</div><div class="label">guards check findings（当前工作区）</div></div>
+      <div class="kpi"><div class="num">-</div><div class="label">配置键都有消费者（env.sandbox 只剩 2 键）</div></div>
+      <div class="kpi warn"><div class="num">1,311<span class="unit">文件</span></div><div class="label">seed 泄漏扫描面（188 MB 归档）</div></div>
+    </div>
+    <div class="callout"><b>“文档里写的产物”必须能被找到。</b>本轮审计发现 <code>metrics/llm_calls.jsonl</code>、<code>inference_agg.json</code>、<code>honeypot.jsonl</code>、<code>sandbox_*</code> 指标等只存在于文档、没有写入点——这些已改为“未接线”并写清实际通道（<code>events.jsonl</code> / 审计报告），避免读者按图索骥。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">06</span>延伸阅读</h2>
+    <ul class="clean">
+      <li><a href="mod-06.html">MOD-06 loop</a> —— 起跑前的 git 门禁与起点守卫。</li>
+      <li><a href="mod-07.html">MOD-07 evolve</a> —— 提交 harness 时 git 怎么用。</li>
+      <li><a href="../prd/MOD-09-infra-PRD.md">MOD-09 PRD</a> · <a href="../../configs/default.yaml">default.yaml</a></li>
+    </ul>
+  </section>
+
+  <div class="pager">
+    <a class="prev" href="mod-08.html"><span class="dir">PREV</span><span class="to">← MOD-08 evals</span></a>
+    <a class="next" href="index.html"><span class="dir">NEXT</span><span class="to">回到总览 →</span></a>
+  </div>
+
+  <footer class="footer">
+    <span>DiceRatchet 模块可视化讲解 · MOD-09</span>
+    <span>事实来源：<code>dice_ratchet/infra/*</code> + PRD · 生成于 2026-10-17</span>
+  </footer>
+
+</div></main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

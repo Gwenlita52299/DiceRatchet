@@ -1,7 +1,8 @@
 # MOD-01 env-rules 技术 PRD
 
-> 版本：v1.2（2026-10-15 **F78 落地：§9 的「逐步不变式校验」不再只是删掉一个死键**——MOD-02 `SandboxEnv.step` 在**提交前**对未提交的新状态跑本模块的 `assert_invariants`（**不碰内核契约**：`reduce_state` 里那道 `debug.showHiddenInfo` 门是与 JS 的逐位对齐点，保持不变）；违反 ⇒ `E_ENV_INTERNAL`（退出码 4，与内核在 `debug` 下自报同码）⇒ **该步不提交**，随后按**既有失败恢复矩阵**（训练路径同类累计 ≥3 中止 run；MOD-08 批量测量记 dropped）；实测 ≈137.5 µs/步（≈48 ms/局，`scripts/bench_invariants.py`）。对齐 Spec v2.32 / B-89，见 §9 注与 §17）
-> 上游：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md) v2.32（冲突以 Spec 为准）· 规则事实来源：[GAME-00](GAME-00-webgame-PRD.md) / [GAME-01](GAME-01-kernel-contract.md) / [GAME-02](GAME-02-content-tables.md) v1.2 与 `src/game/kernel`
+> 版本：v1.3（2026-10-17 **与代码对齐（纯文档，¥0）**：修掉 14 处现状断言——`ensure_ascii=False`、`E_KERNEL_TURN_LIMIT` 原样保留、`E_ENV_INTERNAL` 实为抛错而非 `degraded`、`E_ENV_PARITY_MISMATCH` 无发射点、差分对拍入口已落地、`load_tables` 参数名、`types.py` 为手写、提交当时的包名等；并注明 env 层隔离**不在** MOD-09 guards 的覆盖范围内。见 §17）
+> **历史版本**：v1.2（2026-10-15 **F78 落地：§9 的「逐步不变式校验」不再只是删掉一个死键**——MOD-02 `SandboxEnv.step` 在**提交前**对未提交的新状态跑本模块的 `assert_invariants`（**不碰内核契约**：`reduce_state` 里那道 `debug.showHiddenInfo` 门是与 JS 的逐位对齐点，保持不变）；违反 ⇒ `E_ENV_INTERNAL`（退出码 4，与内核在 `debug` 下自报同码）⇒ **该步不提交**，随后按**既有失败恢复矩阵**（训练路径同类累计 ≥3 中止 run；MOD-08 批量测量记 dropped）；实测 ≈137.5 µs/步（≈48 ms/局，`scripts/bench_invariants.py`）。对齐 Spec v2.32 / B-89，见 §9 注与 §17）
+> 上游：[模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md) v2.35（冲突以 Spec 为准；v2.33–v2.35 只改 evals/evolve 与文档表述，未触及本模块代码）· 规则事实来源：[GAME-00](GAME-00-webgame-PRD.md) / [GAME-01](GAME-01-kernel-contract.md) / [GAME-02](GAME-02-content-tables.md) v1.2 与 `src/game/kernel`
 > 定位：**GAME 内核的纯 Python 等价移植**。本模块不定义任何游戏规则；规则、数值、配表都引用 GAME。v0.1 中基于旧《Dicey Dungeons》模型的内容（floors/HP/block/levelup/`configs/enemies.yaml`/shaped reward 表）已全部废弃。
 
 ## 1. 背景与目标
@@ -49,13 +50,13 @@ DiceRatchet 的智能体侧（MOD-02～08）全部用 Python，而游戏本体�
 
 ## 4. 功能需求（FR-01-x）
 
-- **FR-01-1 模块一一对应**：每个 JS 文件对应一个同名 Python 文件（`index.js` → `engine.py`），函数名改为 snake_case，**参数与返回的 dict 键保持 camelCase 不变**（与 GAME 状态、观测、动作逐字相同，所以 `stateDigest` 可以直接对拍）。
+- **FR-01-1 模块一一对应**：每个 JS 文件对应一个 Python 文件（多数同名；`index.js` → `engine.py`），函数名改为 snake_case，**参数与返回的 dict 键保持 camelCase 不变**（与 GAME 状态、观测、动作逐字相同，所以 `stateDigest` 可以直接对拍）。
 - **FR-01-2 随机**：逐位移植 `rng.js`。
   - `xmur3(streamName)` 与 rootSeed 混合 → SplitMix64，64 位运算用**16 位分片**（GAME-01 §7 P-5）。
   - `STREAM_NAMES` 与 JS 完全一致：`dice.enemy, dice.player, event, forge, levelup, loot, map, shop`。
   - `randint` 用拒绝采样；`shuffle` 为 Fisher–Yates。
   - **禁止** `random`、`hashlib` 参与派生（sha256 只用于 digest）。
-- **FR-01-3 规范化与摘要**：`stable_stringify` 的行为与 JS `stableStringify` 完全相同：递归排序键、`ensure_ascii=True`、`separators=(",",":")`、禁止 float。`digest(v) = "sha256:" + sha256(stable_stringify(v))`。
+- **FR-01-3 规范化与摘要**：`stable_stringify` 的行为与 JS `stableStringify` 完全相同：递归排序键、**`ensure_ascii=False`**、`separators=(",",":")`、禁止 float（`True` 会让含中文的摘要与 JS 不一致——`digest.py` 的 docstring 与 golden 用例都钉住了这一点）。`digest(v) = "sha256:" + sha256(stable_stringify(v))`。
 - **FR-01-4 整数算术**：全面遵守 GAME-01 §7 P-1～P-14。
   - 禁止 `/` 和 `int()` 截断；`Math.floor(x/y)` 一律写成 `x // y`（除数恒为正）。
   - 位运算后 `& 0xFFFFFFFF`。
@@ -76,12 +77,13 @@ DiceRatchet 的智能体侧（MOD-02～08）全部用 Python，而游戏本体�
   | `E_CONTENT_*` | `E_ENV_CONTENT_INVALID`（`detail` 字段保留原码） |
   | `E_KERNEL_INVARIANT` / `E_KERNEL_EXCEPTION` / `E_KERNEL_DISPATCH` | `E_ENV_INTERNAL` |
   | `E_KERNEL_RNG_*` | `E_ENV_RNG` |
-  | `E_KERNEL_TURN_LIMIT` | 不是错误；表现为 `truncationReason="turn_limit"` |
+  | `E_KERNEL_TURN_LIMIT` | 不是错误；原样出现在 `truncationReason="E_KERNEL_TURN_LIMIT"`（与 JS 同值，不是 `turn_limit`） |
   | `E_ACTION_*` | 原样保留（与 GAME 一致，便于跨语言比对） |
+  | 其余 `E_KERNEL_*`（如 `EMPTY_DECK`/`NODE_KIND`/`CONSTRAINT_SYNTAX`/`UNKNOWN_DIE`） | 当前**不会**被 `map_error_code` 映射（原码直接逃出），由调用方按 `E_ENV_INTERNAL` 语义处置；属已知缺口，受配表校验保护、正常内容不可达 |
 
   映射表在 MOD-09 `errors.py` 登记。
 - **FR-01-11 原生结果**：`native_result(state) -> {"outcome", "truncationReason", "stagesCleared", "heartsLeft", "battlesWon", "turns", "kills"}`，供 MOD-02 填写 `StepResult.info`（INV-7）。
-- **FR-01-12 版本**：`KERNEL_VERSION = "kernel-1.0.0"`、`OBS_SCHEMA = "obs-1.0.0"`，与 JS 同值。JS 升版时 Python 必须同步升版，CI 比对两侧常量。
+- **FR-01-12 版本**：`KERNEL_VERSION = "kernel-1.0.0"`、`OBS_SCHEMA = "obs-1.0.0"`，与 JS 同值。**当前 CI 只经 golden meta 的 `kernelVersion` 比对 `KERNEL_VERSION`**；`OBS_SCHEMA` 尚无独立的两侧常量比对（待补，别把这条读成已经强制）。
 
 ## 5. 非功能需求（NFR-01-x）
 
@@ -92,7 +94,7 @@ DiceRatchet 的智能体侧（MOD-02～08）全部用 Python，而游戏本体�
   - `observe` p95 ≤ 1 ms。
   - 相对单个 LLM 决策（约 3 s）可以忽略不计。
 - **NFR-01-3 零依赖**：只用标准库。
-- **NFR-01-4 隔离**：不 import `dice_ratchet` 的其他子包（除 `infra.errors`），由 MOD-09 guards 强制。
+- **NFR-01-4 隔离**：不 import `dice_ratchet` 的其他子包。**现状有两处例外**：① 本模块自带 `env/error.py`，**不** import `infra.errors`；② `env/selftest.py` 会只读 `infra.guards` 做自检。MOD-09 的 `scan_layer_imports` 目前只覆盖 L1–L3 与 `infra`，**没有** env 层规则 ⇒ 「由 guards 强制」这句不成立；env 侧的隔离靠 `env selftest` 与 golden 用例。
 
 ## 6. 接口契约
 
@@ -120,7 +122,7 @@ def digest(value: Any) -> str: ...                                            # 
 def state_hash(state: GameState) -> str: ...                                  # = digest(state)
 
 # dice_ratchet/env/loader.py
-def load_tables(content_dir: Path = GAME_CONTENT_DIR) -> Tables: ...
+def load_tables(dir_: Path = DEFAULT_CONTENT_DIR) -> Tables: ...   # DEFAULT_CONTENT_DIR = GAME_CONTENT_DIR
 GAME_CONTENT_DIR: Final = Path("src/game/content")                            # 可由 DICERATCHET_ENV__CONTENT_DIR 覆盖
 
 GameState = dict[str, Any]         # 结构同 GAME-01 §2 GameState（camelCase 键）
@@ -131,7 +133,7 @@ Tables = Mapping[str, Any]         # 只读；load_tables 返回深度冻结视�
 
 ## 7. 数据模型与存储
 
-- **不自建数据模型**：`GameState`、`Observation`、`Action` 的结构全部由 GAME-01 §2/§5 与 GAME-00 §9.4 定义。Python 侧用 `TypedDict` 做类型提示（`dice_ratchet/env/types.py`），由 GAME-01 生成。
+- **不自建数据模型**：`GameState`、`Observation`、`Action` 的结构全部由 GAME-01 §2/§5 与 GAME-00 §9.4 定义。Python 侧用 `TypedDict` 做类型提示（`dice_ratchet/env/types.py`）——**手写**，不是生成物；与 GAME-01 §2 的对齐由 `tests/unit/env/test_engine_contract.py` 的 G5 用例钉住。
 - **配表**：只读 `src/game/content/*.json`，不复制、不转换。`content_hash = digest(tables)` 记入 `config.json`（MOD-09）。
 - **持久化**：本模块不写盘；续跑所需的状态快照是 `GameState` dict 本身（可 JSON 序列化），由 MOD-06 保存。
 
@@ -149,8 +151,8 @@ for f in src/game/tests/golden/*.jsonl:
     # 首个分歧：打印 step、JSON Pointer 路径、JS 值 / Python 值（用 --dump-state 从 JS 侧导出同一步的全状态）
 
 # 差分对拍（nightly）
-node src/game/scripts/golden-gen.js --random-walk --n 200 --out /tmp/diff   # JS 侧随机合法动作
-pytest tests/golden/test_random_walk.py
+node src/game/scripts/golden-gen.js --random-walk 200   # JS 侧随机合法动作（N 是位置参数，无 --n / --out）
+pytest tests/golden/test_random_walk.py                  # 用例自己起 node、写到临时目录
 ```
 
 移植顺序：`rng → digest → loader → state/slots/counter/risk → combat → map/shop/forge/event/relic → engine`。每一层都先用 GAME-01 §9 的测试向量单测通过，再进入下一层。
@@ -164,7 +166,7 @@ pytest tests/golden/test_random_walk.py
 |---|---|
 | `env.content_dir` | 权威是 `loader.py::GAME_CONTENT_DIR`——**import 时**由 `DICERATCHET_ENV__CONTENT_DIR` 或字面默认解析，**从不读 yaml**。配置层却把它写进 run 快照，而 `audit leak` 曾**信任快照的声明**推隐藏 token ⇒ 一旦两者不一致，审计会拿**这些局从未用过的配表**做重放（`future_room_leak`/`shop_content_leak` 假阳性或假阴性，F58/F59 同族）。现在审计改用快照的 **`content_hash` 反查**（`sandbox/audit.py::_resolve_content_dir`）：候选目录逐个按 digest 比对，命中者才算；一个都对不上就**判 `critical` 并降级这两类规则集**，绝不拿默认配表凑数 |
 | `env.golden_dir` | 对拍基准目录在测试里写死（`src/game/tests/golden`）；配一个没人读的路径只会让「改了键以为搬了目录」的人踩空 |
-| `env.check_invariants` | 原文声称「每次 reduce 后执行 `assertInvariants`（同 JS；默认 true）」，**但生产局从来没有执行**：`engine.step` 里那次调用被**游戏侧的** `config.debug.showHiddenInfo` 门着，而本仓库**没有任何调用方传 `debug`** ⇒ 真实的不变式覆盖来自 `env selftest` 与 G2/G3 golden 逐行对拍。要让真实对局也逐步校验，是一条**内核契约/接线点**的新功能（需先量每步开销），已登记 **F78**——不能靠一个没人读的布尔键假装已经有了。**⚠️ 2026-10-15 修订（Spec v2.32 / B-89）：F78 已落地**——`SandboxEnv.step` 在**提交前**对 reduce 产出的新状态跑同一份 `assert_invariants`（门面侧接线，**不碰内核契约**，那道 `showHiddenInfo` 门保持原样）；违反 ⇒ `E_ENV_INTERNAL`（退出码 4，与「内核异常」同一条通道，也与内核在 `debug` 下自报不变式违反**同码**）⇒ **该步不提交**；随后按调用方**既有失败恢复矩阵**处置：训练路径（`loop/generation.py::_run_training_episode`）记 `audit/env_error_<seed>.json` 并跳过该 seed，同类累计 ≥3（`ENV_ERROR_LIMIT`）⇒ 中止 run（退出码 4）；MOD-08 批量测量（`evals/harness.py`）按 Spec §8.5 记 **dropped**（计 n、按 lose 计、错误码入档）——不静默（错误码一定进产物）、不重试。实测 ≈137.5 µs/步 vs 内核 `reduce` ≈276.3 µs/步 ⇒ ≈48 ms/局（`scripts/bench_invariants.py`，重放 golden，¥0 可复算）；归档 `runs/m3-formal` 的 40 局 13,802 步真实对局重放 0 次违反 |
+| `env.check_invariants` | 原文声称「每次 reduce 后执行 `assertInvariants`（同 JS；默认 true）」，**但生产局从来没有执行**：`reduce_state` 里那次调用被**游戏侧的** `config.debug.showHiddenInfo` 门着，而本仓库**没有任何调用方传 `debug`** ⇒ 真实的不变式覆盖来自 `env selftest` 与 G2/G3 golden 逐行对拍。要让真实对局也逐步校验，是一条**内核契约/接线点**的新功能（需先量每步开销），已登记 **F78**——不能靠一个没人读的布尔键假装已经有了。**⚠️ 2026-10-15 修订（Spec v2.32 / B-89）：F78 已落地**——`SandboxEnv.step` 在**提交前**对 reduce 产出的新状态跑同一份 `assert_invariants`（门面侧接线，**不碰内核契约**，那道 `showHiddenInfo` 门保持原样）；违反 ⇒ `E_ENV_INTERNAL`（退出码 4，与「内核异常」同一条通道，也与内核在 `debug` 下自报不变式违反**同码**）⇒ **该步不提交**；随后按调用方**既有失败恢复矩阵**处置：训练路径（`loop/generation.py::_run_training_episode`）记 `audit/env_error_<seed>.json` 并跳过该 seed，同类累计 ≥3（`ENV_ERROR_LIMIT`）⇒ 中止 run（退出码 4）；MOD-08 批量测量（`evals/harness.py`）按 Spec §8.5 记 **dropped**（计 n、按 lose 计、错误码入档）——不静默（错误码一定进产物）、不重试。实测 ≈137.5 µs/步 vs 内核 `reduce` ≈276.3 µs/步 ⇒ ≈48 ms/局（`scripts/bench_invariants.py`，重放 golden，¥0 可复算）；归档 `runs/m3-formal` 的 40 局 13,802 步真实对局重放 0 次违反 |
 
 游戏参数（难度、开关、局长）不在本模块配置，由 `EpisodeConfig`（Spec §4.1）传入；`env.episode.*` 六个键有消费者（组合根 `loop/cli.py` 显式传 `cfg.env.episode`）。
 
@@ -174,9 +176,9 @@ pytest tests/golden/test_random_walk.py
 |---|---|---|
 | `E_ENV_CONTENT_INVALID` | 配表校验失败 | 启动即失败，退出码 2 |
 | `E_ENV_CONFIG_INVALID` | `apply_difficulty/validate_config` 失败 | 抛出，由调用方退出码 2 |
-| `E_ENV_INTERNAL` | 不变式违反或分派异常 | `reduce` 返回 `error`，state 不变；MOD-02 将该局标为 `degraded` |
+| `E_ENV_INTERNAL` | 不变式违反或分派异常 | `reduce` 返回 `error`，state 不变；**MOD-02 会直接抛 `InfraError`**（不是标 `degraded`——degraded 在本仓库专指 LLM 降级）。训练路径写 `audit/env_error_<seed>.json` 并跳过该 seed（同类 ≥3 中止 run）；MOD-08 批量测量记 `dropped` |
 | `E_ENV_RNG` | 未注册流名或 randint 区间非法 | 同上 |
-| `E_ENV_PARITY_MISMATCH` | 对拍不一致（仅测试/自检） | CI 失败，退出码 1 |
+| `E_ENV_PARITY_MISMATCH` | 对拍不一致（仅测试/自检） | **已登记、当前无发射点**；实际对拍不一致由 `tests/golden/test_golden.py` 的断言直接失败 |
 | `E_ACTION_*` | 非法动作 | 正常返回 `illegal=True`，不是错误 |
 
 不降级：内核错误说明 Python 与 JS 的等价性被破坏，**禁止**用"跳过该步"之类的方式掩盖。
@@ -200,7 +202,7 @@ pytest tests/golden/test_random_walk.py
 
 | 门 | MOD-01 的 DoD |
 |---|---|
-| G1 | `dice_ratchet/env/` 行覆盖 ≥ 90%（JS 侧为 95.8%） |
+| G1 | `dice_ratchet/env/` 行覆盖 ≥ 90%（JS 侧历史数字 95.8% 无生成物可复核，已不引用） |
 | G2 | T-04 全部通过；golden 只读，禁止 Python 侧生成替代快照 |
 | G3 | T-08 通过 |
 | G4 | 本模块不产出 agent 可见内容；MOD-02 投影测试覆盖 `seed/rng` 键 |
@@ -238,14 +240,14 @@ JS 内核约 2,780 行，逐位移植并对拍：
 | 5 | golden 对拍、差分对拍脚本、性能调优 | 1.5 |
 | | **合计** | **7.0** |
 
-**实际交付（M0）**：2026-10-03 提交 `98ded4a`（`dice_ratchet/env/` 全量移植 + golden 对拍）。
+**实际交付（M0）**：2026-10-03 提交 `98ded4a`（当时包名 `gamer_rsi/env/` 全量移植 + golden 对拍；2026-10-08 `6887a3a` 改名为 `dice_ratchet/`）。
 本项目**未单独记工**，「实际人日」无法从仓库证据还原；按提交时间窗折算 ≤ 1 人日，与估算 7.0 人日的偏差 ≥ 85%（排期 §7 的 20% 阈值被触发，已在 [排期 §8](../项目排期-DiceRatchet.md) 记录）。
 T-01～T-10 全部通过（T-08 于 2026-10-03 由验收补齐为 pytest 用例），证据见 [M0 验收报告](../reviews/2026-10-03-M0验收报告.md)。M1 起按排期 §7 逐任务记录实际人日。
 
 ## 16. 开放问题
 
 1. GAME-01 P-5 要求 Python 也用 16 位分片做 64 位乘法。Python 原生大整数加掩码的结果与之相同且更快，是否放宽为"算法任选，测试向量必须通过"？（建议放宽，需修订 GAME-01。）
-2. 差分对拍需要 JS 侧新增 `--random-walk` 模式（`scripts/golden-gen.js`），以及 `--dump-state` 调试导出。归 GAME 侧，工作量约 0.3 人日。
+2. 差分对拍的两个 JS 侧入口**已落地**：`golden-gen.js --random-walk <N>`（`src/game/scripts/golden-gen.js`）与 `--dump-state` 调试导出；`tests/golden/test_random_walk.py` 已在调用。剩余工作只是把差分对拍接进 nightly，而不是新增能力。
 3. 如果将来需要多进程并行跑环境，`Tables` 的冻结视图是否要支持 pickle？
 
 ## 17. 变更记录
@@ -255,4 +257,5 @@ T-01～T-10 全部通过（T-08 于 2026-10-03 由验收补齐为 pytest 用例�
 | v0.1 | 2026-09-30 | 首版（基于旧《Dicey Dungeons》规则模型） |
 | v1.0 | 2026-09-30 17:21 | 按 Spec v1.3（B-09）与 MOD PRD 评审整体重写：定位改为 GAME 内核的逐位移植；废弃 v0.1 的 D-01～D-05（规则相关）；随机派生改为 xmur3 + SplitMix64（原 blake2b 违反 GAME-01 §3.2）；对拍基准改为 `src/game/tests/golden`（新增 `stateDigest` 与 g5 默认局） |
 | v1.1 | 2026-10-14 | **F77-a/b/c：§9 的三个配置键全部删除（Spec v2.31 / B-88；依据用户裁决「一起做完」）**。① `env.content_dir`：权威是 `loader.py::GAME_CONTENT_DIR`（import 时解析 `DICERATCHET_ENV__CONTENT_DIR`，从不读 yaml）；配置层把它写进快照而审计曾**信任快照声明** ⇒ 两者不一致时审计拿错配表做重放（假阳性/假阴性）。现由审计**用快照的 `content_hash` 反查**真实配表，对不上即判 `critical` 并降级 `future_room`/`shop` 规则集（见 [MOD-02 PRD §9](MOD-02-env-sandbox-PRD.md)）。② `env.golden_dir`：对拍基准目录由测试写死，键 0 消费者。③ `env.check_invariants`：**原文声称的「每次 reduce 后执行 assertInvariants（默认 true）」在生产局从未成立**——`engine.step` 的调用被游戏侧 `config.debug.showHiddenInfo` 门着，而本仓库没有调用方传 `debug`；真实覆盖来自 `env selftest` 与 G2/G3 golden 逐行对拍。要在真实对局逐步校验，需先定**接线点**（`SandboxEnv.step` 外挂 vs 内核契约）并实测每步开销 ⇒ 登记 **F78**，不在本轮假装实现。④ 护栏：`test_b88_every_env_key_declares_a_consumer`（`env.*` 键集 == 已登记消费者表）+ `test_b88_dead_env_keys_are_gone`，修复前 7 项失败。 |
+| v1.3 | 2026-10-17 | **与代码对齐（纯文档，¥0）**。① `stable_stringify` 的 `ensure_ascii` 由 `True` 更正为 **`False`**（`digest.py` 实参与注释；用 `True` 会让含中文的摘要与 JS 不一致、T-04 必红）。② `truncationReason` 不是 `turn_limit`，而是原样 `E_KERNEL_TURN_LIMIT`。③ `E_ENV_INTERNAL` 的处置：MOD-02 直接抛 `InfraError`（该步不提交），不是把该局标 `degraded`；训练路径写 `env_error_<seed>.json`，MOD-08 记 dropped。④ `E_ENV_PARITY_MISMATCH` 已登记但**无发射点**，对拍失败由 golden 断言直接失败。⑤ 差分对拍的 `--random-walk` / `--dump-state` 已实现（`golden-gen.js`），命令形式是 `--random-walk <N>`（无 `--n/--out`）。⑥ `load_tables(dir_=...)` 参数名、`types.py` 为手写、`98ded4a` 当时包名 `gamer_rsi/`。⑦ env 层隔离**不在** MOD-09 `scan_layer_imports` 覆盖内（selftest 会 import `infra.guards`），旧文「由 guards 强制」不成立。⑧ 删除不可复核的 JS 覆盖率 95.8%。 |
 | v1.2 | 2026-10-15 | **F78 落地：生产局的逐步内核不变式校验真正接上（Spec v2.32 / B-89；依据用户指令「开始修复78/79」）**。① **改了什么**：`sandbox/api.py::SandboxEnv.step` 在每个**合法**动作**提交 `self._state` 之前**，对 reduce 产出的新状态跑 MOD-01 `assert_invariants`；违反 ⇒ `E_ENV_INTERNAL`（`E_KERNEL_INVARIANT` 的对外码，退出码 4）⇒ **该步不提交**（`self._state` 停在上一步、`_env_steps` 不前进），此后按调用方**既有失败恢复矩阵**处置（训练路径：`audit/env_error_<seed>.json` + 跳过该 seed，同类累计 ≥3 中止 run；MOD-08 批量测量：按 Spec §8.5 记 dropped（计 n、按 lose 计））。② **为什么在门面侧**：内核 `reduce_state` 的那次同名校验被游戏侧 `config.debug.showHiddenInfo` 门着（与 JS 逐位一致，该开关只服务调试），而 MOD-02 从不向 `createGame` 传 `debug` ⇒ 生产局原本为零；改内核那道门等于改与 JS 的对拍语义（golden 会全红），而 `SandboxEnv` 本就是 agent 侧唯一合法入口。③ **开销（先测后接）**：`scripts/bench_invariants.py` 重放 5 个 golden 局（1487 步）实测 `assert_invariants` **137.5 µs/步** vs `reduce` **276.3 µs/步**；按每局 ≈345 步 ⇒ **≈48 ms/局**，相对以 LLM 决策为主的整局耗时（秒级）可忽略。④ **不变量集合（现状）**：手牌 ≤ `handMax`、牌堆无重复且不丢失、每个 die的 `faceIndex ∈ [0,5]`、rng 流名与顺序、全状态**不得出现 float**（内核用整数 permille）。⑤ **诚实边界**：本 FR 覆盖「每次 reduce 后」；`createGame` 的首帧（`reset()`）不在此范围，其覆盖来自 `env selftest` 与 G1–G5 golden 对拍；校验证明「内核没有违反这些不变式」，**不是**「与 JS 逐位等价」。⑥ **成本：¥0**（纯本地）。 |

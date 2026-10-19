@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MOD-02 env-sandbox · DiceRatchet 可视化讲解</title>
+<meta name="description" content="MOD-02 env-sandbox：投影裁剪、代码隔离、审计与蜜罐三道防线，保证 agent 只看到它该看到的、只能做它被允许做的事。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="shell">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html">
+    <span class="logo">◈ <b>DiceRatchet</b></span>
+    <div class="sub">模块可视化讲解 · docs/html<br>源 commit 879ea49 · 2026-10-17</div>
+  </a>
+  <nav class="nav">
+    <div class="nav-title">总览</div>
+    <a href="index.html">闭环与模块地图 <span class="tag">00</span></a>
+    <a href="game.html">游戏本体 GAME <span class="tag">G</span></a>
+    <div class="nav-title">环境层 L0</div>
+    <a href="mod-01.html">MOD-01 env-rules <span class="tag">01</span></a>
+    <a href="mod-02.html">MOD-02 env-sandbox <span class="tag">02</span></a>
+    <div class="nav-title">智能体层 L1</div>
+    <a href="mod-03.html">MOD-03 inference <span class="tag">03</span></a>
+    <a href="mod-04.html">MOD-04 policy <span class="tag">04</span></a>
+    <a href="mod-05.html">MOD-05 memory <span class="tag">05</span></a>
+    <div class="nav-title">进化层 L2</div>
+    <a href="mod-06.html">MOD-06 loop <span class="tag">06</span></a>
+    <a href="mod-07.html">MOD-07 evolve <span class="tag">07</span></a>
+    <div class="nav-title">测量与工程 L3</div>
+    <a href="mod-08.html">MOD-08 evals <span class="tag">08</span></a>
+    <a href="mod-09.html">MOD-09 infra <span class="tag">09</span></a>
+  </nav>
+</aside>
+
+<main class="main"><div class="wrap">
+
+  <header class="reveal">
+    <div class="eyebrow">L0 · 环境层 · Milestone M0</div>
+    <h1>MOD-02 <span class="thin">env-sandbox</span></h1>
+    <p class="lede">L0 与 L1 之间<strong>唯一合法的数据通道</strong>。它同时做三件互相独立的事：把隐藏信息裁掉（防泄漏）、把自编辑代码关进笼子（防越权）、把“有没有漏”变成可复算的审计结论（防未被发现的泄漏）。</p>
+    <div class="badges">
+      <span class="badge l0">L0 环境</span>
+      <span class="badge ok">✅ 已落地</span>
+      <span class="badge">INV-1 / INV-2 / INV-3 / INV-4</span>
+      <span class="badge">规则集 1.1.0</span>
+    </div>
+  </header>
+
+  <section class="reveal">
+    <h2><span class="no">01</span>三道防线，各管一件事</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 940 300" role="img" aria-label="投影、隔离、审计三道防线">
+        <defs>
+          <marker id="m2-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#37d6c0"/>
+          </marker>
+        </defs>
+        <rect x="24" y="34" width="180" height="230" rx="12" class="n-box"/>
+        <text x="114" y="62" text-anchor="middle" class="n-label">完整 GameState</text>
+        <text x="114" y="82" text-anchor="middle" class="n-sub">抽牌堆 / 未来房间</text>
+        <text x="114" y="100" text-anchor="middle" class="n-sub">敌人编队 / RNG 状态</text>
+        <text x="114" y="118" text-anchor="middle" class="n-sub">商店内容 / 隐藏字段</text>
+        <text x="114" y="150" text-anchor="middle" class="n-tiny">agent 永不可见</text>
+        <rect x="52" y="176" width="124" height="52" rx="8" class="n-box-bad"/>
+        <text x="114" y="198" text-anchor="middle" class="n-tiny">这些字段的名字</text>
+        <text x="114" y="214" text-anchor="middle" class="n-tiny">也不许出现在日志</text>
+
+        <rect x="238" y="44" width="196" height="210" rx="12" class="n-box-accent"/>
+        <text x="336" y="72" text-anchor="middle" class="n-label">① 投影裁剪</text>
+        <text x="336" y="92" text-anchor="middle" class="n-sub">project_state()</text>
+        <text x="336" y="114" text-anchor="middle" class="n-tiny">OBSERVATION_SCHEMA</text>
+        <text x="336" y="132" text-anchor="middle" class="n-tiny">obs-agent-1.0.0</text>
+        <text x="336" y="158" text-anchor="middle" class="n-sub">只保留 enabled 字段</text>
+        <text x="336" y="178" text-anchor="middle" class="n-sub">未登记字段一律丢弃</text>
+        <text x="336" y="198" text-anchor="middle" class="n-tiny">只记计数、不记字段名</text>
+        <text x="336" y="220" text-anchor="middle" class="n-tiny">schemaVersion 由本层注入</text>
+
+        <rect x="470" y="44" width="196" height="210" rx="12" class="n-box-warn"/>
+        <text x="568" y="72" text-anchor="middle" class="n-label">② 代码 / 进程隔离</text>
+        <text x="568" y="92" text-anchor="middle" class="n-sub">import 门禁 + ToolWorker</text>
+        <text x="568" y="114" text-anchor="middle" class="n-tiny">BLOCKED_NODES / CALLS</text>
+        <text x="568" y="132" text-anchor="middle" class="n-tiny">无网络 / 无文件写 / 无 subprocess</text>
+        <text x="568" y="158" text-anchor="middle" class="n-sub">harness 工具在子进程跑</text>
+        <text x="568" y="178" text-anchor="middle" class="n-sub">RLIMIT_AS / CPU / 墙钟</text>
+        <text x="568" y="198" text-anchor="middle" class="n-tiny">2 s · 256 MB · 32 tools</text>
+        <text x="568" y="220" text-anchor="middle" class="n-tiny">超限 → E_ENV_TIMEOUT/RESOURCE</text>
+
+        <rect x="702" y="44" width="214" height="210" rx="12" class="n-box"/>
+        <text x="809" y="72" text-anchor="middle" class="n-label">③ 审计 + 蜜罐</text>
+        <text x="809" y="92" text-anchor="middle" class="n-sub">run_audit（显式 CLI）</text>
+        <text x="809" y="114" text-anchor="middle" class="n-tiny">6 类泄漏 · 3 个扫描面</text>
+        <text x="809" y="132" text-anchor="middle" class="n-tiny">prompt / memory / log</text>
+        <text x="809" y="158" text-anchor="middle" class="n-sub">canary 注入自测 12/12</text>
+        <text x="809" y="178" text-anchor="middle" class="n-sub">规则集版本钉扎 1.1.0</text>
+        <text x="809" y="198" text-anchor="middle" class="n-tiny">不符 ⇒ fail-closed</text>
+        <text x="809" y="220" text-anchor="middle" class="n-tiny">E_ENV_AUDIT_RULESET（4）</text>
+
+        <path d="M204 149 L238 149" class="edge-flow" marker-end="url(#m2-ar)"/>
+        <path d="M434 149 L470 149" class="edge-dash"/>
+        <path d="M666 149 L702 149" class="edge-dash"/>
+      </svg>
+      <div class="caption"><b>三道防线不共享故障模式。</b>投影错了，隔离仍然拦代码；隔离被绕过，审计仍能从产物里发现泄漏；蜜罐则保证“审计器本身没坏”。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">02</span>投影：白名单是唯一权威</h2>
+    <p><code>project_state()</code> 只输出 <code>OBSERVATION_SCHEMA</code> 里 <code>enabled=True</code> 的字段。它<strong>不直接读 GameState</strong>：输入是 MOD-01 <code>observe(state, "full")</code> 的白名单结果，再叠三个 agent 专属键（<code>episodeId</code> / <code>decisionIndex</code> / <code>lastResult</code>）与 <code>stageCount</code>。因此隐藏信息有两道彼此独立的防线。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>规则</th><th>行为</th><th>为什么</th></tr></thead>
+        <tbody>
+          <tr><td>未登记字段</td><td>丢弃，只记 <code>dropped_hidden</code> 计数</td><td>日志里记字段名本身就是反向泄漏</td></tr>
+          <tr><td><code>schemaVersion</code></td><td>由投影层覆盖式注入</td><td>源里的同名值不可信</td></tr>
+          <tr><td>字段增删 / 类型变更</td><td>主版本 +1，并追加 <code>OBSERVATION_CHANGELOG.md</code></td><td>CHANGELOG 末行版本 = 代码常量，CI 校验</td></tr>
+          <tr><td>两次投影</td><td>canonical JSON 与 <code>obs_digest</code> 逐字节相同</td><td>纯函数、无随机、无时间依赖</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout"><b>为什么“不记字段名”也是规则。</b>如果日志写“发现隐藏字段 <code>enemyGroupId</code> 被丢弃”，读日志的 agent 就免费获得了隐藏信息的存在与名字。所以统计只保留数量。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">03</span>一步动作的完整检查顺序</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 900 240" role="img" aria-label="SandboxEnv.step 的检查顺序">
+        <defs>
+          <marker id="m2-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3a4d66"/>
+          </marker>
+        </defs>
+        <rect x="18" y="86" width="130" height="62" rx="10" class="n-box"/>
+        <text x="83" y="112" text-anchor="middle" class="n-label">Action</text>
+        <text x="83" y="132" text-anchor="middle" class="n-tiny">来自 PolicyAgent</text>
+
+        <rect x="176" y="86" width="150" height="62" rx="10" class="n-box"/>
+        <text x="251" y="108" text-anchor="middle" class="n-label">legal_actions 校验</text>
+        <text x="251" y="128" text-anchor="middle" class="n-tiny">与内核顺序一致（去 abandon_run）</text>
+
+        <rect x="354" y="86" width="150" height="62" rx="10" class="n-box-accent"/>
+        <text x="429" y="108" text-anchor="middle" class="n-label">reduce</text>
+        <text x="429" y="128" text-anchor="middle" class="n-tiny">产出未提交的新 state</text>
+
+        <rect x="532" y="86" width="160" height="62" rx="10" class="n-box-warn"/>
+        <text x="612" y="108" text-anchor="middle" class="n-label">assert_invariants</text>
+        <text x="612" y="128" text-anchor="middle" class="n-tiny">提交前 · ≈137.5 µs/步</text>
+
+        <rect x="720" y="86" width="162" height="62" rx="10" class="n-box-accent"/>
+        <text x="801" y="108" text-anchor="middle" class="n-label">提交 + 投影</text>
+        <text x="801" y="128" text-anchor="middle" class="n-tiny">返回 StepResult</text>
+
+        <path d="M148 117 L176 117" class="edge" marker-end="url(#m2-ar2)"/>
+        <path d="M326 117 L354 117" class="edge" marker-end="url(#m2-ar2)"/>
+        <path d="M504 117 L532 117" class="edge" marker-end="url(#m2-ar2)"/>
+        <path d="M692 117 L720 117" class="edge" marker-end="url(#m2-ar2)"/>
+
+        <path d="M612 148 L612 184" class="edge-red"/>
+        <rect x="472" y="182" width="280" height="40" rx="8" class="n-box-bad"/>
+        <text x="612" y="207" text-anchor="middle" class="n-sub">违反 ⇒ 该步不提交 + E_ENV_INTERNAL（退出码 4）</text>
+      </svg>
+      <div class="caption"><b>先测后提交。</b>不变式校验针对 reduce 产出的<strong>新状态</strong>；一旦违反，这一步被整体丢弃，环境保持在上一步的合法状态。</div>
+    </div>
+    <p>失败之后不“重试到过”也不静默跳过，而是按调用方既有的恢复矩阵处置：训练路径记 <code>audit/env_error_&lt;seed&gt;.json</code> 并跳过该 seed，同类累计 ≥3 次中止 run；MOD-08 批量测量记 <code>dropped</code>（计 n、按 lose 计、错误码入档）。</p>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">04</span>审计：6 类泄漏，3 个扫描面</h2>
+    <div class="cards">
+      <div class="card"><h3>种子类</h3><p><code>seed_leak</code>——train seed 的字面量出现在 prompt / memory / log。数字串扫描带字符边界，浮点小数部分不算。</p></div>
+      <div class="card"><h3>未来信息</h3><p><code>future_room_leak</code> / <code>shop_content_leak</code>——<strong>逐局作用域</strong>：只比较这一局真正可能看到的未来房间与商店。</p></div>
+      <div class="card"><h3>字段类</h3><p><code>full_state_field_leak</code> / <code>hidden_field_name_leak</code>——全量状态字段名或隐藏字段名出现在文本里。</p></div>
+      <div class="card"><h3>蜜罐</h3><p><code>canary_leak</code>——注入的 canary / 假字段一旦出现，100% 判 critical。自测 12/12 命中才算审计器可用。</p></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>退出码</th><th>含义</th><th>轴</th></tr></thead>
+        <tbody>
+          <tr><td><code>0</code></td><td>无 finding</td><td rowspan="3">泄漏结论轴</td></tr>
+          <tr><td><code>1</code></td><td>仅 medium（字段名类）</td></tr>
+          <tr><td><code>2</code></td><td>含 critical（种子 / 未来 / 商店 / canary）</td></tr>
+          <tr><td><code>4</code></td><td>审计器自身失效：蜜罐自测 &lt;100%，或规则集钉扎不符（<code>E_ENV_AUDIT_RULESET</code>）</td><td>守卫轴（优先于结论轴）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn"><b>审计不是“每代自动跑”。</b>触发方式是显式 CLI：<code>python -m dice_ratchet audit leak --run-id &lt;id&gt;</code>。配置里只有 <code>sandbox.audit.ruleset_pin</code> 一个键，它必须等于代码常量 <code>RULESET_VERSION="1.1.0"</code>；不符就 fail-closed，避免“用旧规则宣布 clean”。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">05</span>配置面：从 15 个键砍到 2 个</h2>
+    <p>2026-10-14 的逐键核查发现：<code>env.sandbox.*</code> 原有 15 个键，只有 2 个真的有消费者。其余 13 个不是“忘了接线”，而是“本就不该是可配项”。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>保留的键</th><th>默认</th><th>消费者 / 语义</th></tr></thead>
+        <tbody>
+          <tr><td><code>env.sandbox.policy_failure_streak</code></td><td><code>3</code></td><td>连续 <code>reject(final=True)</code> 达到即判 <code>policy_failure</code></td></tr>
+          <tr><td><code>env.sandbox.audit.ruleset_pin</code></td><td><code>1.1.0</code></td><td>规则集版本钉扎；必须是代码常量的镜像</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">删掉的 13 个包括：<code>guard.enforce</code>（warn 档会削弱 INV-4）、<code>scan_roots</code>（扫描面是分层结构，不是参数）、<code>honeypot.enabled</code>（给不变式留静默关闭点）、<code>projection.schema_version</code>（必须不可被配置伪造）、<code>exec.*</code>（沙箱上限正是 INV-4 要防的东西）等。</p>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">06</span>当前状态与已知边界</h2>
+    <div class="kpis">
+      <div class="kpi accent"><div class="num">1.1.0</div><div class="label">规则集版本（2026-10-14 起）</div></div>
+      <div class="kpi"><div class="num">6<span class="unit">类</span></div><div class="label">结构化泄漏判定</div></div>
+      <div class="kpi"><div class="num">12/12</div><div class="label">蜜罐自测命中率（G4）</div></div>
+      <div class="kpi warn"><div class="num">2<span class="unit">键</span></div><div class="label">env.sandbox.* 配置面</div></div>
+    </div>
+    <div class="callout bad"><b>一次真实教训：</b>2026-10-14 之前 <code>future_room_leak</code> 是<strong>跨局</strong>作用域，同一批工件复跑得到 5,852 条 critical findings；改成逐局后是 <code>clean / 0 findings</code>。这类“审计器误报”比漏报更难被发现，因为它看起来很有产出。</div>
+    <div class="callout"><b>设计上的取舍：</b>审计按 <code>content_hash</code> 反查真实配表。如果一个都对不上，就判 critical 并降级 future_room / shop 两类规则集——宁可承认“这次没查全”，也不拿默认配表凑数。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">07</span>延伸阅读</h2>
+    <ul class="clean">
+      <li><a href="mod-01.html">MOD-01 env-rules</a> —— 被包在沙箱里的规则内核。</li>
+      <li><a href="mod-04.html">MOD-04 policy</a> —— 投影后的 Observation 在这里变成 prompt。</li>
+      <li><a href="../prd/MOD-02-env-sandbox-PRD.md">MOD-02 PRD</a> · <a href="../prd/OBSERVATION_CHANGELOG.md">观测字段变更记录</a></li>
+    </ul>
+  </section>
+
+  <div class="pager">
+    <a class="prev" href="mod-01.html"><span class="dir">PREV</span><span class="to">← MOD-01 env-rules</span></a>
+    <a class="next" href="mod-03.html"><span class="dir">NEXT</span><span class="to">MOD-03 inference →</span></a>
+  </div>
+
+  <footer class="footer">
+    <span>DiceRatchet 模块可视化讲解 · MOD-02</span>
+    <span>事实来源：<code>dice_ratchet/sandbox/*</code> + PRD · 生成于 2026-10-17</span>
+  </footer>
+
+</div></main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

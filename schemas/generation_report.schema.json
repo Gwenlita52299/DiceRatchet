@@ -78,7 +78,7 @@
       "type": "array",
       "items": { "type": "object" }
     },
-    "decision": { "enum": ["pending", "baseline", "accept", "reject", "rollback"] },
+    "decision": { "enum": ["pending", "baseline", "accept", "reject", "rollback", "error_reject"] },
     "decided_by": { "enum": ["auto", "human"] },
     "reason": { "type": "string" },
     "power_note": { "type": "string" }

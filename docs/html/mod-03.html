@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MOD-03 inference · DiceRatchet 可视化讲解</title>
+<meta name="description" content="MOD-03 inference：统一模型出口，三种本地/在线后端、三角色绑定、三级 JSON 修复与按调用方给预算。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="shell">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html">
+    <span class="logo">◈ <b>DiceRatchet</b></span>
+    <div class="sub">模块可视化讲解 · docs/html<br>源 commit 879ea49 · 2026-10-17</div>
+  </a>
+  <nav class="nav">
+    <div class="nav-title">总览</div>
+    <a href="index.html">闭环与模块地图 <span class="tag">00</span></a>
+    <a href="game.html">游戏本体 GAME <span class="tag">G</span></a>
+    <div class="nav-title">环境层 L0</div>
+    <a href="mod-01.html">MOD-01 env-rules <span class="tag">01</span></a>
+    <a href="mod-02.html">MOD-02 env-sandbox <span class="tag">02</span></a>
+    <div class="nav-title">智能体层 L1</div>
+    <a href="mod-03.html">MOD-03 inference <span class="tag">03</span></a>
+    <a href="mod-04.html">MOD-04 policy <span class="tag">04</span></a>
+    <a href="mod-05.html">MOD-05 memory <span class="tag">05</span></a>
+    <div class="nav-title">进化层 L2</div>
+    <a href="mod-06.html">MOD-06 loop <span class="tag">06</span></a>
+    <a href="mod-07.html">MOD-07 evolve <span class="tag">07</span></a>
+    <div class="nav-title">测量与工程 L3</div>
+    <a href="mod-08.html">MOD-08 evals <span class="tag">08</span></a>
+    <a href="mod-09.html">MOD-09 infra <span class="tag">09</span></a>
+  </nav>
+</aside>
+
+<main class="main"><div class="wrap">
+
+  <header class="reveal">
+    <div class="eyebrow">L1 · 智能体层 · Milestone M1（DeepSeek 后端为 Issue #1 追加）</div>
+    <h1>MOD-03 <span class="thin">inference</span></h1>
+    <p class="lede">系统里<strong>唯一的模型出口</strong>。它要同时满足五个约束：本地可离线、输出能被 JSON Schema 收敛、24 GB 内存不炸、评估时能被并发调用、以及“同 seed 同配置尽量可复现”。</p>
+    <div class="badges">
+      <span class="badge l1">L1 智能体</span>
+      <span class="badge ok">✅ 已落地</span>
+      <span class="badge">MLX / llama.cpp / mock / DeepSeek API</span>
+      <span class="badge">三角色绑定</span>
+    </div>
+  </header>
+
+  <section class="reveal">
+    <h2><span class="no">01</span>一个出口，多个后端</h2>
+    <p>上层（MOD-04/06/07/08）只知道 <code>InferenceClient.generate_json()</code>，不需要知道背后是 MLX、llama-server 还是 HTTP API。新增一个后端只需要实现 <code>Backend</code> 协议与 <code>name</code>/<code>model_id</code> 属性。</p>
+    <div class="diagram">
+      <svg viewBox="0 0 940 320" role="img" aria-label="三角色经统一客户端路由到四种后端">
+        <defs>
+          <marker id="m3-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#37d6c0"/>
+          </marker>
+          <marker id="m3-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3a4d66"/>
+          </marker>
+        </defs>
+
+        <rect x="24" y="36" width="150" height="44" rx="9" class="n-box"/>
+        <text x="99" y="63" text-anchor="middle" class="n-sub">policy（决策）</text>
+        <rect x="24" y="96" width="150" height="44" rx="9" class="n-box"/>
+        <text x="99" y="123" text-anchor="middle" class="n-sub">reflection（反思）</text>
+        <rect x="24" y="156" width="150" height="44" rx="9" class="n-box"/>
+        <text x="99" y="183" text-anchor="middle" class="n-sub">proposer（提案）</text>
+        <text x="99" y="228" text-anchor="middle" class="n-tiny">三个角色，可以绑不同模型</text>
+
+        <rect x="230" y="66" width="196" height="104" rx="11" class="n-box-accent"/>
+        <text x="328" y="94" text-anchor="middle" class="n-label">RoleModelProvider</text>
+        <text x="328" y="114" text-anchor="middle" class="n-sub">client_for(role)</text>
+        <text x="328" y="134" text-anchor="middle" class="n-tiny">四级优先级解析</text>
+        <text x="328" y="152" text-anchor="middle" class="n-tiny">缺绑定 ⇒ fail-closed</text>
+
+        <rect x="482" y="52" width="200" height="132" rx="11" class="n-box-warn"/>
+        <text x="582" y="78" text-anchor="middle" class="n-label">InferenceClient</text>
+        <text x="582" y="98" text-anchor="middle" class="n-sub">generate_json / generate</text>
+        <text x="582" y="118" text-anchor="middle" class="n-tiny">三级 JSON 修复</text>
+        <text x="582" y="136" text-anchor="middle" class="n-tiny">上下文守卫 · 超时 · 重试</text>
+        <text x="582" y="154" text-anchor="middle" class="n-tiny">每次尝试 → 一条 call record</text>
+        <text x="582" y="172" text-anchor="middle" class="n-tiny">E_LLM_* 统一出口</text>
+
+        <rect x="744" y="24" width="172" height="38" rx="8" class="n-box"/>
+        <text x="830" y="48" text-anchor="middle" class="n-sub">MLX（进程内）</text>
+        <rect x="744" y="72" width="172" height="38" rx="8" class="n-box"/>
+        <text x="830" y="96" text-anchor="middle" class="n-sub">llama.cpp / llama-server</text>
+        <rect x="744" y="120" width="172" height="38" rx="8" class="n-box"/>
+        <text x="830" y="144" text-anchor="middle" class="n-sub">mock（离线自检）</text>
+        <rect x="744" y="168" width="172" height="38" rx="8" class="n-box-game"/>
+        <text x="830" y="192" text-anchor="middle" class="n-sub">DeepSeek API（在线）</text>
+
+        <path d="M174 58 C 200 58, 206 104, 230 104" class="edge" marker-end="url(#m3-ar2)"/>
+        <path d="M174 118 L230 118" class="edge" marker-end="url(#m3-ar2)"/>
+        <path d="M174 178 C 200 178, 206 132, 230 132" class="edge" marker-end="url(#m3-ar2)"/>
+        <path d="M426 118 L482 118" class="edge-flow" marker-end="url(#m3-ar)"/>
+        <path d="M682 88 C 714 88, 716 44, 744 44" class="edge" marker-end="url(#m3-ar2)"/>
+        <path d="M682 104 C 714 104, 716 92, 744 92" class="edge" marker-end="url(#m3-ar2)"/>
+        <path d="M682 132 C 714 132, 716 140, 744 140" class="edge" marker-end="url(#m3-ar2)"/>
+        <path d="M682 150 C 714 150, 716 188, 744 188" class="edge" marker-end="url(#m3-ar2)"/>
+
+        <rect x="230" y="244" width="636" height="52" rx="9" class="n-box"/>
+        <text x="548" y="266" text-anchor="middle" class="n-sub">解析优先级：experiment.roles.&lt;role&gt; &gt; experiment.arms[arm].&lt;role&gt; &gt; models.&lt;role&gt; &gt; inference.model_id</text>
+        <text x="548" y="285" text-anchor="middle" class="n-tiny">API key 只进内存；provenance 只记变量名与“是否已设置”，绝不记密钥本体</text>
+      </svg>
+      <div class="caption"><b>模型是配置，不是代码。</b>同一套代码可以用“三角色全本地 8B”跑离线，也可以切到“三角色全 deepseek-flash”（实验臂 C1）。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">02</span>三级 JSON 修复：不让坏格式毁掉一整局</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 900 250" role="img" aria-label="generate_json 的三级策略">
+        <rect x="26" y="34" width="240" height="70" rx="10" class="n-box-accent"/>
+        <text x="146" y="60" text-anchor="middle" class="n-label">① 约束解码</text>
+        <text x="146" y="80" text-anchor="middle" class="n-sub">后端 GBNF / JSON mode</text>
+        <text x="146" y="96" text-anchor="middle" class="n-tiny">让模型“很难”输出坏 JSON</text>
+
+        <rect x="330" y="34" width="240" height="70" rx="10" class="n-box"/>
+        <text x="450" y="60" text-anchor="middle" class="n-label">② Schema 校验</text>
+        <text x="450" y="80" text-anchor="middle" class="n-sub">jsonschema.validate</text>
+        <text x="450" y="96" text-anchor="middle" class="n-tiny">失败则收集具体错误</text>
+
+        <rect x="634" y="34" width="240" height="70" rx="10" class="n-box-warn"/>
+        <text x="754" y="60" text-anchor="middle" class="n-label">③ 带错误的修复重试</text>
+        <text x="754" y="80" text-anchor="middle" class="n-sub">把校验错误喂回模型</text>
+        <text x="754" y="96" text-anchor="middle" class="n-tiny">上限 max_attempts=3 · 退避 200/400 ms</text>
+
+        <path d="M266 69 L330 69" class="edge"/>
+        <path d="M570 69 L634 69" class="edge"/>
+        <path d="M754 104 C 754 160, 450 168, 450 104" class="edge-dash"/>
+        <text x="602" y="178" text-anchor="middle" class="n-tiny">仍失败 ⇒ E_LLM_SCHEMA_INVALID（attempts 记真实次数）</text>
+
+        <rect x="230" y="196" width="440" height="38" rx="8" class="n-box"/>
+        <text x="450" y="220" text-anchor="middle" class="n-sub">全程受 total_timeout_ms=120 s 约束；超时不留半截结果</text>
+      </svg>
+      <div class="caption"><b>为什么不是“重试到成功”。</b>修复重试必须带具体校验错误；无信息重试只会烧 token。全程墙钟上限保证一次坏调用不会卡死整代。</div>
+    </div>
+    <h3>预算按调用方给，而不是全局抬高</h3>
+    <p>历史上提案与决策共用一个全局 <code>max_tokens=256</code>，导致提案（约需 500 token）一律被截断、被误报成 schema 错误，闭环静默定格。现在由调用方显式给预算：</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>调用方</th><th>预算</th><th>温度 / seed</th></tr></thead>
+        <tbody>
+          <tr><td>决策 <code>PolicyAgent</code></td><td><code>agent.policy.max_tokens=320</code></td><td>训练 0.7–1.2；评估固定 0.0</td></tr>
+          <tr><td>局末反思</td><td>256（<code>sampling.max_tokens</code>）</td><td>评估温度 0.0，seed=0</td></tr>
+          <tr><td>harness 提案 <code>proposer</code></td><td><code>_PROPOSE_MAX_TOKENS=2048</code></td><td>按配置；不受 256 全局值限制</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout warn"><b>诚实边界：</b>API 后端不承诺“同 seed 逐字节复现”（同一请求字节多次返回不同响应）。所以 G3 的确定性承诺按层执行：本地臂硬校验；含 API 角色的臂只发 <code>eval.nondeterministic</code> 事件，不抛异常。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">03</span>内存与并发：先算预算，再提交推理</h2>
+    <div class="callout"><b>公式：</b><code>required_gb = resident_gb_est + kv_gb_per_1k_tokens × (context_length/1000) × max_inflight + 1.0</code>。超过 <code>ram_budget_gb</code> 就在 acquire 信号量<strong>之前</strong>抛 <code>E_LLM_OOM</code>——零提交，不产生半截请求。</div>
+    <div class="cards">
+      <div class="card"><h3>常驻预算 20 GB</h3><p>24 GB 机器留 4 GB 给 Python / 环境 / OS。8B Q4 实测常驻 4.61 GB。</p></div>
+      <div class="card"><h3>并发可配</h3><p><code>inference.max_inflight</code> 默认 4；评估模式强制 1。局级并发靠 <code>loop.eval_concurrency</code>，而不是模型级批处理。</p></div>
+      <div class="card"><h3>失败可降级</h3><p>加载失败可退避后换 <code>fallback_backend</code> 重试一次；OOM、超时、schema 失败都以 <code>E_LLM_*</code> 暴露给上层决定。</p></div>
+      <div class="card"><h3>前缀缓存只对本地有效</h3><p><code>cache_prompt</code> 只被 llama-server 消费；API 臂没有本地 prefill，缓存命中率也不可测。</p></div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">04</span>错误码：模型侧失败长什么样</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>错误码</th><th>触发</th><th>上层怎么处置</th></tr></thead>
+        <tbody>
+          <tr><td><code>E_LLM_UNAVAILABLE</code></td><td>未知 model_id / 权重缺失 / sha256 不符 / 角色无绑定</td><td>退出码 3；不静默换模型</td></tr>
+          <tr><td><code>E_LLM_LOAD_FAILED</code></td><td>后端加载失败</td><td>退避后换 fallback 后端重试 1 次</td></tr>
+          <tr><td><code>E_LLM_OOM</code></td><td>内存预算前置拒绝，或真实 OOM</td><td>不提交推理；可降级到 fallback</td></tr>
+          <tr><td><code>E_LLM_TIMEOUT</code></td><td>单次 / 全程墙钟超时</td><td>该次调用失败；由 MOD-04 fallback</td></tr>
+          <tr><td><code>E_LLM_SCHEMA_INVALID</code></td><td>三级修复耗尽</td><td>决策改走启发式；不污染指标</td></tr>
+          <tr><td><code>E_LLM_CONTEXT_OVERFLOW</code></td><td>prompt + max_tokens 超上下文</td><td><code>reject</code> 直接抛；<code>truncate</code> 截最早消息</td></tr>
+          <tr><td><code>E_LLM_NONDETERMINISTIC</code></td><td>同一 request hash 的 API 响应变化</td><td>绝不覆盖旧证据；发 <code>llm.nondeterministic</code> 事件</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">05</span>当前状态（2026-10-17）</h2>
+    <div class="kpis">
+      <div class="kpi accent"><div class="num">C1</div><div class="label">M2/M3 主力臂：三角色全 deepseek-flash</div></div>
+      <div class="kpi"><div class="num">2.09–2.52<span class="unit">min/局</span></div><div class="label">API 臂单局（本地 8B ≈19.6 min）</div></div>
+      <div class="kpi"><div class="num">12.0<span class="unit">tok/s</span></div><div class="label">本地 8B 实测（真实 prompt）</div></div>
+      <div class="kpi warn"><div class="num">4.61<span class="unit">GB</span></div><div class="label">8B Q4 常驻内存实测</div></div>
+    </div>
+    <div class="callout"><b>本地推理的原始性能目标没有达成。</b>注册表里原预算 p50 1.5 s / p95 3 s / 25 tok/s，实测真实 prompt p50 5.69 s / p95 11.7 s / 12.0 tok/s。新预算按实测重设，只用于捕捉回归，不代表“目标已满足”。</div>
+    <div class="callout warn"><b>成本口径。</b>M3 从“墙钟瓶颈”变成“API 花费与限流瓶颈”：一代 74–114 局，API 臂一代 ≈¥84–100（按当时单价）。m3r2 实际 262 局花掉 ¥240.94。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">06</span>延伸阅读</h2>
+    <ul class="clean">
+      <li><a href="mod-04.html">MOD-04 policy</a> —— 谁在调用它、怎么把输出变成动作。</li>
+      <li><a href="mod-07.html">MOD-07 evolve</a> —— proposer 角色如何用 2048 token 预算写补丁。</li>
+      <li><a href="../prd/MOD-03-inference-PRD.md">MOD-03 PRD</a> · <a href="../../configs/models.yaml">models.yaml 注册表</a></li>
+    </ul>
+  </section>
+
+  <div class="pager">
+    <a class="prev" href="mod-02.html"><span class="dir">PREV</span><span class="to">← MOD-02 env-sandbox</span></a>
+    <a class="next" href="mod-04.html"><span class="dir">NEXT</span><span class="to">MOD-04 policy →</span></a>
+  </div>
+
+  <footer class="footer">
+    <span>DiceRatchet 模块可视化讲解 · MOD-03</span>
+    <span>事实来源：<code>dice_ratchet/inference/*</code> + PRD · 生成于 2026-10-17</span>
+  </footer>
+
+</div></main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

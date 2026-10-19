@@ -1,6 +1,6 @@
 # GAME-00 网页版骰子 roguelike 游戏 PRD
 
-> 版本：v1.2（2026-09-30 17:21 为 RSI 训练补充局长选项，见 §20）· 状态：待评审（可交付生成）· 定位：**这份 PRD 是「游戏实现」的唯一事实来源（SSoT）**
+> 版本：v1.3（2026-10-17 与实现对齐：技能骰 15 → 17，见 §20）· 历史版本：v1.2（2026-09-30 17:21 为 RSI 训练补充局长选项）· 状态：待评审（可交付生成）· 定位：**这份 PRD 是「游戏实现」的唯一事实来源（SSoT）**
 > 作者：GAME-00 owner · 日期：2026-09-30
 > 上游：[项目计划-DiceRatchet.md](../../项目计划-DiceRatchet.md) · [模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)
 > 下游/平行：[MOD-01-env-rules-PRD.md](MOD-01-env-rules-PRD.md)（**本游戏跑通后**，按本 PRD 规则另行实现一份纯 Python 模拟器供 RSI 训练）
@@ -383,7 +383,7 @@ status → target.status[kind] += value          # 中毒/灼烧在 upkeep 结�
 
 **通用技能骰（common，任意构筑可用，无强学派倾向）**：提供"过牌/金币/改骰面"等工具效果，`school=neutral` 不参与克制。
 
-**技能骰配表（示例锚点，完整 15 颗见 [GAME-02](GAME-02-content-tables.md) §3）**：
+**技能骰配表（示例锚点，完整 17 颗见 [GAME-02](GAME-02-content-tables.md) §2/§3）**：
 
 | ID | 名称 | 学派 | risk | 核心骰面 | 机制 |
 |---|---|---|---|---|---|
@@ -986,3 +986,4 @@ status → target.status[kind] += value          # 中毒/灼烧在 upkeep 结�
 | v1.0 | 2026-09-30 | 首版 |
 | v1.1 | 2026-09-30 16:39 | 按 `src/game` 实现回写：§0/G-1 启动方式改为 `node server.js`；§4.2 动作全集补充 `targetId` 与 `purify`；§4.3 工具槽可重复使用；§5.3 风险等级阈值修订；§5.5 蓄势/处决规则具体化；§6.2 单系惩罚最小骰数；§7.1 `virtueMax`/`enemyHpMul`/`enemyDmgMul` 平衡标定并附通关率；§17.1 登记实现决策 D-09～D-33 |
 | v1.2 | 2026-09-30 17:21 | 为 RSI 训练（Spec v1.3 §8.6）补充：§8.2 新增可选 `stageCount`（D-34）；修复胜局 `stagesCleared` 漏记（D-35）。内核测试 48/48，golden 未变 |
+| v1.3 | 2026-10-17 | **与实现对齐（纯文档，¥0）**：技能骰总数 15 → **17**（`src/game/content/skills.json` 实测 17 条：blade 5 / arcana 5 / verdant 5 / common 2）。内核测试现状以 `node --test` 实测为准（49 项通过 / 5 组 golden）。 |

@@ -1,6 +1,7 @@
 # MOD-02 env-sandbox 技术 PRD
 
-> 版本：v1.2.6（2026-10-15 **F78 落地：逐步内核不变式校验真正接上**——新增 **FR-02-8d**：每个合法动作在提交前对未提交的新状态跑 MOD-01 `assert_invariants`（内核那次被游戏侧 `debug.showHiddenInfo` 门着、生产局为零）；违反 ⇒ `E_ENV_INTERNAL`（退出码 4）⇒ **该步不提交**，随后按**既有失败恢复矩阵**（训练路径同类累计 ≥3 中止 run；MOD-08 批量测量记 dropped）；实测 ≈137.5 µs/步（≈48 ms/局，`scripts/bench_invariants.py`）。对齐 Spec v2.32 / B-89，见 §4 与 §17）
+> 版本：v1.2.7（2026-10-17 **与代码对齐（纯文档，¥0；15 条，见 §17）**：环境变量前缀改为 `DICERATCHET_ENV__SANDBOX__<KEY>`、事件名改为 `<module>.<event>` 真名、`E_ENV_*` 登记处改为 `infra/errors.py`、`E_ENV_AUDIT_IO` 的退出码按实际路径区分、`honeypot.jsonl` 无写入点、6 个 `sandbox_*` 入档指标无落盘、`state_hash`/`schemaVersion`/`schemas/audit_report.schema.json` 等。对齐 Spec v2.35）
+> **历史版本**：v1.2.6（2026-10-15 **F78 落地：逐步内核不变式校验真正接上**——新增 **FR-02-8d**：每个合法动作在提交前对未提交的新状态跑 MOD-01 `assert_invariants`（内核那次被游戏侧 `debug.showHiddenInfo` 门着、生产局为零）；违反 ⇒ `E_ENV_INTERNAL`（退出码 4）⇒ **该步不提交**，随后按**既有失败恢复矩阵**（训练路径同类累计 ≥3 中止 run；MOD-08 批量测量记 dropped）；实测 ≈137.5 µs/步（≈48 ms/局，`scripts/bench_invariants.py`）。对齐 Spec v2.34 / B-89（v2.33/v2.34 只改 evals/evolve，未触及本模块），见 §4 与 §17）
 > 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突以 Spec 为准）· 上游计划：[../../项目计划-DiceRatchet.md](../../项目计划-DiceRatchet.md) §3/§8
 > 作者：DiceRatchet 技术文档（MOD-02 负责模块）
 
@@ -16,10 +17,10 @@ M0 目标：① 交给 L1+ 的环境数据只可能来自 `dice_ratchet/sandbox/
 
 - `dice_ratchet/sandbox/projection.py`：`OBSERVATION_SCHEMA` 注册表、字段级白名单投影、`obs_digest`、投影协议版本与 CHANGELOG 一致性校验。
 - `dice_ratchet/sandbox/api.py`：`SandboxEnv` 门面（agent 侧唯一入口），私有持有 MOD-01 引擎，不暴露 `FullState`。
-- `dice_ratchet/sandbox/guard.py`：import 门禁（静态 AST + 运行期 import hook + 子进程边界）、harness 代码受限执行（AST 白名单+黑名单）、资源与超时限制。
-- `dice_ratchet/sandbox/audit.py`：可见性重建器、规则扫描器、`leak-report` 输出 schema（CLI 由 MOD-09 暴露）。
+- `dice_ratchet/sandbox/guard.py`：import 门禁（静态 AST + 运行期 import hook + 子进程边界）、harness 代码受限执行（**只用黑名单** `BLOCKED_NODES`/`BLOCKED_CALLS`/`BLOCKED_MODULES`/`ATTR_DENY`；v1.0 的 `ALLOWED_NODES` 白名单已废弃）、资源与超时限制。
+- `dice_ratchet/sandbox/audit.py`：可见性重建器、规则扫描器（报告 schema 在 `schemas/audit_report.schema.json`；CLI 由 MOD-09 暴露）。
 - `dice_ratchet/sandbox/honeypot.py`：canary/假字段注入、触发监控、P0 告警、自测用例生成。
-- 落地文件：`runs/<run_id>/audit/leak-<scope>.json`、`harness-gate.json`、`honeypot.jsonl`。
+- 落地文件：`runs/<run_id>/audit/leak-<scope>.json`、`harness-gate.json`。**`honeypot.jsonl` 当前不会落盘**：`honeypot.record_hits()` 全库 0 调用点，ledger 只由 `DICERATCHET_HONEYPOT_LEDGER` 指定。
 
 ### 2.2 范围外（非目标）
 
@@ -27,7 +28,7 @@ M0 目标：① 交给 L1+ 的环境数据只可能来自 `dice_ratchet/sandbox/
 
 - 规则本身（MOD-01）、奖励函数（MOD-01）、模型侧重试（MOD-03）。
 
-补充（不扩大范围）：非法动作的**语义判定**属 MOD-01/MOD-04，MOD-02 只保证 `info["illegal"]` 被如实投影；`full_state_hash()` 由 MOD-01 实现，MOD-02 只保证不复用为 `obs_digest` 且不入 Observation。
+补充（不扩大范围）：非法动作的**语义判定**属 MOD-01/MOD-04，MOD-02 只保证 `info["illegal"]` 被如实投影；`state_hash()` 由 MOD-01 实现（旧名 `full_state_hash()` 不存在），MOD-02 只保证不复用为 `obs_digest` 且不入 Observation。
 
 ## 3. 使用方与场景
 
@@ -36,9 +37,9 @@ M0 目标：① 交给 L1+ 的环境数据只可能来自 `dice_ratchet/sandbox/
 | MOD-04 policy | 取 `obs` dict 组装 prompt；取注册表工具函数 | `observe/step/legal_actions`、`load_harness_tools` |
 | MOD-06 loop | 驱动单局、落地轨迹 | `reset/step/close`、`obs_digest` |
 | MOD-07 evolve | 候选工具先过静态门禁与受限执行再入库 | `gate`、`load_harness_tools`（Spec §4.7，返回子进程 `ToolWorker`） |
-| MOD-08 evals | 泄漏审计与蜜罐告警纳入评估报告 | `run_audit`、honeypot 事件 |
+| MOD-08 evals | **当前未接线**：审计只经显式 CLI（`app.py::_audit_leak`），`evals/` 不调用 `run_audit`、也不读蜜罐事件 | —（若将来要纳入报告，需新增接线） |
 | MOD-09 infra | CLI `audit leak`、CI import 门禁、`E_ENV_*` 登记 | `run_audit`、`audit_to_console` |
-| 评测复核者 | 事后回答「它有没有看到不该看的」 | `leak-report.schema.json` 全字段 |
+| 评测复核者 | 事后回答「它有没有看到不该看的」 | `schemas/audit_report.schema.json` 全字段 |
 
 ## 4. 功能需求（FR-02-x，编号，每条可测试）
 
@@ -51,7 +52,7 @@ M0 目标：① 交给 L1+ 的环境数据只可能来自 `dice_ratchet/sandbox/
 | FR-02-3b | `render_compact(obs) -> str`：确定性的紧凑文本渲染，供 MOD-04 填入 `{{observation}}`。地图只展开下一行的可达节点，手骰、槽、敌人各占一行。p95 ≤ 1,500 token（8B 分词器）。渲染规则随 `schemaVersion` 版本化，golden 覆盖。 |
 | FR-02-4 | `OBSERVATION_SCHEMA` 不可变；字段增删/类型变更必须 `OBSERVATION_SCHEMA_VERSION` 主版本 +1，并在 `docs/prd/OBSERVATION_CHANGELOG.md` 追加「版本/日期/字段/digest 影响/PR 号」。 |
 | FR-02-5 | **CI** 校验 CHANGELOG 末行版本 == `OBSERVATION_SCHEMA_VERSION`，不一致则 `E_ENV_PROJECTION_VERSION`。运行时不读文档目录（v1.0 在 import 时读 `docs/`，打包后会失效）。 |
-| FR-02-6 | `schema_version` 由投影层强制注入，同名源字段被覆盖（防伪造，字段名见 §6）。 |
+| FR-02-6 | `schemaVersion` 由投影层强制注入，同名源字段被覆盖（防伪造，字段名见 §6；是 camelCase）。 |
 | FR-02-7 | `SandboxEnv` 私有持有 `self._engine`，**无任何返回 `FullState` 的公开成员**；`step()` 内先算 `state_hash`/`obs_digest` 再丢弃 full_state 引用。 |
 | FR-02-8 | 非法动作由 MOD-01 判定；`step()` 返回 `reward=-0.05, info={"illegal":True,...}` 且不抛异常、观测不变（`lastResult` 更新）。 |
 | FR-02-8a | `reject(*, stage, reason, raw, final)`（Spec §4.1/§4.3，P-02 结案）：L1/L2 校验失败时由 MOD-04 调用，不改状态，`illegal_count += 1`，shaped `-0.05`，写一行 `illegal=true` 的轨迹。 |
@@ -68,21 +69,21 @@ M0 目标：① 交给 L1+ 的环境数据只可能来自 `dice_ratchet/sandbox/
 | FR-02-16 | `rebuild_visible_set()` 从 episodes JSONL + prompt/memory 文本重建 `VisibleSet`：`obs_paths`、`obs_digests`、`memory_texts`、`harness_version`、`seeds_seen`。 |
 | FR-02-17 | 扫描 6 类：`seed_leak`、`future_room_leak`、`shop_content_leak`、`full_state_field_leak`、`hidden_field_name_leak`、`canary_leak`，每类输出 finding 明细。**⚠️ 2026-10-14 修订（RULESET_VERSION 1.1.0 / F58）**：`future_room_leak` 与隐藏 token 是**逐局作用域**——某局只用**本局**的 `hidden − shown`；`memory/` 全局库与 `events.jsonl` 这类跨局出口用 `unscoped`（= 任何一局都从未合法展示过）。 |
 | FR-02-18 | 扫描面覆盖 `prompt`（LLM 真实入参）、`memory`（记忆写入）、`log`（JSONL 全字段）；任一出口命中即 P0。 |
-| FR-02-19 | `run_audit()` 输出严格符合 `audit/report.schema.json`；退出码 `0` 无 finding / `1` 仅 medium / `2` 含 critical，供 CLI 透传；`evidence` 仅保留命中 token 前后各 `evidence_chars`（默认 12）字符，报告权限 `0600`，避免报告自身成为泄漏载体。 |
+| FR-02-19 | `run_audit()` 输出严格符合 `schemas/audit_report.schema.json`；退出码 `0` 无 finding**且无 warning** / `1` 仅 medium **或仅 warning** / `2` 含 critical，供 CLI 透传；`evidence` 仅保留命中 token 前后各 `evidence_chars`（默认 12）字符，报告权限 `0600`，避免报告自身成为泄漏载体。 |
 | FR-02-20 | `honeypot.inject()` 的注入点改为 GAME 状态中真实存在的隐藏位置：<br>• 未揭示地图行的节点 `preview.enemyNames` 中嵌入 `HONEYPOT_CANARY`<br>• `state.node.shop` 未展示的库存加 `_np_secret_price`<br>• 抽骰堆 `player.drawPile` 末尾的虚构骰 `_np_future_die`<br>• `enemies[]._np_hidden_status`<br>注入只作用于投影前 state 的**副本**，不影响 `stateDigest` 对拍。 |
 | FR-02-21 | canary 与 3 个假字段名不得出现在 `OBSERVATION_SCHEMA` 任何 `source_path` 中；注册表导入时断言，违反抛 `E_ENV_HONEYPOT`。 |
-| FR-02-22 | `honeypot.scan(text)` 用字节级 `.find()`（非正则）匹配每个 canary/假字段，命中产 `HoneypotHit` + `audit_honeypot_triggered` 事件（MOD-09 格式）。 |
+| FR-02-22 | `honeypot.scan(text)` 用字节级 `.find()`（非正则）匹配每个 canary/假字段，命中只产 `HoneypotHit`——**`scan()` 自己不 emit 事件**；P0 事件由 `audit._honeypot_findings` 发 `sandbox.honeypot_hit`（字段 `sentinel/surface/episode_id/step/offset`，无 `canary_hash`）。 |
 | FR-02-23 | `honeypot.self_test()` 生成 12 条用例（prompt/memory/log × canary/假字段），命中率必须 100%；`audit leak` 前强制执行，低于 100% 直接判 `critical`。 |
-| FR-02-24 | `mode="strict"` 记 `dropped_hidden` 计数并告警；`mode="assert"` 命中隐藏字段即抛 `E_ENV_SCHEMA`（供 golden/CI）。 |
+| FR-02-24 | `mode="strict"` 记 `dropped_hidden` 计数并告警；`mode="assert"` 对**投影结果**跑 `validate_observation`（类型/必填/未登记输出键）并在失败时抛 `E_ENV_SCHEMA`。**未登记的源字段在 assert 下也只是计数丢弃，不会抛错**（隐藏信息的第一道防线是投影白名单）。 |
 
 ## 5. 非功能需求（NFR-02-x：确定性/性能/可复现/可观测）
 
 | 编号 | 需求 |
 |---|---|
-| NFR-02-1 确定性 | `project_state`/`obs_digest` 无随机、无时间依赖；canonical JSON 统一用 MOD-01 `stable_stringify`（`sort_keys=True, ensure_ascii=True, separators=(",",":")`，与 JS 一致，Spec P-21 结案）；`PYTHONHASHSEED=0` 下同 seed 重跑 `obs_digest`/`state_hash` 序列逐字节相同（G3）。 |
+| NFR-02-1 确定性 | `project_state`/`obs_digest` 无随机、无时间依赖；canonical JSON 统一用 MOD-01 `stable_stringify`（`sort_keys=True, ensure_ascii=False, separators=(",",":")`——JS `JSON.stringify` 不转义非 ASCII，用 `True` 会让含中文的摘要与 JS 不一致，Spec P-21 结案）；`PYTHONHASHSEED=0` 下同 seed 重跑 `obs_digest`/`state_hash` 序列逐字节相同（G3）。 |
 | NFR-02-2 性能 | 投影 + 紧凑渲染 p95 ≤ 2 ms/步（GAME 观测约 12k 字符，v1.0 的 200 µs 是按旧观测估的）；审计 ≤2 s/1000 步；工具 worker 单次调用往返 ≤ 20 ms（常驻进程，不含首次启动）；worker 冷启动 ≤ 150 ms。 |
 | NFR-02-3 可复现 | 报告含 `ruleset_version`/`run_id`/`config_hash`；同 run 两次审计除 `generated_at` 外逐字节相同。 |
-| NFR-02-4 可观测+fail-closed | 拒绝/超时/触发全部产结构化事件，不自建日志格式；`E_ENV_*` 在 `infra/logging.py` 集中登记；隔离与门禁的内部错误默认拒绝（拒绝执行/判 critical），绝不静默放行。 |
+| NFR-02-4 可观测+fail-closed | 拒绝/超时/触发全部产结构化事件，不自建日志格式；`E_ENV_*` 登记在 `infra/errors.py` 的 `E` 枚举（`EXIT_CODE` 在 `:162-186`），事件登记在 `infra/events.py::EVENT_REGISTRY`（**`infra/logging.py` 里没有 E_ENV**）；隔离与门禁的内部错误默认拒绝（拒绝执行/判 critical），绝不静默放行。 |
 | NFR-02-5 可测性 | 5 个文件仅用 stdlib；`projection`/`audit`/`honeypot` 为纯函数模块，单测覆盖率 ≥80%（G1）。 |
 
 ## 6. 接口契约（真实 Python 签名 + JSON Schema）
@@ -102,7 +103,7 @@ def obs_field_paths() -> tuple[str, ...]:      # 所有 enabled 字段 name；�
 def project_state(game_obs: Mapping[str, Any], *, ctx: ProjectionCtx, mode: str = "strict") -> tuple[dict, ProjectionStat]:
     """GAME observe(state,"full") → obs-agent-1.0.0（纯函数，FR-02-3a）。mode ∈ {"strict","assert"}；非 optional 字段缺失 → E_ENV_PROJECTION_MISSING。"""
 def canonical_json(obj: Any) -> bytes: ...
-def obs_digest(obs: Mapping[str, Any]) -> str:          # 含 schema_version 的 canonical JSON → "sha256:<hex>"
+def obs_digest(obs: Mapping[str, Any]) -> str:          # 含 schemaVersion 的 canonical JSON → "sha256:<hex>"
 def validate_observation(obs: Mapping[str, Any]) -> list[str]:   # 违规字段路径（空=合法），供 G5 round-trip
 def render_compact(obs: Mapping[str, Any]) -> str: ...            # FR-02-3b，供 prompt
 
@@ -187,23 +188,23 @@ def reset_canary(*, salt: str) -> str:       # 按 run_id 派生 canary，写 ho
 `Observation` JSON（Spec v1.3 §4.2 的机器可读形式，字段集合由 `OBSERVATION_SCHEMA` 唯一决定；以下为 `player_turn` 的节选，其余键同 GAME-00 §9.4）：
 `{"schemaVersion":"obs-agent-1.0.0","episodeId":"e-001042-g003-train","decisionIndex":17,"phase":"player_turn","stage":4,"stageCount":6,"chapter":2,"turn":3,"difficulty":"hard","player":{"hearts":2,"heartsMax":2,"virtue":8,"virtueMax":24,"ward":4,"starShards":120,"statuses":[],"deckSchool":"blade","purifyLeft":0,"abilities":[{"id":"warrior_reroll","usesLeft":1}]},"hand":[{"dieId":"d-0007","defId":"skill_blade_execute","school":"blade","riskTier":"balanced","faceIndex":2,"label":"处决斩 4","kind":"purge","value":4,"statusKind":null,"isCorrupt":false,"corruptionValue":0}],"slots":[{"slotId":"slot_1","slotKind":"attack","constraint":"ge:3","filledBy":null,"effectKind":"purge","bonus":0,"disabled":false}],"enemies":[{"enemyId":"e-00","defId":"mon_verdant_slime","school":"verdant","hp":14,"hpMax":20,"ward":0,"statuses":[],"intent":[{"kind":"purge","value":5,"school":"verdant","arrow":"up","slotId":"e_slot_0"}],"phase":1}],"legalActionKinds":["discard_die","end_turn","play_face","use_ability"],"lastResult":null,"toggles":{"mapBranching":true,"relics":true,"events":true,"shops":true,"schoolCounter":true},"relics":[]}`
 
-`runs/<run_id>/audit/leak-<scope>.json` → `dice_ratchet/sandbox/audit/report.schema.json` 顶层字段：
+`runs/<run_id>/audit/leak-<scope>.json` → `schemas/audit_report.schema.json` 顶层字段：
 `run_id` / `generated_at`(iso) / `ruleset_version` / `scope="leak"` / `verdict∈{clean,warn,critical}`（critical 优先级：canary 泄漏或蜜罐失效 > 其余）/ `scanned{episodes,steps,memory_entries}` / `visible_set{obs_paths[],obs_digests[],harness_version}` / `findings[]{leak_class,surface,episode_id,step,token_class,evidence,line_ref}` / `leak_counts{}` / `honeypot{injected,triggered,caught_rate}`。示例：
 `{"run_id":"4f2a1c9e-9d1c4e77","generated_at":"2026-09-30T12:00:00Z","ruleset_version":"1.1.0","scope":"leak","verdict":"critical","scanned":{"episodes":60,"steps":1840,"memory_entries":42},"visible_set":{"obs_paths":["schema_version","turn","phase"],"obs_digests":["sha256:..."],"harness_version":7},"findings":[{"leak_class":"seed_leak","surface":"prompt","episode_id":"e-000123","step":14,"token_class":"seed","evidence":"...2013...","line_ref":"prompts/e-001042-g003-train.txt:37"}],"leak_counts":{"seed_leak":1},"honeypot":{"injected":4,"triggered":0,"caught_rate":1.0}}`（**⚠️ 2026-10-14 修订：示例中的 `ruleset_version` 同步为当前的 `1.1.0`**）
 
 ## 7. 数据模型与存储
 
-- `Observation`：不可变 `Mapping`（`types.MappingProxyType` 递归冻结），键与类型见 GAME-00 §9.4 + Spec §4.2；`slots[].constraint` 的文法同 GAME-00 §4.3（`any|odd|even|(ge|gt|le|lt|eq):int|in:...`），v1.0 的 `min:N` 已删除；`enemies[].intent` 在玩家回合开始时提交，保证真实。round-trip 无损（G5）。
+- `Observation`：**普通 `dict`**（`freeze_observation()` 存在但只被单测调用，生产返回的不是 `MappingProxyType`），键与类型见 GAME-00 §9.4 + Spec §4.2；`slots[].constraint` 的文法同 GAME-00 §4.3（`any|odd|even|(ge|gt|le|lt|eq):int|in:...`），v1.0 的 `min:N` 已删除；`enemies[].intent` 在玩家回合开始时提交，保证真实。round-trip 无损（G5）。
 - `ProjectionStat` 只记计数不记名称（防止经日志反向泄漏隐藏字段名）。
-- 落地：`runs/<run_id>/audit/leak-<scope>.json`、`harness-gate.json`、`honeypot.jsonl`（每行 `HoneypotHit`+`run_id`/`generation`），权限 `0600`，不写到 `runs/` 之外；不引入数据库，审计只按文件重放。
+- 落地：`runs/<run_id>/audit/leak-<scope>.json`、`harness-gate.json`（`honeypot.jsonl` 见 §2.1 的说明：当前无写入点），权限 `0600`，不写到 `runs/` 之外；不引入数据库，审计只按文件重放。
 
 ## 8. 关键流程（伪代码/时序）
 
 ```
 # 投影
-full_state ─project_state(mode)→ {obs, ProjectionStat}：校验 schema_version ↔ CHANGELOG → 按
+full_state ─project_state(mode)→ {obs, ProjectionStat}：校验 schemaVersion ↔ CHANGELOG → 按
   OBSERVATION_SCHEMA.enabled 逐字段取 source_path → 类型强校验 → 丢弃未登记字段 → 覆盖式注入
-  schema_version → obs_digest = sha256(canonical_json(obs))          # 单向摘要，可入轨迹
+  schemaVersion → obs_digest = sha256(canonical_json(obs))          # 单向摘要，可入轨迹
 # import 门禁（CI 静态 / 运行期 hook / 不配合时的子进程边界）
 CI:     check_imports([agent,memory,loop,evolve,evals,inference]) → 命中即红
 运行期: import dice_ratchet.env（sandbox 预导入）→ install_agent_import_hook() → L1+ 帧发起 find_spec("dice_ratchet.env.*") → GuardViolation(E_ENV_IMPORT_DENIED)
@@ -239,7 +240,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 | `sandbox.honeypot.plan_path` | `configs/honeypot.yaml` 的实际消费者是**测试夹具**（`load_plan()` 校验 4 个注入点与实现一致），运行时不读；文件保留并标注 `[契约]/[占位]`，键删除 |
 | `sandbox.honeypot.self_test` | 该旋钮在 **CLI**（`audit leak --no-self-test`）与 `run_audit(self_test=)` 上，配置键冗余 |
 | `sandbox.projection.mode` | `strict` 是生产唯一档；`assert` 是**调试/测试档**，golden 与 §11 用例**显式传参**（`SandboxEnv(projection_mode="assert")`），不经配置 |
-| `sandbox.projection.schema_version` | 投影协议的版本身份**必须是代码常量**（`projection.py::OBSERVATION_SCHEMA_VERSION`，FR-02-5 由 CI 对 CHANGELOG 末行）——与 `audit.ruleset_pin` 同理：可追溯性要求它**不可被配置伪造** |
+| `sandbox.projection.schema_version`（已删除的旧键名，仅作墓碑） | 投影协议的版本身份**必须是代码常量**（`projection.py::OBSERVATION_SCHEMA_VERSION`，FR-02-5 由 CI 对 CHANGELOG 末行）——与 `audit.ruleset_pin` 同理：可追溯性要求它**不可被配置伪造** |
 | `sandbox.render.max_tokens_p95` | `render_compact(obs)` 不收预算参数，**全库没有任何断言读它** ⇒ 纯装饰。FR-02-3b 的「p95 ≤ 1500 token（8B 分词器）」是**设计目标**（CI 无该分词器），留在 §4/NFR 里，不做成键 |
 | `sandbox.exec.timeout_s` / `mem_limit_mb` / `cpu_limit_s` / `max_tools` | 这四个是 `ToolWorker` 的 **containment 参数**（`RLIMIT_AS`/`RLIMIT_CPU`/墙钟/工具数），是 INV-4 的一部分而**不是策略**——让配置（乃至可演化的 harness）抬高自己的沙箱上限正是 INV-4 要防的事。权威落 `guard.py::ToolWorker` 的默认参数（`2.0 / 256 / 2 / 32`），由用例 `test_b87_tool_worker_limits_are_code_constants` 钉住数值 |
 
@@ -248,7 +249,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 
 **⚠️ 2026-10-14 整块收拢（Spec v2.29 / B-86，F73 裁决 ②）**：上表原有的 `sandbox.audit.{enabled, surfaces, fail_on, evidence_chars, ruleset}` **五个键一并删除**——实现侧只把它们做成了 `run_audit()` 的**参数 + 同名默认值**，配置→调用的接线从未发生（全库 0 消费者；该 yaml 块自 M0 骨架 `5d3574c` 建立后**从未被改过一次**，B-82 把规则集 1.0.0→1.1.0 时也没人想起改它）。其中 `fail_on` 的分级诉求（§16 开放问题 3）已裁决为「退出码按 §18.2 的两根正交轴恒定，不做配置化」。
 
-环境变量前缀 `DICERATCHET_SANDBOX_*`；优先级 CLI > 环境变量 > `configs/default.yaml`（Spec §5）。
+环境变量前缀是 **`DICERATCHET_ENV__SANDBOX__<KEY>`**（`DICERATCHET_` + `__` 分层；**单下划线不会被解析**——实测 `DICERATCHET_SANDBOX_POLICY_FAILURE_STREAK=9` 被静默忽略，`DICERATCHET_ENV__SANDBOX__POLICY_FAILURE_STREAK=9` 才生效）。优先级 CLI > 环境变量 > `configs/default.yaml`（Spec §5）。
 
 ## 10. 错误处理与降级（使用 Spec §8 的错误码前缀）
 
@@ -262,7 +263,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 | `E_ENV_TIMEOUT` | 工具调用超墙钟 | 该次调用失败 → MOD-04 fallback，不判该局失败 |
 | `E_ENV_RESOURCE` | 内存/CPU 超限 | 同上；连续 3 次则该 harness 版本标 `degraded` |
 | `E_ENV_ESCAPE` | 受限执行触及蜜罐 sentinel | P0 事件 + 立即卸载该 harness 版本，人工确认 |
-| `E_ENV_AUDIT_IO` | 轨迹缺失/JSONL 损坏/权限不足 | 判 `critical`（缺证据 ≠ 无泄漏），输出可读原因 |
+| `E_ENV_AUDIT_IO` | 轨迹缺失/JSONL 损坏/权限不足 | **两根通道要分清**：run 内 JSONL 损坏 → 报告判 `critical` → 退出码 **2**；`audit leak --run-id` 找不到 run 目录（`app.py` 直接抛该码）→ **该码未登记 `EXIT_CODE`，按 `error_code_of` 回落退出码 1** |
 | `E_ENV_AUDIT_RULESET` | **规则集版本钉扎不符**（`sandbox.audit.ruleset_pin` ≠ `RULESET_VERSION`，或 `run_audit(ruleset=…)` 收了别的值） | **fail-closed 拒绝审计**（不产出报告）：守卫轴退出码 **4**；消息同时打印两个版本与修法（Spec B-86） |
 | `E_ENV_HONEYPOT` | 自测命中率 <100%，或注册表含蜜罐字段 | CI 红；`audit leak` 恒判 `critical` |
 
@@ -274,7 +275,7 @@ rebuild_visible_set(run_dir) → VisibleSet；对每个 prompt/log/memory：
 - 给定 同一 `FullState`，当 `project_state` 调两次，则两次 canonical JSON 与 `obs_digest` 完全相同（FR-02-1）。
 - 给定 源含未登记字段 `hidden_shop_preview`，当 `mode="strict"`，则输出无该字段、`dropped_hidden==1`、日志文本不含该字段名（FR-02-2）。
 - 给定 seed/后续房间/商店条目/RNG 状态/未来骰面各替换为唯一哨兵值，当 投影后逐字段比对，则任一哨兵出现在 obs 即失败（FR-02-3）。
-- 给定 注册表加字段却不改版本，且源 `schema_version="9.9.9"`，当 import projection / 执行投影，则分别抛 `E_ENV_PROJECTION_VERSION`、obs 取注册表版本（FR-02-5/6）。
+- 给定 注册表加字段却不改版本，且源 `schemaVersion="9.9.9"`，当 import projection / 执行投影，则分别抛 `E_ENV_PROJECTION_VERSION`、obs 取注册表版本（FR-02-5/6）。
 - 给定 含 `from dice_ratchet.env.engine import Engine` 的假 L1 文件 + 已装 import hook，当 `check_imports` / `import dice_ratchet.env.rng`，则 `ok=False`（带行号）、抛 `E_ENV_IMPORT_DENIED`（FR-02-9/10）。
 - 给定 8 个恶意片段（`open("/etc/passwd")`、`import socket`、`__import__("os")`、`eval`、`exec`、`getattr(x,"_np_secret_price")`、`while True`、`class X`），当 `analyze_code`，则全部被拒且码/行号正确（FR-02-12）。
 - 给定 合法 `rank_actions`（纯函数，使用 `+ - * //`、比较、`and/or/not`、推导式、`sorted/len/range/max/min`），当 `gate` + `worker.call`，则通过并返回正确重排（FR-02-12/14，**正例必测**）。
@@ -314,9 +315,9 @@ Golden `tests/golden/sandbox/`：给定 `src/game/tests/golden/g5_hard_six_stage
 
 ## 13. 指标与埋点
 
-结构化事件（Spec §8.2 命名，`infra/logging.py` 落地）：`sandbox_projection`（fields/dropped_hidden/duration_us）、`sandbox_import_denied`（module/path/lineno）、`sandbox_harness_gate`（files/ok/findings）、`sandbox_exec`（tool/duration_ms/outcome∈{ok,timeout,resource,error}）、`audit_leak`（verdict/leak_counts/ruleset_version）、`audit_honeypot_triggered`（surface/episode_id/step/canary_hash）、`audit_honeypot_selftest`（cases/caught）。
+结构化事件（Spec §8.2 的 `<module>.<event>` 命名，`infra/events.py::EVENT_REGISTRY` 登记、落 `events.jsonl`）：`env.projection_pruned`（fields/dropped_hidden/duration_us）、`env.import_denied`（module/path/lineno）、`env.ast_denied`、`env.resource_limit`、`env.honeypot_escape`、`sandbox.gate_pass` / `sandbox.gate_reject`（files/ok/findings）、`sandbox.exec`（tool/duration_ms/outcome∈{ok,timeout,resource,error}）、`sandbox.audit_finding`（verdict/leak_counts/ruleset_version）、`sandbox.honeypot_hit`（sentinel/surface/episode_id/step/offset）、`sandbox.honeypot_selftest`（cases/caught）。
 
-入档指标（`runs/<run_id>/metrics/`）：`sandbox_dropped_hidden_total`、`sandbox_projection_us_p95`、`sandbox_exec_timeout_rate`、`sandbox_gate_reject_rate`、`leak_count_by_class`、`honeypot_caught_rate`。硬约束：`honeypot_caught_rate` 恒为 `1.0`、`canary_leak==0`；任一违反即 `verdict="critical"` 并阻断该代际接受（MOD-07）。
+入档指标：**这 6 个名字当前都没有落盘实现**（`runs/*/metrics/` 里没有 `sandbox_*` 文件）。实际可读的计数在审计报告与事件里：`audit_report.honeypot.caught_rate`（硬约束 1.0）、`findings[].leak_class` 的逐类计数、`env.projection_pruned.dropped_hidden`、`sandbox.gate_pass/gate_reject`、`sandbox.exec.outcome`。`canary_leak==0` 恒为硬约束；违反即 `verdict="critical"`，并阻断该代际接受（MOD-07）。
 
 ## 14. 依赖与风险
 
@@ -453,7 +454,7 @@ G2 golden：`tests/golden/sandbox/{g5_obs_agent.txt,g5_render.txt,leak-report-cl
 
 | 轴 | 问题 | 取值 | 依据 |
 |---|---|---|---|
-| 泄漏结论 | **有没有泄漏？** | `0` 无 finding / `1` 仅 medium / `2` 含 critical | FR-02-19、§11 集成用例、§6 verdict 三级 |
+| 泄漏结论 | **有没有泄漏？** | `0` 无 finding **且无 warning** / `1` 仅 medium **或仅 warning** / `2` 含 critical（`E_ENV_AUDIT_IO` 的 CLI 抛错路径除外，见 §10） | FR-02-19、§11 集成用例、§6 verdict 三级 |
 | 沙箱守卫 | **审计器自己还可信吗？** | `4`（`machinery_errors` 非空，如 `E_ENV_HONEYPOT`） | Spec §8.3「4 沙箱/守卫违例」；`infra.errors.EXIT_CODE[E_ENV_HONEYPOT/E_ENV_ESCAPE/E_ENV_IMPORT_DENIED/E_ENV_AST_DENIED] = 4` |
 
 **优先级 `4 > 2 > 1 > 0`**，理由：检测器失效时，报告写 `clean` 还是 `critical` 都不能按原义
@@ -479,6 +480,7 @@ G2 golden：`tests/golden/sandbox/{g5_obs_agent.txt,g5_render.txt,leak-report-cl
 | v?-2026-10-10 | 2026-10-10 | **`audit leak` 按文件形状解析 + 遥测键豁免（F44/F45，对齐 Spec v2.4 B-53/B-54）**。① **F44**：`reflections/<episode_key>.json` 是 MOD-06 写的**多行 pretty JSON**（实测 51 行），而审计对 `*.jsonl` 与 `*.json` 都走 `_read_jsonl` ⇒ 第 2 行起 `Extra data` ⇒ `E_ENV_AUDIT_IO` ⇒ **退出码 2** ⇒ 任何含反思的 `loop run` 都无法让 `audit leak` clean。改为 `.jsonl` 逐行、`.json` 整文档（并下探 `entry` 取正文——反思正文才是泄漏面）。② **F45a**：同一形状问题在**扫描循环**里还有第二处：逐行 `json.loads` 必失败 ⇒ `row=None` ⇒ 既有的 `MEMORY_NON_CONTENT_KEYS` 豁免被**绕过** ⇒ `created_at` 的年份 `2026` 撞 heldout 区间刷 3 条 critical 假阳性；改为文档整份投影后只扫内容字段。③ **F45b**：`LOG_NON_CONTENT_KEYS` 补入 `llm.*` 纯遥测键（`max_tokens`/`temperature`/`top_p`/`cost_estimate`/`request_hash`/`response_hash`/`prompt_digest`）——触发点正是 Spec B-47 刚加的按调用方输出预算 `max_tokens: 2048`（合法配置值落进 2000–2099 即被判成 seed 泄漏）。该死名单此前已被扩过三次 |
 | v1.2.2 | 2026-10-11 | **F45-2：删两张人工死名单、改成全字段扫描（对齐 Spec v2.6 B-62）**。① **为什么现在能删**：两张名单（`LOG_NON_CONTENT_KEYS` / `MEMORY_NON_CONTENT_KEYS`）四次扩容（M1 F3 的 136 条、`episode_s`/`cpu_s`/`elapsed_s`、F35 的年份 `2026`、F45b 的 `max_tokens: 2048`）本质上都在绕同一件事：旧 heldout/test 的四位区间（2000–2099 / 9000–9099）与耗时、token 预算、ISO 年份共用一个数字空间。F45-2 把 heldout/test 移到六位端口（731000–731099 / 947000–947099）后，这些字面量**不再可能与 seed 相等**，名单因此变成纯粹的盲区。② **实测（删除的依据）**：去掉全部豁免重扫 → 旧区间在 1311 个归档工件 / 188.0 MB 上命中 **799,868** 次（`ts` 699,305 占 87%、`seed` 44,173、`prompt_tokens` 28…），新区间 **0** 命中。③ **保留的唯一豁免**：`LOG_STRUCTURAL_KEYS = {seed, episode_key, spec}`（框架播种计划）。④ **顺带更正错误论据**：名单注释里「64 位 hex 约 3.7% 概率撞 20XX」**实测为假**（20000 个随机 sha256 命中 0/20000；真实 run 的 `request_hash`/`response_hash`/`prompt_digest` 各 9200 样本命中 0，正则的前后环视已把 hex 内部数字段排除）——这三键正是按该错误论据进名单的。⑤ **副产品**：`evals/seeds.py::_NUM4_RE` 写死 4 位（`\d{4}`）⇒ 六位 seed 根本扫不到，`guard_prompt_context`/`scan_forbidden_tokens` 会静默失效；改为 3–7 位（同 SPEC B-62）。⑥ 门禁：`scripts/ci_gate.sh` 全绿（1925 passed）。 |
 | v1.2.3 | 2026-10-14 | **F73/F74：`sandbox.audit.*` 整块收拢为一个**规则集版本钉扎**（Spec v2.29 / B-86；依据用户裁决 F73 = ②、F74 = 认定为文档错误）**。① **F73 的实况比登记更宽**：原登记只指认 `ruleset` 一个死键，回查初版 PRD 设计初衷后确认——`enabled`/`surfaces`/`ruleset`/`fail_on`/`evidence_chars` **五个键全部 0 消费者**（实现侧只把它们做成 `run_audit()` 的参数 + 同名默认值 ⇒「参数已存在」被误当成「配置已接线」）；最硬的证据是 `configs/default.yaml` 的该块自 M0 骨架 `5d3574c` 建立后**从未被改过一次**，B-82 把 `RULESET_VERSION` 1.0.0→1.1.0 并同步 golden 时也没人想起改它。② **为何不能直接接线**：报告里的 `ruleset_version` 是「这份 clean 按哪版规则判的」的唯一凭据（NFR-02-3 可复现）⇒ 它**必须不可被配置伪造**；若让配置说了算，一次 `audit leak` 经 CLI（读配置）与经测试/golden（直连默认值）会写出**不同**的版本号，字段失去唯一含义。③ **落法（用户选 ②）**：五键删除，只留 **`sandbox.audit.ruleset_pin`**（str，默认 `1.1.0`），CLI 把它喂给 `run_audit(ruleset=…)`，由新增的 **`check_ruleset_pin()`** 断言「== 代码常量 `RULESET_VERSION`」，不符 **fail-closed**（新增 **`E_ENV_AUDIT_RULESET`**，§18.2 归**守卫轴 = 退出码 4**，刻意不占结论轴 2——「有泄漏」与「配置不符」要做的处置相反）。④ **F74**：删掉 `sandbox.audit.enabled` 的「**每代结束自动审计**」措辞——`loop/`/`evolve/`/`evals/` 里没有任何 `run_audit` 调用点，正式实验也是跑完手工补刀（`scripts/run_m3_formal.sh`）；FR-02-16..19 全是「给定 run 目录 → 扫描」，**从来没有自动触发的 FR**，故认定为文档错误而非未实现 FR。⑤ **§16 开放问题 3** 随之结案（`fail_on` 不做配置化；真需要本地放宽应落 CLI flag）。⑥ **护栏 11 条**（`tests/unit/sandbox/test_sandbox_audit.py::test_b86_*`，含「yaml 的 pin == 代码常量」「死键不再是合法扁平键」「CLI 真的读了这个键，且拒绝时不产出报告」）——`git stash push -- dice_ratchet/ configs/` 实测**修复前 11/11 全红**。**诚实边界**：钉扎是「两处版本号 + 一条断言」，代码默认值仍是字面量（`infra` 不能 import `sandbox`，分层 + 循环）⇒ 由用例 `test_b86_config_default_pin_equals_code_constant` 把它钉住；`guard.scan_roots`/`process_boundary`、`honeypot.enabled`/`plan_path`/`self_test` 同为 0 消费者（**未在本轮处理**，另登记）。 |
+| v1.2.7 | 2026-10-17 | **与代码对齐（纯文档，¥0；15 条）**。① **环境变量前缀**：`DICERATCHET_SANDBOX_*` → `DICERATCHET_ENV__SANDBOX__<KEY>`（必须 `__` 分层；单下划线静默忽略）。② **事件名**全部改为真实 `<module>.<event>`：`env.projection_pruned`/`env.import_denied`/`env.ast_denied`/`env.resource_limit`/`env.honeypot_escape`/`sandbox.gate_pass|gate_reject`/`sandbox.audit_finding`/`sandbox.honeypot_hit`/`sandbox.honeypot_selftest`（旧名 `sandbox_projection`/`audit_leak`/`audit_honeypot_triggered` 等不存在）。③ `E_ENV_*` 登记在 `infra/errors.py`，不是 `infra/logging.py`。④ `E_ENV_AUDIT_IO` 未登记 `EXIT_CODE`：run 目录缺失走 CLI 抛错 → 退出码 1；只有 run 内 JSONL 损坏的报告路径才是 2。⑤ `honeypot.jsonl` 无写入点（`record_hits()` 0 调用）。⑥ 6 个 `sandbox_*` 入档指标无落盘，实际计数在审计报告与事件里。⑦ `full_state_hash()` → `state_hash()`。⑧ schema 统一为 `schemas/audit_report.schema.json`（三处旧路径都不存在）。⑨ `FR-02-22` 的 `scan()` 不 emit 事件；P0 事件是 `sandbox.honeypot_hit`。⑩ `mode="assert"` 只校验投影输出，未登记源字段只计数。⑪ `0` 的语义是「无 finding 且无 warning」。⑫ `schema_version` → `schemaVersion`。⑬ `ProjectionStat.dropped_hidden` 只记计数，`kept`/`missing_optional` 是字段名元组。⑭ `Observation` 实际是普通 dict。⑮ §3 的 MOD-08 依赖改为「当前未接线」。 |
 | v1.2.4 | 2026-10-14 | **F75：`env.sandbox.*` 逐键核完 —— 15 键砍到 2 键（Spec v2.30 / B-87；依据用户裁决「按 F73 同一套规矩逐个核」）**。① **核的结果**：整棵 `env.sandbox` 原有 15 个键，实测**只有 `policy_failure_streak` 与 `audit.ruleset_pin` 有消费者**（前者 `evals/baselines.py` → `SandboxEnv`，后者 `app.py` → `check_ruleset_pin`）。② **删掉的 13 个**（逐键理由见 §9 的新表）：`guard.enforce`（`warn` 档=削弱 INV-4）、`guard.scan_roots`（INV-1 的分层结构，权威 `guard.py::ENV_ROOTS`）、`guard.process_boundary`（指向无生产调用点的 `run_agent_tick()`，另登记 **F76**）、`honeypot.enabled`（注入是检测不变式 G4）、`honeypot.plan_path`（`configs/honeypot.yaml` 的消费者是**测试夹具**，运行时不读）、`honeypot.self_test`（旋钮在 CLI）、`projection.mode`（`assert` 是测试档，golden 显式传参）、`projection.schema_version`（版本身份必须是代码常量，FR-02-5 由 CI 校验）、`render.max_tokens_p95`（`render_compact()` 不收预算参数、全库无断言读它 ⇒ 纯装饰）、`exec.{timeout_s,mem_limit_mb,cpu_limit_s,max_tools}`（`ToolWorker` 的 **containment 参数**，是 INV-4 的一部分而不是策略——让配置或可演化的 harness 抬高自己的沙箱上限正是 INV-4 要防的事；权威落 `guard.py` 默认参数，由用例钉住 `2.0/256/2/32`）。③ **契约夹具**：`configs/honeypot.yaml` 保留并逐字段标注 `[契约]`（`load_plan()` 校验的 4 个注入点）/`[占位]`（运行时不读，只是设计意图与开放问题的记录）。④ **能力一个没删**：`SandboxEnv(projection_mode="assert")`、`SandboxEnv(honeypot=False)`、`load_plan()`、`run_agent_tick()` 全部保留，由反向护墙用例钉住。⑤ **系统性护栏（新增）**：`tests/unit/infra/test_config.py::test_b87_every_sandbox_key_declares_a_consumer` 要求 **`env.sandbox.*` 的键集 == 已登记消费者表**——以后新增配置键必须同时登记消费者，否则 CI 红；这条护栏把「写完配置就以为接上了」的成本抬到与接线同高。⑥ **诚实边界**：该护栏证明「有人声明了消费者且该文件提到键名」，**不是数据流证明**（数据流证据由各键自己的用例承担，如 `test_b86_audit_leak_cli_consumes_the_pin`）；护栏用例自身也有两条反向用例（`ToolWorker` 数值不变、能力仍在）在修复前就是绿的。⑦ **同批发现（未处理，另登记 F77）**：`env.content_dir`/`env.golden_dir`/`env.check_invariants` 三个 **EnvConfig 层**键同样 0 消费者（`content_dir` 只出现在 run 快照里、由审计从快照回读，不经配置）。⑧ **测试**：B-87 五条用例，`git stash push -- dice_ratchet/ configs/` 实测**修复前 3 failed / 2 passed**（两条绿的正是设计使然的反向护墙）。 |
 | v1.2.5 | 2026-10-14 | **F77-a：`audit leak` 改用快照的 `content_hash` **反查**真实配表（Spec v2.31 / B-88；依据用户裁决「一起做完」）**。① **病灶**：MOD-01 的 `GAME_CONTENT_DIR` 是 import 时解析的常量（`DICERATCHET_ENV__CONTENT_DIR` 或字面默认），**从不读 yaml**；而配置层曾把 `env.content_dir` 写进 run 快照，审计又**信任快照的声明**去推隐藏 token ⇒ 声明与运行时一旦不一致（在 yaml 里指到另一个**真实存在**的配表目录即可），`future_room_leak`/`shop_content_leak` 就会建在**这些局从未用过的配表**上 ⇒ 假阳性/假阴性（F58/F59 同族）；重放若因此跑不动，`derive_hidden_tokens` 只回一条 warning ⇒ 六类里两类**实际未检查**而 verdict 仅 `warn`。② **修法（①+③）**：`env.content_dir` 键**删除**（权威回 `loader.GAME_CONTENT_DIR`），审计改为 `_resolve_content_dir()`——候选目录逐个按 `content_hash(load_tables(dir))` 与快照的 `content_hash` 比对，**命中的那套才算这些局用过的**；三态：命中 → 用它；快照**无** `content_hash`（旧协议/夹具）→ 退回声明或仓库默认（**仅在声明了非默认目录时**记一条 warning，避免把每个旧 run 从 clean 掉成 warn）；**有 digest 但无人相符** → 记 `io_errors`（→ `_verdict` 判 **critical**，退出码 2）并**降级**这两类规则集，**绝不**拿默认配表凑数。③ **实测**：真实归档 `runs/m3-formal` 的 `content_hash`（`sha256:964d6915…`）能被反查命中、零 io_errors ⇒ **历史证据未被污染**；构造「声明一个存在但不同的配表目录」的快照，修复前静默用错表、修复后被判 critical。④ **诚实边界**：`_content_hash` 提供者未注册（测试夹具）时快照无该字段 ⇒ 走旧路径（上面第二条）；护栏 5 条（`test_b88_*`），`git stash` 实测修复前全红。 |
 | v1.2.6 | 2026-10-15 | **F78 落地：FR-02-8d「逐步内核不变式校验」（Spec v2.32 / B-89；依据用户指令「开始修复78/79」）**。① **缺口**：`env/engine.py:670` 的 `assert_invariants` 被**游戏侧** `config.debug.showHiddenInfo` 门着（与 JS 逐位一致），而本模块从不向 `createGame` 传 `debug` ⇒ 真实对局的逐步校验**为零**（B-88 登记 F78），内核状态若被破坏只会表现为**静默的错误指标**。② **修法（门面侧接线）**：新增 `sandbox/api.py::_check_step_invariants()`，`step()` 在`illegal` 分支之后、提交 `self._state` **之前**调用（因此异常时状态不前进）；不碰 `reduce_state` 的那道门（它是与 JS 的对拍对齐点，改了 golden 会全红）。③ **失败语义**：`E_ENV_INTERNAL`（退出码 4 = 守卫轴）⇒ 该步不提交；随后按**既有失败恢复矩阵**处置（训练路径：`audit/env_error_<seed>.json` + 跳过该 seed，同类累计 ≥3 中止 run；MOD-08 批量测量：按 Spec §8.5 记 dropped（计 n、按 lose 计、错误码入档））——与内核在 `debug` 下自报不变式违反**同码同通道**；不静默、不重试。④ **开销（先测后接）**：新增 `scripts/bench_invariants.py`（重放 `src/game/tests/golden/*.jsonl`，5 局 1487 步，¥0 可复算）——`assert_invariants` **137.5 µs/步** vs `reduce` **276.3 µs/步**；每局 ≈345 步 ⇒ **≈48 ms/局**，相对秒级的 LLM 主导耗时可忽略。另在归档 `runs/m3-formal` 的 40 局 / 13,802 步真实对局上重放：102 µs/步 vs 202 µs/步、**0 次违反**（接入不会误伤真实局）。⑤ **护栏 4 条**（`tests/unit/sandbox/test_sandbox_api.py::test_b89_*`：每步恰好校验一次且断言内核闸门在生产配置下确为关闭；真实引擎 + 篡改状态 ⇒ 退出码 4/消息含 `E_KERNEL_INVARIANT`/状态未提交；反向：非法动作不重复校验；**一致性护墙**：内核在 `debug` 下自报的不变式违反与门面侧新校验**同码同通道**（同一缺陷不能因「谁先发现」给出两个码——该条修复前后都绿））。`git stash push -- dice_ratchet/` 实测修复前 3/3 红（前三条）。⑥ **诚实边界**：校验的是**当前不变式集合**，不等于「与 JS 逐位等价」；`reset()` 首帧不在范围内。⑦ **成本：¥0**。 |

@@ -140,6 +140,15 @@ def _build_registry() -> dict[str, EventSpec]:
         ("rollback", frozenset({"to_version"})),
         ("cost", frozenset({"episodes_spent", "episodes_cap"})),
         ("ledger", frozenset({"generation", "status"})),
+        # 2026-10-17（B-95）：起点守卫与检查点/继承/死路事件此前**只 emit 未登记**
+        # ⇒ 生产模式被改写成 infra.unknown_event（丢名字），DICERATCHET_DEV=1 直接抛
+        # E_IO_EVENT_UNKNOWN。这里按 emit 处实际字段补登记。
+        ("start_guard", frozenset({"status", "play_hash"})),
+        ("parent_inherit", frozenset({"generation", "status", "source"})),
+        ("proposal_checkpoint", frozenset({"gen", "status"})),
+        ("proposal_reused", frozenset({"gen", "n_candidates"})),
+        ("dead_end", frozenset({"generation", "candidate_id"})),
+        ("play_hash", frozenset({"generation", "status"})),
     ]:
         entries.append(_spec("evolve", ev, "MOD-07 harness 自进化事件", req))
     # ---- eval（MOD-08 PRD §13：eval.start/seed_start/seed_done/report/guard_violation/
@@ -153,6 +162,14 @@ def _build_registry() -> dict[str, EventSpec]:
         ("guard_violation", frozenset({"error_code", "split", "destination"})),
         ("collapse", frozenset({"generation", "flag"})),
         ("test_unlock", frozenset({"generation", "attestation_path"})),
+        # 2026-10-17：以下 6 个事件原先 emit 了但未登记（生产丢名字）。arm_reused 由
+        # `evals/harness.py` 用复数前缀发出，靠 `_ALIASES` 归一为 `eval.arm_reused`。
+        ("arm_reused", frozenset({"generation", "split", "basket", "arm", "n"})),
+        ("generation_unresolved", frozenset({"split", "generation", "n"})),
+        ("train_insufficient", frozenset({"generation", "run_id", "n", "expected"})),
+        ("ledger_version_conflict", frozenset({"generation", "arm", "column"})),
+        ("acceptance_skipped", frozenset({"code"})),
+        ("kind_distribution_skipped", frozenset({"code"})),
     ]:
         entries.append(_spec("eval", ev, "MOD-08 测量事件", req))
     return dict(entries)
@@ -170,6 +187,10 @@ _ALIASES: Final[Mapping[str, str]] = {
     "loop_episode_start": "loop.episode_start",
     "loop_episode_end": "loop.episode_end",
     "evolve_decision": "evolve.decision",
+    "evals.arm_reused": "eval.arm_reused",
+    "evals.generation_unresolved": "eval.generation_unresolved",
+    "evals.train_insufficient": "eval.train_insufficient",
+    "evals.ledger_version_conflict": "eval.ledger_version_conflict",
 }
 
 # ---- 运行时绑定 ---------------------------------------------------------------------

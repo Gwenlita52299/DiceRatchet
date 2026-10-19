@@ -1,6 +1,6 @@
 # MOD-05 memory 技术 PRD
 
-> 版本：v1.2（2026-09-30 17:49 按 Spec v1.4 回填裁决，见 §17）· 状态：草案（待复核） · 所属里程碑：M2（MOD-05/06/07 初版） · 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突以 Spec 为准） · 作者：MOD-05 技术文档 author
+> 版本：v1.3（2026-10-17 **与代码对齐（纯文档，¥0）**：I3 改为真实的 `MemoryStore._seed_guard_all()`、I2 写明本地扫描 + MOD-02 交叉校验、I1 不写 leak 事件、§13 事件名改为点分规范名、公共字段去掉 `episode_id`、`REFLECTION_ENTRY_SCHEMA`、`_type:"memory_entry"`、`outcome_stats` 改为实际计数器、依赖改为 `sandbox.audit.scan_text` / `estimate_tokens`；对齐 Spec v2.35，见 §17）· 状态：草案（待复核） · 所属里程碑：M2（MOD-05/06/07 初版） · 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源，冲突以 Spec 为准） · 作者：MOD-05 技术文档 author
 
 ## 1. 背景与目标
 MOD-05 是 L1 层的**策略记忆与反思库**：把 MOD-06 局末产出的反思文本转成可检索、可度量、可淘汰、可回滚的结构化记忆，供 MOD-04 组装 prompt 时按当前 `Observation` 取用。它是「反思注入」演化对象（项目计划 §5 改进对象 a/c）的落地载体，也是 MOD-07 可回滚的演化对象之一（Spec §3 MOD-05）。目标：① 写入→去重→冲突裁决→检索→淘汰→快照/回滚 全链路**确定性可复现**；② 效用证据只用**环境原生胜负**（Spec INV-7），避免自证式膨胀（调研纪要 §4.1）；③ 硬性落实 **INV-5**：heldout/test 的 seed 与相关信息**永不进入记忆**，四拦截点可审计。非目标见 §2.2——本模块只做存储、检索与生命周期，不生成反思文本，也不判定记忆价值。
@@ -16,7 +16,7 @@ MOD-05 是 L1 层的**策略记忆与反思库**：把 MOD-06 局末产出的反
 逐字复用 Spec §3 MOD-05 的「不负责」清单：
 - 生成反思文本（MOD-06）、评估记忆是否有用（MOD-08 提供指标，MOD-07 做取舍）。
 
-补充边界（不改变上述清单）：不做 prompt 拼装（MOD-04）；不做 embedding 服务实现（走 MOD-03 `embed()`）；不做 seed 注册表与 split 划分（MOD-09 `seeds.yaml` + MOD-08）；不实现泄漏扫描器（只调 MOD-02 `sandbox.audit.scan_text(text, surface="memory")`，Spec §4.7）；不做消融与记忆价值判定（MOD-08）。
+补充边界（不改变上述清单）：不做 prompt 拼装（MOD-04）；不做 embedding 服务实现（走 MOD-03 `embed()`）；不做 seed 注册表与 split 划分（MOD-09 `seeds.yaml` + MOD-08）；不实现通用泄漏扫描器，但**有本地字面量兜底**：`MemoryStore._scan_text` 先用本地 `_NUM_TOKEN_RE/_SEED_HINT_RE/_SEED_PATTERN` 扫，再调 MOD-02 `sandbox.audit.scan_text(..., surface="memory")` 做交叉校验（Spec §4.7）；不做消融与记忆价值判定（MOD-08）。
 
 ## 3. 使用方与场景
 
@@ -33,7 +33,7 @@ MOD-05 是 L1 层的**策略记忆与反思库**：把 MOD-06 局末产出的反
 ## 4. 功能需求（FR-05-x）
 - **FR-05-1 schema**：两个 entry 有 JSON Schema（draft 2020-12）；`to_json → from_json` round-trip 逐字段相等；`additionalProperties:false`，未知字段拒绝。
 - **FR-05-2 反思入站与抽取**：`add_reflection()` 仅接受 `provenance.split == "train"`，否则抛 `MemoryIsolationError(E_EVAL_INV5_LEAK)`；`extract_candidates()` 用**确定性规则**从 `ReflectionEntry.text` 抽出 ≤ `max_candidates_per_reflection` 个候选（`situation/tags/lesson/polarity/action_hint`），无候选时仅存反思、不报错。
-- **FR-05-3 去重与冲突检测**：`(situation_key, text_hash)` 相同 → 精确合并；`sim ≥ 0.85` 且 `situation_key` 相同 → 近似合并（合并不新增行，只累加 `outcome_stats` 与 `merged_from`）；同 `situation_key`、`polarity` 相反、`action_hint.kind` 相同（或均 `null`）→ 冲突，默认两条都 active + `conflict_group`，检索只返回组内高分者并标注。
+- **FR-05-3 去重与冲突检测**：`(situation_key, text_hash)` 相同 → 精确合并；`sim ≥ 0.85` 且 `situation_key` 相同 → 近似合并（合并不新增行：只累加 `n_ref`，有 outcome 时再加 `n_not_adopted` / `n_win_not_adopted`，并更新 `confidence` 与 `merged_from`（**没有** `outcome_stats` 字段））；同 `situation_key`、`polarity` 相反、`action_hint.kind` 相同（或均 `null`）→ 冲突，默认两条都 active + `conflict_group`，检索只返回组内高分者并标注。
 - **FR-05-4 原子落盘**：追加 `memory_active.jsonl`，每 `compact_every` 次 tmp+`fsync`+`os.replace` 压实；崩溃不得留半行。
 - **FR-05-5 检索**：`retrieve(obs, *, top_k, token_budget, tick)`（Spec §4.7）按 §6.3 打分，返回 `RetrieveResult`（entries/scores/tokens/dropped/conflict_groups/elapsed_ms）。
 - **FR-05-6 顺序与裁剪确定性**：排序键 `(-round(S,6), entry_id)`；`S < min_score(0.15)` 剔除；预算裁剪**跳过**超预算条目而不截断文本，`dropped[]` 记原因。
@@ -51,7 +51,7 @@ MOD-05 是 L1 层的**策略记忆与反思库**：把 MOD-06 局末产出的反
 ## 5. 非功能需求
 - **NFR-05-1 确定性（G3）**：打分、排序、淘汰只用逻辑时钟 `tick`（由调用方显式传入），不读墙钟；`created_at` 只作审计展示，不参与打分，也不计入 `content_sha256`；禁 `import random`（MOD-09 AST 守卫）；同 seed 同输入两次 `retrieve()` 逐字节相同。
 - **NFR-05-2 性能与内存**：`active ≤ 2000` 时 `retrieve()` P95 ≤ 50 ms、`add_reflection()` P95 ≤ 15 ms（不含扫描与 embedding）、启动全量加载 ≤ 2 s、常驻内存 ≤ 64 MB（M5/24GB，纯 Python）。
-- **NFR-05-3 可复现、稳健与可观测**：快照 `content_sha256` 可跨机复核，`config_hash` 覆盖全部 `memory.*` 键；记忆是增强而非依赖，任何写入/检索失败不得让本局失败（§10）；事件单行 JSONL（公共字段 `run_id/episode_id/harness_version/memory_version/event/ts`），不自建日志格式。
+- **NFR-05-3 可复现、稳健与可观测**：快照 `content_sha256` 可跨机复核，`config_hash` 覆盖全部 `memory.*` 键；记忆是增强而非依赖，任何写入/检索失败不得让本局失败（§10）；事件单行 JSONL（公共字段 `run_id/harness_version/memory_version/generation/event/ts`（**没有 `episode_id`**；它只在 I2/I3/I4 的 leak 事件里作为额外字段出现）），不自建日志格式。
 - **NFR-05-4 容量**：单文件 ≤ 16 MB；单条渲染 ≤ 400 字符；`token_budget` 默认 900；`active` 默认上限 2000。
 
 ## 6. 接口契约（真实 Python 签名 + JSON Schema）
@@ -139,13 +139,13 @@ utility = clip(0.5*(p_used - p_base) + 0.3*log1p(n_ref)/log1p(200) + 0.2*exp(-ag
 | # | 位置 | 机制 | 失败行为 |
 |---|---|---|---|
 | I1 源头 | `add_reflection`/`add_memory` 入口 | `provenance.split == "train"` 且 `seed ∈ MOD-09 seeds.yaml.train` | 抛 `MemoryIsolationError(E_EVAL_INV5_LEAK)`，不落盘 |
-| I2 文本 | 落盘前逐字段扫 `text/lesson/tags/action_hint` | 调 `sandbox.audit.scan_text(text, surface="memory")`：正则 `\bseed\b\s*[:=#]?\s*\d{1,7}` + 命中 heldout/test seed 集合的裸整数 | `scan.status="quarantined"` → 条目入 `memory/quarantine.jsonl`，事件入 `audit/leak_events.jsonl` |
-| I3 兜底 | `snapshot()` 与 `verify(full=True)` | `infra.guards.seed_token_guard()` 复扫全库 | 拒绝出快照（`E_EVAL_INV5_LEAK`），active 条目标 `quarantined` |
+| I2 文本 | 落盘前逐字段扫 `text/lesson/tags/action_hint` | 调 `sandbox.audit.scan_text(text, surface="memory")`：本地 `_scan_text`（`\bseed\b\s*[:=#]?\s*\d{1,7}` + 裸整数比对）**再**调 `sandbox.audit.scan_text(forbidden=…, surface="memory")` 交叉校验 | 条目入 `memory/quarantine.jsonl`、写 `audit/leak_events.jsonl`；**注意 `reflections/*.json` 里的 `scan.status` 仍是入站原值（`pass`）**，不改成 `quarantined` |
+| I3 兜底 | `snapshot()` 与 `verify(full=True)` | `MemoryStore._seed_guard_all()`（`memory/store.py`）复扫全库；每条走 `_scan_entry(point="I3")`（先查 heldout/test 字面量，再调 `sandbox.audit.scan_text(surface="memory")` 交叉校验） | 拒绝出快照（`E_EVAL_INV5_LEAK`），命中条目标 `quarantined` 并写 `audit/leak_events.jsonl` |
 | I4 出口 | `retrieve()` 返回前 | 对入选条目做廉价字面量复检（覆盖旧快照载入的条目） | 命中条目丢弃并记事件，不计入返回 |
 
-反思文本里出现 seed 数字**必须**由 MOD-02 扫描（I2）拦下；I3/I4 是本模块兜底，不替代 MOD-02。
+反思文本里出现 seed 数字由 I2 的**本地扫描 + MOD-02 交叉校验**拦下；I3/I4 是本模块兜底，不替代 MOD-02。
 
-### 6.6 JSON Schema（`MemoryEntry`；`ReflectionEntry` 同风格另存 `schemas.REFLECTION_SCHEMA`）
+### 6.6 JSON Schema（`MemoryEntry`；`ReflectionEntry` 同风格另存 `schemas.REFLECTION_ENTRY_SCHEMA`（旧名 `REFLECTION_SCHEMA` 不存在））
 ```json
 {"$schema":"https://json-schema.org/draft/2020-12/schema","title":"MemoryEntry","type":"object","additionalProperties":false,
  "required":["entry_id","schema_version","created_at","created_tick","expires_tick","ttl_ticks","run_id","generation","harness_version","source_episode_id","source_reflection_id","situation","situation_key","tags","lesson","polarity","confidence","n_ref","n_adopted","n_win_adopted","n_not_adopted","n_win_not_adopted","utility","status","text_hash","content_sha256"],
@@ -155,9 +155,9 @@ utility = clip(0.5*(p_used - p_base) + 0.3*log1p(n_ref)/log1p(200) + 0.2*exp(-ag
   "lesson":{"type":"string","minLength":1,"maxLength":240},"action_hint":{"type":["object","null"]},"polarity":{"enum":["do","avoid"]},"confidence":{"type":"number","minimum":0,"maximum":1},"last_ref_tick":{"type":["integer","null"]},"n_ref":{"type":"integer","minimum":0},"utility":{"type":"number","minimum":-1,"maximum":1},"status":{"enum":["active","evicted","superseded","quarantined"]},
   "supersedes":{"type":["string","null"]},"superseded_by":{"type":["string","null"]},"conflict_group":{"type":["string","null"]},"merged_from":{"type":"array","items":{"type":"string"}},"embedding":{"type":["array","null"],"items":{"type":"number"}},"text_hash":{"type":"string","pattern":"^[0-9a-f]{64}$"},"content_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}}}
 ```
-示例（`memory_active.jsonl` 的一行；`text_hash` / `content_sha256` 实际为 64 位 hex，此处缩写）：
+示例（`memory_active.jsonl` 的一行；行首带 `_type:"memory_entry"`，`text_hash` / `content_sha256` 实际为 64 位 hex，此处缩写）：
 ```json
-{"entry_id":"mem-3f1c9ab24d07","schema_version":"1.1","created_at":"2026-10-02T09:14:11Z","created_tick":37,"run_id":"a1b2c3d4-5e6f7a8b-20261002T090000Z","generation":2,"harness_version":1,"source_episode_id":"e-001037-g002-train","source_reflection_id":"refl-88ac1d0b2fe4","situation":{"phase":"player_turn","stage_bucket":"3-4","node_kind":"elite","virtue_bucket":"critical","hearts_left":1,"enemy_school":"blade","intent_kind":"purge","counter_arrow":"down","hand_count":4,"corrupt_count":1,"slot_kinds":["attack","defense","heal","utility"]},"situation_key":"sk-71a0c4d2","tags":["combat","low_virtue","defense","school_counter"],"lesson":"净化值低于 25% 且敌方意图伤害 ≥ 当前净化值时，先把光盾骰放进防御槽，再考虑输出。","action_hint":{"kind":"play_face","slotKind":"defense","school":"neutral"},"polarity":"do","confidence":0.7,"n_ref":4,"n_adopted":3,"n_win_adopted":2,"n_not_adopted":1,"n_win_not_adopted":0,"last_ref_tick":52,"utility":0.42,"ttl_ticks":300,"expires_tick":337,"status":"active","supersedes":null,"superseded_by":null,"conflict_group":null,"merged_from":[],"embedding":null,"text_hash":"9c1f…","content_sha256":"4d2a…"}
+{"_type":"memory_entry","entry_id":"mem-3f1c9ab24d07","schema_version":"1.1","created_at":"2026-10-02T09:14:11Z","created_tick":37,"run_id":"a1b2c3d4-5e6f7a8b-20261002T090000Z","generation":2,"harness_version":1,"source_episode_id":"e-001037-g002-train","source_reflection_id":"refl-88ac1d0b2fe4","situation":{"phase":"player_turn","stage_bucket":"3-4","node_kind":"elite","virtue_bucket":"critical","hearts_left":1,"enemy_school":"blade","intent_kind":"purge","counter_arrow":"down","hand_count":4,"corrupt_count":1,"slot_kinds":["attack","defense","heal","utility"]},"situation_key":"sk-71a0c4d2","tags":["combat","low_virtue","defense","school_counter"],"lesson":"净化值低于 25% 且敌方意图伤害 ≥ 当前净化值时，先把光盾骰放进防御槽，再考虑输出。","action_hint":{"kind":"play_face","slotKind":"defense","school":"neutral"},"polarity":"do","confidence":0.7,"n_ref":4,"n_adopted":3,"n_win_adopted":2,"n_not_adopted":1,"n_win_not_adopted":0,"last_ref_tick":52,"utility":0.42,"ttl_ticks":300,"expires_tick":337,"status":"active","supersedes":null,"superseded_by":null,"conflict_group":null,"merged_from":[],"embedding":null,"text_hash":"9c1f…","content_sha256":"4d2a…"}
 ```
 
 ## 7. 数据模型与存储
@@ -208,7 +208,7 @@ add_reflection(refl, provenance):
   if appends % compact_every == 0: compact()
   return AddResult(added, merged, conflicted, quarantined, memory_version)
 ```
-去重度量为 `similarity(a,b) = 0.5*Jaccard(tokenize(a.lesson), tokenize(b.lesson)) + 0.5*cos(char3gram_tfidf(a.lesson), char3gram_tfidf(b.lesson))`，阈值 `sim_threshold=0.85` 且要求 `situation_key` 相同（跨情境的不同结论不算重复）。`merge`：survivor = `utility` 高者（并列取 `created_tick` 小者，再并列取 `entry_id` 小者），`outcome_stats` 逐项相加，`confidence = max`，`merged_from += other.entry_id`，重算 `text_hash/content_sha256`，**不新增行**。
+去重度量为 `similarity(a,b) = 0.5*Jaccard(tokenize(a.lesson), tokenize(b.lesson)) + 0.5*cos(char3gram_tfidf(a.lesson), char3gram_tfidf(b.lesson))`，阈值 `sim_threshold=0.85` 且要求 `situation_key` 相同（跨情境的不同结论不算重复）。`merge`：survivor = `utility` 高者（并列取 `created_tick` 小者，再并列取 `entry_id` 小者），`n_ref` / `n_not_adopted` / `n_win_not_adopted` 按实际计数相加，`confidence = max`，`merged_from += other.entry_id`，重算 `text_hash/content_sha256`，**不新增行**。
 
 ### 8.2 淘汰与 TTL
 ```
@@ -218,7 +218,7 @@ sweep_ttl(tick): for e in active: if e.expires_tick <= tick: e.status="evicted";
 
 ### 8.3 快照 / 回滚
 ```
-snapshot(reason):  I3: seed_token_guard(所有 active 条目)，命中即 E_EVAL_INV5_LEAK 并中止
+snapshot(reason):  I3: MemoryStore._seed_guard_all()(全部非 quarantined 条目)，命中即 E_EVAL_INV5_LEAK 并中止
                    N = index.memory_version + 1；write memory_v{N}.jsonl（header + entries，含 content_sha256）
                    index.json = {memory_version:N, parent:current, harness_version:current, entry_count, active_count}
 rollback(target, dry_run): 文件不存在 → E_IO_SNAPSHOT_MISSING（退出码 2）；sha256 不符 → E_IO_MEMORY_CORRUPT
@@ -248,10 +248,10 @@ S4 时序：MOD-07 判负 → 恢复 `harness/version.json` 到 v6 → `memory.r
 
 | 码 | 触发 | 处置 / 降级 |
 |---|---|---|
-| `E_EVAL_INV5_LEAK`（v1.0 为 `E_EVAL_SEED_LEAK`，按 Spec §8.3 统一） | I1–I4 任一命中 | **P0**：拒写/拒返回；事件入 `audit/leak_events.jsonl`；loop 不中断，该反思标记为不可用于演化 |
+| `E_EVAL_INV5_LEAK`（v1.0 为 `E_EVAL_SEED_LEAK`，按 Spec §8.3 统一） | I1–I4 任一命中 | **P0**：拒写/拒返回；**I2–I4 写 `audit/leak_events.jsonl`，I1 只抛错（不写事件）**；loop 不中断，该反思标记为不可用于演化 |
 | `E_IO_MEMORY_CORRUPT` | 行解析失败 / `content_sha256` 不符 / `entry_id` 重复 | 坏行移入 `memory/quarantine.jsonl`，其余正常加载，检索继续 |
 | `E_IO_MEMORY_LOCKED`（新增） / `E_IO_MEMORY_QUOTA`（新增） / `E_IO_SNAPSHOT_MISSING`（新增） | 压实期 `.lock` 被占用 >5 s / 单文件 >16 MB 或 `active > 2*max_entries` / `rollback` 目标快照缺失 | 跳过本次压实改下次（写入仍走追加） / 强制淘汰+压实，仍超则停写并告警（读不受影响） / 回滚失败，保持当前版本，CLI 退出码 2 |
-| `E_EVAL_CONFLICT_UNRESOLVED`（新增） | `auto_supersede=false` 下冲突无法裁决 | 保守：两条共存，检索压制其一（FR-05-3），发 `memory_conflict` 事件 |
+| `E_EVAL_CONFLICT_UNRESOLVED`（新增，**当前无 raise 点**） | `auto_supersede=false` 下冲突无法裁决 | 保守：两条共存，检索压制其一（FR-05-3），`conflict_unresolved += 1` 并发 `memory.conflict(rule="suppress")` 事件；**不抛码** |
 | `E_IO_MEMORY_WRITE_FAILED`（新增） | 磁盘错误 / 权限 | 本局继续（记忆是增强）；同 run 第 3 次失败后本 run 停写并显眼标注（该 run 不参与消融对比） |
 | `E_LLM_EXTRACT_FAILED` | `extract.use_llm=true` 且 MOD-03 失败 | 降级为规则抽取；反思仍入库 |
 
@@ -282,21 +282,21 @@ S4 时序：MOD-07 判负 → 恢复 `harness/version.json` 到 v6 → `memory.r
 - **M2 交付**：闭环 ≥1 轮演化中「反思入库 → 记忆检索注入 → 快照 → 回滚演练」全链路跑通；`report.json` 引用 `(memory_version, harness_version)` 血缘；`memory rollback` 演练 ≥1 次并留事件。**明确不验收**：反思文本质量（MOD-08 指标 + MOD-07 取舍）、记忆是否提升胜率（MOD-08 消融）。
 
 ## 13. 指标与埋点
-事件单行 JSONL → `runs/<run_id>/metrics/memory.jsonl`，公共字段 `ts/run_id/episode_id/generation/harness_version/memory_version/event`：
+事件单行 JSONL → `runs/<run_id>/metrics/memory.jsonl`，公共字段 `ts/run_id/generation/harness_version/memory_version/event`（**没有 `episode_id`**）：
 
 | event | 额外字段 |
 |---|---|
-| `memory.add` | `entry_id, source_reflection_id, tags, polarity, result(added\|merged\|conflicted\|quarantined)` |
-| `memory_merge` / `memory_conflict` | `survivor_id, merged_id, sim, reason(exact\|near)` / `conflict_group, entry_ids, winner_id, rule(auto\|suppress)` |
-| `memory_quarantine` / `memory_seed_leak_blocked` / `memory.evict` | `entry_id\|reflection_id, reason(corrupt\|conflict\|scan)` / `interception_point(I1..I4), field, matched_pattern` / `entry_id, evict_reason(capacity\|ttl), utility, n_ref` |
-| `memory_retrieve` | `obs_digest, n_candidates, returned_ids, dropped_reasons{}, tokens, elapsed_ms` |
-| `memory_snapshot` / `memory_rollback` | `from_version, to_version, entry_count, content_sha256` |
-| `memory_write_failed` / `memory_retrieve_failed` | `code(E_IO_*), message` |
+| `memory.add` | `entry_id, source_reflection_id, tags, polarity, result(added)`（当前实际只发 `added`） |
+| `memory.merge` / `memory.conflict` | `survivor_id, merged_id, sim, reason(exact_or_near)` / `conflict_group, entry_ids, winner_id, rule(auto\|suppress)` |
+| `memory.quarantine` / `memory.seed_leak_blocked` / `memory.evict` | `entry_id\|reflection_id, reason(corrupt\|conflict\|scan)` / `interception_point(I1..I4), field, matched_pattern` / `entry_id, evict_reason(capacity\|ttl), utility, n_ref` |
+| `memory.retrieve` | `obs_digest, n_candidates, returned_ids, dropped_reasons{}, tokens, elapsed_ms` |
+| `memory.snapshot` / `memory.rollback` | `from_version, to_version, entry_count, content_sha256` |
+| `memory.write_failed` / `memory.retrieve_failed` | `code(E_IO_*), message` |
 
 派生指标（`memory stats` 与代际报告引用）：`dedup_rate = merged/added_candidates`、`conflict_rate`、`retrieve_hit_rate = 被引用条目中 adopted 占比`、`retrieve_p95_ms`、`budget_utilization = tokens/token_budget`、`memory_growth_per_generation = Δactive/Δgen`（膨胀告警阈值 >200/代）、`seed_leak_blocks`（期望恒 0；蜜罐测试时 ≥1）。埋点不得含 heldout/test 相关字段——I4 同样约束事件，`obs_digest` 为单向摘要且不含 seed。
 
 ## 14. 依赖与风险
-依赖：MOD-02（`guard.scan_text`、`Observation`）、MOD-04（schema 协作方与 `action_hint` 消费方，Spec §6 记 MOD-05 依赖 MOD-04 schema）、MOD-06（反思文本与 `provenance`）、MOD-09（配置/日志/`run_id`/CLI/`infra.guards.seed_token_guard`/`seeds.yaml`）、MOD-03（可选 `count_tokens`、`embed()`）。
+依赖：MOD-02（`sandbox.audit.scan_text`、`Observation`）、MOD-04（schema 协作方与 `action_hint` 消费方，Spec §6 记 MOD-05 依赖 MOD-04 schema）、MOD-06（反思文本与 `provenance`）、MOD-09（配置/日志/`run_id`/CLI/`seeds.yaml` 的 seed 协议解析）、MOD-03（可选 `embed()`；本模块的 token 估算用 `retriever.estimate_tokens`，不调用 `count_tokens`）。
 
 | 风险 | 影响 | 对策 |
 |---|---|---|
@@ -325,7 +325,7 @@ S4 时序：MOD-07 判负 → 恢复 `harness/version.json` 到 v6 → `memory.r
 1. **换向量库阈值**：本 PRD 提出 §7.1 的四个触发条件，第一跳 SQLite FTS5（+`sqlite-vec`）、第二跳 FAISS/LanceDB；是否需用真实规模实验校准 `active > 20,000` 与 `> 50,000`？
 2. **`adopted` 判定归属**：本 PRD 定为 MOD-04/06 计算并传入（MOD-05 不做语义判断）；若 MOD-04 认为属记忆侧职责，需在 Spec 层重新划界。
 3. **冲突自动替代证据标准与版本号统一**：`n_ref ≥ 5`、胜率差 `≥ 0.15` 为拍定值，需 M2 数据回填（也可能永久保持 `auto_supersede=false`）；`memory_version` 与 `harness_version` 是否统一为 `artifact_version`（待 MOD-07/MOD-09 决策）。
-4. **Spec 回填**：`memory/` 目录、`memory` 子命令、`snapshot.py` 均未在 Spec §5/§4.6 登记；不回填即违反「下游 PRD 必须与 Spec 一致」。
+4. **（已结案）Spec 回填**：`memory/` 目录、`memory` 子命令与 `snapshot.py` 已分别由 Spec B-08（§4.6 命令面）与 B-35（§5 模块布局）登记。
 5. **跨 run 记忆复用与中文分词**：阶段一每 run 独库、分词用字符 unigram/bigram（零依赖）；跨 run 迁移的 INV-5 复查成本、是否引入 `jieba`（增加依赖需确定性校验）均待定。
 
 ## 17. 变更记录
@@ -334,4 +334,5 @@ S4 时序：MOD-07 判负 → 恢复 `harness/version.json` 到 v6 → `memory.r
 |---|---|---|
 | v1.0 | 2026-09-30 | 首版 |
 | v1.1 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：时间改为逻辑时钟 `tick`（训练局序号），`ttl_ticks=300`、`min_age_ticks=30`，修复淘汰永不生效和 G3 不成立的问题；`SituationKey`、tags、`ReflectionEntry` 改为 GAME/INV-7 口径（P0-1）；`adopted` 改为 `(kind, slotKind, school)` 三元组判定，由 MOD-04 给出、MOD-06 在局末调用 `record_usage`（P1-2）；新增 `frozen()` 只读视图；`scan_text` 改为 `sandbox.audit`（P1-16）；`E_EVAL_SEED_LEAK` 统一为 `E_EVAL_INV5_LEAK`（P1-12）；schema_version 升为 1.1 |
+| v1.3 | 2026-10-17 | **与代码对齐（纯文档，¥0）**。① **I3**：不存在 `infra.guards.seed_token_guard()`；实际是 `MemoryStore._seed_guard_all()`（由 `snapshot()` / `verify(full=True)` 调用），扫**全部非 quarantined** 条目（不只是 active）。② **I2**：不是「只调 MOD-02」——`MemoryStore._scan_text` 先做本地正则/裸整数扫描，再调 `sandbox.audit.scan_text(forbidden=…, surface="memory")` 交叉校验。③ **I1** 只抛 `E_EVAL_INV5_LEAK`，不写 `audit/leak_events.jsonl`（写事件的是 I2–I4）。④ `reflections/*.json` 的 `scan.status` 保持入站原值（`pass`），隔离状态体现在返回的 `quarantined` 计数与 `leak_quarantine.jsonl`。⑤ §13 事件名统一为 `memory.add/merge/conflict/quarantine/seed_leak_blocked/evict/retrieve/snapshot/rollback/write_failed/retrieve_failed`；公共字段**没有** `episode_id`；`memory.add` 当前只发 `result=added`，`memory.merge` 只发 `reason=exact_or_near`。⑥ `MemoryEntry` 没有 `outcome_stats`；合并只累加 `n_ref`（有 outcome 时加 `n_not_adopted`/`n_win_not_adopted`）并更新 `confidence`/`merged_from`。⑦ `schemas.REFLECTION_ENTRY_SCHEMA`（旧名不存在）；active 行首带 `_type:"memory_entry"`。⑧ 依赖改为 `sandbox.audit.scan_text` 与 `retriever.estimate_tokens`；`E_EVAL_CONFLICT_UNRESOLVED` 当前无 raise 点（只计数 + 事件）。⑨ §16 开放问题 4 结案（B-08/B-35 已登记）。 |
 | v1.2 | 2026-09-30 17:49 | P-18 裁决回填为 Spec B-30；snapshot.py 回填为 B-35；CLI 标注改为 B-08 |

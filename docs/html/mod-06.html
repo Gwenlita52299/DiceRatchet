@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MOD-06 loop · DiceRatchet 可视化讲解</title>
+<meta name="description" content="MOD-06 loop：把 play → reflect → evaluate → evolve 串成可中断、可续跑、不重复计分的闭环；含 loop baseline 与起点守卫。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="shell">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html">
+    <span class="logo">◈ <b>DiceRatchet</b></span>
+    <div class="sub">模块可视化讲解 · docs/html<br>源 commit 879ea49 · 2026-10-17</div>
+  </a>
+  <nav class="nav">
+    <div class="nav-title">总览</div>
+    <a href="index.html">闭环与模块地图 <span class="tag">00</span></a>
+    <a href="game.html">游戏本体 GAME <span class="tag">G</span></a>
+    <div class="nav-title">环境层 L0</div>
+    <a href="mod-01.html">MOD-01 env-rules <span class="tag">01</span></a>
+    <a href="mod-02.html">MOD-02 env-sandbox <span class="tag">02</span></a>
+    <div class="nav-title">智能体层 L1</div>
+    <a href="mod-03.html">MOD-03 inference <span class="tag">03</span></a>
+    <a href="mod-04.html">MOD-04 policy <span class="tag">04</span></a>
+    <a href="mod-05.html">MOD-05 memory <span class="tag">05</span></a>
+    <div class="nav-title">进化层 L2</div>
+    <a href="mod-06.html">MOD-06 loop <span class="tag">06</span></a>
+    <a href="mod-07.html">MOD-07 evolve <span class="tag">07</span></a>
+    <div class="nav-title">测量与工程 L3</div>
+    <a href="mod-08.html">MOD-08 evals <span class="tag">08</span></a>
+    <a href="mod-09.html">MOD-09 infra <span class="tag">09</span></a>
+  </nav>
+</aside>
+
+<main class="main"><div class="wrap">
+
+  <header class="reveal">
+    <div class="eyebrow">L2 · 进化层 · Milestone M2</div>
+    <h1>MOD-06 <span class="thin">loop</span></h1>
+    <p class="lede">闭环的<strong>编排器</strong>。它不产生策略、不训练模型、不判定好坏，只负责让「打局 → 反思 → 记忆 → 提案 → 评估 → 版本」在三个时间尺度上正确、可复现、可中断、可恢复地跑起来。</p>
+    <div class="badges">
+      <span class="badge l2">L2 进化</span>
+      <span class="badge ok">✅ 已落地</span>
+      <span class="badge">2026-10-17 新增 loop baseline</span>
+      <span class="badge">起点守卫</span>
+    </div>
+  </header>
+
+  <section class="reveal">
+    <h2><span class="no">01</span>两个嵌套的循环</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 940 360" role="img" aria-label="单局循环与演化周期循环">
+        <defs>
+          <marker id="l-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#37d6c0"/>
+          </marker>
+          <marker id="l-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3a4d66"/>
+          </marker>
+        </defs>
+
+        <rect x="30" y="60" width="330" height="132" rx="12" class="n-box"/>
+        <text x="195" y="84" text-anchor="middle" class="n-tiny">单局循环 · 每 seed 一次</text>
+        <rect x="48" y="98" width="80" height="40" rx="7" class="n-box-accent"/><text x="88" y="123" text-anchor="middle" class="n-tiny">reset</text>
+        <rect x="146" y="98" width="86" height="40" rx="7" class="n-box"/><text x="189" y="123" text-anchor="middle" class="n-tiny">play_decision</text>
+        <rect x="250" y="98" width="92" height="40" rx="7" class="n-box"/><text x="296" y="123" text-anchor="middle" class="n-tiny">step + 落盘</text>
+        <path d="M128 118 L146 118" class="edge" marker-end="url(#l-ar2)"/>
+        <path d="M232 118 L250 118" class="edge" marker-end="url(#l-ar2)"/>
+        <path d="M342 118 C 368 118, 368 168, 88 168 C 70 168, 64 148, 60 140" class="edge-dash" marker-end="url(#l-ar2)"/>
+        <text x="195" y="182" text-anchor="middle" class="n-tiny">terminated / truncated 才退出（上限由 MOD-02 判）</text>
+
+        <rect x="404" y="60" width="506" height="132" rx="12" class="n-box-warn"/>
+        <text x="657" y="84" text-anchor="middle" class="n-tiny">周期循环 · 每 K=30 局一次</text>
+        <rect x="424" y="98" width="82" height="40" rx="7" class="n-box"/><text x="465" y="123" text-anchor="middle" class="n-tiny">reflect</text>
+        <rect x="520" y="98" width="82" height="40" rx="7" class="n-box"/><text x="561" y="123" text-anchor="middle" class="n-tiny">memory</text>
+        <rect x="616" y="98" width="82" height="40" rx="7" class="n-box-warn"/><text x="657" y="123" text-anchor="middle" class="n-tiny">propose</text>
+        <rect x="712" y="98" width="82" height="40" rx="7" class="n-box-warn"/><text x="753" y="123" text-anchor="middle" class="n-tiny">evaluate</text>
+        <rect x="808" y="98" width="82" height="40" rx="7" class="n-box-accent"/><text x="849" y="123" text-anchor="middle" class="n-tiny">gate</text>
+        <path d="M506 118 L520 118" class="edge" marker-end="url(#l-ar2)"/>
+        <path d="M602 118 L616 118" class="edge" marker-end="url(#l-ar2)"/>
+        <path d="M698 118 L712 118" class="edge" marker-end="url(#l-ar2)"/>
+        <path d="M794 118 L808 118" class="edge-flow" marker-end="url(#l-ar)"/>
+
+        <rect x="180" y="236" width="580" height="52" rx="9" class="n-box"/>
+        <text x="470" y="258" text-anchor="middle" class="n-sub">状态机：pending → playing → (reflecting) → evolving → hitl_wait / playing → … → done</text>
+        <text x="470" y="277" text-anchor="middle" class="n-tiny">失败 → failed；SIGINT → 写 interrupted_at（不新增 phase），退出码 130，可 --resume</text>
+
+        <rect x="180" y="306" width="580" height="38" rx="8" class="n-box-bad"/>
+        <text x="470" y="330" text-anchor="middle" class="n-sub">周期边界幂等：last_completed_cycle + evolving_cycle + MOD-07 产物存在性</text>
+      </svg>
+      <div class="caption"><b>“一局”与“一代”是两件事。</b>局是执行单位，代是裁决单位；每 K 局触发一次周期，generation 只在 MOD-07 返回“已裁决”后 +1（接受与拒绝都算）。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">02</span>起跑前的三道闸（2026-10-17 起）</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 920 250" role="img" aria-label="loop run 起跑顺序">
+        <rect x="24" y="76" width="180" height="82" rx="10" class="n-box"/>
+        <text x="114" y="102" text-anchor="middle" class="n-label">① git 干净检查</text>
+        <text x="114" y="122" text-anchor="middle" class="n-tiny">preflight_worktree_clean</text>
+        <text x="114" y="142" text-anchor="middle" class="n-tiny">E_IO_GIT_DIRTY · 退出码 4</text>
+
+        <rect x="246" y="76" width="200" height="82" rx="10" class="n-box-warn"/>
+        <text x="346" y="102" text-anchor="middle" class="n-label">② 起点守卫</text>
+        <text x="346" y="122" text-anchor="middle" class="n-tiny">play_hash ∈ 原始 v0 ∪ 已接受快照</text>
+        <text x="346" y="142" text-anchor="middle" class="n-tiny">E_EVOLVE_UNGATED_START · 退出码 2</text>
+
+        <rect x="488" y="76" width="180" height="82" rx="10" class="n-box-bad"/>
+        <text x="578" y="102" text-anchor="middle" class="n-label">③ gen-000 基线</text>
+        <text x="578" y="122" text-anchor="middle" class="n-tiny">write_gen000_baseline</text>
+        <text x="578" y="142" text-anchor="middle" class="n-tiny">从这一刻开始花钱</text>
+
+        <rect x="710" y="76" width="186" height="82" rx="10" class="n-box-accent"/>
+        <text x="803" y="102" text-anchor="middle" class="n-label">④ 训练 / 演化</text>
+        <text x="803" y="122" text-anchor="middle" class="n-tiny">K=30 训练 + 周期</text>
+        <text x="803" y="142" text-anchor="middle" class="n-tiny">每代 74–114 局</text>
+
+        <path d="M204 117 L246 117" class="edge" marker-end="url(#l-ar2)"/>
+        <path d="M446 117 L488 117" class="edge" marker-end="url(#l-ar2)"/>
+        <path d="M668 117 L710 117" class="edge-flow" marker-end="url(#l-ar)"/>
+
+        <rect x="246" y="192" width="650" height="34" rx="8" class="n-box"/>
+        <text x="571" y="214" text-anchor="middle" class="n-sub">①② 任一不过 ⇒ 0 局、0 推理调用；--allow-ungated-start 只放行 ②，并发 evolve.start_guard 事件留痕</text>
+      </svg>
+      <div class="caption"><b>为什么守卫放在基线之前。</b>基线本身要花钱（40 局 held-out）。先确认“这个起点是被裁决过的”，再决定是否为它付钱。</div>
+    </div>
+    <div class="callout bad"><b>现场教训（2026-10-17）：</b>P1 被人工预装成 version 0 的“基线”，从未作为候选过门禁，却成了 P2 的父代。P2 的 accept 建立在 P1 的 held-out <strong>0.05</strong>（裸 v0 是 <strong>0.175</strong>）之上。守卫只保证“没裁决过的东西不会悄悄变成父代”，它不能替代门禁本身。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">03</span>loop baseline：把“测一个候选”抽出来</h2>
+    <div class="cards">
+      <div class="card"><h3>它做什么</h3><p>对给定的 <code>--harness-dir</code> 跑一次 held-out，落 <code>generations/gen-000/report.json</code> 与臂归档，然后<strong>停下</strong>。</p></div>
+      <div class="card"><h3>它不做什么</h3><p>不训练、不演化、不提交 git、不做裁决。它只产出测量；是否接受仍归 MOD-07 的 C0–C5。</p></div>
+      <div class="card"><h3>幂等</h3><p><code>gen-000/report.json</code> 已存在即直接返回，不重复花钱。<strong>幂等键是 run 目录</strong>——换 harness 必须换 run-id。</p></div>
+    </div>
+    <pre>python -m dice_ratchet loop baseline \
+  --run-id m3r3 --harness-dir runs/m3r3/harness --basket H1
+<span class="c"># 只测 v0+P2 的 40 局 held-out；正式测量 ≈¥33 / ≈1.5 h（--agent heuristic 可免费自检）</span></pre>
+    <div class="callout"><b>为什么需要它。</b>协议纠正后要单独测 <code>v0+P2</code>；原先唯一路径是 <code>loop run</code>，它会把测量和训练/演化绑在一起。把测量抽出来，才能先回答“P2 独立于 P1 还有没有效”这个更便宜的问题。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">04</span>产物与幂等键</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>对象</th><th>路径</th><th>幂等 / 语义</th></tr></thead>
+        <tbody>
+          <tr><td>run 状态</td><td><code>state.json</code></td><td>phase / generation / completed_train_seeds / pending_queue / hitl_pending / counters / budget</td></tr>
+          <tr><td>轨迹</td><td><code>episodes/&lt;split&gt;/&lt;episode_key&gt;.jsonl</code></td><td>每步一行，立即 flush；局末追加 episode_end</td></tr>
+          <tr><td>计分台账</td><td><code>metrics/scoreboard.json</code></td><td>幂等键 <code>episode_key = e-{seed}-g{gen}-{arm}</code>；同 seed 重跑标 superseded_by</td></tr>
+          <tr><td>反思</td><td><code>reflections/&lt;episode_key&gt;.json</code></td><td>失败写 skipped；<code>--retry-reflections</code> 才重试</td></tr>
+          <tr><td>代际报告</td><td><code>generations/gen-NNN/report.json</code></td><td>MOD-07 写；判据的机读来源</td></tr>
+          <tr><td>基线报告</td><td><code>generations/gen-000/report.json</code></td><td><code>decision="baseline"</code>；loop baseline 也落这里</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="muted small">周期幂等：<code>cycle_index = len(completed_train_seeds) // k</code>，由 <code>last_completed_cycle</code> + <code>evolving_cycle</code> + MOD-07 产物存在性三重校验。</p>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">05</span>成本、并发与降级</h2>
+    <div class="kpis">
+      <div class="kpi accent"><div class="num">K=30</div><div class="label">每 30 训练局触发一次演化周期</div></div>
+      <div class="kpi"><div class="num">114<span class="unit">局</span></div><div class="label">公式上限 E_gen = K + (1+C)(S+H)</div></div>
+      <div class="kpi"><div class="num">74<span class="unit">局</span></div><div class="label">继承命中时的实际每 cycle 局数</div></div>
+      <div class="kpi warn"><div class="num">120<span class="unit">局</span></div><div class="label">全系统唯一成本上限</div></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>失败</th><th>MOD-06 的处置</th></tr></thead>
+        <tbody>
+          <tr><td>模型超时 / 不可用</td><td>降级为 heuristic，事件标 degraded；该局不计入评估样本</td></tr>
+          <tr><td>反思失败</td><td>写 <code>status="skipped"</code>，主循环继续——绝不判该局失败</td></tr>
+          <tr><td>环境内核错误</td><td>该局终止、写 <code>audit/env_error_&lt;seed&gt;.json</code>，同类 ≥3 次中止 run（退出码 4）</td></tr>
+          <tr><td>MOD-07 抛 <code>E_EVOLVE_*</code></td><td>保守：不更新 harness，记 <code>decision="error_reject"</code>，generation +1，退出码 0</td></tr>
+          <tr><td>SIGINT / SIGTERM</td><td>当前 step 落盘 → 写 state → 退出码 130；<code>--resume</code> 无损续跑</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">06</span>当前状态（2026-10-17）</h2>
+    <div class="callout warn"><b>m3r2 的“3 个 cycle”是范围漂移。</b>裁决是 1 个 cycle（先看 P2），脚本的硬编码 seed 上界让它跑了 3 个：262 局、12 h 22 m、<strong>¥240.94</strong>，比预算多 ≈¥141。范围漂移已修（seed 上界按 CYCLES 推导 + 精确断言）。</div>
+    <div class="callout"><b>协议纠正后：</b>P1 判负 ⇒ <code>v1 = v0</code>；m3r2 的 v1 保留为“含 P1 的 provisional v1”；下一步用 <code>loop baseline</code> 测 <code>v0+P2</code>（40 局 ≈¥33）。在役 harness（version 3）在测完前不动。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">07</span>延伸阅读</h2>
+    <ul class="clean">
+      <li><a href="mod-07.html">MOD-07 evolve</a> —— 周期边界之后发生什么、C0–C5 怎么判。</li>
+      <li><a href="mod-08.html">MOD-08 evals</a> —— held-out 测量、台账与判据 1 判定器。</li>
+      <li><a href="mod-09.html">MOD-09 infra</a> —— run 目录、退出码与 git 门禁。</li>
+      <li><a href="../prd/MOD-06-loop-PRD.md">MOD-06 PRD</a> · <a href="../reviews/2026-10-17-M3R2-协议口径纠正-P1应判负.md">协议口径纠正</a></li>
+    </ul>
+  </section>
+
+  <div class="pager">
+    <a class="prev" href="mod-05.html"><span class="dir">PREV</span><span class="to">← MOD-05 memory</span></a>
+    <a class="next" href="mod-07.html"><span class="dir">NEXT</span><span class="to">MOD-07 evolve →</span></a>
+  </div>
+
+  <footer class="footer">
+    <span>DiceRatchet 模块可视化讲解 · MOD-06</span>
+    <span>事实来源：<code>dice_ratchet/loop/*</code> + PRD · 生成于 2026-10-17</span>
+  </footer>
+
+</div></main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

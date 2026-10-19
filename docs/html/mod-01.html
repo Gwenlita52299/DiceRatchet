@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MOD-01 env-rules · DiceRatchet 可视化讲解</title>
+<meta name="description" content="MOD-01 env-rules：把 GAME 的 JS 规则内核逐位移植成纯 Python，用 golden 对拍保证 obs/state/rng 三个摘要逐字节一致。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="shell">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html">
+    <span class="logo">◈ <b>DiceRatchet</b></span>
+    <div class="sub">模块可视化讲解 · docs/html<br>源 commit 879ea49 · 2026-10-17</div>
+  </a>
+  <nav class="nav">
+    <div class="nav-title">总览</div>
+    <a href="index.html">闭环与模块地图 <span class="tag">00</span></a>
+    <a href="game.html">游戏本体 GAME <span class="tag">G</span></a>
+    <div class="nav-title">环境层 L0</div>
+    <a href="mod-01.html">MOD-01 env-rules <span class="tag">01</span></a>
+    <a href="mod-02.html">MOD-02 env-sandbox <span class="tag">02</span></a>
+    <div class="nav-title">智能体层 L1</div>
+    <a href="mod-03.html">MOD-03 inference <span class="tag">03</span></a>
+    <a href="mod-04.html">MOD-04 policy <span class="tag">04</span></a>
+    <a href="mod-05.html">MOD-05 memory <span class="tag">05</span></a>
+    <div class="nav-title">进化层 L2</div>
+    <a href="mod-06.html">MOD-06 loop <span class="tag">06</span></a>
+    <a href="mod-07.html">MOD-07 evolve <span class="tag">07</span></a>
+    <div class="nav-title">测量与工程 L3</div>
+    <a href="mod-08.html">MOD-08 evals <span class="tag">08</span></a>
+    <a href="mod-09.html">MOD-09 infra <span class="tag">09</span></a>
+  </nav>
+</aside>
+
+<main class="main"><div class="wrap">
+
+  <header class="reveal">
+    <div class="eyebrow">L0 · 环境层 · Milestone M0</div>
+    <h1>MOD-01 <span class="thin">env-rules</span></h1>
+    <p class="lede">游戏规则的<strong>纯 Python 等价内核</strong>。它不发明任何规则，只负责让同一份配表、同一个 seed、同一串动作，在 Python 里得到与 JS 内核<strong>逐字节相同</strong>的状态、观测与随机流。</p>
+    <div class="badges">
+      <span class="badge l0">L0 环境</span>
+      <span class="badge ok">✅ 已落地</span>
+      <span class="badge">零依赖 · 只用标准库</span>
+      <span class="badge">被 MOD-02 独占调用</span>
+    </div>
+  </header>
+
+  <section class="reveal">
+    <h2><span class="no">01</span>为什么需要一份“翻译过的内核”</h2>
+    <p>智能体链路（MOD-02～08）全部是 Python。如果训练时经 HTTP 调 JS 游戏，会引入进程边界、网络栈与额外延迟，更难保证“同一 seed 两次跑出同一结果”。所以游戏本体先在 JS 里做成可玩的网页版（<a href="game.html">GAME 系列</a>），再把规则内核按同一契约搬到 Python。</p>
+    <div class="cards">
+      <div class="card"><h3>不定义规则</h3><p>规则、数值、配表的唯一事实来源是 GAME-00/01/02 与 <code>src/game</code>。MOD-01 只做移植，冲突时以游戏侧为准。</p></div>
+      <div class="card"><h3>只承诺对拍</h3><p>承诺的是三个摘要：<code>obsDigest</code> / <code>rngDigest</code> / <code>stateDigest</code> 与 JS 逐字节相等，而不是“看起来像”。</p></div>
+      <div class="card"><h3>零运行时依赖</h3><p>只用标准库；唯一例外是 <code>env/selftest.py</code> 只读 <code>infra.guards</code>。env 层目前不在 MOD-09 分层守卫的覆盖内，靠 <code>env selftest</code> 与 golden 钉住。</p></div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">02</span>双内核对拍：一份规则，两种语言</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 900 300" role="img" aria-label="JS 内核与 Python 内核通过 golden 快照对拍">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3a4d66"/>
+          </marker>
+          <marker id="ar-c" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#37d6c0"/>
+          </marker>
+        </defs>
+
+        <rect x="26" y="54" width="196" height="150" rx="12" class="n-box-game"/>
+        <text x="124" y="84" text-anchor="middle" class="n-label">JS 内核（游戏本体）</text>
+        <text x="124" y="106" text-anchor="middle" class="n-sub">src/game/kernel/*.js</text>
+        <text x="124" y="126" text-anchor="middle" class="n-sub">kernel-1.0.0 · obs-1.0.0</text>
+        <text x="124" y="150" text-anchor="middle" class="n-tiny">reduce / observe / legalActions</text>
+        <text x="124" y="170" text-anchor="middle" class="n-tiny">node --test：49 项通过</text>
+        <text x="124" y="188" text-anchor="middle" class="n-tiny">唯一规则事实来源</text>
+
+        <rect x="352" y="40" width="196" height="178" rx="12" class="n-box-warn"/>
+        <text x="450" y="68" text-anchor="middle" class="n-label">golden 快照</text>
+        <text x="450" y="90" text-anchor="middle" class="n-sub">src/game/tests/golden/*.jsonl</text>
+        <text x="450" y="112" text-anchor="middle" class="n-tiny">g1 全关 · g2 全开</text>
+        <text x="450" y="130" text-anchor="middle" class="n-tiny">g3 easy 通关 · g4 厄咒路径</text>
+        <text x="450" y="148" text-anchor="middle" class="n-tiny">g5 hard × 6 关</text>
+        <text x="450" y="176" text-anchor="middle" class="n-sub">逐步记录 obsDigest / rngDigest</text>
+        <text x="450" y="196" text-anchor="middle" class="n-tiny">/ stateDigest</text>
+
+        <rect x="678" y="54" width="196" height="150" rx="12" class="n-box-accent"/>
+        <text x="776" y="84" text-anchor="middle" class="n-label">Python 内核</text>
+        <text x="776" y="106" text-anchor="middle" class="n-sub">dice_ratchet/env/*.py</text>
+        <text x="776" y="126" text-anchor="middle" class="n-sub">GameEngine 门面</text>
+        <text x="776" y="150" text-anchor="middle" class="n-tiny">reduce / observe / legal_actions</text>
+        <text x="776" y="170" text-anchor="middle" class="n-tiny">纯标准库 · 零第三方依赖</text>
+        <text x="776" y="188" text-anchor="middle" class="n-tiny">生产路径不直接对 agent 暴露</text>
+
+        <path d="M222 108 C 280 108, 300 108, 352 108" class="edge" marker-end="url(#ar)"/>
+        <text x="287" y="98" text-anchor="middle" class="n-tiny">记录</text>
+        <path d="M548 108 C 600 108, 620 108, 678 108" class="edge-warn" marker-end="url(#ar)"/>
+        <text x="613" y="98" text-anchor="middle" class="n-tiny">重放</text>
+
+        <path d="M776 204 C 776 250, 450 262, 450 226" class="edge-flow" marker-end="url(#ar-c)"/>
+        <text x="613" y="258" text-anchor="middle" class="n-tiny">三个摘要逐字节比较</text>
+
+        <rect x="300" y="236" width="300" height="40" rx="9" class="n-box"/>
+        <text x="450" y="261" text-anchor="middle" class="n-sub">任一字节不等 ⇒ CI 红（E_ENV_PARITY_MISMATCH）</text>
+      </svg>
+      <div class="caption"><b>对拍不是抽样。</b>g5 的 1,487 个 env 步是 CI 的硬基线；Python 侧任何一步的摘要漂移都会让整条流水线变红。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">03</span>一步动作在内核里发生了什么</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 900 250" role="img" aria-label="reduce 的合法与非法两条路径">
+        <defs>
+          <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3a4d66"/>
+          </marker>
+        </defs>
+        <rect x="20" y="86" width="126" height="58" rx="10" class="n-box"/>
+        <text x="83" y="110" text-anchor="middle" class="n-label">Action</text>
+        <text x="83" y="129" text-anchor="middle" class="n-tiny">来自 agent / 脚本</text>
+
+        <rect x="176" y="86" width="130" height="58" rx="10" class="n-box"/>
+        <text x="241" y="110" text-anchor="middle" class="n-label">normalize</text>
+        <text x="241" y="129" text-anchor="middle" class="n-tiny">补全 targetId 等</text>
+
+        <rect x="336" y="86" width="126" height="58" rx="10" class="n-box"/>
+        <text x="399" y="110" text-anchor="middle" class="n-label">is_legal</text>
+        <text x="399" y="129" text-anchor="middle" class="n-tiny">阶段 / 资源 / 配对</text>
+
+        <rect x="492" y="72" width="150" height="86" rx="10" class="n-box-accent"/>
+        <text x="567" y="98" text-anchor="middle" class="n-label">dispatch</text>
+        <text x="567" y="118" text-anchor="middle" class="n-sub">17 种 action kind</text>
+        <text x="567" y="137" text-anchor="middle" class="n-tiny">end_turn → E0…E12</text>
+
+        <rect x="672" y="72" width="200" height="86" rx="10" class="n-box"/>
+        <text x="772" y="96" text-anchor="middle" class="n-label">新 state + events</text>
+        <text x="772" y="116" text-anchor="middle" class="n-sub">写时构造，不改入参</text>
+        <text x="772" y="136" text-anchor="middle" class="n-tiny">stateDigest → rngDigest</text>
+
+        <path d="M146 115 L176 115" class="edge" marker-end="url(#ar2)"/>
+        <path d="M306 115 L336 115" class="edge" marker-end="url(#ar2)"/>
+        <path d="M462 115 L492 115" class="edge" marker-end="url(#ar2)"/>
+        <path d="M642 115 L672 115" class="edge-accent" marker-end="url(#ar2)"/>
+
+        <path d="M399 144 L399 196 L241 196 L241 144" class="edge-red"/>
+        <rect x="256" y="176" width="286" height="40" rx="8" class="n-box-bad"/>
+        <text x="399" y="201" text-anchor="middle" class="n-sub">illegal=True + 原 state 原样返回（不抛异常）</text>
+
+        <text x="83" y="62" text-anchor="middle" class="n-tiny">输入</text>
+        <text x="772" y="52" text-anchor="middle" class="n-tiny">输出给 SandboxEnv.step</text>
+      </svg>
+      <div class="caption"><b>非法动作不是异常。</b>内核按 GAME-01 §4 的语义返回 <code>illegal=True</code> 与原因；真正的失败（内核异常 / 不变式违反）才走 <code>E_ENV_INTERNAL</code>。</div>
+    </div>
+    <ol class="steps">
+      <li><b>写时构造。</b>先复制再修改，入参 state 永不被原地改写——这让「同一状态分叉两次」成为可能，也让轨迹可重放。</li>
+      <li><b>顺序固定。</b><code>legal_actions</code> 的元素与顺序必须与 JS 完全一致；MOD-02 据此只做减法（去掉 <code>abandon_run</code>）。</li>
+      <li><b>整数算术。</b>禁止 <code>/</code> 与 <code>int()</code> 截断，千分倍率用整数运算，位运算后强制 <code>&amp; 0xFFFFFFFF</code>，以对齐 JS 的 32 位语义。</li>
+    </ol>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">04</span>确定性三件套</h2>
+    <div class="cards">
+      <div class="card"><h3><code>stable_stringify</code></h3><p>递归排序键、<code>ensure_ascii=True</code>、紧凑分隔符；出现 float 直接抛错。摘要因此与语言、平台、locale 无关。</p></div>
+      <div class="card"><h3><code>digest(v)</code></h3><p><code>"sha256:" + sha256(stable_stringify(v))</code>。sha256 只用于摘要，<strong>不参与随机数派生</strong>。</p></div>
+      <div class="card"><h3>SplitMix64 + 16 位分片</h3><p><code>xmur3(streamName)</code> 与 rootSeed 混合后派生；8 条流固定为 <code>dice.enemy, dice.player, event, forge, levelup, loot, map, shop</code>。</p></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>摘要</th><th>覆盖什么</th><th>谁在消费</th></tr></thead>
+        <tbody>
+          <tr><td><code>obsDigest</code></td><td>白名单投影后的 Observation（不含 seed）</td><td>MOD-02 投影对拍 / golden</td></tr>
+          <tr><td><code>rngDigest</code></td><td>8 条随机流的状态与计数</td><td>确定性审计（INV-6）</td></tr>
+          <tr><td><code>stateDigest</code></td><td>完整 GameState（含隐藏信息）</td><td>轨迹审计 / 重放 / 双跑比对</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">05</span>边界：谁能碰内核</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 900 230" role="img" aria-label="agent 只能经 SandboxEnv 访问内核">
+        <rect x="30" y="78" width="210" height="76" rx="11" class="n-box-bad"/>
+        <text x="135" y="104" text-anchor="middle" class="n-label">L1+ agent 代码</text>
+        <text x="135" y="124" text-anchor="middle" class="n-sub">Policy / Evolve / Evals</text>
+        <text x="135" y="142" text-anchor="middle" class="n-tiny">禁止 import dice_ratchet.env.*</text>
+
+        <rect x="330" y="68" width="230" height="96" rx="11" class="n-box-accent"/>
+        <text x="445" y="94" text-anchor="middle" class="n-label">MOD-02 SandboxEnv</text>
+        <text x="445" y="114" text-anchor="middle" class="n-sub">唯一合法数据通道</text>
+        <text x="445" y="133" text-anchor="middle" class="n-tiny">投影 / 校验 / 逐步不变式</text>
+        <text x="445" y="151" text-anchor="middle" class="n-tiny">E_ENV_INTERNAL → 该步不提交</text>
+
+        <rect x="650" y="78" width="220" height="76" rx="11" class="n-box"/>
+        <text x="760" y="104" text-anchor="middle" class="n-label">MOD-01 内核</text>
+        <text x="760" y="124" text-anchor="middle" class="n-sub">GameEngine</text>
+        <text x="760" y="142" text-anchor="middle" class="n-tiny">纯函数 · 无 IO · 无全局随机</text>
+
+        <path d="M240 116 L330 116" class="edge-red"/>
+        <text x="285" y="104" text-anchor="middle" class="n-tiny">越权 = 红</text>
+        <path d="M560 116 L650 116" class="edge-accent"/>
+        <text x="605" y="104" text-anchor="middle" class="n-tiny">进程内调用</text>
+      </svg>
+      <div class="caption"><b>INV-1 的落点。</b>L1+ 只能拿到 MOD-02 投影后的 <code>Observation</code>；直接 import 内核会被 CI 静态门禁与运行期 import hook 双重拒绝。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">06</span>配置与错误映射</h2>
+    <p>本模块不定义游戏参数：难度、开关、局长由 <code>EpisodeConfig</code> 经 <code>env.episode.*</code> 传入。历史上有三个“死键”（<code>env.content_dir</code> / <code>env.golden_dir</code> / <code>env.check_invariants</code>），已于 2026-10-14 删除——配表目录的权威是 <code>loader.GAME_CONTENT_DIR</code>。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>JS 码</th><th>Python 码</th><th>含义</th></tr></thead>
+        <tbody>
+          <tr><td><code>E_KERNEL_BAD_CONFIG</code></td><td><code>E_ENV_CONFIG_INVALID</code></td><td>开局配置非法（退出码 2）</td></tr>
+          <tr><td><code>E_CONTENT_*</code></td><td><code>E_ENV_CONTENT_INVALID</code></td><td>配表校验失败，原码进 <code>detail</code></td></tr>
+          <tr><td><code>E_KERNEL_INVARIANT / EXCEPTION / DISPATCH</code></td><td><code>E_ENV_INTERNAL</code></td><td>内核异常或不变式违反（退出码 4）</td></tr>
+          <tr><td><code>E_KERNEL_RNG_*</code></td><td><code>E_ENV_RNG</code></td><td>未注册流名 / 区间非法</td></tr>
+          <tr><td><code>E_KERNEL_TURN_LIMIT</code></td><td>—（不是错误）</td><td>表现为 <code>truncationReason="turn_limit"</code></td></tr>
+          <tr><td><code>E_ACTION_*</code></td><td>原样保留</td><td>非法动作，跨语言比对用</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">07</span>当前状态（2026-10-17）</h2>
+    <div class="kpis">
+      <div class="kpi accent"><div class="num">5<span class="unit">组</span></div><div class="label">golden 快照逐行一致</div></div>
+      <div class="kpi"><div class="num">1,487<span class="unit">步</span></div><div class="label">g5 重放的 env 步（对拍基线）</div></div>
+      <div class="kpi"><div class="num">137.5<span class="unit">µs/步</span></div><div class="label">assert_invariants 实测（重放 golden）</div></div>
+      <div class="kpi"><div class="num">0<span class="unit">次违反</span></div><div class="label">m3-formal 40 局 / 13,802 步重放</div></div>
+    </div>
+    <div class="callout"><b>逐步校验已真的接上。</b>从 2026-10-15 起，MOD-02 在每次提交前对<strong>未提交的新状态</strong>跑 <code>assert_invariants</code>；违反即 <code>E_ENV_INTERNAL</code>、该步不提交。训练路径同类累计 ≥3 次会中止 run，批量测量记 dropped——不再有“配置里写着校验、生产局从不执行”的死键。</div>
+    <div class="callout warn"><b>诚实边界。</b>137.5 µs/步 ≈ 48 ms/局，相对于秒级的 LLM 决策可忽略，但它确实是新增开销；性能数字来自 <code>scripts/bench_invariants.py</code> 的本地重放，不是线上采样。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">08</span>延伸阅读</h2>
+    <ul class="clean">
+      <li><a href="mod-02.html">MOD-02 env-sandbox</a> —— 唯一允许调用本模块的门面：投影、隔离、审计。</li>
+      <li><a href="game.html">GAME 游戏本体</a> —— 规则的事实来源与可玩网页版。</li>
+      <li><a href="../prd/MOD-01-env-rules-PRD.md">MOD-01 PRD</a> · <a href="../prd/GAME-01-kernel-contract.md">GAME-01 内核契约</a></li>
+    </ul>
+  </section>
+
+  <div class="pager">
+    <a class="prev" href="game.html"><span class="dir">PREV</span><span class="to">← 游戏本体 GAME</span></a>
+    <a class="next" href="mod-02.html"><span class="dir">NEXT</span><span class="to">MOD-02 env-sandbox →</span></a>
+  </div>
+
+  <footer class="footer">
+    <span>DiceRatchet 模块可视化讲解 · MOD-01</span>
+    <span>事实来源：<code>dice_ratchet/env/*</code> + PRD · 生成于 2026-10-17</span>
+  </footer>
+
+</div></main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

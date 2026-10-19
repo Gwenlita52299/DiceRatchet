@@ -1,6 +1,7 @@
 # MOD-09 infra 技术 PRD
 
-> 版本：v0.8（2026-10-15 **F79 落地：`E_IO_RUN_CONFLICT` 附「键级漂移摘要」**——`config_drift()` + `describe_config_drift()` 在**与 `config_hash` 同一口径**上比对快照配置与当前配置，报 `新增/删除/值变化` 各多少键并点名（剔易变键、绝对路径、harness 覆盖键整棵子树）；**只加诊断，不放宽 fail-closed**（显式漂移通道已否决）。对齐 Spec v2.32 / B-90，见 §4 FR-09-5、§10 与 §17）
+> 版本：v0.9（2026-10-17 **命令面与现状对齐（纯文档，¥0）**：① 子命令清单补 **`loop baseline`** 与 `loop run --allow-ungated-start`（2026-10-17 新增；Spec 已回填 B-95）；② 绘图调用点按 **F56** 更正为 `evals.harness.ledger_and_plots()`——原 `evals/cli.py::_plot_or_warn` 已删除，现由 MOD-06 基线 / MOD-07 代末 / `eval report` 三方共用；③ §9 三个配置键改为真实键名（`infra.redaction_enabled` / `infra.plot_enabled` / `infra.git_enabled`，下划线，无中间层）；④ §10 补 **`E_IO_GIT_FAILED`**（退出码 2）、`E_IO_PLOT_NO_DATA`、`E_IO_INTERRUPTED`。见 §17）
+> **历史版本**：v0.8（2026-10-15 **F79 落地：`E_IO_RUN_CONFLICT` 附「键级漂移摘要」**——`config_drift()` + `describe_config_drift()` 在**与 `config_hash` 同一口径**上比对快照配置与当前配置，报 `新增/删除/值变化` 各多少键并点名（剔易变键、绝对路径、harness 覆盖键整棵子树）；**只加诊断，不放宽 fail-closed**（显式漂移通道已否决）。对齐 Spec v2.32 / B-90，见 §4 FR-09-5、§10 与 §17）
 > **历史版本**：v0.5（2026-10-10 新增 FR-09-20 起跑前门禁 + `commit_harness` 失败自清，并改写 FR-09-14；处置 F47-A/C1，见 §17）
 > **历史版本**：v0.4（2026-10-10 `episode_key` 的 `arm` 位允许 `-smoke`）· v0.3.1（2026-10-03 修复 `bootstrap_process()` 早发 `infra.run_start`，见 §17；此前误留在 v0.3）· 状态：待评审 · 所属里程碑：M0–M3（L3 工程层，横切全模块）
 > 上游 Spec：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（唯一事实来源；与本文件冲突时以 Spec 为准）
@@ -61,7 +62,7 @@ MOD-09 是 Spec §6 依赖矩阵中**唯一不被任何人阻塞、却阻塞所�
 
 - **FR-09-1 配置优先级（Spec v1.4 B-26）**：合并顺序 `CLI 显式参数 > DICERATCHET_* 环境变量 > harness/config.json（可演化层）> configs/default.yaml > 代码内 dataclass 默认值`。harness 层只接受白名单键（`policy.*` 训练期采样参数、`memory.retrieve.*`、`agent.tools.*`），出现其他键或试图设置评估温度 → `E_IO_CONFIG_INVALID`（退出码 2）；这一层计入 `artifact_hash`，不计入 `config_hash`。环境变量命名规则 `DICERATCHET_<SECTION>__<KEY>`（双下划线分层），未知键 → 记 `E_IO_CONFIG_UNKNOWN` 并**忽略**（不中断），未知键清单写入 run 启动日志。
 - **FR-09-2 schema 校验**：`AppConfig` 为 frozen dataclass + 显式 `validate()`（避免引入 pydantic 作为阶段一硬依赖）；类型不符或越界 → `E_IO_CONFIG_INVALID` 并以退出码 2 终止，错误信息必须指出键路径与期望类型。
-- **FR-09-3 config_hash**：`config_hash = sha256(json.dumps(_canonical(cfg), sort_keys=True, separators=(",",":"), ensure_ascii=False))[:16]`；`_canonical` **排除**易变字段（`run_id`、`created_at`、`log_level`、`paths.runs_root`）与所有绝对路径，**不包含** `harness_version`（Spec v1.3 B-19：否则第一代被接受后 `--resume` 必然冲突）。harness 的变化由 `artifact_hash(harness_dir)` 表达：对 `(相对路径, 文件 sha256)` 按路径排序后整体 sha256，逐代写入 `version.json` 与 report。
+- **FR-09-3 config_hash**：`config_hash = sha256(json.dumps(_canonical(cfg), sort_keys=True, separators=(",",":"), ensure_ascii=False))[:16]`；`_canonical` **排除**易变字段（`infra.runs_root` / `infra.log_level` / `infra.threads` / `infra.config_dir` / `infra.schemas_dir`，即 `_HASH_VOLATILE_KEYS`）与所有绝对路径值，**不包含** `harness_version`（Spec v1.3 B-19：否则第一代被接受后 `--resume` 必然冲突）。harness 的变化由 `artifact_hash(harness_dir)` 表达：对 `(相对路径, 文件 sha256)` 按路径排序后整体 sha256，逐代写入 `version.json` 与 report。
 - **FR-09-4 run_id**：`run_id = f"{git_short_sha}-{config_hash[:8]}-{utc_ts}"`，`utc_ts = YYYYMMDDTHHMMSSZ`；`git_short_sha` 取自 `git rev-parse --short HEAD`，仓库不可用（无 git / dirty 之外的情况）→ 用 `nogit` 占位并记 `E_IO_GIT_UNAVAILABLE`。**已回填（Spec v1.3 §4.6）**：`--run-id` 显式指定时以显式值为准，用于复现与测试。
 - **FR-09-5 目录初始化**：`init_run_dir(run_id, cfg) -> RunPaths` 幂等创建 Spec §5 的目录树（`config.json`、`events.jsonl`、`episodes/<split>/`、`reflections/`、`generations/`、`metrics/`、`plots/`、`audit/`）。目录已存在且 `config.json` 的 `config_hash` 不一致 → `E_IO_RUN_CONFLICT` 并退出码 2（禁止两套配置写同一 run）。**⚠️ 2026-10-15（Spec v2.32 / B-90）**：该报错现在附**键级漂移摘要**（`config_drift()` / `describe_config_drift()`，口径同 `config_hash`：易变键、绝对路径值、harness 覆盖键整棵子树不计）——`新增 N 键 / 删除 N 键 / 值变化 N 键` 并点名（每类最多 8 个），用来分辨「某个值被改了」与「配置结构变了（升版本/改 `configs/`）」；摘要只是诊断，**判定仍只看 `config_hash`**（不放宽 fail-closed，故未提供 `--accept-config-drift` 之类通道）。
 - **FR-09-6 JsonlWriter 写入语义**：每行 `json.dumps(..., ensure_ascii=False)` + `\n`；每次 `write()` 后 `flush()`；`infra.fsync_every`（默认 0 = 不 fsync，>0 表示每 N 行 `os.fsync`）。**崩溃安全**：读取端必须容忍末行截断（`json.JSONDecodeError` 时丢弃最后一行并记 `E_IO_TRAILING_TRUNCATED`）；写入端保证「一行要么完整要么不存在」——先构造整行字符串再单次 `write`。
@@ -83,12 +84,12 @@ MOD-09 是 Spec §6 依赖矩阵中**唯一不被任何人阻塞、却阻塞所�
   - **轨迹（`episodes/`）、`events.jsonl`、`generations/` 不做 redaction**：它们属于审计侧，MOD-08 的配对检验需要原始 seed。
   - 只擦除不阻断，阻断属于 MOD-04/MOD-02 的职责。
 - **FR-09-10 CLI 一致性**：
-  - 子命令树与 Spec v1.3 §4.6 逐字一致，包括 `inference *`、`loop status|smoke`、`eval ablation|test`、`memory *`、`guards check`。
+  - 子命令树与 Spec §4.6 逐字一致，包括 `inference *`、`loop run|status|baseline|smoke`、`eval report|diversity|ablation|test|acceptance`、`rehearsal check`、`memory *`、`guards check`。**2026-10-17 新增 `loop baseline`**（只测一个给定 harness 的 held-out，不训练、不演化）与 `loop run --allow-ungated-start`（起点守卫的显式放行，发 `evolve.start_guard` 事件留痕）。
   - run 一律用 `--run-id ID` 指定，续跑用 `--resume` 开关。本模块只负责解析与转发到各模块的 `register(subparser)`；**新增命令必须同步更新 Spec §4.6**。
 - **FR-09-11 退出码**：`0` 成功（含 HITL 挂起）；`1` 领域失败（如验收不达标）；`2` 配置/环境错误；`3` 模型不可用；`4` 沙箱/守卫违例；`5` IO 落盘失败；`130` 用户 Ctrl-C（与 Spec v1.3 §8.3 一致）。约定写入 `dice_ratchet/infra/exit_codes.py` 并被所有命令复用。
 - **FR-09-12 dry-run 与 resume**：`--dry-run` 对所有命令生效——不调用模型、不写 `runs/`、只打印将执行的动作与配置摘要（stdout 为可解析 JSON）；`--run-id ID --resume` 由 MOD-06 实现语义，本模块负责定位目录、校验 `config_hash` 一致（`config_hash` 不含 harness，所以演化过的 run 也能续跑）、并在 `state.json` 缺失时报 `E_IO_STATE_MISSING`。
 - **FR-09-13 绘图**：`plot_generations(csv_path, out_dir)` 输出 `win_rate.png`、`stages_cleared.png`、`hearts_left.png`、`entropy.png`、`train_heldout_gap.png`（INV-7 口径，Spec v1.3），每图含 `n`、`ci95` 误差棒与数据点标注；无 matplotlib 时降级为 `E_IO_PLOT_UNAVAILABLE` 警告而不失败。
-  - **✅ 2026-10-11（F48，Spec v2.12 / B-68）——四个必须记住的口径**：① **列清单的唯一副本在本模块**（`infra/plotting.py::GENERATIONS_CSV_COLUMNS`）：台账是 IO 工件，其 schema 落 IO 层；`evals.harness.GENERATIONS_COLUMNS` **直接引用它**。**不要**把副本挪回 `evals`——`infra → evals` 会被分层门禁 `E_IO_GUARD_LAYER` 拦下（NFR-09-5）。B-06 的「列定义归 MOD-08」按此解释为**口径归 MOD-08、字面清单唯一副本在 IO 层**。② **`split` 是行维度**：heldout 一行、train 一行；`train_win_rate` 这类「按列找 train」的写法在真实台账里永远取到空（修复前正是如此 ⇒ 5 张**空白图**）。③ **无数据点 = 失败**：任一图没有数据点时抛 `E_IO_PLOT_NO_DATA`，**不得**产出空白图——M3 的验收语是「实测产出 5 张 PNG」，「文件存在」会被空白图通过。④ **调用点是 `eval report` 末尾**（`evals/cli.py::_plot_or_warn`）：绘图失败**不阻断**报告/台账落盘（它们是判据的机读来源），但必须**非静默**（`infra.plot_done` / `infra.plot_skipped` / `infra.plot_missing_split` 事件 + stderr）。
+  - **✅ 2026-10-11（F48，Spec v2.12 / B-68）——四个必须记住的口径**：① **列清单的唯一副本在本模块**（`infra/plotting.py::GENERATIONS_CSV_COLUMNS`）：台账是 IO 工件，其 schema 落 IO 层；`evals.harness.GENERATIONS_COLUMNS` **直接引用它**。**不要**把副本挪回 `evals`——`infra → evals` 会被分层门禁 `E_IO_GUARD_LAYER` 拦下（NFR-09-5）。B-06 的「列定义归 MOD-08」按此解释为**口径归 MOD-08、字面清单唯一副本在 IO 层**。② **`split` 是行维度**：heldout 一行、train 一行；`train_win_rate` 这类「按列找 train」的写法在真实台账里永远取到空（修复前正是如此 ⇒ 5 张**空白图**）。③ **无数据点 = 失败**：任一图没有数据点时抛 `E_IO_PLOT_NO_DATA`，**不得**产出空白图——M3 的验收语是「实测产出 5 张 PNG」，「文件存在」会被空白图通过。④ **调用点收敛到 `evals.harness.ledger_and_plots()`**（F56，2026-10-12 起；原 `evals/cli.py::_plot_or_warn` 已删除）：三方共用——MOD-06 `loop/generation.py::write_gen000_baseline`、MOD-07 `evolve/generation.py` 代末、`eval report` 末尾。它一次写全「台账行 + 5 张 PNG」，绘图失败**不阻断**报告/台账落盘（它们是判据的机读来源），但必须**非静默**（`infra.plot_done` / `infra.plot_skipped` / `infra.plot_missing_split` 事件 + stderr）。
 - **FR-09-14 git 封装**：`worktree_clean_check()` 在工作区不干净时抛 `E_IO_GIT_DIRTY`（退出码 4）；`preflight_worktree_clean(repo, allow=())` 是它的**起跑前**形态（FR-09-20）；`commit_harness(version, message)` 提交 `harness/` 并返回 commit sha，提交信息格式 `harness(v{N}): {message}`——**先门禁后 `git add`**，任何失败都 `git reset -- <harness>` 收尾（F47-C1，不得留下 staged 残留）；`tag_version(N)` 打 `harness-v{N}` 轻量 tag（已存在则跳过；不建同名分支，避免 `refname is ambiguous`）；`rollback_to(N)` 以 `git checkout harness-v{N} -- harness/` 恢复工件目录并返回新 commit sha。
 - **FR-09-20 起跑前门禁（F47-A）**：`preflight_worktree_clean(repo, allow=())` 把同一判据前移到**任何推理调用之前**：非 git worktree → 返回 `False` 并降级跳过（Spec §8.5）；否则脏即抛 `E_IO_GIT_DIRTY`。由 MOD-06 在 `loop run` 起跑处调用（见 MOD-06 §9.3）。**为什么必须有它**：FR-09-14 的判据原先只长在 `commit_harness()` 内部，即 accept 的最后一步——脏工作区要等**整代跑完**才被拒（实测一代 3.75 h / ≈¥47），且 `_finish_report` 会把它记成 `decision="reject"`、`build_decision_sections` 又会按 gate 状态写成 `decision="accept"`（幻影 accept）。
 - **FR-09-15 确定性守卫（AST，非正则）**：`scan_determinism()` 报出 `E_IO_GUARD_RANDOM`（`import random` / `numpy.random.*` 未显式 seed / `time.time()` 参与采样 / `uuid4()` 用于标识 id）、`scan_layer_imports()` 报出 `E_IO_GUARD_LAYER`（`dice_ratchet/agent|memory|loop|evolve|evals/*` 中出现 `import dice_ratchet.env`，违反 INV-1）。白名单注释 `# guard: allow <CODE> reason=...` 可豁免，但会记 `guard_finding` 事件留痕。
@@ -358,9 +359,9 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
 | `infra.rotate_max_mb` | int | `512` | 单 JSONL 文件轮转阈值 |
 | `infra.threads` | int | `1` | 传给推理后端与 numpy 的线程数（确定性） |
 | `infra.utc` | bool | `true` | 强制 UTC 时间戳 |
-| `infra.redaction.enabled` | bool | `true` | 关闭需显式记 `guard_finding` |
-| `infra.plot.enabled` | bool | `true` | 无 matplotlib 时自动降级 |
-| `infra.git.enabled` | bool | `true` | 关闭后 `commit_harness` 为 no-op 并告警 |
+| `infra.redaction_enabled` | bool | `true` | 关闭需显式记 `guard_finding` |
+| `infra.plot_enabled` | bool | `true` | 无 matplotlib 时自动降级 |
+| `infra.git_enabled` | bool | `true` | 关闭后 `commit_harness` 为 no-op 并告警 |
 | `infra.exit_on_guard` | bool | `true` | `guards` 违例是否直接非零退出 |
 
 ## 10. 错误处理与降级（使用 Spec §8 的错误码前缀）
@@ -377,9 +378,11 @@ if any(f.code == "E_IO_GUARD_LAYER" for f in findings): raise SandboxViolation(.
 | `E_IO_REDACTION_HIT` | 落盘前擦除命中 | 写 `guard_finding` + 触发 MOD-02 告警 |
 | `E_IO_DISK_FULL` | 写入 `OSError` | 立即停止 run，保留已落盘数据，退出码 5 |
 | `E_IO_RUNS_NOT_IGNORED` | `runs/` 未被 `.gitignore` 覆盖 | 退出码 2 |
-| `E_IO_GIT_DIRTY` / `E_IO_GIT_UNAVAILABLE` | git 门禁失败 / 无 git | 前者阻断演化；后者降级为 `nogit` |
+| `E_IO_GIT_DIRTY` / `E_IO_GIT_UNAVAILABLE` / `E_IO_GIT_FAILED` | git 门禁失败 / 无 git / git 可用但命令失败 | 前者阻断演化（退出码 4）；中者降级为 `nogit`；后者按环境错误立即失败（退出码 2，绝不记 0） |
 | `E_IO_GUARD_RANDOM` / `E_IO_GUARD_LAYER` | 守卫检出违例 | 退出码 4；演化场景直接拒绝候选 |
 | `E_IO_PLOT_UNAVAILABLE` | 缺 matplotlib | 降级为警告 |
+| `E_IO_PLOT_NO_DATA` | 绘图输入存在但没有数据点 | 拒绝产出空白图，退出码 5（M3 判据要求“5 张 PNG 有数据点”） |
+| `E_IO_INTERRUPTED` | SIGINT/SIGTERM | 当前 step 落盘后以 130 退出，可 `--resume` 无损续跑 |
 
 **降级原则**：可观测性缺失（绘图、git、fsync）→ 降级 + 告警；**可复现性缺失**（config 非法、run 冲突、守卫违例）→ 立即失败，绝不静默继续。
 
@@ -462,6 +465,7 @@ T-09-1～T-09-16 全部落地（`bbdc02e` 起）；证据见 [M0 验收报告](.
 
 | 版本 | 时间 | 变更 |
 |---|---|---|
+| v0.9 | 2026-10-17 | **命令面与现状对齐（纯文档，¥0）**。① **`loop baseline`**：2026-10-17 新增的 MOD-06 子命令（`--harness-dir / --basket / --agent / --model`）已进入 FR-09-10 的清单；它只测一个给定 harness 的 held-out，不训练、不演化、不提交 git，幂等。② **`--allow-ungated-start`**：起点守卫的显式放行开关（见 MOD-06 §9.4 / MOD-07 §6.8），放行会发 `evolve.start_guard` 事件留痕。③ **绘图调用点更正**：F56 已把 `_plot_or_warn` 换成 `harness.ledger_and_plots()`，由 MOD-06 基线、MOD-07 代末、`eval report` 三处共用——本 PRD 的 FR-09-13 与 §6 之前仍写着旧调用点。④ **§9 键名更正**：`infra.redaction.enabled` → `infra.redaction_enabled`、`infra.plot.enabled` → `infra.plot_enabled`、`infra.git.enabled` → `infra.git_enabled`（`AppConfig`/`configs/default.yaml` 的真实键名；旧写法在配置加载时会报未知键）。⑤ **§10 补三个码**：`E_IO_GIT_FAILED`（git 可用但命令失败，退出码 2）、`E_IO_PLOT_NO_DATA`（拒绝空白图，退出码 5）、`E_IO_INTERRUPTED`（130，可 `--resume`）。 |
 | v0.7 | 2026-10-14 | **`audit leak` 的守卫轴新增 `E_ENV_AUDIT_RULESET`（对齐 Spec v2.29 B-86；F73 裁决 ②）**。① **新增错误码**（`infra/errors.py`）：`sandbox.audit.ruleset_pin` ≠ 代码常量 `sandbox/audit.py::RULESET_VERSION` 时 fail-closed，`EXIT_CODE` 映射 **4 = 守卫轴**，**刻意不占结论轴 2**（`2` = 含 critical 泄漏；两者处置相反）。② **本模块是唯一消费者**：`app.py::_audit_leak` 先 `check_ruleset_pin(cfg.env.sandbox.audit.ruleset_pin)` 再把结果喂给 `run_audit(ruleset=…)`（**放在扫盘之前**——pin 不符时审计器自己声称的规则集版本不可采信，报任何 verdict 都不该按原义读），**拒绝时不产出报告**。③ **配置面同步收拢**：`env.sandbox.audit` 由 v1.0 的五个 0 消费者键（`enabled`/`surfaces`/`ruleset`/`fail_on`/`evidence_chars`）收成一个 **`ruleset_pin`**（详见 MOD-02 PRD §9/§10/§18.2）。④ §6 CLI 表下方那条「退出码由 MOD-02 决定」的注已补上本码。⑤ 测试：`tests/unit/sandbox/test_sandbox_audit.py::test_b86_audit_leak_cli_consumes_the_pin` 端到端跑真实入口（pin 坏 ⇒ 4 且无报告 / pin 好 ⇒ 干净 0）。 |
 | v0.1 | 2026-09-30 | 首版 |
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：`config_hash` 不再包含 harness_version，新增 `artifact_hash`（P0-7）；redaction 只作用于 prompt/memory/reflection（P0-7）；事件改为 `<module>.<event>` 注册表并统一落到 `events.jsonl`（P1-11）；轨迹 schema 对齐 §4.5 新字段与 `episode_key` 路径（P1-10）；退出码新增 5（P1-13）；CLI 对齐 §4.6，统一使用 `--run-id`（P1-14）；git tag 改为 `harness-v{N}`（P1-15）；新增 FR-09-18 schema 与原子写、FR-09-19 `runs/` 忽略检查 |

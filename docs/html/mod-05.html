@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MOD-05 memory · DiceRatchet 可视化讲解</title>
+<meta name="description" content="MOD-05 memory：把局末反思变成可检索、可淘汰、可回滚的策略记忆，并用四个拦截点保证 held-out/test seed 永不入库。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="shell">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html">
+    <span class="logo">◈ <b>DiceRatchet</b></span>
+    <div class="sub">模块可视化讲解 · docs/html<br>源 commit 879ea49 · 2026-10-17</div>
+  </a>
+  <nav class="nav">
+    <div class="nav-title">总览</div>
+    <a href="index.html">闭环与模块地图 <span class="tag">00</span></a>
+    <a href="game.html">游戏本体 GAME <span class="tag">G</span></a>
+    <div class="nav-title">环境层 L0</div>
+    <a href="mod-01.html">MOD-01 env-rules <span class="tag">01</span></a>
+    <a href="mod-02.html">MOD-02 env-sandbox <span class="tag">02</span></a>
+    <div class="nav-title">智能体层 L1</div>
+    <a href="mod-03.html">MOD-03 inference <span class="tag">03</span></a>
+    <a href="mod-04.html">MOD-04 policy <span class="tag">04</span></a>
+    <a href="mod-05.html">MOD-05 memory <span class="tag">05</span></a>
+    <div class="nav-title">进化层 L2</div>
+    <a href="mod-06.html">MOD-06 loop <span class="tag">06</span></a>
+    <a href="mod-07.html">MOD-07 evolve <span class="tag">07</span></a>
+    <div class="nav-title">测量与工程 L3</div>
+    <a href="mod-08.html">MOD-08 evals <span class="tag">08</span></a>
+    <a href="mod-09.html">MOD-09 infra <span class="tag">09</span></a>
+  </nav>
+</aside>
+
+<main class="main"><div class="wrap">
+
+  <header class="reveal">
+    <div class="eyebrow">L1 · 智能体层 · Milestone M2</div>
+    <h1>MOD-05 <span class="thin">memory</span></h1>
+    <p class="lede">反射注入的<strong>落地载体</strong>。它把局末反思转成结构化记忆，按当前局势检索回 prompt；同时是 INV-5 在本项目里最难守的一环——因为“记忆”天生喜欢把见过的 seed 记下来。</p>
+    <div class="badges">
+      <span class="badge l1">L1 智能体</span>
+      <span class="badge ok">✅ 已落地</span>
+      <span class="badge">INV-5 四拦截点</span>
+      <span class="badge">逻辑时钟 tick</span>
+    </div>
+  </header>
+
+  <section class="reveal">
+    <h2><span class="no">01</span>写入管线：从一段反思到一条记忆</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 960 300" role="img" aria-label="反思写入、抽取、去重、冲突、落盘">
+        <defs>
+          <marker id="m5-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#37d6c0"/>
+          </marker>
+          <marker id="m5-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3a4d66"/>
+          </marker>
+        </defs>
+        <rect x="18" y="92" width="132" height="76" rx="10" class="n-box"/>
+        <text x="84" y="118" text-anchor="middle" class="n-label">ReflectionEntry</text>
+        <text x="84" y="138" text-anchor="middle" class="n-sub">局末反思</text>
+        <text x="84" y="156" text-anchor="middle" class="n-tiny">provenance.split=train</text>
+
+        <rect x="182" y="92" width="132" height="76" rx="10" class="n-box-accent"/>
+        <text x="248" y="118" text-anchor="middle" class="n-label">① 抽取</text>
+        <text x="248" y="138" text-anchor="middle" class="n-sub">规则优先</text>
+        <text x="248" y="156" text-anchor="middle" class="n-tiny">LLM 可选，失败即降级</text>
+
+        <rect x="346" y="92" width="132" height="76" rx="10" class="n-box"/>
+        <text x="412" y="118" text-anchor="middle" class="n-label">② 去重</text>
+        <text x="412" y="138" text-anchor="middle" class="n-sub">sim ≥ 0.85</text>
+        <text x="412" y="156" text-anchor="middle" class="n-tiny">jaccard 0.5 + char3 0.5</text>
+
+        <rect x="510" y="92" width="142" height="76" rx="10" class="n-box-warn"/>
+        <text x="581" y="118" text-anchor="middle" class="n-label">③ 冲突裁决</text>
+        <text x="581" y="138" text-anchor="middle" class="n-sub">默认不自动取代</text>
+        <text x="581" y="156" text-anchor="middle" class="n-tiny">需 ≥5 引用 且 Δwin ≥0.15</text>
+
+        <rect x="684" y="92" width="132" height="76" rx="10" class="n-box-accent"/>
+        <text x="750" y="118" text-anchor="middle" class="n-label">④ 落盘</text>
+        <text x="750" y="138" text-anchor="middle" class="n-sub">JSONL 追加</text>
+        <text x="750" y="156" text-anchor="middle" class="n-tiny">content_sha256 + index</text>
+
+        <rect x="848" y="92" width="96" height="76" rx="10" class="n-box"/>
+        <text x="896" y="124" text-anchor="middle" class="n-label">active</text>
+        <text x="896" y="146" text-anchor="middle" class="n-tiny">可被检索</text>
+
+        <path d="M150 130 L182 130" class="edge" marker-end="url(#m5-ar2)"/>
+        <path d="M314 130 L346 130" class="edge" marker-end="url(#m5-ar2)"/>
+        <path d="M478 130 L510 130" class="edge" marker-end="url(#m5-ar2)"/>
+        <path d="M652 130 L684 130" class="edge" marker-end="url(#m5-ar2)"/>
+        <path d="M816 130 L848 130" class="edge-flow" marker-end="url(#m5-ar)"/>
+
+        <rect x="182" y="206" width="500" height="58" rx="9" class="n-box-bad"/>
+        <text x="432" y="229" text-anchor="middle" class="n-sub">I1/I2：入口与落盘前扫描</text>
+        <text x="432" y="249" text-anchor="middle" class="n-tiny">provenance 越权 ⇒ 拒绝；文本命中 held-out/test 字面量 ⇒ quarantine + leak 事件</text>
+        <path d="M248 168 L248 206" class="edge-red"/>
+        <path d="M750 168 C 750 196, 682 196, 682 206" class="edge-red"/>
+      </svg>
+      <div class="caption"><b>去重与冲突都是确定性的。</b>相似度、引用数、胜负差都有明确阈值；LLM 只用于可选的候选抽取，失败即退回规则抽取，反思仍然入库。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">02</span>读取管线：按“现在的局面”取记忆</h2>
+    <p>检索打分为五路加权，再按 token 预算裁剪；顺序必须确定（同分按 id 升序），否则 prompt 不可复现。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>信号</th><th>权重（默认）</th><th>作用</th></tr></thead>
+        <tbody>
+          <tr><td>tag 命中</td><td><code>1.0</code></td><td>失败原因 / 局面标签的精确匹配</td></tr>
+          <tr><td>BM25</td><td><code>0.6</code></td><td>文本相似（<code>k1=1.2, b=0.75</code>）</td></tr>
+          <tr><td>向量</td><td><code>0.0</code></td><td>可选；默认关闭（不引入额外模型依赖）</td></tr>
+          <tr><td>效用</td><td><code>0.3</code></td><td>只用环境原生胜负的证据（INV-7）</td></tr>
+          <tr><td>时新度</td><td><code>0.1</code></td><td><code>exp(−Δticks/…)</code>，<code>recency_lambda=0.01</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>检索参数：<code>top_k=8</code>、<code>token_budget=900</code>、<code>min_score=0.15</code>、同局面加成 <code>0.25</code>。返回前对入选条目做 <strong>I4</strong> 廉价复检：命中条目丢弃并记事件，不计入返回。</p>
+    <div class="callout"><b>“同局面加成”是确定性的。</b><code>SituationKey</code> 由阶段、学派、心数区间等离散字段组成；不用 embedding 相似度决定是否同局面，避免不可复现。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">03</span>INV-5：四个拦截点，缺一不可</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 940 260" role="img" aria-label="记忆的四个 INV-5 拦截点">
+        <rect x="20" y="86" width="196" height="92" rx="11" class="n-box-accent"/>
+        <text x="118" y="112" text-anchor="middle" class="n-label">I1 源头</text>
+        <text x="118" y="132" text-anchor="middle" class="n-sub">add_reflection / add_memory</text>
+        <text x="118" y="150" text-anchor="middle" class="n-tiny">split 必须 train 且 seed 属于 train</text>
+        <text x="118" y="168" text-anchor="middle" class="n-tiny">否则 MemoryIsolationError</text>
+
+        <rect x="252" y="86" width="196" height="92" rx="11" class="n-box-accent"/>
+        <text x="350" y="112" text-anchor="middle" class="n-label">I2 文本</text>
+        <text x="350" y="132" text-anchor="middle" class="n-sub">落盘前逐字段扫描</text>
+        <text x="350" y="150" text-anchor="middle" class="n-tiny">lesson / tags / action_hint</text>
+        <text x="350" y="168" text-anchor="middle" class="n-tiny">scan_text(surface="memory")</text>
+
+        <rect x="484" y="86" width="196" height="92" rx="11" class="n-box-warn"/>
+        <text x="582" y="112" text-anchor="middle" class="n-label">I3 兜底</text>
+        <text x="582" y="132" text-anchor="middle" class="n-sub">snapshot / verify(full)</text>
+        <text x="582" y="150" text-anchor="middle" class="n-tiny">_seed_guard_all() 复扫全库</text>
+        <text x="582" y="168" text-anchor="middle" class="n-tiny">命中 ⇒ 拒绝出快照</text>
+
+        <rect x="716" y="86" width="196" height="92" rx="11" class="n-box-warn"/>
+        <text x="814" y="112" text-anchor="middle" class="n-label">I4 出口</text>
+        <text x="814" y="132" text-anchor="middle" class="n-sub">retrieve() 返回前</text>
+        <text x="814" y="150" text-anchor="middle" class="n-tiny">复检旧快照载入的条目</text>
+        <text x="814" y="168" text-anchor="middle" class="n-tiny">命中 ⇒ 丢弃 + 记事件</text>
+
+        <path d="M216 132 L252 132" class="edge"/>
+        <path d="M448 132 L484 132" class="edge"/>
+        <path d="M680 132 L716 132" class="edge"/>
+        <text x="470" y="222" text-anchor="middle" class="n-tiny">统一失败码 E_EVAL_INV5_LEAK（旧名 E_EVAL_SEED_LEAK 已并入）；I3/I4 是兜底，不替代 MOD-02 的扫描</text>
+      </svg>
+      <div class="caption"><b>为什么需要四个。</b>入口能挡新写入，但挡不住旧快照、手工导入与“文本里换个写法”；I3 在出快照时复扫全库，I4 在每次返回前复检，才算闭环。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">04</span>时间与容量：逻辑时钟，不用墙钟</h2>
+    <div class="cards">
+      <div class="card"><h3>tick = 已完成的训练局数</h3><p>由 MOD-06 维护，写入 <code>state.json</code>。TTL、时新度、淘汰全部以 tick 为唯一时间源——重跑与续跑不会因为“今天几号”改变结果。</p></div>
+      <div class="card"><h3>容量 2,000 条</h3><p><code>ttl_ticks=300</code>、<code>min_age_ticks=30</code>、<code>compact_every=200</code>。淘汰时保护「引用 ≥3 次或太新」的条目。</p></div>
+      <div class="card"><h3>快照与回滚</h3><p><code>memory_v{N}.jsonl</code> + 索引；回滚缺失 → <code>E_IO_SNAPSHOT_MISSING</code>（退出码 2），sha 不符 → <code>E_IO_MEMORY_CORRUPT</code>。</p></div>
+    </div>
+    <h3>效用分只用原生胜负</h3>
+    <pre><span class="c"># PRD §6.4：Laplace 平滑后的“被采纳 vs 未被采纳”胜率差</span>
+p_used = (n_win_adopted + 1) / (n_adopted + 2)
+p_base = (n_win_not_adopted + 1) / (n_not_adopted + 2)
+utility = clip(0.5*(p_used - p_base)
+             + 0.3*log1p(n_ref)/log1p(200)
+             + 0.2*exp(-age_ticks/ttl_ticks), -1.0, 1.0)</pre>
+    <p class="muted small">adopted 由 MOD-04 判定并经 <code>DecisionResult.adopted_memory_ids</code> 传给 MOD-06；MOD-05 不做语义判断。</p>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">05</span>当前状态</h2>
+    <div class="kpis">
+      <div class="kpi accent"><div class="num">114<span class="unit">条</span></div><div class="label">m3-formal 结束时 active 记忆</div></div>
+      <div class="kpi"><div class="num">90<span class="unit">tick</span></div><div class="label">三代 × 30 训练局</div></div>
+      <div class="kpi"><div class="num">4<span class="unit">个</span></div><div class="label">INV-5 拦截点</div></div>
+      <div class="kpi"><div class="num">0<span class="unit">次</span></div><div class="label">期望的 seed_leak_blocks</div></div>
+    </div>
+    <div class="callout warn"><b>记忆是增强项，不是主链路。</b>写入失败重试 ≤2 次后跳过并告警，不阻塞本局；快照失败也只在代际边界显式记录。真正的风险不是“记忆丢了”，而是“记忆把 held-out 信息带进 prompt”。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">06</span>延伸阅读</h2>
+    <ul class="clean">
+      <li><a href="mod-04.html">MOD-04 policy</a> —— 记忆如何进入 prompt（top-k 与预算）。</li>
+      <li><a href="mod-06.html">MOD-06 loop</a> —— tick 的来源与代际快照时机。</li>
+      <li><a href="../prd/MOD-05-memory-PRD.md">MOD-05 PRD</a> · <a href="../prd/OBSERVATION_CHANGELOG.md">观测字段变更</a></li>
+    </ul>
+  </section>
+
+  <div class="pager">
+    <a class="prev" href="mod-04.html"><span class="dir">PREV</span><span class="to">← MOD-04 policy</span></a>
+    <a class="next" href="mod-06.html"><span class="dir">NEXT</span><span class="to">MOD-06 loop →</span></a>
+  </div>
+
+  <footer class="footer">
+    <span>DiceRatchet 模块可视化讲解 · MOD-05</span>
+    <span>事实来源：<code>dice_ratchet/memory/*</code> + PRD · 生成于 2026-10-17</span>
+  </footer>
+
+</div></main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

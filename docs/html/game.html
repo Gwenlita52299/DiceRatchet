@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GAME 游戏本体 · DiceRatchet 可视化讲解</title>
+<meta name="description" content="GAME-00/01/02：可玩的网页版骰子 roguelike，规则内核、后端 API、前端与内容配表，以及它如何成为 Python 训练环境的唯一事实来源。">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+<div class="shell">
+
+<aside class="sidebar">
+  <a class="brand" href="index.html">
+    <span class="logo">◈ <b>DiceRatchet</b></span>
+    <div class="sub">模块可视化讲解 · docs/html<br>源 commit 879ea49 · 2026-10-17</div>
+  </a>
+  <nav class="nav">
+    <div class="nav-title">总览</div>
+    <a href="index.html">闭环与模块地图 <span class="tag">00</span></a>
+    <a href="game.html">游戏本体 GAME <span class="tag">G</span></a>
+    <div class="nav-title">环境层 L0</div>
+    <a href="mod-01.html">MOD-01 env-rules <span class="tag">01</span></a>
+    <a href="mod-02.html">MOD-02 env-sandbox <span class="tag">02</span></a>
+    <div class="nav-title">智能体层 L1</div>
+    <a href="mod-03.html">MOD-03 inference <span class="tag">03</span></a>
+    <a href="mod-04.html">MOD-04 policy <span class="tag">04</span></a>
+    <a href="mod-05.html">MOD-05 memory <span class="tag">05</span></a>
+    <div class="nav-title">进化层 L2</div>
+    <a href="mod-06.html">MOD-06 loop <span class="tag">06</span></a>
+    <a href="mod-07.html">MOD-07 evolve <span class="tag">07</span></a>
+    <div class="nav-title">测量与工程 L3</div>
+    <a href="mod-08.html">MOD-08 evals <span class="tag">08</span></a>
+    <a href="mod-09.html">MOD-09 infra <span class="tag">09</span></a>
+  </nav>
+</aside>
+
+<main class="main"><div class="wrap">
+
+  <header class="reveal">
+    <div class="eyebrow">GAME-00 / GAME-01 / GAME-02 · 里程碑 G0</div>
+    <h1>游戏本体 <span class="thin">「破咒骰」</span></h1>
+    <p class="lede">一个浏览器里直接玩的骰子 roguelike：掷骰、把骰面放进技能槽、用<strong>学派克制</strong>压强敌。它先作为「人能玩、能验收」的产品存在，然后成为 RSI 训练链路的<strong>规则唯一事实来源</strong>。</p>
+    <div class="badges">
+      <span class="badge game">G0 已交付</span>
+      <span class="badge ok">49 项测试通过</span>
+      <span class="badge">5 组 golden</span>
+      <span class="badge">零 npm 依赖</span>
+    </div>
+    <div class="kpis">
+      <div class="kpi accent"><div class="num">10<span class="unit">关</span></div><div class="label">3 章 · Boss 在第 3/6/10 关</div></div>
+      <div class="kpi"><div class="num">17<span class="unit">颗</span></div><div class="label">技能骰（blade 5 / arcana 5 / verdant 5 / common 2）</div></div>
+      <div class="kpi"><div class="num">24<span class="unit">只</span></div><div class="label">怪物（normal 15 / elite 6 / boss 3）</div></div>
+      <div class="kpi"><div class="num">5<span class="unit">个</span></div><div class="label">局内系统开关</div></div>
+    </div>
+  </header>
+
+  <section class="reveal">
+    <h2><span class="no">01</span>为什么先做一个真游戏</h2>
+    <p>如果训练环境只是一个抽象 MDP，RSI 的结论会依赖“我们自己发明的规则”。先把游戏做成人类可玩、有 golden 快照、能人工通关的产品，训练链路才有可对拍的现实锚点。</p>
+    <div class="cards">
+      <div class="card"><h3>规则可玩</h3><p>掷骰 → 放技能槽 → 结算敌人意图 → 地图/商店/事件/锻造 → 三章十关。</p></div>
+      <div class="card"><h3>规则可对拍</h3><p>纯函数内核 + 确定性 RNG + 三个摘要；5 组 golden 记录逐步 digest。</p></div>
+      <div class="card"><h3>规则可移植</h3><p>MOD-01 按 GAME-01 的契约做逐位等价 Python 内核，训练不经 HTTP。</p></div>
+    </div>
+    <div class="callout"><b>事实来源的层级：</b>GAME-00（玩法）→ GAME-01（内核契约）→ GAME-02（配表数值）→ <code>src/game</code> 实现。冲突时以 GAME-00 为准；Python 侧只承诺与 JS 逐字节对拍。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">02</span>三层结构：内核 / 后端 / 前端</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 940 340" role="img" aria-label="游戏的三层结构与数据流">
+        <defs>
+          <marker id="g-ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#37d6c0"/>
+          </marker>
+          <marker id="g-ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="#3a4d66"/>
+          </marker>
+        </defs>
+
+        <rect x="24" y="34" width="270" height="250" rx="12" class="n-box-game"/>
+        <text x="159" y="62" text-anchor="middle" class="n-label">前端（原生 JS）</text>
+        <text x="159" y="82" text-anchor="middle" class="n-sub">frontend/js/*.js</text>
+        <text x="159" y="106" text-anchor="middle" class="n-tiny">main / net / anim / audio</text>
+        <text x="159" y="124" text-anchor="middle" class="n-tiny">render/{menu,map,battle,hud,nodes,settle}</text>
+        <text x="159" y="152" text-anchor="middle" class="n-sub">零框架、零构建</text>
+        <text x="159" y="174" text-anchor="middle" class="n-sub">只消费 Observation</text>
+        <text x="159" y="196" text-anchor="middle" class="n-tiny">不包含伤害公式</text>
+        <text x="159" y="220" text-anchor="middle" class="n-sub">静态文件由同一 server 托管</text>
+        <text x="159" y="244" text-anchor="middle" class="n-tiny">assets/manifest.json 管资源清单</text>
+
+        <rect x="334" y="34" width="270" height="250" rx="12" class="n-box-accent"/>
+        <text x="469" y="62" text-anchor="middle" class="n-label">后端（Node，无依赖）</text>
+        <text x="469" y="82" text-anchor="middle" class="n-sub">server.js + backend/*.js</text>
+        <text x="469" y="106" text-anchor="middle" class="n-tiny">api.js：9 个端点</text>
+        <text x="469" y="124" text-anchor="middle" class="n-tiny">session.js：run 会话</text>
+        <text x="469" y="142" text-anchor="middle" class="n-tiny">validate.js：请求校验</text>
+        <text x="469" y="160" text-anchor="middle" class="n-tiny">errors.js：E_API_*</text>
+        <text x="469" y="188" text-anchor="middle" class="n-sub">127.0.0.1:8080（默认）</text>
+        <text x="469" y="210" text-anchor="middle" class="n-sub">POST /api/game → sessionId</text>
+        <text x="469" y="232" text-anchor="middle" class="n-sub">POST /api/game/:sid/action</text>
+        <text x="469" y="254" text-anchor="middle" class="n-tiny">GET /api/content/:table（白名单）</text>
+
+        <rect x="644" y="34" width="272" height="250" rx="12" class="n-box"/>
+        <text x="780" y="62" text-anchor="middle" class="n-label">规则内核（纯函数）</text>
+        <text x="780" y="82" text-anchor="middle" class="n-sub">kernel/*.js · 14 个模块</text>
+        <text x="780" y="106" text-anchor="middle" class="n-tiny">rng / digest / loader / state</text>
+        <text x="780" y="124" text-anchor="middle" class="n-tiny">slots / counter / risk / combat</text>
+        <text x="780" y="142" text-anchor="middle" class="n-tiny">map / shop / forge / event / relic</text>
+        <text x="780" y="170" text-anchor="middle" class="n-sub">reduce(state, action) → state</text>
+        <text x="780" y="192" text-anchor="middle" class="n-sub">observe(state) → Observation</text>
+        <text x="780" y="214" text-anchor="middle" class="n-tiny">零环境依赖（K-2 测试）</text>
+        <text x="780" y="236" text-anchor="middle" class="n-tiny">无浮点字面量（K-3 测试）</text>
+
+        <path d="M294 158 L334 158" class="edge-flow" marker-end="url(#g-ar)"/>
+        <path d="M604 158 L644 158" class="edge" marker-end="url(#g-ar2)"/>
+        <text x="314" y="146" text-anchor="middle" class="n-tiny">HTTP</text>
+        <text x="624" y="146" text-anchor="middle" class="n-tiny">进程内</text>
+
+        <rect x="334" y="296" width="270" height="34" rx="8" class="n-box-warn"/>
+        <text x="469" y="318" text-anchor="middle" class="n-sub">内容配表 content/*.json（10 个文件）</text>
+        <path d="M469 284 L469 296" class="edge-dash"/>
+      </svg>
+      <div class="caption"><b>前端不算规则。</b>战斗伤害、克制倍率、敌人意图都在内核里；前端只做展示与交互，避免「两套规则」。测试 <code>kernel 不依赖 backend/frontend</code> 就是钉这条。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">03</span>一回合发生了什么</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 920 260" role="img" aria-label="玩家回合与敌人回合的结算顺序">
+        <rect x="20" y="88" width="130" height="64" rx="9" class="n-box-accent"/>
+        <text x="85" y="114" text-anchor="middle" class="n-sub">掷骰 / 抽骰</text>
+        <text x="85" y="134" text-anchor="middle" class="n-tiny">dice.player 流</text>
+
+        <rect x="178" y="88" width="140" height="64" rx="9" class="n-box"/>
+        <text x="248" y="114" text-anchor="middle" class="n-sub">放技能槽</text>
+        <text x="248" y="134" text-anchor="middle" class="n-tiny">play_face(die, slot)</text>
+
+        <rect x="346" y="88" width="140" height="64" rx="9" class="n-box"/>
+        <text x="416" y="114" text-anchor="middle" class="n-sub">结算玩家面</text>
+        <text x="416" y="134" text-anchor="middle" class="n-tiny">先学派克制，再遗物</text>
+
+        <rect x="514" y="88" width="150" height="64" rx="9" class="n-box-warn"/>
+        <text x="589" y="114" text-anchor="middle" class="n-sub">end_turn</text>
+        <text x="589" y="134" text-anchor="middle" class="n-tiny">敌方回合 E0–E12</text>
+
+        <rect x="692" y="88" width="200" height="64" rx="9" class="n-box"/>
+        <text x="792" y="114" text-anchor="middle" class="n-sub">意图刷新 / 胜负判定</text>
+        <text x="792" y="134" text-anchor="middle" class="n-tiny">ward 清空 · 中毒/灼烧 · 虚弱减半</text>
+
+        <path d="M150 120 L178 120" class="edge"/>
+        <path d="M318 120 L346 120" class="edge"/>
+        <path d="M486 120 L514 120" class="edge"/>
+        <path d="M664 120 L692 120" class="edge-accent"/>
+
+        <rect x="178" y="196" width="536" height="42" rx="8" class="n-box"/>
+        <text x="446" y="222" text-anchor="middle" class="n-sub">回合上限 60：撞上即 truncationReason=E_KERNEL_TURN_LIMIT（计 lose，不是错误）</text>
+        <path d="M589 152 L589 196" class="edge-red"/>
+      </svg>
+      <div class="caption"><b>顺序固定才能对拍。</b>敌人光盾在自身回合开始清零、状态结算、虚弱减半、被动触发——这些顺序写在 GAME-01 §4.2，Python 内核逐步照抄。</div>
+    </div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">04</span>内容与配表</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>文件</th><th>内容</th><th>数量 / 要点</th></tr></thead>
+        <tbody>
+          <tr><td><code>characters.json</code></td><td>角色</td><td>1 个（warrior）</td></tr>
+          <tr><td><code>dice.json</code></td><td>普通骰 / 锻造骰 / 厄咒骰</td><td>6 颗基础骰 + 5 个锻造面</td></tr>
+          <tr><td><code>skills.json</code></td><td>技能骰</td><td><strong>17 颗</strong>（blade 5 / arcana 5 / verdant 5 / common 2）</td></tr>
+          <tr><td><code>monsters.json</code></td><td>怪物与编队</td><td><strong>24 只</strong>（normal 15 / elite 6 / boss 3）</td></tr>
+          <tr><td><code>stages.json</code></td><td>10 关 / 3 章</td><td>Boss 关：3 / 6 / 10；支持 <code>stageCount ∈ {3,6,10}</code></td></tr>
+          <tr><td><code>difficulty.json</code></td><td>3 难度</td><td>easy / medium / hard，差异只在配置</td></tr>
+          <tr><td><code>schools.json</code></td><td>4 学派克制</td><td>blade → verdant → arcana → blade</td></tr>
+          <tr><td><code>events.json</code></td><td>事件</td><td>12 个</td></tr>
+          <tr><td><code>relics.json</code></td><td>遗物</td><td>14 个</td></tr>
+          <tr><td><code>shops.json</code></td><td>商店 / 锻造 / 宝箱</td><td>价格与候选池</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>配表校验在 <code>kernel/loader.js</code>：ID 规则、悬空引用、学派克制、风险等级与骰面一致性。MOD-01 的 <code>load_tables()</code> 复用同一套规则，所以一份坏配表会在两侧同时被拒。</p>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">05</span>从游戏到训练环境</h2>
+    <div class="diagram">
+      <svg viewBox="0 0 900 240" role="img" aria-label="游戏与训练链路的关系">
+        <rect x="24" y="80" width="220" height="80" rx="10" class="n-box-game"/>
+        <text x="134" y="106" text-anchor="middle" class="n-label">JS 内核（SSoT）</text>
+        <text x="134" y="126" text-anchor="middle" class="n-sub">src/game/kernel</text>
+        <text x="134" y="146" text-anchor="middle" class="n-tiny">node --test：49 项</text>
+
+        <rect x="300" y="80" width="220" height="80" rx="10" class="n-box-warn"/>
+        <text x="410" y="106" text-anchor="middle" class="n-label">golden 快照</text>
+        <text x="410" y="126" text-anchor="middle" class="n-sub">5 组 · 1,487 步</text>
+        <text x="410" y="146" text-anchor="middle" class="n-tiny">obs/rng/state 三个 digest</text>
+
+        <rect x="576" y="80" width="300" height="80" rx="10" class="n-box-accent"/>
+        <text x="726" y="106" text-anchor="middle" class="n-label">MOD-01 Python 内核</text>
+        <text x="726" y="126" text-anchor="middle" class="n-sub">逐位等价 · 纯标准库</text>
+        <text x="726" y="146" text-anchor="middle" class="n-tiny">训练链路不再经 HTTP</text>
+
+        <path d="M244 120 L300 120" class="edge" marker-end="url(#g-ar2)"/>
+        <path d="M520 120 L576 120" class="edge-flow" marker-end="url(#g-ar)"/>
+        <text x="548" y="108" text-anchor="middle" class="n-tiny">重放 + 比对</text>
+
+        <rect x="300" y="188" width="576" height="36" rx="8" class="n-box"/>
+        <text x="588" y="211" text-anchor="middle" class="n-sub">网页版仍然保留：人类可以随时开一局，做定性复核与演示</text>
+      </svg>
+      <div class="caption"><b>两条路都活着。</b>训练走 Python 内核（快、可审计）；网页版是规则来源与人类复核入口。未来若接视觉模型，也可以直接对网页版训练。</div>
+    </div>
+    <div class="callout"><b>实测基线：</b>hard × 6 关的启发式通关率 45.5%（n=200，seed 1–200），每局 p50 232 env 步 / 96 个决策点。这是 MOD-04 启发式与 MOD-08 基线对照的锚点。</div>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">06</span>怎么本地跑一局</h2>
+    <pre><span class="c"># 零 npm 依赖，Node ≥ 18</span>
+cd src/game
+node server.js                    <span class="c"># → http://127.0.0.1:8080</span>
+
+<span class="c"># 全部测试（49 项）</span>
+node --test "tests/**/*.test.js"
+
+<span class="c"># 5 组 golden 重放</span>
+node --test "tests/kernel/*.test.js"</pre>
+    <ul class="clean">
+      <li>前端不硬编码难度/开关：<code>GET /api/config/schema</code> 动态渲染。</li>
+      <li><code>POST /api/replay</code> 无状态重放，审计与对拍用；与在线对局可逐行比较。</li>
+      <li>服务端只监听 <code>127.0.0.1</code>，默认端口 8080。</li>
+    </ul>
+  </section>
+
+  <section class="reveal">
+    <h2><span class="no">07</span>延伸阅读</h2>
+    <ul class="clean">
+      <li><a href="mod-01.html">MOD-01 env-rules</a> —— Python 逐位移植与对拍。</li>
+      <li><a href="mod-02.html">MOD-02 env-sandbox</a> —— 训练时 agent 能看到什么。</li>
+      <li><a href="../prd/GAME-00-webgame-PRD.md">GAME-00 玩法 PRD</a> · <a href="../prd/GAME-01-kernel-contract.md">GAME-01 内核契约</a> · <a href="../prd/GAME-02-content-tables.md">GAME-02 配表</a></li>
+      <li><a href="../../src/game/README.md">src/game/README</a></li>
+    </ul>
+  </section>
+
+  <div class="pager">
+    <a class="prev" href="index.html"><span class="dir">PREV</span><span class="to">← 闭环与模块地图</span></a>
+    <a class="next" href="mod-01.html"><span class="dir">NEXT</span><span class="to">MOD-01 env-rules →</span></a>
+  </div>
+
+  <footer class="footer">
+    <span>DiceRatchet 模块可视化讲解 · GAME</span>
+    <span>事实来源：<code>src/game</code> + GAME-00/01/02 · 生成于 2026-10-17</span>
+  </footer>
+
+</div></main>
+</div>
+<script src="assets/app.js"></script>
+</body>
+</html>

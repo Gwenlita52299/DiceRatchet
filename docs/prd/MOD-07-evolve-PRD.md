@@ -1,6 +1,8 @@
 # MOD-07 evolve 技术 PRD
 
-> **版本**：v0.13（2026-10-15 **F63 收口：起点的跨代继承按「测量身份 = play 面指纹」还原归档 + 补上 F66 的第二半（声明改了 play 面却实测没变 ⇒ 花钱前 fail-closed）**。① 归档现在记 `harness_play_hash`（由编排层透传给 `evaluate_arm(play_hash=)`），`restore_arm_from_archive(play_hash=)` **优先按 play 面**还原——修复前它按 `harness_version` 判，而候选臂归档记的是 accept **之前**的号 ⇒ `restore(harness_version=1)` 对`gen001-…cand-98119a8a4a90.json` 返回 `None`，D-M3-7 的继承在 accept 场景**静默退化成重测 40 局 ≈¥21 ≈1.7 h**（那条 `continue` 原先不发任何事件，现补 `evolve.parent_inherit status="declined"`）。② 新增窄口径断言：候选 `touched_files` 声明了 play 面文件而实测 `play_hash == parent_play_hash` ⇒ `E_EVOLVE_PATCH_INVALID`且**一局都不跑**；只改学习侧文件的提案不触发（仍由 C2 合法拒绝）。对齐 Spec v2.33 B-92，见 §8.1/§13）
+> **版本**：v0.15（2026-10-17 **与代码对齐（纯文档，¥0）**：`n_candidates` 默认 1、`E_EVOLVE_GIT_FAILED` 记 `error_reject`、产物改为 `metrics/arms/` 与 `gen-{NNN}/proposals/`、`rollback`/`resolve_gate`/`evaluate_arm` 签名、回滚写 `new_version`、`run_one_generation` 入口、provenance 17 键、`decision.jsonl` 未落盘、事件枚举与 `--run-id` 必填等。起点守卫见 §6.8。见 §17）
+> **历史版本**：v0.14（2026-10-17 **起点守卫**：`assert_start_play_plane_accepted()` 让「未经门禁裁决的 play 面」不得起跑——白名单 = `harness/versions/v*/` 任一已接受快照 + `harness/BASELINE.json` 登记的原始 v0，否则 `E_EVOLVE_UNGATED_START`（退出码 2）、零推理调用；`--allow-ungated-start` 显式放行并发 `evolve.start_guard` 事件留痕。现场：P1 被预装成 version 0 的“基线”，从未过门禁却成了 P2 的父代。见 §6.8/§10）
+> **历史版本**：v0.13（2026-10-15 **F63 收口：起点的跨代继承按「测量身份 = play 面指纹」还原归档 + 补上 F66 的第二半（声明改了 play 面却实测没变 ⇒ 花钱前 fail-closed）**。① 归档现在记 `harness_play_hash`（由编排层透传给 `evaluate_arm(play_hash=)`），`restore_arm_from_archive(play_hash=)` **优先按 play 面**还原——修复前它按 `harness_version` 判，而候选臂归档记的是 accept **之前**的号 ⇒ `restore(harness_version=1)` 对`gen001-…cand-98119a8a4a90.json` 返回 `None`，D-M3-7 的继承在 accept 场景**静默退化成重测 40 局 ≈¥21 ≈1.7 h**（那条 `continue` 原先不发任何事件，现补 `evolve.parent_inherit status="declined"`）。② 新增窄口径断言：候选 `touched_files` 声明了 play 面文件而实测 `play_hash == parent_play_hash` ⇒ `E_EVOLVE_PATCH_INVALID`且**一局都不跑**；只改学习侧文件的提案不触发（仍由 C2 合法拒绝）。对齐 Spec v2.33 B-92，见 §8.1/§13）
 > **历史版本**：v0.12（2026-10-14 **C2 改判为「play 面确实变了」+ 冒烟门删除胜率轴**——处置 F62/F67，用户裁决「F62 直接取消 C2」；统计量（`compare_all_metrics`）降级为 `paired["by_metric"]` **报告项**，多候选排序改**连续轴优先**，`accept` 的语义明确为「打法变了且无判定出的退化」而非「显著变强」；见 §8.2/§9/§17）
 > **历史版本**：v0.11（2026-10-14 **D-M3-7 起点继承改按 `play_hash`**：继承资格 / 判据 1 的同起点豁免 / F66 第二半三处改问「play 面指纹」；`heldout` 段改定为「本代结束时在役那份 harness 的测量」；见 §8.1/§17）
 > **历史版本**：v0.10（2026-10-12 **新增 §8.1 的 F57 规则：parent 测量跨代继承**（Spec v2.20 B-78）；v0.10 的资格判据自 2026-10-14 起被 D-M3-7 的 `play_hash` 口径取代，见 §8.1/§17）
@@ -9,8 +11,8 @@
 > **历史版本**：v0.7（2026-10-10 **新增 §6.6：accept/rollback 的失败自清与失败口径**——处置 F47-C2/D：失败时删掉本次新建的快照（否则顶掉版本号并留下可被 load/rollback 取用的幻影版本）、版本冲突也失败保守、基础设施失败记 `decision="error_reject"` 且 `report.json` 不得写成 `accept`；见 §17）
 > **历史版本**：v0.6（2026-10-10 **新增 §6.5：提案输入与补丁应用的硬口径**——处置 F37（按调用方给输出预算）/F38（内联可改文件正文）/F39（容忍行偏移、不容忍 fuzz）/F40（prompt 必须列出校验器规则）/F41（冒烟臂 `-smoke` 的 `episode_key`）；见 §17）。
 > **历史版本**：v0.5（2026-10-09 **处置缺陷 F28**：C5 的 `truncation` 由绝对门 0.15 改为**相对门** `candidate ≤ parent + truncation_tol(0.05)`，`illegal`/`fallback` 保留绝对门；新增 §8.2.2、更新 §8.2/§8.2.1/§9，对齐 Spec v2.0 B-44 用户裁决 ②+③；v0.4 = 2026-10-07 按 Spec v1.8 回填 C5 实测标定与 M3 相对门设计，见 §8.2.1/§17）· **状态**：待评审 · **所属里程碑**：M2（propose/evaluate/versioning/HITL 初版）→ M3（回滚/消融对接/统计口径收紧）· **作者**：DiceRatchet 技术文档 · **日期**：2026-10-09
-> **上游 Spec**：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（v2.27，**唯一事实来源**；冲突以 Spec 为准）· **关联不变量**：INV-3/INV-4/INV-5/INV-7
-> **代码位置**：`dice_ratchet/evolve/{proposer,judge,versioning,gate}.py`、`harness/`、`runs/<run_id>/generations/`
+> **上游 Spec**：[../模块拆分Spec-DiceRatchet.md](../模块拆分Spec-DiceRatchet.md)（v2.35，**唯一事实来源**；冲突以 Spec 为准）· **关联不变量**：INV-3/INV-4/INV-5/INV-7
+> **代码位置**：`dice_ratchet/evolve/{proposer,judge,versioning,gate,generation,checkpoint,paths,schemas,errors,cli}.py`、`harness/`、`runs/<run_id>/generations/`
 
 ---
 
@@ -53,7 +55,7 @@ MOD-06 每 K 局（默认 30）触发演化周期，把「策略记忆 + 最近�
 
 ## 4. 功能需求（FR-07-x，编号，每条可测试）
 
-- **FR-07-1 候选生成**：`propose()` 输入 `EvidenceBundle`，输出 `list[Candidate]`，长度 ∈ [1, `evolve.n_candidates`]（默认 2，上限 3；Spec §8.6 成本模型）。每条含 `kind ∈ {prompt_patch, tool_patch, config_patch}`、`diff`（unified diff）、`rationale`（≤300 字）、`expected_effect{metric,direction,priority}`。失败返回 `ProposalResult(candidates=[], error_code="E_EVOLVE_PROPOSE_FAILED")`。
+- **FR-07-1 候选生成**：`propose()` 输入 `EvidenceBundle`，输出 `list[Candidate]`，长度 ∈ [1, `evolve.n_candidates`]（默认 **1**——2026-10-06 D-1 由 2 下调；上限 3；Spec §8.6 成本模型）。每条含 `kind ∈ {prompt_patch, tool_patch, config_patch}`、`diff`（unified diff）、`rationale`（≤300 字）、`expected_effect{metric,direction,priority}`。失败返回 `ProposalResult(candidates=[], error_code="E_EVOLVE_PROPOSE_FAILED")`。
 - **FR-07-2 证据束白名单**：`EvidenceBundle` 只能由 `trajectory_summary(split="train")`、`memory.retrieve_for_evolution()`、`reflection_set(split="train")`、`harness_snapshot()` 构造；`build_evidence_bundle()` 是唯一构造函数，`__post_init__` 校验 `source_tags ⊆ {"memory:train","traj:train","reflect:train","harness:current"}`。
 - **FR-07-3 防自我确认（生成侧）**：证据束条目 `split` 必须全为 `train`；`assert_no_holdout_leak()`（1）拒绝任何 `split != "train"` 条目，（2）对全部文本字段做 seed 字面量扫描——命中 heldout 注册表任一 seed 的整值 token（正则 `(?<!\d){seed}(?!\d)`）即抛 `E_EVAL_INV5_LEAK`，（3）拒绝出现 `heldout`/`test` 标签或 `seeds.yaml` 片段。`render_proposer_prompt()` 模板化产出，**不允许**插入证据束之外的上下文（INV-3）。
 - **FR-07-4 修改面硬约束（单候选）**：改动行数 ≤ `evolve.max_diff_lines`（40）且字符数 ≤ `evolve.max_diff_chars`（4000）；文件数 ≤ 2 且必须 ∈ 白名单 `harness/prompts/decision.md`、`harness/prompts/reflection.md`、`harness/tools/*.py`、`harness/config.json`；**禁止**改 `rank_actions` 签名与 `@harness_tool` 语义；**禁止**新增第三方依赖（顶层 import 必须 ∈ `evolve.tool_import_allowlist` 或 `tools/` 内已有模块）；**禁止**网络/文件写/subprocess/env 内部访问（INV-4）；`config_patch` 只能改 `evolve.evolvable_keys` 声明的键。
@@ -74,14 +76,14 @@ MOD-06 每 K 局（默认 30）触发演化周期，把「策略记忆 + 最近�
 - **FR-07-8 判定表**：按 §8.2 顺序短路求值，六项全 True → `accept`，否则 `reject` 且 `reason` 含首个失败条件 id（如 `C1:win_rate 0.20<0.25`、`C2:no_play_change`）。
 - **FR-07-9 版本化**：`accept()` 生成 `harness/versions/v{N}/`（全量拷贝 + `version.json` + `diff.patch`），更新 `harness/version.json` 指针，经 MOD-09 `commit_harness` 提交到当前分支，并打 tag `harness-v{N}`（不建同名分支，Spec B-22），message = `harness(v{N}): gen-{G} {kind} {short_rationale}`；`N` = 现有最大 +1，**不可复用、不可重写历史**。
 - **FR-07-10 回滚**：`rollback(to_version)` 用 `versions/v{to_version}/` 覆盖 `harness/`，写 `version.json`、生成 `revert.patch`、提交 `revert(harness): back to v{N}`，并写一条 `decision="rollback"` 的代际报告。
-- **FR-07-11 HITL 门**：`evolve.hitl=true` 时 `gate.await_human()` 把决策置 `pending`、写 `gen-{N}/gate.json`（`generation, harness_version, parent_version, diff_path, report_path, status, expires_at`），loop **优雅退出（exit 0，可续跑）**；`evolve approve|rollback --generation N` 读取 gate 文件后执行 accept/rollback，写 `decided_by="human"` 与可选 `reason`；超时（默认 24h）→ 保守回滚 `parent_version`，`reason="hitl_timeout"`（对齐 Spec §8.5）。
+- **FR-07-11 HITL 门**：`evolve.hitl=true` 时 `gate.await_human()` 把决策置 `pending`、写 `gen-{N}/gate.json`（`generation, harness_version, parent_version, diff_path, report_path, status, expires_at`），loop **优雅退出（exit 0，可续跑）**；`evolve approve|rollback --run-id <id> --generation N`（`--run-id` 必填）读取 gate 文件后执行 accept/rollback，写 `decided_by="human"` 与可选 `reason`；超时（默认 24h）→ 保守回滚 `parent_version`，`reason="hitl_timeout"`（对齐 Spec §8.5）。
 - **FR-07-12 拒绝记录**：任何 reject（含冒烟淘汰、扫描失败）都落 `gen-{N}/candidates/{candidate_id}.json`，含 `candidate`、`report`（若有）、`decision`、`reason`、`error_code`。
 - **FR-07-13 候选代码安全执行**：新 harness 使用前必须依次通过 `guard.gate()`（MOD-02 静态扫描：AST 规则/禁用符号/依赖检查）与 `guard.load_harness_tools()`（在子进程 worker 中加载，Spec B-20）；扫描失败 → 直接 reject，`E_EVOLVE_SCAN_FAILED`，**不进冒烟、不进 heldout**；受限加载失败 → 立即回滚 `parent_version`，`E_EVOLVE_LOAD_FAILED`。
 - **FR-07-14 代际报告**：每 `gen-{N}` 写 `report.json`，键严格等于 Spec §4.5、缺失用 `null`、**不新增顶层键**；多候选时记录最终接受者（或最后尝试者），其余写 `candidates/` 明细；**FR-07-15** 空候选/全淘汰也必须落盘（`decision="reject"` + 对应错误码），保证「每次接受/拒绝都有 `report.json` 支撑」（Spec §8.4）。
 
 ## 5. 非功能需求（NFR-07-x：确定性/性能/可复现/可观测）
 
-- **NFR-07-1 确定性**：随机性只来自显式 seed（`evolve.seed`，由 MOD-09 从 `run_id` 派生）；禁 `random.*`/`time`/`uuid4`，遍历用 `sorted()`。同 `(run_id, generation, seed)` 重跑，`candidate_id` 序列与 `report.json` 逐字节相同（`created_at`/`ts` 由 MOD-09 注入，可用 `--freeze-time` 冻结以支持 G3）。
+- **NFR-07-1 确定性**：随机性只来自显式 seed（`propose_seed(run_id, generation)` 派生）；**`EvolveConfig` 没有 `seed` 字段**，也不存在 `--freeze-time` CLI。禁 `random.*`/`time`/`uuid4`，遍历用 `sorted()`。同 `(run_id, generation)` 重跑，`candidate_id` 序列与 `report.json` 逐字节相同（`created_at`/`ts` 由 MOD-09 注入；G3 的时间冻结目前**没有** CLI 面）。
 - **NFR-07-2 安全（INV-4/INV-5）**：候选代码永不 `exec` 于主进程；受限加载由 MOD-02 提供；proposer 上下文白名单由 FR-07-3 代码级强制；heldout seed 值出现在 `harness/`、`runs/*/reflections/` 或 memory 库中即为 P0。
 - **NFR-07-3 可复现**：每次决策可由 `report.json` + `candidates/*.json` + `diff.patch` + `version.json` 离线重建；`config_hash` 覆盖 evolve 配置（Spec §5）。
 - **NFR-07-4 可观测**：只用 MOD-09 结构化事件（`evolve.propose|validate|scan|smoke|evaluate|decision|version|gate|cost`），一次调用 = 一行 JSONL，不自建日志格式。
@@ -126,14 +128,14 @@ def judge(cand_report: CandidateReport, parent_report: HeldoutReport, *, cfg: Ev
 # ---- versioning.py ----
 def stage_candidate(cand: Candidate, *, run_id: str, cfg: EvolveConfig) -> Path:  # staging 目录
 def accept(cand: Candidate, verdict: Verdict, *, run_id: str, cfg: EvolveConfig) -> HarnessRef: ...
-def rollback(to_version: int, *, run_id: str, reason: str, decided_by: str) -> HarnessRef: ...
+def rollback(to_version: int, *, cfg: EvolveConfig, run_id: str, reason: str, decided_by: str) -> HarnessRef: ...
 def load_version(v: int) -> HarnessRef: ...
 def build_decision_sections(gen: int, reports: list[CandidateReport], winner: CandidateReport | None, gate: GateState) -> dict: ...   # 只产出 candidates/decision/decided_by/reason
 # ---- gate.py ----
 def await_human(*, generation: int, run_id: str, diff_path: Path,
                 report_path: Path, cfg: EvolveConfig) -> GateState: ...
 def resolve_gate(*, generation: int, run_id: str, action: Literal["approve","rollback"],
-                 reason: str | None) -> Verdict: ...
+                 reason: str | None) -> GateState: ...   # 再由 verdict_from_gate() 转 Verdict
 ```
 
 ### 6.2 被依赖签名
@@ -144,7 +146,7 @@ def resolve_gate(*, generation: int, run_id: str, action: Literal["approve","rol
 def gate(harness_dir: Path) -> GateReport: ...            # status: "pass"|"fail", violations[{code,file,line,symbol}], ast_digest
 def load_harness_tools(harness_dir: Path) -> ToolWorker: ...   # 常驻子进程；失败抛 E_EVOLVE_LOAD_FAILED
 # MOD-08
-def evaluate_arm(harness_dir: Path, *, split: str, basket: str, memory_version: int, arm: str, run_id: str, protocol=None, runner=None, generation: int = 0, harness_version: int = 0, config=None, model_hash: str = "", n_workers: int = 1, n_rep: int = 1, episode_config=None, resume_results: Sequence = (), on_result=None, run_dir=None, archive: bool = True) -> ArmResult: ...
+def evaluate_arm(harness_dir: Path, *, split: str, basket: str, memory_version: int, arm: str, run_id: str, protocol=None, runner=None, generation: int = 0, harness_version: int = 0, config=None, model_hash: str = "", model_backend: str = "", play_hash: str = "", n_workers: int = 1, n_rep: int = 1, episode_config=None, resume_results: Sequence = (), on_result=None, run_dir=None, archive: bool = True) -> ArmResult: ...
 def compare_paired(a: ArmResult, b: ArmResult, metric: str = "win_rate", *, alpha: float = 0.05, B: int = 10000, rng=None) -> PairedTest: ...   # {method, metric, p, delta, significant, direction:"up"|"down"|"flat", n_pairs}
 def compare_all_metrics(a: ArmResult, b: ArmResult, *, alpha: float = 0.05, B: int = 10000, rng=None) -> dict[str, PairedTest]: ...   # F62：逐指标报告项（paired["by_metric"]）
 def evaluate_generation(gen: int, parent: ArmResult, winner: ArmResult | None, *, run_id: str, run_dir=None, config=None, protocol=None, heldout_source: str = "measured", retained_arm: ArmResult | None = None, retained_version: int | None = None, play_hash: str = "") -> dict: ...  # report 指标段（D-M3-7：heldout = 本代结束时在役那份的测量）
@@ -165,7 +167,8 @@ harness/                     # 当前生效工件（MOD-04 只读）
   prompts/decision.md  prompts/reflection.md  config.json   # evolvable_keys 内键可被改
   tools/*.py                 # @harness_tool 纯函数，rank_actions 签名冻结
   versions/v{N}/             # 每次 accept 的不可变快照：version.json + diff.patch + prompts/ tools/ config.json
-runs/<run_id>/generations/gen-{N}/    # report.json  gate.json  decision.jsonl + candidates/{id}.json + patches/{id}.patch
+runs/<run_id>/generations/gen-{N}/    # report.json  gate.json  + candidates/{id}.json + patches/{id}.patch
+# 注意：`decision.jsonl` 只在 paths.py 里预留了属性，**当前没有读写点、也不会落盘**。
 ```
 
 **已裁决（Spec v1.4 B-29/B-32/B-33）**：`harness/versions/v{N}/` 只放不可变快照（`version.json` + `diff.patch` + 全量工件）；`candidates/`、`patches/`、`gate.json` 放在 `runs/<run_id>/generations/gen-{NNN}/`；HITL 挂起以退出码 0 结束，超时 24h 保守回滚；`version.json.base_model` 预留给 MOD-10，M0–M3 恒为 `null`。
@@ -258,7 +261,8 @@ argument 'resume_results'`）。
    `metrics/arms/gen{gen:03d}-{split}-{basket}-{arm}.json` =
    `ArmResult.as_dict()` + `provenance` + **逐局明细**。`provenance` 字段：
    `generation / split / basket / arm / harness_version / memory_version / n_seeds /
-   n_dropped / config_hash / seeds_hash / protocol_id / episode_config_hash / created_at`。
+   n_dropped / config_hash / seeds_hash / resolved_seeds_hash / protocol_id / episode_config_hash /
+   harness_play_hash / model_hash / model_backend / created_at`（共 17 键；权威清单是 `evals/harness.py::ARM_PROVENANCE_KEYS`）。
 2. **复用规则（fail-closed）**：
    - `provenance` 在 `ARM_PROVENANCE_KEYS` 上**逐字段全等**（**不含** `created_at`）且归档覆盖
      完整 seed 列表 → **整臂复用**：**一局都不跑**，发 `evals.arm_reused`；
@@ -267,7 +271,7 @@ argument 'resume_results'`）。
    - 任一字段不一致 / 归档损坏 / run 目录不存在 → **不复用**（照常重算）。改了 harness 版本、
      记忆版本、篮子、局型（`episode_config`）或 seed 区间，都必然走到这一支。
 3. **提案检查点**（`evolve/checkpoint.py`）：**评估之前**把 `ProposalResult` 落
-   `generations/gen{gen:03d}/proposals/proposal.json`，连同**输入指纹**
+   `generations/gen-{int(gen):03d}/proposals/proposal.json`，连同**输入指纹**
    （`run_id` / `generation` / `propose_seed` / `harness_version` / `memory_version` /
    `prompt_digest`）。resume 时重算指纹：一致 → **复用同一 `candidate_id` 与 diff**、
    **0 次 proposer 调用**（发 `evolve.proposal_reused`）；不一致 / 版本不符 / 损坏 → 照常重新提案。
@@ -320,13 +324,41 @@ LLM 的渲染**共用同一句**，避免「检查点按另一份参数算指纹
 **端到端验收（实测，全部本地替身、0 成本）**：一代在 parent heldout 第 1 局之后 Ctrl-C →
 resume → proposer **0 次调用**、parent heldout 已归档的局**一局都没重跑**、该代跑完。
 
+### 6.8 起点守卫：未经门禁裁决的 play 面不得起跑（v0.14 新增；2026-10-17）
+
+**实现**：`evolve/versioning.py::assert_start_play_plane_accepted(root, *, allow_ungated=False)`，
+由 MOD-06 在 `loop run` 起跑处调用（git 干净检查之后、gen-000 基线之前，见 MOD-06 §9.4）。
+
+**判定**：计算起点 harness 的 `play_hash`，白名单只含两类身份——
+
+1. `harness/versions/v{N}/` 任一**已接受快照**的 `play_hash`（来源记 `accepted:v{N}`）；
+2. `harness/BASELINE.json` 登记的**原始 v0** `play_hash`（来源记 `baseline:v0`）——
+   v0 从来不建 `versions/v0/`，所以单独登记一个锚点文件。
+
+不在白名单 ⇒ 抛 `E_EVOLVE_UNGATED_START`（退出码 **2**），**零推理调用**。`allow_ungated=True`
+时放行并发 `evolve.start_guard{status="allow_ungated", play_hash}` 事件——放行必须留痕。
+
+**现场**：m3r2 把人工去重的 P1 预装成 version 0 的“基线”。`write_gen000_baseline` 只测不裁决，
+门禁只在 `evaluate_candidate(candidate, parent)` 里跑，于是 P1 从未作为 candidate 过门禁，
+却成了 P2 的父代：P2 的 accept 建立在 P1 的 held-out **0.05**（裸 v0 是 **0.175**）之上。
+
+**它不做什么**：不追溯否定已在账本里的版本（在役 v1 的 provisional 问题靠账本修复）；
+不替代门禁；不拦 `loop baseline`（测量候选是合法用途）与 `--no-evolve`。
+
+**辅助函数**：`read_baseline_record()` / `record_baseline()` / `accepted_play_hashes()`。
+**维护规则**：改动原始 v0（`prompts/decision.md` / `config.json` / `tools/*.py`）时必须同步
+`record_baseline()` 刷新 `harness/BASELINE.json`，否则新内容会被当成未裁决补丁拦下。
+
+**护栏**：`tests/unit/evolve/test_start_guard.py` 6 条（原始 v0 通过 / 未裁决改动拒绝 /
+放行留痕 / 已接受快照通过 / 学习侧改动不拦 / 无锚点 fail-closed）。
+
 ## 7. 数据模型与存储
 
 | 对象 | 落盘位置 | 关键字段 | 生命周期 |
 |---|---|---|---|
 | `Candidate` / `CandidateReport` | `candidates/{id}.json` | `candidate_id,kind,diff,rationale,expected_effect,touched_files,diff_lines,gen_id`；同文件 `report` 键：`smoke{win_rate,illegal_rate,episodes}`、`heldout:HeldoutReport\|null`、`paired`、`elapsed_s`、`error_code` | 随 run 永久（≥ 全部代际，Spec §8.4） |
-| `HeldoutReport` | `metrics/heldout-gen{N}-{id}.json`（MOD-08 写、本模块只读回链） | MOD-08 定义 | 永久 |
-| `Verdict` | `report.json` 的 `decision/decided_by/reason` + `decision.jsonl` | `decision,decided_by,reason,condition_trace` | 永久 |
+| `HeldoutReport` | `metrics/arms/gen{gen:03d}-{split}-{basket}-{arm}.json`（MOD-08 写、本模块只读回链） | MOD-08 定义 | 永久 |
+| `Verdict` | `report.json` 的 `decision/decided_by/reason`（**没有 `decision.jsonl`**） | `decision,decided_by,reason,condition_trace` | 永久 |
 | `version.json` | `harness/version.json` 与 `harness/versions/v{N}/version.json` | `version,parent,git_commit,created_at,reason,accepted_by` | 除当前指针外不可变 |
 | `GateState` / 事件流 | `gen-{N}/gate.json`；`runs/<run_id>/events.jsonl`（MOD-09 落地） | `generation,harness_version,parent_version,diff_path,report_path,status,expires_at,resolved_by,reason`；`evolve.*` | 永久 |
 
@@ -337,7 +369,7 @@ resume → proposer **0 次调用**、parent heldout 已归档的局**一局都�
 ### 8.1 单代流程（伪代码）
 
 ```python
-def run_generation(run_id, gen, cfg) -> dict:
+def run_one_generation(*, state, run_ctx, runner) -> GenerationReport: ...   # 真实入口；不存在 run_generation(run_id, gen, cfg)
     parent = versioning.load_version(current_version())
     mem_v = memory.snapshot(version=gen)                                                  # 冻结记忆快照，parent 与候选共用
     bundle = build_evidence_bundle(run_id=run_id, n_traj=cfg.evolve.n_traj, cfg=cfg)      # FR-07-2/3
@@ -498,7 +530,7 @@ loop(MOD-06) --accept?--> gate(MOD-07): hitl? → 写 gate.json(status=pending) 
 loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: accept()/rollback() --> git commit + tag harness-v{N}
 ```
 
-`rollback(v)`：① 校验 `v` 存在且 `v <= current`；② `harness/` 内容替换为 `versions/v/`；③ 写 `version.json`（`version=v`，`parent=current_version`，新 `git_commit`，`reason`，`accepted_by=decided_by`）；④ 生成 `revert.patch`（current → v）；⑤ git commit，并打 tag `harness-v{new}`；⑥ 写 `gen-{N}/report.json`，`decision="rollback"`。
+`rollback(v)`：① 校验 `v` 存在且 `v <= current`；② `harness/` 内容替换为 `versions/v/`；③ 写 `version.json`（`version=new_version`，`parent=current_version`，新 `git_commit`，`reason`，`accepted_by=decided_by`；**编号不回退**——`new_version=next_version(root)`，护栏断言回滚 v0 得到 `version=3,parent=2`）；④ 生成 `revert.patch`（current → v）；⑤ git commit，并打 tag `harness-v{new}`；⑥ 写 `gen-{N}/report.json`，`decision="rollback"`。
 
 ## 9. 配置项（键名、类型、默认值、含义）
 
@@ -518,7 +550,7 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | `evolve.truncation_backstop` | float | **0.60** | C5 的 **truncation 绝对 backstop**：**2026-10-11 新增**（D-M3-2 裁决 E）。原设计（B-44）刻意不设，代价是 §8.2.2 记录的已知放宽——parent=0.90 时候选 0.60 也能过；本值把上限钉在 0.60。取 0.60 的理由：C1 hard×6 实测 truncation 0.30（撞内核 `maxTurnsPerBattle=60`），0.60 = 实测值的 2× 余量，且远低于「几乎全截断」的 0.90 |
 | `evolve.hitl` / `evolve.gate_timeout_hours` | bool / int | true / 24 | 人在环门开关 / 超时 → 保守回滚 |
 | `evolve.propose_max_retries` | int | 2 | JSON-schema 失败重试（在 MOD-03 `generate_json` 之上再包一层）；成本上限改由 MOD-06 `loop.max_episodes_per_generation` 统一控制 |
-| `evolve.evolvable_keys` | list[str] | `["retrieval.top_k","sampling.temperature","prompt.show_intent"]` | `config_patch` 白名单键 |
+| `evolve.evolvable_keys` | list[str] | `["sampling.temperature","sampling.memory_top_k","prompt.token_budget","policy.retry_max"]` | `config_patch` 白名单键（**概念名**，非实际键路径）。两条不变量：① 每个键必须能映射成 `harness/config.json` 加载器**接受**的实际字段（`prompt.token_budget` → `agent.policy.prompt_token_budget`、`policy.retry_max` → `agent.policy.retry_max`）；② **必须在判定口 binding**（见 §18.4）——否则 `config_patch` 只能产出「字节变了、行为没变」的候选，C2 会被骗过。`sampling.*` 是**训练侧**键（eval 下温度恒 0.0、heldout 无记忆），eval 轮次由 `proposer.effective_evolvable_keys()` 裁掉。|
 | `evolve.tool_import_allowlist` | list[str] | `["math","re","json","itertools","functools","typing","dataclasses"]` | `tool_patch` 允许的顶层 import |
 
 ## 10. 错误处理与降级（使用 Spec §8 的错误码前缀）
@@ -529,7 +561,7 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | `E_EVAL_INV5_LEAK`（v0.1 的 `E_EVOLVE_HOLDOUT_LEAK` 并入，Spec §8.3） | 证据束含非 train split 或 heldout seed 字面量 | **致命**：中止本代 + 写 `audit/` 告警；连续 2 次中止 run（INV-5） | 否 |
 | `E_EVOLVE_PATCH_INVALID` | `validate_candidate` 失败（行数/文件/签名/依赖/白名单） | 该候选 reject，继续下一候选 | 否 |
 | `E_EVOLVE_SCAN_FAILED` | MOD-02 `guard.gate` 返回 `fail` | 该候选 reject，`violations` 落 `candidates/{id}.json` | 否 |
-| `E_EVOLVE_LOAD_FAILED` | `guard.load_harness_tools` 抛错（worker 启动或加载失败） | 已 accept 则立即回滚 `parent_version`，否则 reject | 是（已发生） |
+| `E_EVOLVE_LOAD_FAILED` | `guard.load_harness_tools` 抛错（worker 启动或加载失败） | 该候选 **reject**（发生在 accept 与评估之前，**0 局消耗**；没有「已 accept 则回滚」这条路径） | 否（0 局） |
 | `E_EVOLVE_SMOKE_FAILED` | 冒烟快速淘汰命中 / 冒烟异常 | reject，不进 heldout | 否（仅 2 局 train） |
 | `E_EVOLVE_EVAL_FAILED` | MOD-08 超时/异常 | reject（保守），保留当前 harness | 是 |
 | `E_EVOLVE_NO_GAIN` / `E_EVOLVE_ILLEGAL_RATE` | C1、C2 或 C5 失败 | reject（C5 记 `illegal_rate`/`fallback_rate`/`truncation_rate` 明细） | 是 |
@@ -537,7 +569,8 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | `E_EVOLVE_JUDGE_FAILED` | 判定链路异常/报告缺字段 | reject（Spec §8.5 保守拒绝） | 视情况 |
 | `E_EVOLVE_GATE_TIMEOUT` | HITL 超时 | 回滚 `parent_version`，`reason="hitl_timeout"` | 否 |
 | `E_EVOLVE_VERSION_CONFLICT` | 版本号已存在/指针不一致/git 冲突 | 中止本代 accept，人工介入（不自动 merge） | 否 |
-| `E_EVOLVE_GIT_FAILED` | git commit/branch 失败 | 丢弃未提交 accept，`version.json` 不变，`decision="reject"` | 否 |
+| `E_EVOLVE_GIT_FAILED` | git commit/branch 失败 | 丢弃未提交 accept，`version.json` 不变，`decision="error_reject"`（**不是 `reject`**） | 否 |
+| `E_EVOLVE_UNGATED_START`（v0.14 新增） | 起跑时 harness 的 `play_hash` 既不是原始 v0，也不是任一已接受快照 | **起跑前**拒绝（退出码 2），0 局；用 `loop baseline` 先测、按协议裁决，或 `--allow-ungated-start` 显式放行（留痕） | 否 |
 
 **降级总则**：任何不确定 → 拒绝候选（保留 parent），绝不"先进再修"。
 
@@ -552,7 +585,7 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 5. 判定表表驱动 12 例：C1 降 0.01 → 通过（`tol=0.05`）；降 0.06 → reject(`E_EVOLVE_NO_GAIN`)；**C2 判 play 面**（指纹相同/缺失 → reject；统计不显著但指纹变了 → 通过）；C3 `gap=0.19>0.15` → reject(`overfit_suspect`)；C4 `collapse_flag=True` → reject；C5 `illegal_rate=0.11` → reject；六项全真 → accept；并覆盖短路顺序。
 6. 给定已存在 `(run_id, gen)`，当重复 `accept`，则返回首次结果且 `harness/versions/` 无新增目录（幂等）；给定 current=5，当 `rollback(2)`，则 `harness/` 的 sha256 等于 `versions/v2/`，`version.json.parent==5`，产生 `revert.patch`；给定 `evolve.hitl=false`，当 accept，则不写 `gate.json` 且 `decided_by="auto"`；给定 `hitl=true` 且 gate 未响应至超时，则 `decision="rollback"`、`reason="hitl_timeout"`。
 
-**集成（`tests/integration/evolve/`）**：① 给定 stub LLM + 缩配（`smoke_seeds=train:1000-1001`、`evolve.heldout_basket=H3`；旧写法 `heldout_seeds=heldout:2000-2005` 的键与协议都已失效），当跑 `run_generation`，则产出 `report.json` 且通过 §6.3 Schema（G5 round-trip）；② 给定 3 代 run（`--hitl`）且每代 `evolve approve`，则 `harness/version.json.version == 3` 且 `harness/v1..v3` 三个 commit 存在（G6）；③ 给定 MOD-08 抛 `E_EVAL_TIMEOUT`，当 `evaluate_candidate`，则候选 reject 且当前 harness 不变（NFR-07-7）；④ 给定 run 全目录，当 `audit leak --run-id <run_id>`，则在 MOD-07 产出物上 0 告警（G4）。
+**集成（`tests/integration/evolve/`）**：① 给定 stub LLM + 缩配（`smoke_seeds=train:1000-1001`、`evolve.heldout_basket=H3`；旧写法 `heldout_seeds=heldout:2000-2005` 的键与协议都已失效），当跑 `run_one_generation`，则产出 `report.json` 且通过 §6.3 Schema（G5 round-trip）；② 给定 3 代 run（`--hitl`）且每代 `evolve approve`，则 `harness/version.json.version == 3` 且 `harness/v1..v3` 三个 commit 存在（G6）；③ 给定 MOD-08 抛 `E_EVAL_TIMEOUT`，当 `evaluate_candidate`，则候选 reject 且当前 harness 不变（NFR-07-7）；④ 给定 run 全目录，当 `audit leak --run-id <run_id>`，则在 MOD-07 产出物上 0 告警（G4）。
 
 **安全用例（恶意候选被拒，`tests/unit/evolve/test_malicious_candidates.py`；全部期望 0 局 heldout 消耗）**
 
@@ -595,7 +628,8 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | `evolve.propose` | `run_id, gen, n_candidates, n_deduped, kinds[], prompt_tokens, latency_ms, error_code` |
 | `evolve.validate` / `evolve.scan` | `candidate_id, status, violations[], diff_lines, touched_files[]` / `ast_digest, third_party_imports[], disallowed_calls[]` |
 | `evolve.smoke` / `evolve.evaluate` | `candidate_id, n, win_rate, illegal_rate, elapsed_s, fast_reject_reason` / `win_rate_ci95, mean_stages_cleared, mean_hearts_left, delta_vs_parent, p_value, episodes_spent` |
-| `evolve.decision` / `evolve.version` / `evolve.gate` / `evolve.cost` | `gen, candidate_id, decision, decided_by, condition_trace[], reason, error_code` / `from_version, to_version, git_commit, branch` / `status(pending\|approved\|rolled_back\|timeout), waited_s, decided_by` / `episodes_spent, episodes_cap, candidates_evaluated` |
+| `evolve.decision` / `evolve.version` / `evolve.gate` / `evolve.cost` | `gen, candidate_id, decision, decided_by, condition_trace[], reason, error_code` / `from_version, to_version, git_commit, action` / `status(pending\|approved\|rejected\|timeout), waited_s, decided_by` / `episodes_spent, episodes_cap, candidates_evaluated` |
+| `evolve.start_guard` | `status(allow_ungated), play_hash`（起点守卫放行；见 §6.8） |
 
 看板：候选接受率（按 kind）、冒烟淘汰率、heldout 预算消耗/代、`win_rate_gap` 与 `entropy_slope` 时间序列、HITL 平均等待时长、`E_EVOLVE_SCAN_FAILED` 占比。**红线**：`E_EVAL_INV5_LEAK` 任意一次；`collapse_flag` 连续 2 代为真。
 
@@ -635,6 +669,8 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | 版本 | 时间 | 变更 |
 |---|---|---|
 | v0.13 | 2026-10-15 | **F63 收口：跨代继承按「测量身份」还原 + F66 第二半（Spec v2.33 / B-92；用户指令「修复F52/63」）**。① **现场**：候选臂归档只带 `harness_version`，而它记的是 accept **之前**在役的号 ⇒ `runs/m3-formal` 里 gen-001 的 `parent` 与打过补丁的 `cand-98119a8a4a90` provenance **除 `arm`/`created_at` 外逐字段相同**。② **实测后果（本轮查出）**：`_inherited_parent_heldout` 的资格 ① 走 `report.json` 的 `harness_play_hash` ✓，但资格 ③ 落到 `restore_arm_from_archive`，它额外要求 `archive["harness_version"] == 本代起点的版本号`（accept **之后**的号）⇒ 被接受那代的归档**永远还原不了**（零成本复现：`restore(harness_version=1)` ⇒ `None`）⇒ 每代**静默**重测 40 局 heldout ≈¥21 ≈1.7 h，B-81/D-M3-7 承诺的 114→74 局/代在唯一它想优化的 accept 场景失效（且无事件）。今天零暴露：**没有任何归档出现过 accept**。③ **修法**：`evolve/judge.py` 把编排层已算好的 `candidate_play_hash` / `parent_play_hash` 透传给 `evaluate_arm(play_hash=)`（parent 臂与候选臂各拿各的，不串）；`evals.harness` 写进 provenance 并加入 `ARM_PROVENANCE_KEYS`（旧归档缺键 ⇒ 重算，fail-closed）；`restore_arm_from_archive(play_hash=)` 优先比 play 面、无指纹才回落版本号；继承被拒补 `evolve.parent_inherit status="declined"`。`loop/generation.py` 的 gen-000 基线也把 play 面指纹交给 `evaluate_arm`（基线的测量身份同样要进归档）。④ **F66 第二半**：新增 `_assert_play_face_actually_changed`（窄口径：只看 `touched_files` 是否声明了 play 面文件；空清单或只改学习侧都不触发）⇒ `E_EVOLVE_PATCH_INVALID` 且 0 局消耗。**路径归一**：真实候选写的是 `harness/prompts/decision.md`（diff 头 `a/harness/…`），只认裸路径会让断言**永不触发**（F73 家族）⇒ `_play_plane_name()` 显式剥 `./`、`a/`/`b/`、`harness/` 前缀，并用三份真实归档候选兜底。⑤ **护栏 19 条**（`tests/unit/evolve/test_b92_play_identity.py`：14 条窄口径参数化 + 真实归档兜底 + 断言本身 + 花钱前拦截 + 两处指纹传递），`git stash push -- dice_ratchet/` 实测修复前**模块级 `ImportError`（19/19 红）**。⑥ **诚实边界**：新键入对拍 ⇒ 修复前落盘的归档不再复用（刻意 fail-closed）；`seeds_hash` 仍恒空 ⇒ 另登记 **F80**。**成本：¥0**。 |
+| v0.15 | 2026-10-17 | **与代码对齐（纯文档，¥0）**。① `evolve.n_candidates` 默认 **1**（D-1：2→1），旧文写 2。② `E_EVOLVE_GIT_FAILED` 的 decision 是 **`error_reject`**（旧表写 `reject`）。③ `E_EVOLVE_LOAD_FAILED` 发生在 accept/评估之前：该候选 reject、**0 局**，没有「已 accept 则回滚」路径。④ 产物名：`metrics/arms/gen{NNN}-{split}-{basket}-{arm}.json`（旧文 `metrics/heldout-gen{N}-{id}.json` 不存在）；`decision.jsonl` 只有 `paths.py` 的属性、没有读写点。⑤ 签名：`rollback(..., *, cfg: EvolveConfig, ...)`（`cfg` 必填）；`resolve_gate(...) -> GateState`（Verdict 由 `verdict_from_gate` 转）；`evaluate_arm` 另有 `play_hash`/`model_backend`。⑥ 回滚写 `version=new_version`、`parent=current_version`（编号不回退）。⑦ `run_generation(run_id, gen, cfg)` 不存在；真实入口是 `run_one_generation(*, state, run_ctx, runner)`。⑧ 提案检查点路径是 `generations/gen-{NNN}/proposals/proposal.json`（带连字符）。⑨ provenance 实际 17 键（补 `resolved_seeds_hash`/`harness_play_hash`/`model_hash`/`model_backend`）。⑩ 事件枚举：`evolve.gate.status` 无 `rolled_back`（是 `rejected`），`evolve.version` 无 `branch`（是 `action`）；`evolve.start_guard` 已登记。⑪ `evolve approve|rollback` 必填 `--run-id`。⑫ `EvolveConfig` 无 `seed` 字段、无 `--freeze-time` CLI；G3 的时间冻结目前没有 CLI 面。 |
+| v0.14 | 2026-10-17 | **起点守卫（对齐 Spec v2.35 / B-95；代码 + 测试 + 文档，¥0）**。① **问题**：`write_gen000_baseline` 把起跑时的 harness 直接当基线（只测不裁决），而门禁只在 `evaluate_candidate(candidate, parent)` 里跑 ⇒ 人工预装成 version 0 的 P1 从未作为候选过门禁，却成了 P2 的父代；P2 的 accept 建立在 held-out 0.05（裸 v0 0.175）之上。② **守卫**：`evolve/versioning.py::assert_start_play_plane_accepted()` —— `play_hash` 必须等于 `versions/v*/` 任一已接受快照，或 `BASELINE.json` 登记的原始 v0；否则 `E_EVOLVE_UNGATED_START`（退出码 2），在 gen-000 基线之前拦下（不花钱）。③ **放行**：`--allow-ungated-start` 发 `evolve.start_guard` 事件，来源记 `allow_ungated`。④ **锚点**：新增 `harness/BASELINE.json`（原始 v0 的 `play_hash`）；改原始 v0 时必须同步。⑤ **不做什么**：不追溯否定已接受版本、不替代门禁、不拦 `loop baseline` / `--no-evolve`。⑥ **护栏**：`tests/unit/evolve/test_start_guard.py` 6 条；`tests/unit/{evolve,loop}` + 两条 integration 共 409 passed。 |
 | v0.12 | 2026-10-14 | **C2 改判「play 面确实变了」+ 冒烟门删除胜率轴（F62/F67，对齐 Spec v2.26 B-83；用户裁决「F62 直接取消 C2」）**。① **为什么改**：M3 正式实验实测三代**全部**止步 C2（`C2:no_significant_gain`，p=1.000/0.549/0.754），而 n=40 上 C2 的**等效门槛**是「净 +15 pp / 0.45 关」，实际效应只有 +2.5–7.5 pp / +0.05–0.325 关 ⇒ **是门没有功效，不是候选不够好**。② **为什么不能只删**：零改动的候选若被 accept，会因为 `play_hash` 未变而在判据 1 里落回 `not_applicable` ⇒「≥1 次 accept」**第二次**变成退化通过。③ **判据**：`c2_ok = bool(play_hash) and bool(parent_play_hash) and play_hash != parent_play_hash`（候选 staging vs 起点在役 harness；任一为空即 fail-closed 拒绝）。④ **统计量降级为报告项**：`evals.harness.compare_all_metrics`（早已存在、此前**零生产调用点**）每次候选评估全跑一遍（0 局新成本）⇒ `paired["by_metric"]`；C2 的 `condition_trace` 同时带两个指纹与显著/方向/delta/p。⑤ **排序改轴**：`better()` 由「C2 的 `win_rate` delta」改为**连续轴优先**（`mean_stages_cleared` → `win_rate` → `candidate_id`）。⑥ **冒烟门**：删掉 `_SMOKE_WIN_RATE_MARGIN=0.2`（n=2 分辨率 0.5 ⇒ 结构上不可达 + 2–3% 等价候选误杀），保留 error/illegal/fallback 三条安全硬门；冒烟定位写明为 **triage 不是证据**。⑦ **归档 run 零成本反事实复核**：三代 staging 的 play 指纹**都变了**，按归档臂复算 C1/C5 ⇒ gen-001/002 可 accept、**gen-003 被 C5 拒**（truncation 0.175 > 0.150）⇒ 新门可达且 C5 有真诊断力（此前因短路从未求值）。⑧ **护栏**：判定器 9 条 + 生成链 3 条（含「统计不显著但 play 面变了 ⇒ accept」这条语义核心），`git stash` 后全部失败。⑨ **⚠️ 诚实边界**：`accept` 的语义改为「**打法确实变了且没有可判定的退化**」，**不是**「显著变强」；只改学习侧（`reflection.md`/`dead_ends.md`）的提案会被 C2 合法拒绝（D-M3-7 下演化的单位是 play 面）；`evolve.alpha` 只剩「报告项的显著性水平」这一职责。⑩ **成本**：¥0 |
 | v0.11 | 2026-10-14 | **D-M3-7：起点的跨代继承改按 `play_hash`，并把代际测量改成「每代只测候选」；`heldout` 段的口径由「恒取 parent」改为「本代结束时在役那份 harness 的测量」（Spec v2.24 B-81；取代 F57 的资格判据与落盘口径）**。① **为什么换判据**：D2=A 让**拒绝也推进版本号**（`v_{N+1} = v_N + dead_ends`）⇒「版本相同 ⇔ 起点相同」不再成立；判据 1 的同起点豁免、继承资格、F66 的第二半（补丁是否真的改变打法）三处统一问 `play_hash`。② **为什么换落盘口径**：全拒的 run 里每一代都继承起点那份，若 `heldout` 恒取 parent 则台账永远只有一个数据点、`comparable_pairs` 恒 0 ⇒ 判据 1 **结构上不可满足**；接受一代必须留下新数字。③ **成本**：每 cycle 114 → 74 局（省 ≈40 局 / ≈¥21 / ≈1.7 h）。④ **D1=A/D2=A**：死路记录进提案 prompt（`HarnessSnapshot.context`，schema `1.2.0`；只读 + 禁止候选改动 + 渲染脱敏 + system prompt 第 11 条硬约束）；拒绝轻量推进版本号（无快照、无 tag、账本不带 `versions` 键、git 失败回滚指针）。⑤ **同批修 F64**（训练局标签 = 它服务的那一代；train 段取本代训练块并按 `arm="train"` 真过滤；不足即 `source="insufficient"`）与 **F69**（绘图 `yerr` 夹到 ≥0，辅助产物不得毁主产物）。⑥ **诚实边界**：被接受候选的测量成为下一代基线 ⇒ 含选择偏差（winner's curse），登记 **F70** 待裁决。**成本：¥0**。 |
 | v0.10 | 2026-10-12 | **新增 §8.1 的 F57 规则：parent 测量跨代继承（Spec v2.20 B-78）**。① `accept()` 之后 parent 就是上一代被接受的候选，而它已被完整测过 ⇒ `_inherited_parent_arms` **继承**那批局，heldout **0 次 `evaluate_arm`**（省 ≈20 局 / ≈¥17 每代）。② 资格四条 fail-closed（accept / 版本相同 / 能推出候选臂 / 归档可还原且 seed 覆盖本代篮子）；任一不满足即重测。③ **冒烟仍按本代 seed 重测**（同预算要求同批 seed）。④ 继承的代**不新增 heldout 台账行**，只在 `report.json` 记 `heldout.source="inherited:gen-00X"`。⑤ 动机不只是钱：API 臂同 harness 两次测量差 5pp（本 run 噪声底）⇒ 重测引入不可复现抖动。⑥ 隐性陷阱（实测踩到）：资格判断**不能**写 `or -1`——`harness_version == 0` 是合法且 falsy 的值，会静默跳过 v0 上的可继承来源。 |
@@ -648,3 +684,101 @@ loop run --resume --> CLI(MOD-09) 读 gate.json --> approve/rollback --> gate: a
 | v0.3 | 2026-09-30 17:49 | P-17/P-26/P-27 裁决回填为 Spec B-29/B-32/B-33；开放问题 2、4 部分结案 |
 | v0.2 | 2026-09-30 17:21 | 按 Spec v1.3 与 MOD PRD 评审修订：MOD-08/MOD-02 调用改为 Spec §4.7 签名（P1-3/16）；显著性方法归 MOD-08（P1-4）；report 改为引用唯一 schema，本模块只填写决策段（P1-5/6）；删除 `train_eval_seeds`（与训练块重叠，P1-7）；成本算术改正、候选数默认 2（P1-8、Spec §8.6）；parent 与候选共用冻结记忆快照；冒烟 seed 改为本代训练块末尾；补充 `better()` 定义；C5 改为 illegal/fallback/truncation；git 改为只打 tag `harness-v{N}`（P1-15）；M3 追加「≥1 次 accept」防止退化通过 |
 | v0.1 | 2026-09-30 | 首版 |
+
+## 18. 附录：MVP 打通期结论（mvp1–mvp4，2026-10-18/19）
+
+### 18.1 为什么有这一段
+
+M3 正式轮 `m3r4` 的 cycle 1 以 `E_EVOLVE_NO_CANDIDATE` 结束（提案把 `config.json` 写成嵌套对象）。
+随后用 **H3**（`reserve` 篮子，20 局、可重复用）跑了 4 轮 MVP。它们的**目的不是效果证据**，
+而是用最小成本把「提案 → 静态校验 → 冒烟 → heldout → 判定表 → 版本化 → 落盘」整条链跑通，
+并把**只在真实参数组合下才暴露**的缺陷挤出来——实际挤出了 9 个（F-M3-4 … F-M3-12）。
+
+### 18.2 四轮 MVP 的实际结果
+
+| run | 参数 | 裁决 | 花费 / 时长 |
+|---|---|---|---|
+| `mvp1` | H3 20 局、k=10、2 代 | gen-1 `reject C1`；gen-2 **`accept`**（`temperature: 0.4`，事后证明空转） | ¥49.66 / 3 h 33 |
+| `mvp2` | H3 20 局、k=10、1 代 | `reject C1`（`memory_top_k: 8`；heldout 无记忆 ⇒ 纯噪声） | ¥28.24 / 2 h 11 |
+| `mvp3` | 同上（白名单换成 eval 侧键） | `reject C2`（`max_plan_len: 16`；生效指纹口径缺失导致误判） | ¥28.40 / 2 h 09 |
+| `mvp4` | 同上（白名单只留 binding 键） | **`accept`**（`retry_max: 3`），**首次跑完 C0–C5** | ¥28.19 / 2 h 25 |
+
+`mvp4` 的完整判定链（可作为「链路打通」的验收样本）：
+
+```
+C0 heldout.n=20 ≥ 15                                  ✓
+C1 win_rate 0.4000 vs parent 0.3000 (tol=0.05)         ✓
+C2 play 面已变 1ebe12e1→5f237543；生效指纹 d4d2ec13≠c3d3dc65 ✓
+C3 win_rate_gap -0.4000 ≤ 0.15                         ✓
+C4 collapse_flag=False, entropy_slope -0.00012 ≥ -0.01 ✓
+C5 illegal 0.0217 ≤ 0.0692；fallback/truncation 全 0    ✓
+```
+
+### 18.3 缺陷清单（F-M3-4 … F-M3-12）
+
+| 编号 | 现象（现场） | 根因 | 修法 / 回归 |
+|---|---|---|---|
+| **F-M3-4** | m3r4 cycle 1 `no_candidate` | 提案写嵌套 `{"retrieval":{"top_k":3}}`；旧校验器把容器键判非法，理由不可操作 | 花钱前以 `config_patch_nested_object` 拒绝并给实际键样例；校验失败带原因重试（`propose_max_retries`）；`test_evolve_proposer_validation.py` |
+| **F-M3-5** | 白名单里的 `prompt.show_intent` 没有 `PolicyConfig` 字段 | Spec §5 的概念占位键残留 | 从白名单删除 + 显式判 `config_key_unsupported`；`test_evolve_evolvable_keys.py` |
+| **F-M3-6** | accept 之后工作区必脏；`version.json` 的 `git_commit` 指向**上一个**提交 | ① 回滚备份建在 `harness/.backup-v{N}/` 内，被 `git add harness` 提交；② `git_commit` 是提交后才回填的，只写文件不再提交 | 备份移出仓库（`tempfile.mkdtemp`）+ `harness/.backup-*` 从暂存排除；版本化拆「快照提交 + sha 回填提交」，tag 打在回填提交；`test_evolve_accept_git_clean.py`（真 git 端到端）、`test_git_ops.py` |
+| **F-M3-7** | `gen-001.train.n=0`、`win_rate=0.0` | 训练局标签按 `state.generation+1`，报告按 `take("train", g)`（`per_generation=30`）；`k=10` 时两者错位 | `_assert_train_blocks_match_protocol()` 在跑任何一局前逐代比对，偏离即 `E_IO_CONFIG_INVALID`；`test_loop_cli.py` 4 例 |
+| **F-M3-8** | 候选 `temperature: 0.4` 被 accept，行为完全没变 | ① 候选臂的 `harness/config.json` **从未被读**（只有进程启动读 run 级那份）；② `temperature` 在 eval 恒 0.0、play 被 clamp 到 0.7 | `loop.cli._policy_factory` 逐臂 `harness_policy_overrides` → `apply_policy_overrides`；`test_evolve_evolvable_effectiveness.py` |
+| **F-M3-9** | 白名单只声明「可写」，不声明「写了会不会生效」 | `evolvable_keys` 只是一串字符串 | 新增 `EVOLVABLE_KEY_SPECS`（概念名 → 实际键 / 类型 / 取值域 / 生效 mode）；`effective_evolvable_keys()` 做三重过滤；越界 `config_value_out_of_range`、模式不生效 `config_key_inert_in_mode` |
+| **F-M3-10** | 判定口上所有采样键都不改指标 | eval 恒 0.0/1.0；`memory_top_k` 在 heldout 无记忆（train 5,146 行有 1,607 行带 memory，heldout 6,134 行 0 行） | 白名单换成决策路径键：`prompt.token_budget` / `policy.retry_max`（`plan.max_plan_len` 因不 binding 被移出，见 §18.4）；`sampling.*` 降级为训练侧 |
+| **F-M3-11** | mvp3 的候选改 `max_plan_len` 却被判 `no_effective_change` | 生效指纹 `effective_policy_values()` 只覆盖采样值 | 指纹纳入 `max_plan_len` / `prompt_token_budget` / `retry_max`；回归测试复现该形态 |
+| **F-M3-12** | `next_version()` 从 5 跳到 6 | 切分支后 `git` 留下空目录 `harness/versions/v5/tools/`，版本号按目录名计数 | 只认带 `version.json` 的目录是版本；`test_evolve_versioning.py::test_empty_version_dir_does_not_bump_next_version` |
+
+### 18.4 不变量：可演化键**必须在判定口 binding**
+
+`config_patch` 的候选只有在「改了配置 → 决策真的不同」时才是有效演化。判据有三层，
+缺一层就会出现「字节变了、行为没变」的假候选（`mvp1` 的 gen-2 就是这样被 accept 的）：
+
+1. **加载层**：键必须是 `harness/config.json` 加载器接受的实际字段（`agent.policy.*` 等）；
+2. **生效层**：候选臂的 `config.json` 必须真的进入 `PolicyAgent`（逐臂 override，F-M3-8）；
+3. **binding 层**：这个值在**当前 `inference.mode`** 下必须改变行为。实测数据（mvp3/mvp4）：
+
+| 键 | 实测 | binding |
+|---|---|---|
+| `agent.policy.max_plan_len = 12` | plan 长度 max **9** | ❌ 从不触发（12→16 无任何行为变化） |
+| `agent.policy.prompt_token_budget = 3072` | 决策 prompt p50 **2819** / p90 **3107**，**13.9% 超过 3072** | ✅ |
+| `agent.policy.retry_max = 2` | attempts 分布 1:6092 / 2:348 / 3:23（≈6% 决策会重试） | ✅（2→3 后第三/四次尝试 2→21） |
+
+**新增可演化键时的检查单**：① 它在 eval 下改什么？（`policy.py` 的哪个分支）②
+`harness_policy_overrides` 能否把它套进 `PolicyConfig`？③ 有没有实测数据证明它会 binding？
+④ 进 `EVOLVABLE_KEY_SPECS`（含取值域与生效 mode）并补一条「合法值放行 + 越界拒绝」的单测。
+
+### 18.5 判定的统计功效：n=20 下 C1 近乎抛硬币
+
+同一批 H3 seed、同一份 v4，四次基线分别是 **0.40 / 0.45 / 0.25 / 0.30**（n=20，API 不支持
+seed）。因此：
+
+* **MVP 结论不作证据**：`accept` 的语义始终是 F62 的「打法确实变了且没有判定出的退化」，
+  不是「显著变强」（`mvp4` 的 C1 是 +0.10、p=0.73）；
+* **正式轮必须 n=40（H1）**：这也是 §18.7 区分两套协议的原因。
+
+### 18.6 版本化不变量（每次 accept 后必须成立）
+
+1. 工作区**干净**（`git status --porcelain` 为空）——否则下一次 `loop run` 被 F47-A（`E_IO_GIT_DIRTY`）拦死；
+2. `harness/versions/v{N}/` 含 `version.json`；`harness/version.json.git_commit` = **快照提交**的 sha；
+3. tag `harness-v{N}` 打在**回填提交**上（`git checkout harness-v{N}` 出来的指针自洽）；
+4. `versions/` 下不存在「只有空目录」的版本；`next_version()` 只能看到带 `version.json` 的目录；
+5. 回滚备份不在仓库内（`harness/.backup-*` 已从暂存排除且被 `.gitignore` 兜住）。
+
+### 18.7 两套协议（别混用）
+
+| | MVP / 彩排 | 正式轮 |
+|---|---|---|
+| held-out 篮子 | `H3`（20 局，`reserve`，可重复） | `H1`（40 局，`generation_judge`） |
+| `loop.k` / `evals.n_heldout` | 10 / 20 | **30 / 40**（`k` 必须等于 `train.per_generation`） |
+| `evolve.min_heldout_n` | 15 | 20 |
+| `evolve.hitl` | false（自动跑） | **true**（挂起等人工裁决） |
+| 结论用途 | 只验链路 | 才可作为 M3 证据 |
+
+> MVP 期间为了控成本把 `evolve.min_heldout_n` 降到 15、把篮子换成 H3——这两条**都不得**带进
+> 正式轮：正式轮的 `min_heldout_n` 与篮子都由 `configs/default.yaml` 决定，不传环境变量覆盖。
+
+### 18.8 变更记录
+
+| 版本 | 日期 | 摘要 |
+|---|---|---|
+| v0.16 | 2026-10-19 | **MVP 打通期结论回填**：新增 §18（四轮 MVP 结果、9 个缺陷 F-M3-4…F-M3-12、可演化键 binding 不变量、判定功效、版本化不变量、两套协议的边界）；同步更新 §9 的 `evolve.evolvable_keys` 默认值与不变量说明。纯文档，¥0。 |
