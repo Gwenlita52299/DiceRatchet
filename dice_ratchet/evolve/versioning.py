@@ -326,7 +326,10 @@ def _existing_versions(root: Path) -> list[int]:
     if versions_dir.is_dir():
         for path in sorted(versions_dir.glob("v*")):
             suffix = path.name[1:]
-            if path.is_dir() and suffix.isdigit():
+            # F-M3-12（2026-10-19）：只认**带 version.json 的**目录是版本。切分支/清理会留下
+            # 空目录（`git` 不跟踪空目录，`harness/versions/v5/tools/` 实测残留），
+            # 按目录名计数会让 `next_version()` 跳过真实号（next=6 而非 5）。
+            if path.is_dir() and suffix.isdigit() and (path / VERSION_FILE).is_file():
                 out.append(int(suffix))
     return sorted(out)
 

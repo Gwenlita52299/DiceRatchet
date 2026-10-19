@@ -595,3 +595,15 @@ def test_play_hash_tracks_play_plane_and_deletions(tmp_path):
     assert V.play_hash(harness) != base
     (harness / "tools" / "score.py").unlink()
     assert V.play_hash(harness) != base
+
+
+def test_empty_version_dir_does_not_bump_next_version(tmp_path):
+    """F-M3-12：切分支/清理会留下空版本目录（git 不跟踪空目录），不能因此跳号。
+
+    现场：mvp4 的 accept 建了 ``versions/v5/``，切回 main 后只剩空目录
+    ``harness/versions/v5/tools/`` ⇒ ``next_version()`` 从 5 变成 6。
+    """
+    harness = write_harness(tmp_path)          # versions/v0 由 write_harness 建
+    (harness / "versions" / "v9" / "tools").mkdir(parents=True)
+    assert V.current_version(harness) == 0
+    assert V.next_version(harness) == 1, "空目录不得占号"
