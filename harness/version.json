@@ -4,7 +4,7 @@
   "base_model": null,
   "created_at": "2026-10-19T13:04:58Z",
   "diff_path": "harness/versions/v5/diff.patch",
-  "git_commit": "",
+  "git_commit": "926565f49e07610dacc2a15e0f51fae953cdf02e",
   "parent": 4,
   "reason": "reflect:train#3/#8 非法尝试达 19/22 次，traj:train#3 因 E_KERNEL_TURN_LIMIT 截断判负；非法动作会让整次决策作废重试，重试预算不足时回合被烧掉。与 dead_ends 的 gen-002/gen-003 不同：那两条改 decision.md 文案（自检清单/心数优先级），本条改 config 的重试预算，机制不同且不动 prompt。",
   "version": 5
