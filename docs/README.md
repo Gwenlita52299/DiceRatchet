@@ -24,7 +24,9 @@
 > **当前版本**：Spec **v2.35**（2026-10-17，**文档与命令面对齐现状（纯文档 + 两处代码登记，¥0）**：① 新增 **`loop baseline`**（只测一个给定 harness 的 held-out，不训练/不演化/不提交 git；幂等键=run 目录）与 **`loop run --allow-ungated-start`**；② 新增错误码 **`E_EVOLVE_UNGATED_START`**（退出码 2）与**起点守卫**：`loop run` 起跑顺序 = git 干净检查 → 起点守卫 → gen-000 基线，起点 `play_hash` 必须 ∈ {`harness/BASELINE.json` 的原始 v0, `harness/versions/v*/` 任一已接受快照}；③ §4.6 更正 `eval report --arm` 缺省口径为 **parent**（F57 起）；④ 登记 **B-95**（协议口径纠正：P1 判负、下一轮测 `v0+P2`）与 **B-96**（全库 PRD 现状断言对齐，含 8 个未登记事件与 `error_reject` schema 枚举两处代码修复）。见 [Spec §11.1m](模块拆分Spec-DiceRatchet.md)）
 >
 > **历史版本索引**（只列关键节点，完整变更见 [Spec §12](模块拆分Spec-DiceRatchet.md)）：v2.34（F80/F81 种子/模型身份进对拍）· v2.33（F52/F63 `tol` 分母 + 测量身份）· v2.27（全库文档一致性修订）· v2.26（取消 C2 统计门）· v2.24（D-M3-7 起点继承按 play 面）· v2.6（F45-2 六位 seed 端口空间 + F42 检查点）· v2.5（F47 起跑前 git 门禁）· v2.0（三角色解耦 + DeepSeek 后端）。
-> 当前在役 harness 为 **version 4**（裸 v0 + prompt 前缀缓存重排；2026-10-18 登记；A/B 7/40 vs 7/40、McNemar p=1.0；唯一缓存 10.8%→40.1%；40 局 `cost_estimate` ≈¥33→¥19.74）。v4 **不含** v3 的 P1/P2 规则（实测候选为裸 v0+cache，`play_hash=1ebe12e1`）；`v0+P2` 的 40 局 held-out 测量仍待单独裁决。见 [2026-10-17 API 缓存命中修复](reviews/2026-10-17-API缓存命中修复.md) §3.2。
+> 当前在役 play 面为 **v4**（裸 v0 + prompt 前缀缓存重排；2026-10-18 登记；A/B 7/40 vs 7/40、McNemar p=1.0；唯一缓存 10.8%→40.1%；40 局 `cost_estimate` ≈¥33→¥19.74）。v4 **不含** v3 的 P1/P2 规则（实测候选为裸 v0+cache，`play_hash=1ebe12e1`）。
+>
+> `harness/version.json` 里现在写的是 **version 5**，但那是 m3r5 gen-001 被拒后的**死路推进**（D-M3-7：拒绝也推进版本号，无快照、无 tag），`play_hash` 仍是 `1ebe12e1`，harness 内容没有变。`v0+P2` 的 40 局 held-out 测量、以及 m3r5 gen-002 的 pending accept（0.250 vs 0.175，McNemar p=0.55，门已过期）都仍待裁决。见 [2026-10-17 API 缓存命中修复](reviews/2026-10-17-API缓存命中修复.md) §3.2 与 [M3R2 主体结果](reviews/2026-10-17-M3R2-正式实验主体结果.md)。
 
 ## 可视化讲解（docs/html）
 
