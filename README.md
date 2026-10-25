@@ -1,16 +1,69 @@
 # DiceRatchet：本地小模型在自建骰子 roguelike 里递归自我改进
 
-> 让一个跑在 Mac 上的 8B 级本地模型，在自己搭建的防作弊沙箱里反复玩一款骰子 roguelike。每一局它都经历"玩 → 验证 → 反思 → 改进自己"（策略记忆、prompt、harness 代码），并用**不可作弊的 held-out 测量**回答一个问题：它真的在变强吗？
+[![ci](https://github.com/Gwenlita52299/DiceRatchet/actions/workflows/ci.yml/badge.svg)](https://github.com/Gwenlita52299/DiceRatchet/actions/workflows/ci.yml)
+
+> 让一个跑在 Mac 上的 8B 级本地模型，在自己搭建的防作弊沙箱里反复玩一款骰子 roguelike。每一局它都经历「玩 → 验证 → 反思 → 改进自己」（策略记忆、prompt、harness 配置），再用**不可作弊的 held-out 测量**回答一个问题：它真的在变强吗？
 >
-> 定位：学习 + 作品集 · 状态：**M0/M1/M2 已完成；M3 正式实验主体已跑完（2026-10-14，run `m3-formal`），判据本身正在收口**（排期见 [项目排期](docs/项目排期-DiceRatchet.md)，最新结论见 [M3 正式实验主体结果](docs/reviews/2026-10-14-M3正式实验主体结果.md)）
+> 定位：学习 + 作品集 · 状态（2026-10-25）：**闭环已打通，测量链已修到「可判」；但「变强」尚未被证明**。
+
+## 先说结论
+
+这个项目最重要的产出不是「模型变强了」，而是一条**能诚实地否证自己**的流水线。
+
+**已经证明的**
+
+- **闭环能真跑完**：提案 → 静态校验 → 冒烟 → held-out 测量 → C0–C5 门禁 → 版本化 → 落盘，全程无人干预（HITL 门除外），跨代可续跑、可回滚。
+- **测量链本身可信**：审计、seed 三方隔离、play 面指纹、臂归档身份、候选补丁是否真的进入决策 prompt —— 每一条都被实测校验过。`m3r5` 的 C2 记录到 `play_hash 1ebe12e1 → 65fabe1a`，证明「候选补丁真的改了打法」，而不是只改了几个字节。
+- **accept 的语义是明确的**：「打法确实变了（`play_hash` 变化）+ 没有触发任何判负门」，**不是**「变强了」。
+- **优化能降本**：prompt cache-first 改造把唯一 prompt 的缓存命中率从 10.8% 提到 40.1%，成本下降，胜率不变（7/40 vs 7/40，McNemar p=1.0）。这正是一个诚实的负结果：省了钱，没变强。
+
+**还没有证明的**
+
+- **没有任何一次被接受的变化带来统计上可测的提升。** `m3r2` 台账里出现过 1 次 accept（0.05 → 0.275），但事后协议复核认定：它的起点里焊着一个**已被判负**的补丁 P1，对裸 v0 的真实增益只有约 +10 pp，且置信区间大幅重叠。`m3r5` 的第二个 accept 候选（0.100 → 0.250）McNemar **p=0.55**、净 +3 局、平均关数反而从 4.75 降到 4.70。两者都不能当「自我改进」的证据。
+- **`C1`（三角色全 `deepseek-flash`）始终不如一个免费的启发式 bot。** 同一个 H1 篮子（hard × 6 关，40 局）：`heuristic` **0.325**，`C1` 最好一次 **0.275**，`m3r5` 起点只有 0.175。
+- **在 n=40 上判据不可判，而不是「没提升」。** 同一份 harness、同一批 40 个 seed 的 7 次测量：`0.175 / 0.100 / 0.125 / 0.150 / 0.225 / 0.100 / 0.150`，均值 0.146、SD 0.041、**极差 12.5 pp**。要在 n=40 上以 80% 功效分辨 0.30 关的差异，需要约 **180 局/臂**（每代多 ≈¥145）。
+
+所以本仓库的诚实标题是：**一个把 RSI 从论文拉回可测量地面的负结果 + 一套为此修到自洽的测量仪器。**
+
+## 试验结果总表
+
+所有金额都是 `cost_estimate` 的**高峰价上界**（不是账单）；「实扣」单列。`H1` = hard × 6 关 × 40 局（seed 731000–731039），`H3` = 20 局彩排篮子。
+
+| run-id | 日期 | 臂 / 篮子 | 局数 | 成本（峰值） | 代数 | 结果 |
+|---|---|---|---|---|---|---|
+| `m1-real-h1n10b` | 10-05 | 三基线 / 旧四位 n=10 | 30 | ¥0 | — | `random` 0/10、`heuristic` 4/10、`fixed_prompt` 0/10 |
+| `m1-real-h1n40` | 10-05 | 基线 / 旧 H1（seed 2000–2039） | 80 | ¥0 | — | `random` 0.000、`heuristic` 0.45（**旧篮子**，与今天 H1 不是同一批 seed） |
+| `cachefix-b0` | 10-17 | C1 / H1 | 40 | ¥19.74 | A/B | 7/40 vs 7/40，**p=1.0**；缓存命中 10.8% → 40.1% |
+| `m2-s32b-smoke-c1-medium6` | 10-09 | C1 / medium×6 | 77 | — | 1 | 候选 0.6757 vs parent 0.6250、p=0.79 → 合法拒绝（结论待复核，见 F66） |
+| `m3-formal` | 10-13→14 | C1 / H1 | 382 | ¥344.44（实扣 ¥197.67） | 3 | 0 accept；4 次 parent 测量 0.175/0.100/0.150/0.100；抓出 F58–F71 |
+| `m3r2` | 10-16→17 | C1 / H1（起点 v0+P1） | 262 | ¥240.94 | 3（裁决 1） | **1 accept** 0.05→0.275；事后判定起点含已判负的 P1，**不算数** |
+| `m3r3` | 10-17 | C1 / H1 | 0 | ¥0.06 | 0 | 中止（9 次调用）⇒ **P2 的独立有效性至今无数据** |
+| `m3r4` | 10-18 | C1 / H1（复用 gen-000） | 30 | ¥22.10 | 1 | 提案写了嵌套 config key ⇒ reject / `no_candidate` |
+| `m3r5` | 10-19→20 | C1 / H1（起点 v4） | 148 | ¥90.80 | 2 | gen-001 reject 0.100；gen-002 **accept 候选 0.250（p=0.55）**，HITL 门过期、**未落地** |
+| `mvp1` | 10-18 | C1 / H3 | 88 | ¥49.66 | 2 | reject 0.30；accept 0.45（`temperature` 在 eval 下不生效 ⇒ 空转） |
+| `mvp2` | 10-18 | C1 / H3 | 54 | ¥28.24 | 1 | reject（`memory_top_k`，held-out 无记忆 ⇒ 纯噪声） |
+| `mvp3` | 10-18→19 | C1 / H3 | 54 | ¥28.40 | 1 | reject C2（`max_plan_len` 不在生效指纹里） |
+| `mvp4` | 10-19 | C1 / H3 | 54 | ¥28.19 | 1 | **accept**（`retry_max:3`，+0.10、n=20、p=0.73）；首次跑完 C0–C5 |
+
+**成本与时长（实测，2026-10 口径）**
+
+| 口径 | 实测值 |
+|---|---|
+| 每代（74 局：30 train + 4 冒烟 + 40 held-out） | **¥67.70 / ¥70.97 / ¥69.03**（m3r2 三代）；≈**¥0.92/局** |
+| 每局（按臂） | `m3r2` ¥0.92 · `m3r4` ¥0.74 · `m3r5` ¥0.61 · MVP ¥0.52–0.56 · `cachefix-b0` ¥0.49 |
+| 每代墙钟 | ≈4.1 h（m3r2）· ≈3.1 h（m3r5）· ≈1.5–1.8 h（MVP，44 局/代） |
+| 本地 8B（MLX） | ≈19.6 min/局（只用于 M1 真实模型跑批，未进入正式 M3 臂） |
+
+> 早期 README 里的「74 局 ≈¥38/代」「≈¥0.52/局」已作废：前者是旧单价外推，后者只是 `m3-formal` 的**账户实扣**单价，不能当现行成本。
 
 ## 为什么做这个
 
 RSI（Recursive Self-Improvement，递归自我改进）的公开讨论大多停留在论文或思想实验里。本项目想在消费级硬件上**真实跑通一个最小闭环**，并把文献中反复出现的几种失败模式当作一等公民来测量：
 
-- **自我确认环路**：模型"觉得"自己变强了。对策是所有结论只看 held-out 与 test seed，并且 seed 三方隔离（INV-5）。
+- **自我确认环路**：模型「觉得」自己变强了。对策是所有结论只看 held-out 与 test seed，并且 seed 三方隔离（INV-5）。
 - **奖励投机 / 环境作弊**：对策是只给白名单观测，harness 代码在受限子进程里执行，蜜罐和泄漏审计全程开启（INV-1～4）。
-- **模式坍缩**：对策是监控动作熵曲线与 JSD，做消融，并区分"反思 + 记忆"和"自编辑 harness"各自贡献了多少增益。
+- **模式坍缩**：对策是监控动作熵曲线与 JSD，做消融，并区分「反思 + 记忆」和「自编辑 harness」各自贡献了多少增益。
+- **测量噪声**：这一条是项目后期才真正付学费学到的 —— 40 局、40 个 seed 的篮子在 0.15–0.22 的胜率区间里，单次测量的抖动就有 12.5 pp。任何「这一代提升了」的结论都必须先过功效这一关。
 
 背景调研见 [RSI调研纪要](RSI调研纪要.md) 与 [文献综述 2024–2026](文献综述-RSI-2024-2026.md)。
 
@@ -19,13 +72,14 @@ RSI（Recursive Self-Improvement，递归自我改进）的公开讨论大多停
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 调研与计划 | 调研纪要、文献综述、项目计划、指导建议 | ✅ |
-| G0 游戏本体 | 网页版骰子 roguelike「破咒骰」：纯函数规则内核 + Node 后端 + 原生前端（`src/game`） | ✅ 49 项测试通过，5 组 golden |
-| 规格层 | 模块拆分 Spec + GAME-00～02 + MOD-01～09 技术 PRD；已完成一轮评审，决策登记表持续回填（Spec 现 **v2.26 / B-83**） | ✅ |
-| M0 环境 | MOD-09 骨架、MOD-01 Python 移植、MOD-02 沙箱 | ✅ 2026-10-03 验收通过（[报告](docs/reviews/2026-10-03-M0验收报告.md)）：5 组 golden 逐行对拍、200 局差分 0 分歧、heuristic 差 0.0pp、G1–G6 全过 |
-| M1 基线 | MOD-03 本地推理：后端契约 + 三级 JSON 修复 + 内存预算/并发限流 + 聚合指标 | ✅ 代码落地（`tests/unit/inference` / `tests/integration/test_inference_*` / `tests/golden/inference`）；真实 8B 200 条跑批待权重落盘（`inference robustness`） |
-| M1 基线 | 决策策略（MOD-04）+ 三基线 | ✅ 完成（2026-10-05 验收复核）：三基线入档（`runs/m1-real-h1n10b/`，**旧四位协议** n=10：`random` 0/10、`heuristic` 4/10、`fixed_prompt` 0/10）。**新六位 H1（40 局）上**后续免费补测了两格：`random` 0.000 / `heuristic` 0.325 通关率（`heuristic` 全面优于 `C1`）；**`fixed_prompt` 的 H1 40 局仍未跑**（≈¥35） |
-| M2 闭环 | 反思记忆（MOD-05）+ 闭环编排（MOD-06）+ harness 自进化（MOD-07） | ✅ 代码落地：`tests/unit/{memory,loop,evolve}` + `tests/integration/{test_loop_*,evolve}`；主力臂已定（`C1` = 三角色全 `deepseek-flash`，Spec v2.5 B-43/B-45/B-46/B-51/B-52/B-56..B-58）、C5 的门已按该臂改造（`truncation` 改相对门）；**端到端跑代已跑通**：§3.2 实验（run `m2-s32b-smoke-c1-medium6`）产出真实一代（候选臂 `n=37 / win_rate 0.6757` vs parent 臂 `n=40 / 0.6250`、McNemar `p=0.7905` ⇒ 合法拒绝，实证 D-3），并已处置 F32–F47；见检查单 §12/§13 |
-| M3 测量 | held-out 裁判、消融、多样性、test 终检 | 🔴 **正式实验主体已跑完**（run `m3-formal`，2026-10-14：gen-000 基线 + 3 代，382 局 / 19 h 50 min / 实扣 ¥197.67）：**3 次提案全部在 C2 被合法拒绝 ⇒ 0 accept ⇒ 判据 1 `ok=false`（唯一原因是退化通过闸）**；**同一份 harness 的 7 次测量 `win_rate` 极差 12.5 pp**（判据轴在 n=40 上不可判；F66 定案后由 4 次升为 7 次），免费基线 `heuristic` 0.325 **全面优于 `C1`**；抓出 **F58–F66**（**均已修**，见下文各批；审计跨局误报 / 浮点小数误判 / 重算伪造版本列覆盖台账 / train 侧臂解析 / C2 指标口径 / 候选补丁身份缺失 / 训练局 generation 差 1 / parent 每代重测 / **F66：候选补丁从未进入决策 prompt —— 候选臂与 parent 的 prompt_hash 逐字节相同，判据 2 在本 run 无数据，M2 冒烟与 M3 彩排的候选结论一并待复核**）。消融 H2 与 test 未跑（建议留到修完判据且出现真 accept 之后）。见 [M3 正式实验主体结果](docs/reviews/2026-10-14-M3正式实验主体结果.md)。**2026-10-14 架构改造（D-M3-7，Spec v2.24 / B-81）**：按用户口述口径重写「起点继承」——① 继承资格改为 **`play_hash` 相同**（拒绝也推进版本号 ⇒ 版本号不再是起点的可靠代理）；② **每代只测候选**（每 cycle **114 → 74 局**，省 ≈40 局 / ≈¥21 / ≈1.7 h）；③ `heldout` 段 = **本代结束时在役那份 harness 的测量**（旧口径让「接受了一代」在台账里永远不可见 ⇒ 判据 1 结构上不可满足）；④ 拒绝 ⇒ `v_{N+1} = v_N + 死路记录`（轻量推进：有指针/commit，无快照/无 tag；死路记录只给提案方看且禁止候选改动）；⑤ 同批修掉 **F64**（训练局 generation 差 1 ⇒ train 段只拿到 4 局冒烟）与 **F69**（绘图非 `InfraError` 异常炸整代）；⑥ 新登记 **F67**（冒烟胜率门在 n=2 上无诊断力）/ **F68**（环境性门禁噪声）/ **F70**（winner's curse，需裁决）。（D-M3-7 批：**23 条护栏**验证过修复前失败；全量门禁 2088 passed）。见 [7 步对照](docs/reviews/2026-10-14-M3-DM37架构改造与7步对照.md)。**2026-10-14 同日再修 F58/F59/F60（Spec v2.25 / B-82）**：① `audit leak` 的 `future_room_leak` 改**逐局作用域**（派生面 = 扫描面）⇒ 同一批工件复跑 **`critical/5,852 findings` → `clean/0`**；② 数字扫描的浮点**小数部分**不再被当 seed（`0.731042` 不再命中 H2；整数形态仍然命中）；③ `eval report`/台账的**版本列以 `report.json` 为唯一权威**、分歧非静默，并修好被污染的 gen-003 行（`3/2 → 0/0`，判据 1 的假「单调性不成立」被撤销）。二者合计：`audit clean` 这条判据**第一次真的可达**。**2026-10-14 第三批：判据本身修好（Spec v2.26 / B-83）** —— ① **取消 C2 的统计显著性门**（用户裁决「F62 直接取消 C2」）：槽位改判「**候选 `play_hash` ≠ 起点 `play_hash`**」（防空转、fail-closed），统计量降级为 `paired["by_metric"]` **报告项**（`compare_all_metrics` 第一次接上生产调用点），多候选排序改**连续轴优先**；**为什么不能只删**：零改动的 accept 在判据 1 里是 `not_applicable` ⇒「≥1 次 accept」会第二次变成退化通过。② **归档 run 零成本反事实复核**：三代 staging 的 play 指纹**都变了**，按归档臂复算 C1/C5 ⇒ gen-001/002 可 accept、**gen-003 被 C5 拒**（truncation 0.175 > 0.150）⇒ 新门**可达**且 **C5 有真诊断力**（它此前因短路从未被求值）。③ **F61**：`--split train` 认 train 侧臂（修复前退出码 2）；**F71（新登记，🔴）**：同一条路径原先会**覆盖 `report.json` 的 heldout 段**（baseline/pending 代不受 sidecar 保护）⇒ 非 heldout split 现为**只读**。④ **F67**：删冒烟胜率轴（n=2 分辨率 0.5 > margin 0.2，结构上不可达），保留三条安全硬门。⑤ **F70**：判据 1 产物逐对标注「基线是选择后的测量」（用户裁决「只做 ② 标注」，不重测、不换篮子）。⑥ **F68**：HTTP 就绪改**有截止期的轮询**（原为写死 2 s 的单次探测）、性能预算改 **best-of-3 批最小值**。护栏 **24 条**，`git stash` 实测**修复前 80 项失败**。**成本 ¥0**。 |
+| G0 游戏本体 | 网页版骰子 roguelike「破咒骰」：纯函数规则内核 + Node 后端 + 原生前端（`src/game`） | ✅ `node --test` 全绿 + 5 组 golden |
+| 规格层 | 模块拆分 Spec + GAME-00～02 + MOD-01～09 技术 PRD，决策登记表回填至 **B-96** | ✅ Spec **v2.35** |
+| M0 环境 | MOD-09 骨架、MOD-01 Python 移植、MOD-02 沙箱 | ✅ 2026-10-03 验收：5 组 golden 逐行对拍、200 局差分 0 分歧 |
+| M1 基线 | MOD-03 本地推理 + MOD-04 策略 + 三基线 | ✅ 契约与单测落地；`random` 0.000 / `heuristic` 0.325（H1 40 局）；`fixed_prompt` 的 H1 40 局**仍未跑** |
+| M2 闭环 | MOD-05 记忆 + MOD-06 编排 + MOD-07 harness 自进化 | ✅ 端到端跑通（`m2-s32b-smoke-c1-medium6`）；但该冒烟的候选结论受 F66 影响，**待复核** |
+| M3 测量 | held-out 裁判、消融、多样性、test 终检 | 🟡 **仪器已修到自洽，结论是负结果**：多轮正式/彩排（上表），无一次被接受的变化有可测增益；H2 消融与 test 终检**未跑**（建议留到出现真 accept 之后） |
+
+> 2026-10-14 起，C2 的「统计显著性门」被取消（用户裁决 F62）：门只判「候选 `play_hash` ≠ 起点 `play_hash`」，统计量降级为报告项。原因是一个纯改字节、不改打法的 accept 会让「≥1 次 accept」结构性地变成退化通过。之后发现的 F66（候选补丁从未进入决策 prompt）也已修好，并由 `m3r5` 的 C2 实测确认。
 
 ## 系统结构
 
@@ -39,8 +93,6 @@ RSI（Recursive Self-Improvement，递归自我改进）的公开讨论大多停
 | L1 智能体 | MOD-03 inference · MOD-04 policy · MOD-05 memory | MLX 本地推理 + 约束解码；决策计划、三层校验与 fallback；反思记忆库 |
 | L2 进化 | MOD-06 loop · MOD-07 evolve | 闭环编排、断点续跑与成本闸门；harness 候选生成、held-out 裁判、版本化与回滚 |
 | L3 测量与工程 | MOD-08 evals · MOD-09 infra | 基线、指标、坍缩监控与消融；配置、事件、CLI、守卫、git |
-
-一局游戏的默认设定是 hard 难度 × 6 关：启发式 bot 的通关率 45.5%，中位数 232 env 步 / 96 个决策点（n=200，seed 1–200；复现命令见 Spec §8.6）。每代局数按 `E_gen = K + (H + S) + C·(S + H)` 计算，默认 **114 局**（训练 30 + parent 与 1 个候选的冒烟 2 与 held-out 40；2026-10-06 D-1 定稿）——这是**公式/保守上限**，也是 `loop.max_episodes_per_generation=120` 的比较对象。**2026-10-14（D-M3-7）起实际每 cycle 只有 74 局**：parent 的 held-out 改为按 **`play_hash` 继承**同 play 面的已有测量（0 局），只有找不到可复用测量时才退回实测（那时才是 114）。**每代耗时/花费按臂分列**：本地 8B（MLX）实测单价 **19.6 min/局 ⇒ ≈37 小时/代**（按 114 局的上界口径）；**M2/M3 闭环主力臂 `C1`（三角色全 `deepseek-flash`）实测 2.09–2.52 min/局 ⇒ 按 114 局 ≈4.0–4.8 小时/代、约 ¥84–100/代**（2026-10-09 裁决，Spec v2.0 B-43）——按 D-M3-7 之后的 **74 局**则是 ≈¥38/代（`m3-formal` 实测账户口径 ≈¥0.52/局）。详见 [Spec §8.6](docs/模块拆分Spec-DiceRatchet.md)。
 
 ### 七条不变量
 
@@ -70,119 +122,82 @@ node scripts/golden-gen.js                               # 重新生成 golden �
 
 玩法、架构和内核 API 见 [src/game/README.md](src/game/README.md)。
 
-RSI 训练链路（Python，`dice_ratchet/`）已落地 MOD-01…09（含 MOD-07 evolve 的初版），
-命令面对齐 [Spec §4.6](docs/模块拆分Spec-DiceRatchet.md)：
+RSI 训练链路（Python，`dice_ratchet/`）已落地 MOD-01…09，命令面对齐 [Spec §4.6](docs/模块拆分Spec-DiceRatchet.md)：
 
 ```bash
 python -m dice_ratchet env selftest --seed 1                                       # 期望退出码 0
 # 注意（F10）：--model/--mode/--seed 会并入 config_hash——同一 run-id 只能跑覆盖集合相同的命令
 # 下面三条 inference 覆盖相同（--model mock --mode eval --seed 7），可共用 <inf_run_id>
-python -m dice_ratchet inference probe      --model mock --mode eval --seed 7         --run-id <inf_run_id>   # 期望退出码 0
-python -m dice_ratchet inference bench      --model mock --mode eval --seed 7 --n 50  --run-id <inf_run_id>   # 期望退出码 0
-python -m dice_ratchet inference robustness --model mock --mode eval --seed 7 --n 200 --run-id <inf_run_id>   # 期望退出码 0
+python -m dice_ratchet inference probe      --model mock --mode eval --seed 7         --run-id <inf_run_id>
+python -m dice_ratchet inference bench      --model mock --mode eval --seed 7 --n 50  --run-id <inf_run_id>
+python -m dice_ratchet inference robustness --model mock --mode eval --seed 7 --n 200 --run-id <inf_run_id>
 # MOD-06 闭环 + MOD-07 自进化：冒烟不触网（--no-reflect 免模型），真实演化需要 MOD-03 客户端
 python -m dice_ratchet loop smoke --seeds train:1000-1002 --k 3 --no-reflect           # 期望退出码 0
 python -m dice_ratchet loop run --agent llm --seeds train:1000-1029 --k 30 --hitl --run-id <loop_run_id>
-python -m dice_ratchet loop status --run-id <loop_run_id>                              # 期望退出码 0
+python -m dice_ratchet loop status --run-id <loop_run_id>
 # HITL 挂起（退出码 0）→ 人工裁决 → 续跑执行 accept/rollback
-python -m dice_ratchet evolve approve  --run-id <loop_run_id> --generation 1           # 期望退出码 0
+python -m dice_ratchet evolve approve  --run-id <loop_run_id> --generation 1
 python -m dice_ratchet evolve rollback --run-id <loop_run_id> --generation 1 --reason "效果可疑"
-python -m dice_ratchet loop run --run-id <loop_run_id> --resume                        # 期望退出码 0
-# eval report 不带 --model/--mode/--seed（与 inference 族覆盖不同）→ 必须换一个 run-id
-# F46-A：--generation 现在是真过滤（不再跨代/跨臂混合）；--arm <name|all> 选臂——
-#   缺省 = 该代胜出/候选臂（无候选或全被拒时回落 parent），all = 显式申报的混合池
-python -m dice_ratchet eval report --run-id <eval_run_id> --split heldout --baseline all   # 期望退出码 0
+python -m dice_ratchet loop run --run-id <loop_run_id> --resume
+# eval report 不带 --model/--mode/--seed → 必须换一个 run-id
+# F46-A：--generation 是真过滤；--arm <name|all> 选臂（缺省 = 该代胜出/候选臂，all = 混合池）
+python -m dice_ratchet eval report --run-id <eval_run_id> --split heldout --baseline all
 ```
 
-## 模型角色与实验臂（配置切换，Issue #1）
+## 模型角色与实验臂
 
-三个模型角色 —— `policy`（游戏决策）、`reflection`（局末反思）、`proposer`（harness 修改提案）——
-都只经 MOD-03 的统一 `InferenceClient` 取模型。**换模型、换角色组合、切对照臂全部只改配置**，
-MOD-04/06/07/08 的业务代码不动，也不出现 `from mlx_lm import ...` / `from openai import ...`。
+三个模型角色 —— `policy`（游戏决策）、`reflection`（局末反思）、`proposer`（harness 修改提案）—— 都只经 MOD-03 的统一 `InferenceClient` 取模型。**换模型、换角色组合、切对照臂全部只改配置**，MOD-04/06/07/08 的业务代码不动。
 
 优先级（高 → 低）：`experiment.roles.<role>` > `experiment.arms[arm]` > `models.<role>` > `inference.model_id`。
-空字符串表示「继承下一层」，所以 `--model mock`（写的是 `inference.model_id`）在 A 臂下仍一次覆盖全部角色。
-
-六个实验臂（[configs/default.yaml](configs/default.yaml) 的 `experiment.arms`，臂定义计入 `config_hash` → 换臂即换 run-id 族）：
 
 | Arm | 决策 / 反思 | Proposer | Harness | 用途 |
 |---|---|---|---|---|
 | A0 / A1 | Qwen3-8B | Qwen3-8B | 固定 / 演化 | Qwen 主线 baseline 与 RSI 主实验臂 |
 | B0 / B1 | Qwen3-8B | `deepseek-flash` | 固定 / 演化 | 「proposer 能力」对照 |
-| C0 / C1 | `deepseek-flash` | `deepseek-flash` | 固定 / 演化 | 全量外部模型对照 |
+| C0 / C1 | `deepseek-flash` | `deepseek-flash` | 固定 / 演化 | 全量外部模型对照（**实际跑的是 C1**） |
 
-外部模型是 **`deepseek-flash`**（DeepSeek-V4.1-Flash，1M 上下文）：2026-10-08 实测
-`GET https://api.deepseek.com/v1/models` 只有 `deepseek-flash` 与 `deepseek-v4-pro`，
-原登记名 `deepseek-chat` 已下线（见 [configs/models.yaml](configs/models.yaml)）。
-后者的 `deepseek-v4-pro` 已登记但未被任何臂使用，供后续「proposer 能力 vs 成本」对照直接切。
-成本按官方定价登记为**人民币 + 高峰档上界**，审计里记 `cost_estimate{amount,currency,basis}`；
-未登记单价的模型记 `null`（不拿 0 冒充免费）。
+外部模型是 **`deepseek-flash`**（DeepSeek-V4.1-Flash，1M 上下文）：2026-10-08 实测 `GET https://api.deepseek.com/v1/models` 只有 `deepseek-flash` 与 `deepseek-v4-pro`，原登记名 `deepseek-chat` 已下线（见 [configs/models.yaml](configs/models.yaml)）。
 
-**flash 必须显式关闭思考模式**（`api_thinking: disabled`）：该模型默认开思考模式，思维链会把
-`max_tokens` 吃光、`content` 返回空串，于是每次都靠 MOD-03 的修复重试才拿到 JSON —— 白花一次调用。
-实测（同一 probe）：开思考 895 输入/166 输出 token、墙钟 3459 ms、`attempts=2`；
-关思考 215/109 token、869 ms、`attempts=1`。官方文档也印证：思考模式忽略 `temperature`，
-非思考模式下 `temperature` 才生效，正是 B-14 需要的确定性口径。
+**必须显式关闭思考模式**（`api_thinking: disabled`）：该模型默认开思考模式，思维链会把 `max_tokens` 吃光、`content` 返回空串。实测同一 probe：开思考 895 输入/166 输出 token、3459 ms、`attempts=2`；关思考 215/109 token、869 ms、`attempts=1`。
 
 ```bash
 # 方式一：改 configs/default.yaml 的 experiment.arm / models.* / experiment.roles
 # 方式二：DICERATCHET_* 环境变量（B-30 的 __ 分层；CLI 目前只有 8 个显式覆盖键，没有通用 --set）
-export DICERATCHET_EXPERIMENT__ARM=B1                    # 等价于 experiment.arm: B1
-export DICERATCHET_MODELS__PROPOSER=deepseek-flash        # 只钉 proposer，其余角色不动
+export DICERATCHET_EXPERIMENT__ARM=B1
+export DICERATCHET_MODELS__PROPOSER=deepseek-flash
 python -m dice_ratchet loop run --agent llm --seeds train:1000-1029 --k 30 --hitl --run-id <loop_run_id>
 ```
 
-### API key：本地密钥文件（不入库）
+## API key 与隐私
 
-真跑 B/C 臂需要 `DEEPSEEK_API_KEY`。除了 `export`，也可以放在仓库根一个**被 .gitignore 忽略**的
-`.env` 里（省得每次 export）：
+真跑 B/C 臂需要 `DEEPSEEK_API_KEY`。除了 `export`，也可以放在仓库根一个**被 .gitignore 忽略**的 `.env` 里：
 
 ```bash
 cp .env.example .env && chmod 600 .env    # 然后把 key 粘到 DEEPSEEK_API_KEY= 后面
 ```
 
-语义（实现在 [dice_ratchet/inference/secrets.py](dice_ratchet/inference/secrets.py)）：
+语义（实现见 [dice_ratchet/inference/secrets.py](dice_ratchet/inference/secrets.py)）：
 
-- **真实环境变量优先**：已经 `export` 时以环境变量为准，文件不覆盖；
-- **只读注册表声明的那个名字**（`configs/models.yaml` 的 `api_key_env`，当前是 `DEEPSEEK_API_KEY`）——
-  文件里其它行一律无效，包括 `DICERATCHET_*`，所以这个文件**不能用来偷改配置**；
-- **不改进程环境**：只做查找，绝不 `os.environ.update(...)`，受限子进程与 `config.json` 的环境快照都看不到它；
-- key 只进内存：不写 `harness/`、run JSON、事件或日志；审计与 provenance 只记来源
-  （`api_key_source: environment | env_file | missing`）与「是否可用」的布尔值；
-- 文件对同组/其他用户可读时记一条 `llm.api.key_file_permissions` 告警（建议 `chmod 600`）；
+- **真实环境变量优先**；只读注册表声明的那个名字（`configs/models.yaml` 的 `api_key_env`），文件里其它行一律无效；
+- **不改进程环境**，key 只进内存：不写 `harness/`、run JSON、事件或日志；审计只记 `api_key_source` 与「是否可用」；
+- 文件对同组/其他用户可读时记一条告警（建议 `chmod 600`）；
 - 想只用环境变量：把 `inference.api_key_file` 设为空字符串。
 
-`.gitignore` 里必须有 `.env` 这条：`infra.git_ops` 把 `git status --porcelain` 的任何输出都算
-「worktree 不干净」（未跟踪文件也在内），否则 MOD-07 会直接拒绝演化。
-
-臂与角色绑定都是**静态实验决定**：它们不进 `harness/config.json` 白名单（MOD-07 不能自己改实验臂），
-但会进 `config_hash`，所以换臂后必须换 run-id。
-
-每个 run 落 `runs/<run_id>/models_provenance.json`：三角色各自的 model_id / provider / backend /
-model_revision / online / `api_key_present` / `api_key_source`，加上臂、harness 模式与 `config_hash`。
-DeepSeek 侧另有审计：`runs/<run_id>/llm_api/` 按 request hash 存 prompt hash / sampling /
-response hash / usage / 成本估算 / **响应正文**（`response_text`，记录 v2）；同一请求而响应变化时
-**不覆盖旧证据**，另存变体（`.v<n>.json`）并记 `llm.nondeterministic`（`E_LLM_NONDETERMINISTIC`）。
-离线复现用 `inference.api_mode=replay`（只读历史响应，缺记录**或缺响应正文**即 fail-closed，
-绝不把审计元数据当模型输出，也不冒充新样本）。**实测提醒**（报告 §11）：`deepseek-flash` 在
-`temperature=0.0` 下也不保证跨时间确定 —— 两次同配置真跑之间 9 个逐字节相同的请求拿到
-9 个不同响应，
-所以 A/B/C 对照必须 `n≫1`、按 episode seed 配对，逐位复现只能靠 replay。
-跨 run 比对用只读脚本：`.venv/bin/python scripts/compare_api_runs.py <run_a> <run_b>`。
+本仓库的公开版本做过一次全历史清洗：**任何 commit 里都不含真实 key**（已用真实 key 前缀逐 commit 校验），文档与 golden 里的本机绝对路径也已替换为 `<repo>` / `<workspace>` / `<home>`。prompt 的 `source_ids` 现在只记**仓库相对**模板路径，避免 run 工件再次写入用户名与目录结构。
 
 ## CI 门禁
 
 门禁是**一条脚本**，本地与 CI 跑的是同一份（Spec §9 G1–G6 与 INV-1/INV-6 的可执行化）：
 
 ```bash
-./scripts/ci_gate.sh                  # 快速门（约 1 分钟）：guards + selftest + pytest -m "not slow" + 跨 PYTHONHASHSEED
-./scripts/ci_gate.sh --with-slow      # 深门（约 10 分钟）：全量 pytest（5 组 golden / 200 局差分 / 200 局 bot 对拍）+ node 测试 + golden 基准独立性
+./scripts/ci_gate.sh                  # 快速门：guards + selftest + pytest -m "not slow" + 跨 PYTHONHASHSEED
+./scripts/ci_gate.sh --with-slow      # 深门：全量 pytest（5 组 golden / 200 局差分 / 200 局 bot 对拍）+ node 测试
 ./scripts/ci_gate.sh --coverage       # 附带覆盖率报告（G1 判据）
 ```
 
 `guards check` 反例自检也内含其中：门禁必须能拦下 `tests/fixtures/guards/`（退出码 4），否则视为门禁失效。
 
-CI 侧（[.github/workflows/ci.yml](.github/workflows/ci.yml)，Node 22 / Python 3.12）把两者拆成两个作业，**按需触发以省 CI 分钟**（实测：快速门 ≈4.5 分钟、深门 ≈13 分钟）：
+CI 侧（[.github/workflows/ci.yml](.github/workflows/ci.yml)，Node 22 / Python 3.12）把两者拆成两个作业，按需触发以省 CI 分钟：
 
 | 事件 | 快速门 | 深门（对拍） |
 |---|---|---|
@@ -191,66 +206,68 @@ CI 侧（[.github/workflows/ci.yml](.github/workflows/ci.yml)，Node 22 / Python
 | tag push（`refs/tags/**`） | ✅ | ✅ |
 | 手动 `workflow_dispatch` | ✅ | ✅（可 `-f slow=false` 关掉） |
 
-```bash
-gh workflow run ci.yml -F slow=true    # 需要时手动补一次慢门（push 不会自动跑）
-```
-
 ## 技术栈
 
 | 组件 | 选型 |
 |---|---|
 | 硬件 | Apple Silicon Mac，24 GB 统一内存 |
-| 模型 | 阶段一 Qwen3-8B（MLX 4bit），阶段二 Qwen3-30B-A3B（MoE，Q4） |
+| 模型 | 阶段一 Qwen3-8B（MLX 4bit），阶段二 Qwen3-30B-A3B（MoE，Q4）；正式实验主臂用 `deepseek-flash` |
 | 游戏 | Node.js（原生 http + ESM）、原生 HTML/CSS/JS，内核为整数纯函数 |
-| 训练链路 | Python 3.11；确定性 RNG 为 xmur3 + SplitMix64，与 JS 内核逐位一致 |
+| 训练链路 | Python 3.11+；确定性 RNG 为 xmur3 + SplitMix64，与 JS 内核逐位一致 |
 
 ## 仓库结构
 
 ```
 .
 ├── README.md                     # 本文件
+├── LICENSE                       # MIT
 ├── RSI调研纪要.md                 # 为什么做：理论 / 实证 / 失败模式 / 治理
 ├── 文献综述-RSI-2024-2026.md
 ├── 项目计划-DiceRatchet.md            # 做什么：目标、沙箱纪律、里程碑、验收
 ├── 项目指导建议-DiceRatchet.md
 ├── docs/
 │   ├── README.md                 # 文档中心（阅读顺序、PRD 索引）
-│   ├── 模块拆分Spec-DiceRatchet.md    # 模块边界与接口的唯一事实来源（v1.4）
+│   ├── 模块拆分Spec-DiceRatchet.md    # 模块边界与接口的唯一事实来源（v2.35 / B-96）
 │   ├── 项目排期-DiceRatchet.md        # 排期与甘特图
 │   ├── prd/                      # GAME-00～02、MOD-01～09 技术 PRD
-│   ├── reviews/                  # 评审记录
+│   ├── reviews/                  # 每轮实验与评审记录（含全部数字出处）
+│   ├── handoff/ · tasks/         # 交接提示与任务单
+│   ├── patches/                  # 已归档的 prompt/缓存补丁
 │   ├── assets/                   # 生成的 SVG（模块依赖图、甘特图）
 │   └── tools/gen_diagrams.py     # 图表生成脚本（零依赖）
-├── schemas/                      # 跨模块 JSON schema（Spec §4.5，MOD-09 登记）
-├── harness/                      # harness 工件（Spec §4.4）：config.json（可演化层，v1 = {} 无覆盖）
-│                                 #   + prompts/（MOD-04 读）+ tools/（MOD-07 写）+ versions/v{N}/（MOD-07 不可变快照）
+├── schemas/                      # 跨模块 JSON schema（Spec §4.5）
+├── harness/                      # harness 工件：config.json + prompts/ + tools/ + versions/v{N}/
 ├── tests/                        # unit / integration / golden（Python 训练链路）
-├── dice_ratchet/                    # RSI 训练链路：env / sandbox / inference / infra
+├── dice_ratchet/                 # RSI 训练链路：env / sandbox / inference / infra / ...
 ├── scripts/ci_gate.sh            # CI 门禁入口（本地与 CI 同一份）
 ├── .github/workflows/ci.yml      # CI：gate（快速）+ parity（golden / 差分对拍）
 ├── src/game/                     # G0 游戏本体：kernel / backend / frontend / content / tests
-└── papers/                       # 参考论文 PDF（未纳入 git）
+└── papers/                       # 参考论文清单与元数据（PDF 未入库）
 ```
+
+## 复现与数据
+
+- 每轮实验的**完整产物**（逐局轨迹、LLM 请求/响应审计、成本、图）落在本地 `runs/<run_id>/`，约 1.7 GB，**不入库**；README 与 `docs/reviews/` 里每个数字都能追到对应文件与行号。
+- 复现的最小入口是 mock 后端（零成本、零网络）：`--model mock` 加上面的 `inference bench` / `loop smoke`。
+- 真跑一轮（C1 / H1）的价格量级：≈**¥70/代**、≈**3–4 小时/代**；跑之前先读 [项目排期](docs/项目排期-DiceRatchet.md) 和最近一份 `docs/reviews/` 里的现场记录。
 
 ## 文档导航
 
 1. [项目计划](项目计划-DiceRatchet.md)：目标与验收。
-2. [模块拆分 Spec](docs/模块拆分Spec-DiceRatchet.md)：切成几块、怎么接起来。
+2. [模块拆分 Spec](docs/模块拆分Spec-DiceRatchet.md)：切成几块、怎么接起来（v2.35）。
 3. [GAME PRD](docs/prd/)：游戏规则的唯一真相。
 4. [MOD PRD](docs/prd/)：每个模块怎么实现。
 5. [项目排期](docs/项目排期-DiceRatchet.md)：什么时候完成。
-6. [评审记录](docs/reviews/)：改了什么、为什么改。
+6. [评审与实验记录](docs/reviews/)：改了什么、为什么改、数字从哪来。
 
-文档与代码冲突时，以 Spec 为准。新增的临时决策登记到 Spec §11.2（从 P-31 起编号）。
+最值得先读的三份复盘：
 
-## 重新生成图表
+- [M3 正式实验主体结果](docs/reviews/2026-10-14-M3正式实验主体结果.md)（噪声、F58–F71）
+- [M3R2 正式实验主体结果](docs/reviews/2026-10-17-M3R2-正式实验主体结果.md)（首次 accept 与它的口径问题）
+- [MVP1 打通与版本化缺陷](docs/reviews/2026-10-18-MVP1打通与版本化缺陷.md)（harness 血缘）
 
-```bash
-python3 docs/tools/gen_diagrams.py    # 写入 docs/assets/*.svg，并打印排期明细表
-```
+文档与代码冲突时，以 Spec 为准。新增的临时决策登记到 Spec §11.2。
 
-## 说明
+## 许可
 
-- `papers/` 下的 PDF 约 85 MB，没有纳入版本控制，可按文件名中的 arXiv 编号重新下载。
-- `runs/`、`logs/`、`.local/` 是运行产物，已写入 `.gitignore`。
-- 许可协议未定；在确定之前，代码与文档保留所有权利。
+[MIT](LICENSE)。游戏内容、文档与实验数据同样按 MIT 发布；第三方参考仓库没有纳入本仓库。
