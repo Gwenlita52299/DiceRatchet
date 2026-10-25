@@ -184,6 +184,18 @@ def test_fr_04_5_bundle_records_source_ids():
     assert "reflection:r-2" in joined
 
 
+def test_source_ids_never_leak_absolute_paths():
+    """公开仓库纪律：来源清单不得写入本机绝对路径（用户名/目录结构）。"""
+    spec = load_template(DEFAULT_TEMPLATE_PATH)
+    bundle = assemble_prompt(spec, _ctx())
+    template_ids = [sid for sid in bundle.source_ids if sid.startswith("template:")]
+    assert template_ids, "缺少 template 来源"
+    recorded = template_ids[0].split(":", 1)[1]
+    assert not Path(recorded).is_absolute(), recorded
+    assert recorded.endswith("dice_ratchet/agent/prompts/decision_fallback.md"), recorded
+
+
+
 def test_baseline_fixed_prompt_uses_frozen_template(harness_dir):
     from dice_ratchet.infra.config import PolicyConfig
 

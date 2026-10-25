@@ -359,13 +359,30 @@ def _select_memory(items: Sequence[MemoryItem], limit: int
     return kept, records
 
 
+#: 仓库根（`dice_ratchet/agent/prompts/assembler.py` 往上三级）；装成 wheel 时不存在。
+_REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
+
+
+def _source_path(path: str | Path) -> str:
+    """来源清单里的模板路径只记**仓库相对**形式。
+
+    绝对路径会把本机用户名与目录结构写进 golden、run 工件和审计，既是隐私泄漏，
+    也让同一份 harness 在不同机器上产出不同的 ``source_ids``。仓库外的路径只留文件名。
+    """
+    target = Path(path)
+    try:
+        return target.resolve().relative_to(_REPO_ROOT).as_posix()
+    except (OSError, ValueError):
+        return target.name
+
+
 def source_ids(spec: PromptSpec, ctx: PromptContext,
                memory: Sequence[MemoryItem],
                reflections: Sequence[ReflectionItem]) -> tuple[str, ...]:
     """INV-3 四类来源的显式清单（审计/复现用；顺序确定）。"""
     ids = [
         f"obs:{ctx.obs_digest or sha256_of(ctx.observation)}",
-        f"template:{spec.path}",
+        f"template:{_source_path(spec.path)}",
         f"harness:{int(ctx.harness_version)}",
     ]
     if ctx.task:

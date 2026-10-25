@@ -8,7 +8,7 @@
   "prompt_hash": "sha256:d8515847bd4f9bf23339f527d25b5748066e5aa79832418c5e85d27ae5ccf2a6",
   "source_ids": [
     "obs:sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    "template:<repo>/dice_ratchet/agent/prompts/decision_fallback.md",
+    "template:dice_ratchet/agent/prompts/decision_fallback.md",
     "harness:7",
     "task:sha256:6a169f313aa9822747a49b4ba483c8c13d64e7f1a6c338dfe08b474810272d00",
     "memory:m-0002",
